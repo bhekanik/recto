@@ -3,8 +3,10 @@
 import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { CommandPalette } from "@/components/command-palette";
 import { EditorPane } from "@/components/editor-pane";
 import { EmptyState } from "@/components/empty-state";
+import { ModeToolbar } from "@/components/mode-toolbar";
 import { StatusBar } from "@/components/status-bar";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -12,7 +14,16 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { authClient } from "@/lib/auth-client";
+import type { CodeMirrorEditorHandle } from "@/lib/editor/codemirror";
+import { createPreviewHandle } from "@/lib/editor/handle";
 import type { MilkdownEditorHandle } from "@/lib/editor/milkdown";
+import { createAppShortcutHandler } from "@/lib/keyboard/app-shortcuts";
+import {
+	type CaretPosition,
+	type Mode,
+	modeToLabel,
+	type VimSubMode,
+} from "@/lib/modes/types";
 import { useDocumentSync } from "@/lib/sync/use-document-sync";
 
 const ACTIVE_DOC_KEY = "recto:active-document";
@@ -20,11 +31,22 @@ const ACTIVE_DOC_KEY = "recto:active-document";
 export function StudioShell() {
 	const router = useRouter();
 	const { isAuthenticated, isLoading: authLoading } = useConvexAuth();
-	const editorRef = useRef<MilkdownEditorHandle>(null);
+	const shellRef = useRef<HTMLDivElement>(null);
 
+	const richRef = useRef<MilkdownEditorHandle>(null);
+	const cmRef = useRef<CodeMirrorEditorHandle>(null);
+
+	const [mode, setMode] = useState<Mode>("rich");
+	const [vimSubMode, setVimSubMode] = useState<VimSubMode>("normal");
 	const [documentId, setDocumentId] = useState<Id<"documents"> | null>(null);
 	const [creating, setCreating] = useState(false);
 	const [editorReady, setEditorReady] = useState(false);
+	const [paneMarkdown, setPaneMarkdown] = useState("");
+	const [pendingCaret, setPendingCaret] = useState<CaretPosition | null>(null);
+	const [commandOpen, setCommandOpen] = useState(false);
+
+	const modeRef = useRef(mode);
+	modeRef.current = mode;
 
 	const documents = useQuery(api.documents.list, isAuthenticated ? {} : "skip");
 	const createDocument = useMutation(api.documents.create);
@@ -32,6 +54,36 @@ export function StudioShell() {
 	const document = useQuery(
 		api.documents.get,
 		documentId && isAuthenticated ? { documentId } : "skip",
+	);
+
+	const getEditorHandle = useCallback(() => {
+		if (modeRef.current === "rich") return richRef.current;
+		if (modeRef.current === "raw" || modeRef.current === "vim") {
+			return cmRef.current;
+		}
+		return createPreviewHandle(() => paneMarkdown);
+	}, [paneMarkdown]);
+
+	const sync = useDocumentSync({
+		documentId,
+		getEditorHandle,
+		serverMarkdown: document?.markdown,
+		serverUpdatedAt: document?.updatedAt,
+		enabled: editorReady && document !== undefined && document !== null,
+	});
+
+	const switchMode = useCallback(
+		async (to: Mode) => {
+			if (to === modeRef.current) return;
+			await sync.flushSync();
+			const handle = getEditorHandle();
+			const md = handle?.getCanonicalMarkdown() ?? sync.getCurrentMarkdown();
+			const caret = handle?.exportCaret() ?? null;
+			setPaneMarkdown(md);
+			setPendingCaret(caret);
+			setMode(to);
+		},
+		[sync, getEditorHandle],
 	);
 
 	useEffect(() => {
@@ -67,13 +119,19 @@ export function StudioShell() {
 		setEditorReady(false);
 	}, [document, documentId]);
 
-	const sync = useDocumentSync({
-		documentId,
-		editorRef,
-		serverMarkdown: document?.markdown,
-		serverUpdatedAt: document?.updatedAt,
-		enabled: editorReady && document !== undefined && document !== null,
-	});
+	useEffect(() => {
+		const shell = shellRef.current;
+		if (!shell) return;
+		const handler = createAppShortcutHandler((action) => {
+			if (action.type === "open-palette") {
+				setCommandOpen(true);
+				return;
+			}
+			void switchMode(action.mode);
+		});
+		shell.addEventListener("keydown", handler, true);
+		return () => shell.removeEventListener("keydown", handler, true);
+	}, [switchMode]);
 
 	const handleCreate = useCallback(async () => {
 		setCreating(true);
@@ -82,6 +140,7 @@ export function StudioShell() {
 			setDocumentId(newId);
 			localStorage.setItem(ACTIVE_DOC_KEY, newId);
 			setEditorReady(false);
+			setMode("rich");
 		} finally {
 			setCreating(false);
 		}
@@ -103,11 +162,23 @@ export function StudioShell() {
 
 	const showEmpty = documents !== undefined && documents.length === 0;
 	const loadingDoc = documentId !== null && document === undefined;
+	const displayMarkdown =
+		paneMarkdown || document?.markdown || sync.getCurrentMarkdown();
 
 	return (
-		<div className="flex min-h-dvh flex-col">
-			<header className="flex h-10 shrink-0 items-center justify-between border-b border-border px-[var(--space-4)] text-[length:var(--text-ui)] text-[var(--color-ink-secondary)]">
-				<span className="truncate">{document?.title ?? "Recto"}</span>
+		<div ref={shellRef} className="flex min-h-dvh flex-col">
+			<header className="flex h-10 shrink-0 items-center justify-between gap-[var(--space-3)] border-b border-border px-[var(--space-4)] text-[length:var(--text-ui)] text-[var(--color-ink-secondary)]">
+				<span className="min-w-0 flex-1 truncate">
+					{document?.title ?? "Recto"}
+				</span>
+				{!showEmpty && (
+					<ModeToolbar
+						mode={mode}
+						vimSubMode={vimSubMode}
+						onModeChange={(next) => void switchMode(next)}
+						onOpenCommandPalette={() => setCommandOpen(true)}
+					/>
+				)}
 				<Button variant="ghost" size="sm" onClick={handleSignOut}>
 					Sign out
 				</Button>
@@ -154,8 +225,14 @@ export function StudioShell() {
 						)}
 
 						<EditorPane
-							editorRef={editorRef}
+							mode={mode}
+							markdown={displayMarkdown}
+							pendingCaret={pendingCaret}
+							onCaretApplied={() => setPendingCaret(null)}
+							richRef={richRef}
+							cmRef={cmRef}
 							onChange={sync.handleEditorChange}
+							onVimModeChange={setVimSubMode}
 							loading={loadingDoc || !editorReady}
 						/>
 					</>
@@ -163,8 +240,20 @@ export function StudioShell() {
 			</main>
 
 			{!showEmpty && (
-				<StatusBar wordCount={sync.wordCount} syncStatus={sync.syncStatus} />
+				<StatusBar
+					wordCount={sync.wordCount}
+					modeLabel={modeToLabel(mode, vimSubMode)}
+					syncStatus={sync.syncStatus}
+				/>
 			)}
+
+			<CommandPalette
+				open={commandOpen}
+				onOpenChange={setCommandOpen}
+				mode={mode}
+				vimSubMode={vimSubMode}
+				onSwitchMode={(next) => void switchMode(next)}
+			/>
 		</div>
 	);
 }

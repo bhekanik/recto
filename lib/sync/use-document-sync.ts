@@ -6,7 +6,7 @@ import { useDebouncedCallback } from "use-debounce";
 
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import type { MilkdownEditorHandle } from "@/lib/editor/milkdown";
+import type { EditorHandle } from "@/lib/editor/handle";
 import { countWords } from "@/lib/markdown";
 import {
 	clearDraft,
@@ -21,7 +21,7 @@ export type SyncStatus = "idle" | "saving" | "saved" | "unsynced";
 
 type UseDocumentSyncArgs = {
 	documentId: Id<"documents"> | null;
-	editorRef: React.RefObject<MilkdownEditorHandle | null>;
+	getEditorHandle: () => EditorHandle | null;
 	serverMarkdown: string | undefined;
 	serverUpdatedAt: number | undefined;
 	enabled: boolean;
@@ -37,6 +37,8 @@ type UseDocumentSyncResult = {
 	useDraft: () => void;
 	useServer: () => void;
 	handleEditorChange: () => void;
+	flushSync: () => Promise<void>;
+	getCurrentMarkdown: () => string;
 };
 
 /** Whether a reactive query update is from a remote writer (not this client's echo). */
@@ -53,7 +55,7 @@ export function isRemoteServerUpdate(
 /** Debounced editor↔Convex sync with D11 hydrate-on-idle contract. */
 export function useDocumentSync({
 	documentId,
-	editorRef,
+	getEditorHandle,
 	serverMarkdown,
 	serverUpdatedAt,
 	enabled,
@@ -71,6 +73,9 @@ export function useDocumentSync({
 	const hasSeededRef = useRef(false);
 	const pendingMarkdownRef = useRef<string | null>(null);
 	const flushInFlightRef = useRef(false);
+	const lastFlushedMarkdownRef = useRef<string>("");
+	const getEditorHandleRef = useRef(getEditorHandle);
+	getEditorHandleRef.current = getEditorHandle;
 
 	// Reset seed state when document changes
 	// biome-ignore lint/correctness/useExhaustiveDependencies: intentional reset on document switch
@@ -79,12 +84,14 @@ export function useDocumentSync({
 		expectedUpdatedAtRef.current = 0;
 		lastWrittenUpdatedAtRef.current = 0;
 		lastHandledServerUpdatedAtRef.current = 0;
+		lastFlushedMarkdownRef.current = "";
 	}, [documentId]);
 
 	const flush = useCallback(async () => {
-		if (!documentId || !editorRef.current) return;
+		const editorRef = getEditorHandleRef.current();
+		if (!documentId || !editorRef) return;
 
-		const markdown = editorRef.current.getCanonicalMarkdown();
+		const markdown = editorRef.getCanonicalMarkdown();
 		const words = countWords(markdown);
 		setWordCount(words);
 		saveDraft(documentId, markdown);
@@ -92,6 +99,13 @@ export function useDocumentSync({
 
 		const expected = expectedUpdatedAtRef.current;
 		if (expected === 0) return;
+
+		if (markdown === lastFlushedMarkdownRef.current) {
+			pendingMarkdownRef.current = null;
+			if (documentId) clearDraft(documentId);
+			setSyncStatus("saved");
+			return;
+		}
 
 		setSyncStatus("saving");
 		flushInFlightRef.current = true;
@@ -113,6 +127,7 @@ export function useDocumentSync({
 			expectedUpdatedAtRef.current = result.updatedAt;
 			lastWrittenUpdatedAtRef.current = result.updatedAt;
 			lastHandledServerUpdatedAtRef.current = result.updatedAt;
+			lastFlushedMarkdownRef.current = markdown;
 			pendingMarkdownRef.current = null;
 			clearDraft(documentId);
 			setSyncStatus("saved");
@@ -121,20 +136,39 @@ export function useDocumentSync({
 		} finally {
 			flushInFlightRef.current = false;
 		}
-	}, [documentId, editorRef, updateMarkdown]);
+	}, [documentId, updateMarkdown]);
 
 	const debouncedFlush = useDebouncedCallback(flush, DEBOUNCE_MS);
 
+	const flushSync = useCallback(async () => {
+		debouncedFlush.flush();
+		await flush();
+		while (flushInFlightRef.current) {
+			await new Promise((r) => setTimeout(r, 10));
+		}
+	}, [debouncedFlush, flush]);
+
+	const getCurrentMarkdown = useCallback(() => {
+		return getEditorHandleRef.current()?.getCanonicalMarkdown() ?? "";
+	}, []);
+
 	const handleEditorChange = useCallback(() => {
-		if (!editorRef.current) return;
-		const markdown = editorRef.current.getCanonicalMarkdown();
+		const editorRef = getEditorHandleRef.current();
+		if (!editorRef) return;
+		const markdown = editorRef.getCanonicalMarkdown();
 		const words = countWords(markdown);
 		setWordCount(words);
 		if (documentId) saveDraft(documentId, markdown);
 		pendingMarkdownRef.current = markdown;
 		setSyncStatus("unsynced");
 		debouncedFlush();
-	}, [debouncedFlush, documentId, editorRef]);
+	}, [debouncedFlush, documentId]);
+
+	const seedEditor = useCallback((markdown: string) => {
+		const editorRef = getEditorHandleRef.current();
+		editorRef?.seed(markdown, { programmatic: true });
+		setWordCount(countWords(markdown));
+	}, []);
 
 	// Seed on open — retry until editor ref is ready
 	useEffect(() => {
@@ -142,7 +176,8 @@ export function useDocumentSync({
 		if (hasSeededRef.current) return;
 
 		const trySeed = (): boolean => {
-			if (!editorRef.current) return false;
+			const editorRef = getEditorHandleRef.current();
+			if (!editorRef) return false;
 
 			const { markdown, hadConflict, draftOrigin } = reconcileDraft(
 				serverMarkdown,
@@ -150,11 +185,12 @@ export function useDocumentSync({
 				documentId,
 			);
 
-			editorRef.current.seed(markdown);
+			editorRef.seed(markdown, { programmatic: true });
 			setWordCount(countWords(markdown));
 			expectedUpdatedAtRef.current = serverUpdatedAt ?? 0;
 			lastWrittenUpdatedAtRef.current = serverUpdatedAt ?? 0;
 			lastHandledServerUpdatedAtRef.current = serverUpdatedAt ?? 0;
+			lastFlushedMarkdownRef.current = markdown;
 			hasSeededRef.current = true;
 
 			if (hadConflict && !isOwnDraftOrigin(draftOrigin)) {
@@ -170,12 +206,14 @@ export function useDocumentSync({
 		}, 50);
 
 		return () => window.clearInterval(interval);
-	}, [enabled, documentId, serverMarkdown, serverUpdatedAt, editorRef]);
+	}, [enabled, documentId, serverMarkdown, serverUpdatedAt]);
 
 	// Idle re-hydrate when remote write arrives (G7.4 origin/updatedAt guard)
 	useEffect(() => {
 		if (!enabled || !documentId || serverMarkdown === undefined) return;
-		if (!hasSeededRef.current || !editorRef.current) return;
+		if (!hasSeededRef.current) return;
+		const editorRef = getEditorHandleRef.current();
+		if (!editorRef) return;
 		if (serverUpdatedAt === undefined) return;
 
 		if (lastHandledServerUpdatedAtRef.current === serverUpdatedAt) return;
@@ -191,35 +229,38 @@ export function useDocumentSync({
 			return;
 		}
 
-		if (editorRef.current.isFocused()) {
+		if (editorRef.isFocused()) {
 			setNeedsRehydrate(true);
 			lastHandledServerUpdatedAtRef.current = serverUpdatedAt;
 			return;
 		}
 
-		editorRef.current.seed(serverMarkdown);
+		editorRef.seed(serverMarkdown, { programmatic: true });
 		setWordCount(countWords(serverMarkdown));
 		expectedUpdatedAtRef.current = serverUpdatedAt;
 		lastWrittenUpdatedAtRef.current = serverUpdatedAt;
 		lastHandledServerUpdatedAtRef.current = serverUpdatedAt;
+		lastFlushedMarkdownRef.current = serverMarkdown;
 		clearDraft(documentId);
 		setNeedsRehydrate(false);
 		setSyncStatus("saved");
-	}, [enabled, documentId, serverMarkdown, serverUpdatedAt, editorRef]);
+	}, [enabled, documentId, serverMarkdown, serverUpdatedAt]);
 
 	const confirmRehydrate = useCallback(() => {
-		if (!editorRef.current || serverMarkdown === undefined) return;
-		editorRef.current.seed(serverMarkdown);
+		const editorRef = getEditorHandleRef.current();
+		if (!editorRef || serverMarkdown === undefined) return;
+		editorRef.seed(serverMarkdown, { programmatic: true });
 		setWordCount(countWords(serverMarkdown));
 		if (serverUpdatedAt !== undefined) {
 			expectedUpdatedAtRef.current = serverUpdatedAt;
 			lastWrittenUpdatedAtRef.current = serverUpdatedAt;
 			lastHandledServerUpdatedAtRef.current = serverUpdatedAt;
 		}
+		lastFlushedMarkdownRef.current = serverMarkdown;
 		if (documentId) clearDraft(documentId);
 		setNeedsRehydrate(false);
 		setSyncStatus("saved");
-	}, [documentId, editorRef, serverMarkdown, serverUpdatedAt]);
+	}, [documentId, serverMarkdown, serverUpdatedAt]);
 
 	const dismissRehydrate = useCallback(() => {
 		setNeedsRehydrate(false);
@@ -232,19 +273,17 @@ export function useDocumentSync({
 			serverUpdatedAt ?? 0,
 			documentId,
 		);
-		editorRef.current?.seed(draft.markdown);
-		setWordCount(countWords(draft.markdown));
+		seedEditor(draft.markdown);
 		setPendingConflict(false);
 		debouncedFlush();
-	}, [documentId, debouncedFlush, editorRef, serverMarkdown, serverUpdatedAt]);
+	}, [documentId, debouncedFlush, seedEditor, serverMarkdown, serverUpdatedAt]);
 
 	const useServer = useCallback(() => {
 		if (serverMarkdown === undefined) return;
-		editorRef.current?.seed(serverMarkdown);
-		setWordCount(countWords(serverMarkdown));
+		seedEditor(serverMarkdown);
 		if (documentId) clearDraft(documentId);
 		setPendingConflict(false);
-	}, [documentId, editorRef, serverMarkdown]);
+	}, [documentId, seedEditor, serverMarkdown]);
 
 	useEffect(() => {
 		return () => {
@@ -273,5 +312,7 @@ export function useDocumentSync({
 		useDraft,
 		useServer,
 		handleEditorChange,
+		flushSync,
+		getCurrentMarkdown,
 	};
 }
