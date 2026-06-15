@@ -1,0 +1,77 @@
+* {
+	box-sizing: border-box;
+}
+
+body {
+	margin: 0;
+	font-family: system-ui, sans-serif;
+	background: #111;
+	color: #eee;
+}
+
+header {
+	padding: 1rem 1.5rem;
+	border-bottom: 1px solid #333;
+}
+
+header h1 {
+	margin: 0 0 0.25rem;
+	font-size: 1.1rem;
+}
+
+header p {
+	margin: 0;
+	color: #aaa;
+	font-size: 0.9rem;
+}
+
+.panes {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 1px;
+	background: #333;
+	min-height: calc(100vh - 120px);
+}
+
+section {
+	background: #1a1a1a;
+	display: flex;
+	flex-direction: column;
+}
+
+section h2 {
+	margin: 0;
+	padding: 0.5rem 1rem;
+	font-size: 0.75rem;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+	color: #888;
+	border-bottom: 1px solid #333;
+}
+
+.editor-pane {
+	flex: 1;
+	min-height: 400px;
+	padding: 0.75rem;
+	overflow: auto;
+}
+
+#raw-pane .cm-editor {
+	height: 100%;
+}
+
+#metrics {
+	margin: 0;
+	padding: 0.75rem 1rem;
+	font-size: 0.75rem;
+	color: #888;
+	border-top: 1px solid #333;
+}
+
+.milkdown {
+	outline: none;
+}
+
+.milkdown .editor {
+	min-height: 360px;
+}

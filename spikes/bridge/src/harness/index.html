@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Recto Phase 0 — Spike A (live bridge)</title>
+		<link rel="stylesheet" href="./styles.css" />
+	</head>
+	<body>
+		<header>
+			<h1>Spike A — live two-mode bridge</h1>
+			<p>
+				Milkdown (rich) and CodeMirror (raw) share one remark MDAST. Type in either
+				pane — throwaway harness.
+			</p>
+		</header>
+		<div class="panes">
+			<section>
+				<h2>Rich (Milkdown)</h2>
+				<div id="rich-pane" class="editor-pane"></div>
+			</section>
+			<section>
+				<h2>Raw (CodeMirror 6)</h2>
+				<div id="raw-pane" class="editor-pane"></div>
+			</section>
+		</div>
+		<pre id="metrics" aria-live="polite"></pre>
+		<script type="module" src="./main.ts"></script>
+	</body>
+</html>
