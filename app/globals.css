@@ -266,6 +266,14 @@
 	margin-inline-end: 0.5em;
 }
 
+.milkdown-slash-menu {
+	z-index: 50;
+}
+
+.milkdown-slash-menu[data-show="false"] {
+	display: none;
+}
+
 @theme inline {
 	--font-heading: var(--font-sans);
 	--font-sans: var(--font-sans);
