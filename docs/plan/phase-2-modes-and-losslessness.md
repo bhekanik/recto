@@ -1,5 +1,7 @@
 # Phase 2 — Modes & Losslessness
 
+> **Status: Complete** (all exit criteria met; mode shortcuts use `⌘K` palette + `Alt+1–4` instead of `Ctrl+Shift+*` per UX feedback).
+
 > **Execution companion to the blueprint.** This file describes *how and in what order* Phase 2 gets built. The canonical *what* is the blueprint: read [`../blueprint/README.md`](../blueprint/README.md) first (it holds locked decisions **D1–D15**, the canonical Convex schema, the Markdown dialect summary, and the glossary). This phase expands and is bound by four blueprint files: [`../blueprint/04-editor-modes.md`](../blueprint/04-editor-modes.md), [`../blueprint/05-lossless-bridge.md`](../blueprint/05-lossless-bridge.md), [`../blueprint/06-markdown-dialect.md`](../blueprint/06-markdown-dialect.md), and [`../blueprint/13-keyboard-commands.md`](../blueprint/13-keyboard-commands.md).
 >
 > This file is **self-contained**: it restates its goal, prerequisites, scope, work breakdown, technical approach, the data-model and dependencies it touches, explicit out-of-scope items, testable exit criteria, and risks. An implementer should be able to execute it with only the blueprint open alongside. If anything here contradicts the blueprint, **the blueprint wins** — open an issue and reconcile (per [`../plan/README.md`](./README.md) Definition of Done §5).
