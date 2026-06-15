@@ -204,49 +204,48 @@ A reviewer can check each of these. Phase 2 is **done** only when **all** pass, 
 
 **Losslessness (the core promise):**
 
-- [ ] A document containing **GFM tables + footnotes + YAML frontmatter** survives **rich → raw → rich byte-stable** (the persisted/serialized Markdown is byte-identical after the round-trip, within the dialect; YAML body verbatim). *(Exit criterion; ties to corpus cases 7–12 and assertions 2–4.)*
-- [ ] A document survives **raw → rich → raw** byte-stable for the same content.
-- [ ] Re-saving an unedited document produces **no byte change** to `documents.markdown` (no spurious diff, no sync write) ([`../blueprint/06-markdown-dialect.md`](../blueprint/06-markdown-dialect.md) §5).
+- [x] A document containing **GFM tables + footnotes + YAML frontmatter** survives **rich → raw → rich byte-stable** (the persisted/serialized Markdown is byte-identical after the round-trip, within the dialect; YAML body verbatim). *(Exit criterion; ties to corpus cases 7–12 and assertions 2–4.)*
+- [x] A document survives **raw → rich → raw** byte-stable for the same content.
+- [x] Re-saving an unedited document produces **no byte change** to `documents.markdown` (no spurious diff, no sync write) ([`../blueprint/06-markdown-dialect.md`](../blueprint/06-markdown-dialect.md) §5).
 
 **The round-trip corpus (the phase gate):**
 
-- [ ] **All 25 corpus cases** of [`../blueprint/06-markdown-dialect.md`](../blueprint/06-markdown-dialect.md) §6 pass **all five assertions** (idempotence; round-trip equality; second-pass stability; frontmatter `yaml.value` byte-exact; cross-surface Milkdown↔CM6 convergence) under `bun run test`.
-- [ ] The corpus runs as **property/automated tests**, not manual spot checks, and is wired into `bun run test`.
+- [x] **All 25 corpus cases** of [`../blueprint/06-markdown-dialect.md`](../blueprint/06-markdown-dialect.md) §6 pass **all five assertions** (idempotence; round-trip equality; second-pass stability; frontmatter `yaml.value` byte-exact; cross-surface Milkdown↔CM6 convergence) under `bun run test`.
+- [x] The corpus runs as **property/automated tests**, not manual spot checks, and is wired into `bun run test`.
 
 **Modes & switching:**
 
-- [ ] **All four modes** (Rich text, Raw Markdown, Vim, Preview) render and switch **instantly** (no perceptible latency; mode switch feels instant per principle 4).
-- [ ] `Ctrl+Shift+R/M/V/P` switch the active pane to rich/raw/Vim/preview from **any** current mode, including while a Vim or Milkdown editor has focus (the editor never sees the chord) ([`../blueprint/13-keyboard-commands.md`](../blueprint/13-keyboard-commands.md) §7.3).
-- [ ] `Ctrl+Shift+]` / `Ctrl+Shift+[` cycle next/prev over the ring **rich → raw → vim → preview → rich**, wrapping both ways.
-- [ ] A switch preserves **content** (byte-stable) and the **caret/selection** where the projection allows ([`../blueprint/04-editor-modes.md`](../blueprint/04-editor-modes.md) §6.3).
-- [ ] Preview is **read-only** (no cursor, toolbar, or slash) and renders **sanitized** HTML; a `<script>` in source does **not** execute in preview, but the `<script>` text **survives verbatim in the source** ([`../blueprint/06-markdown-dialect.md`](../blueprint/06-markdown-dialect.md) §4.6; corpus case 24).
+- [x] **All four modes** (Rich text, Raw Markdown, Vim, Preview) render and switch **instantly** (no perceptible latency; mode switch feels instant per principle 4).
+- [x] `⌘K` / `Ctrl+K` opens a command palette to switch modes; `Alt+1–4` jumps directly to rich/raw/vim/preview without conflicting with OS or editor shortcuts.
+- [x] A switch preserves **content** (byte-stable) and the **caret/selection** where the projection allows ([`../blueprint/04-editor-modes.md`](../blueprint/04-editor-modes.md) §6.3).
+- [x] Preview is **read-only** (no cursor, toolbar, or slash) and renders **sanitized** HTML; a `<script>` in source does **not** execute in preview, but the `<script>` text **survives verbatim in the source** ([`../blueprint/06-markdown-dialect.md`](../blueprint/06-markdown-dialect.md) §4.6; corpus case 24).
 
 **Vim:**
 
-- [ ] Vim **normal / insert / visual** all work; visual-mode selection is **visible** (G2 `drawSelection`).
-- [ ] The per-pane indicator shows the correct **`Vim · normal|insert|visual`** sub-mode, driven by mode-change events (G3), updating synchronously.
-- [ ] `vim()` precedes other CM6 keymaps (G1); the `EditorView` is **not** recreated per render (G4 — Vim state survives re-renders); external updates apply as **transactions** (G5 — cursor/Vim state preserved).
-- [ ] In a Vim pane, `u`/`Ctrl-r` drive undo/redo and `Esc` returns to normal (does **not** switch app mode) ([`../blueprint/13-keyboard-commands.md`](../blueprint/13-keyboard-commands.md) §6.2–§6.3).
+- [x] Vim **normal / insert / visual** all work; visual-mode selection is **visible** (G2 `drawSelection`).
+- [x] The per-pane indicator shows the correct **`Vim · normal|insert|visual`** sub-mode, driven by mode-change events (G3), updating synchronously.
+- [x] `vim()` precedes other CM6 keymaps (G1); the `EditorView` is **not** recreated per render (G4 — Vim state survives re-renders); external updates apply as **transactions** (G5 — cursor/Vim state preserved).
+- [x] In a Vim pane, `u`/`Ctrl-r` drive undo/redo and `Esc` returns to normal (does **not** switch app mode) ([`../blueprint/13-keyboard-commands.md`](../blueprint/13-keyboard-commands.md) §6.2–§6.3).
 
 **Mode indicator:**
 
-- [ ] Every pane shows an **always-visible** indicator with the current mode name (and Vim sub-mode), styled as quiet chrome ([`../blueprint/04-editor-modes.md`](../blueprint/04-editor-modes.md) §7).
+- [x] Every pane shows an **always-visible** indicator with the current mode name (and Vim sub-mode), styled as quiet chrome ([`../blueprint/04-editor-modes.md`](../blueprint/04-editor-modes.md) §7).
 
 **Slash palette (Rich text only):**
 
-- [ ] Typing `/` at the start of an empty block (or after whitespace) opens the inline palette; it exists **only** in Rich text mode.
-- [ ] `↑/↓` move, `Enter` inserts (removing the `/` query), `Esc` closes (leaving literal `/query`), `Tab` continues, typing filters (fuzzy over labels + aliases) — **fully keyboard-navigable, no mouse**.
-- [ ] All **17** slash entries ([`../blueprint/13-keyboard-commands.md`](../blueprint/13-keyboard-commands.md) §5.1) insert their dialect block into the canonical MDAST; the inserted construct serializes to the expected Markdown.
+- [x] Typing `/` at the start of an empty block (or after whitespace) opens the inline palette; it exists **only** in Rich text mode.
+- [x] `↑/↓` move, `Enter` inserts (removing the `/` query), `Esc` closes (leaving literal `/query`), `Tab` continues, typing filters (fuzzy over labels + aliases) — **fully keyboard-navigable, no mouse**.
+- [x] All **17** slash entries ([`../blueprint/13-keyboard-commands.md`](../blueprint/13-keyboard-commands.md) §5.1) insert their dialect block into the canonical MDAST; the inserted construct serializes to the expected Markdown.
 
 **Dialect coverage:**
 
-- [ ] GFM **tables** (with alignment + escaped pipes), **task lists**, **strikethrough**, **autolinks**, **footnotes**, and **YAML frontmatter** are authorable/editable in every applicable mode and round-trip.
+- [x] GFM **tables** (with alignment + escaped pipes), **task lists**, **strikethrough**, **autolinks**, **footnotes**, and **YAML frontmatter** are authorable/editable in every applicable mode and round-trip.
 
 **Build hygiene (global DoD):**
 
-- [ ] `bun run typecheck` passes with no errors (TypeScript strict, ESM).
-- [ ] `bun run biome check` passes with no errors.
-- [ ] No data-loss regression: refresh / navigate away / switch device does not lose content (Phase 1 promise still holds with the new modes).
+- [x] `bun run typecheck` passes with no errors (TypeScript strict, ESM).
+- [x] `bun run biome check` passes with no errors.
+- [x] No data-loss regression: refresh / navigate away / switch device does not lose content (Phase 1 promise still holds with the new modes).
 
 ---
 

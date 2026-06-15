@@ -4,7 +4,7 @@
 
 Each phase file is **self-contained**: it restates its own goal, prerequisites, work breakdown, technical approach, the data-model and dependencies it touches, explicit out-of-scope items, testable exit criteria, and risks. You should be able to hand a single phase file to an implementer and have them execute it without reading the others (though they should read the blueprint).
 
-**Current status:** Phase 0 (spikes) and Phase 1 (foundation) are complete. Next up: [Phase 2 — Modes & losslessness](./phase-2-modes-and-losslessness.md).
+**Current status:** Phase 0–2 are complete. Next up: [Phase 3 — Multi-doc, split & workspace](./phase-3-multi-doc-split-workspace.md).
 
 ---
 
@@ -20,7 +20,7 @@ Recto has two genuinely novel, unproven mechanisms — **live two-mode editing o
 |-------|-------|------------------|----------------|--------|
 | [0](./phase-0-spikes.md) | **Spikes** | Prove the live two-mode bridge and the cloud undo-tree DAG, or choose fallbacks — before any product UI | `05`, `07`, `10` | ✅ Done |
 | [1](./phase-1-foundation.md) | **Foundation** | Next.js + Convex + Better Auth + dark shell; document CRUD; one rich-text surface that syncs and never loses words; live word count | `02`, `03`, `10`, `12` | ✅ Done |
-| [2](./phase-2-modes-and-losslessness.md) | **Modes & losslessness** | Add raw Markdown, Vim, and preview; lossless mode switching; slash palette; full GFM + footnotes + frontmatter with round-trip tests | `04`, `05`, `06`, `13` | — |
+| [2](./phase-2-modes-and-losslessness.md) | **Modes & losslessness** | Add raw Markdown, Vim, and preview; lossless mode switching; slash palette; full GFM + footnotes + frontmatter with round-trip tests | `04`, `05`, `06`, `13` | ✅ Done |
 | [3](./phase-3-multi-doc-split-workspace.md) | **Multi-doc, split & workspace** | Document switcher; nested split panes; same-doc-two-live-modes; workspace persistence and cross-device resume | `09`, `10` | — |
 | [4](./phase-4-history.md) | **History** | Undo-tree visualizer wired to the persisted DAG; version history with auto + manual tags; additive restore | `07`, `08` | — |
 | [5](./phase-5-polish-and-export.md) | **Polish & export** | Command palette; clipboard (html+plain) and copy-as-markdown; export .md / .html; bespoke design pass | `11`, `12`, `13` | — |

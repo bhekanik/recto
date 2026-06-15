@@ -11,6 +11,14 @@
 ## Canonical markdown
 
 - All MDAST ↔ string crossing in `lib/markdown/` only.
+- Round-trip gate: `lib/markdown/corpus.test.ts` (25 cases × 5 assertions).
+
+## Editor modes (Phase 2)
+
+- Four modes: rich (Milkdown), raw/vim (CodeMirror 6), preview (sanitized HTML).
+- Switch-on-mode: `flushSync()` → export caret → remount from canonical markdown (`components/studio-shell.tsx`).
+- Shared handle API: `lib/editor/handle.ts`. App shortcuts: `lib/keyboard/app-shortcuts.ts` (`⌘K` palette, `Alt+1–4` modes).
+- Live two-pane bridge is Phase 3 only — do not port `BridgeCoordinator` / `recreateTransform` yet.
 
 ## Sync (D11)
 
