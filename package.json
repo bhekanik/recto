@@ -3,7 +3,7 @@
 	"type": "module",
 	"private": true,
 	"scripts": {
-		"dev": "convex dev --start 'next dev --turbopack'",
+		"dev": "convex dev --start 'bun scripts/warmup-auth.mjs && next dev --turbopack'",
 		"dev:bridge": "vite",
 		"build": "next build",
 		"start": "next start",
