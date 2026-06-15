@@ -80,6 +80,9 @@ const MilkdownEditorInner = forwardRef<MilkdownEditorHandle, InnerProps>(
 				const editor = editorRef.current;
 				if (!editor) return;
 				const normalized = normalizeMarkdown(markdown);
+				// Skip redundant replaceAll — it would reset the selection/cursor.
+				const current = normalizeMarkdown(editor.action(getMarkdown()));
+				if (current === normalized) return;
 				if (opts?.programmatic) programmaticRef.current = true;
 				editor.action(replaceAll(normalized, false));
 				if (opts?.programmatic) programmaticRef.current = false;
@@ -132,6 +135,15 @@ const MilkdownEditorInner = forwardRef<MilkdownEditorHandle, InnerProps>(
 			},
 			getRootElement() {
 				return rootRef.current;
+			},
+			focus() {
+				const editor = editorRef.current;
+				if (!editor) return;
+				try {
+					editor.ctx.get(editorViewCtx).focus();
+				} catch {
+					// editor still mounting
+				}
 			},
 		}));
 

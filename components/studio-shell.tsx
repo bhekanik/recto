@@ -41,12 +41,18 @@ export function StudioShell() {
 	const [documentId, setDocumentId] = useState<Id<"documents"> | null>(null);
 	const [creating, setCreating] = useState(false);
 	const [editorReady, setEditorReady] = useState(false);
-	const [paneMarkdown, setPaneMarkdown] = useState("");
+	// Snapshot of canonical markdown captured at the last mode switch. `null`
+	// means "no snapshot yet" — fall back to the server copy. An empty string is
+	// a valid snapshot (the user cleared the document), so we must not use `||`.
+	const [paneMarkdown, setPaneMarkdown] = useState<string | null>(null);
 	const [pendingCaret, setPendingCaret] = useState<CaretPosition | null>(null);
 	const [commandOpen, setCommandOpen] = useState(false);
 
 	const modeRef = useRef(mode);
 	modeRef.current = mode;
+
+	const paneMarkdownRef = useRef<string | null>(paneMarkdown);
+	paneMarkdownRef.current = paneMarkdown;
 
 	const documents = useQuery(api.documents.list, isAuthenticated ? {} : "skip");
 	const createDocument = useMutation(api.documents.create);
@@ -61,8 +67,8 @@ export function StudioShell() {
 		if (modeRef.current === "raw" || modeRef.current === "vim") {
 			return cmRef.current;
 		}
-		return createPreviewHandle(() => paneMarkdown);
-	}, [paneMarkdown]);
+		return createPreviewHandle(() => paneMarkdownRef.current ?? "");
+	}, []);
 
 	const sync = useDocumentSync({
 		documentId,
@@ -72,18 +78,23 @@ export function StudioShell() {
 		enabled: editorReady && document !== undefined && document !== null,
 	});
 
+	const { flushMarkdown, getCurrentMarkdown } = sync;
+
 	const switchMode = useCallback(
-		async (to: Mode) => {
+		(to: Mode) => {
 			if (to === modeRef.current) return;
-			await sync.flushSync();
-			const handle = getEditorHandle();
-			const md = handle?.getCanonicalMarkdown() ?? sync.getCurrentMarkdown();
-			const caret = handle?.exportCaret() ?? null;
-			setPaneMarkdown(md);
+			const outgoing = getEditorHandle();
+			const liveMarkdown =
+				outgoing?.getCanonicalMarkdown() ?? getCurrentMarkdown();
+			const caret = outgoing?.exportCaret() ?? null;
+
+			setPaneMarkdown(liveMarkdown);
 			setPendingCaret(caret);
 			setMode(to);
+
+			void flushMarkdown(liveMarkdown);
 		},
-		[sync, getEditorHandle],
+		[flushMarkdown, getCurrentMarkdown, getEditorHandle],
 	);
 
 	useEffect(() => {
@@ -140,6 +151,8 @@ export function StudioShell() {
 			setDocumentId(newId);
 			localStorage.setItem(ACTIVE_DOC_KEY, newId);
 			setEditorReady(false);
+			setPaneMarkdown(null);
+			setPendingCaret(null);
 			setMode("rich");
 		} finally {
 			setCreating(false);
@@ -162,8 +175,7 @@ export function StudioShell() {
 
 	const showEmpty = documents !== undefined && documents.length === 0;
 	const loadingDoc = documentId !== null && document === undefined;
-	const displayMarkdown =
-		paneMarkdown || document?.markdown || sync.getCurrentMarkdown();
+	const displayMarkdown = paneMarkdown ?? document?.markdown ?? "";
 
 	return (
 		<div ref={shellRef} className="flex min-h-dvh flex-col">
@@ -198,26 +210,6 @@ export function StudioShell() {
 										<Button onClick={sync.useDraft}>Use local draft</Button>
 										<Button variant="ghost" onClick={sync.useServer}>
 											Use cloud copy
-										</Button>
-									</div>
-								</AlertDescription>
-							</Alert>
-						)}
-
-						{sync.needsRehydrate && (
-							<Alert
-								variant="destructive"
-								className="mx-auto mt-[var(--space-4)] max-w-lg border-[var(--color-warning)] bg-[var(--color-bg-raised)] text-[var(--color-ink-secondary)]"
-							>
-								<AlertTitle>Newer version available</AlertTitle>
-								<AlertDescription className="mt-[var(--space-3)]">
-									<p>Another device saved changes to this document.</p>
-									<div className="mt-[var(--space-3)] flex justify-center gap-[var(--space-3)]">
-										<Button onClick={sync.confirmRehydrate}>
-											Reload from cloud
-										</Button>
-										<Button variant="ghost" onClick={sync.dismissRehydrate}>
-											Keep editing
 										</Button>
 									</div>
 								</AlertDescription>

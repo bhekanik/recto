@@ -155,6 +155,10 @@ export const CodeMirrorEditor = forwardRef<
 		getRootElement() {
 			return containerRef.current;
 		},
+		focus() {
+			// Focus only; Vim stays in normal mode (its expected entry state).
+			viewRef.current?.focus();
+		},
 		setVimEnabled(enabled: boolean) {
 			const view = viewRef.current;
 			if (!view) return;

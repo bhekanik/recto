@@ -6,6 +6,7 @@ export type EditorHandle = {
 	getCanonicalMarkdown: () => string;
 	exportCaret: () => CaretPosition;
 	importCaret: (caret: CaretPosition) => void;
+	focus: () => void;
 	isFocused: () => boolean;
 	getRootElement: () => HTMLElement | null;
 };
@@ -17,6 +18,7 @@ export function createPreviewHandle(getMarkdown: () => string): EditorHandle {
 		getCanonicalMarkdown: getMarkdown,
 		exportCaret: () => ({ offset: 0, anchor: 0, head: 0 }),
 		importCaret() {},
+		focus() {},
 		isFocused: () => false,
 		getRootElement: () => null,
 	};

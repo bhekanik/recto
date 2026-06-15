@@ -30,14 +30,12 @@ type UseDocumentSyncArgs = {
 type UseDocumentSyncResult = {
 	wordCount: number;
 	syncStatus: SyncStatus;
-	needsRehydrate: boolean;
-	confirmRehydrate: () => void;
-	dismissRehydrate: () => void;
 	pendingConflict: boolean;
 	useDraft: () => void;
 	useServer: () => void;
 	handleEditorChange: () => void;
 	flushSync: () => Promise<void>;
+	flushMarkdown: (markdown: string) => Promise<void>;
 	getCurrentMarkdown: () => string;
 };
 
@@ -64,7 +62,6 @@ export function useDocumentSync({
 
 	const [wordCount, setWordCount] = useState(0);
 	const [syncStatus, setSyncStatus] = useState<SyncStatus>("idle");
-	const [needsRehydrate, setNeedsRehydrate] = useState(false);
 	const [pendingConflict, setPendingConflict] = useState(false);
 
 	const expectedUpdatedAtRef = useRef<number>(0);
@@ -73,6 +70,7 @@ export function useDocumentSync({
 	const hasSeededRef = useRef(false);
 	const pendingMarkdownRef = useRef<string | null>(null);
 	const flushInFlightRef = useRef(false);
+	const pendingFlushAfterInFlightRef = useRef(false);
 	const lastFlushedMarkdownRef = useRef<string>("");
 	const getEditorHandleRef = useRef(getEditorHandle);
 	getEditorHandleRef.current = getEditorHandle;
@@ -87,61 +85,104 @@ export function useDocumentSync({
 		lastFlushedMarkdownRef.current = "";
 	}, [documentId]);
 
-	const flush = useCallback(async () => {
-		const editorRef = getEditorHandleRef.current();
-		if (!documentId || !editorRef) return;
+	const performFlush = useCallback(
+		async (
+			markdownOverride?: string,
+		): Promise<"done" | "skipped" | "retry"> => {
+			if (!documentId) return "skipped";
 
-		const markdown = editorRef.getCanonicalMarkdown();
-		const words = countWords(markdown);
-		setWordCount(words);
-		saveDraft(documentId, markdown);
-		pendingMarkdownRef.current = markdown;
+			const markdown =
+				markdownOverride ??
+				getEditorHandleRef.current()?.getCanonicalMarkdown() ??
+				pendingMarkdownRef.current ??
+				"";
+			const words = countWords(markdown);
+			setWordCount(words);
+			saveDraft(documentId, markdown);
+			pendingMarkdownRef.current = markdown;
 
-		const expected = expectedUpdatedAtRef.current;
-		if (expected === 0) return;
+			const expected = expectedUpdatedAtRef.current;
+			if (expected === 0) return "skipped";
 
-		if (markdown === lastFlushedMarkdownRef.current) {
-			pendingMarkdownRef.current = null;
-			if (documentId) clearDraft(documentId);
-			setSyncStatus("saved");
-			return;
-		}
+			if (markdown === lastFlushedMarkdownRef.current) {
+				pendingMarkdownRef.current = null;
+				clearDraft(documentId);
+				setSyncStatus("saved");
+				return "done";
+			}
 
-		setSyncStatus("saving");
-		flushInFlightRef.current = true;
+			setSyncStatus("saving");
 
-		try {
-			const result = await updateMarkdown({
-				documentId,
-				markdown,
-				wordCount: words,
-				expectedUpdatedAt: expected,
-			});
+			try {
+				const result = await updateMarkdown({
+					documentId,
+					markdown,
+					wordCount: words,
+					expectedUpdatedAt: expected,
+				});
 
-			if (result.stale) {
+				if (result.stale) {
+					expectedUpdatedAtRef.current = result.updatedAt;
+					lastHandledServerUpdatedAtRef.current = result.updatedAt;
+					return "retry";
+				}
+
+				expectedUpdatedAtRef.current = result.updatedAt;
+				lastWrittenUpdatedAtRef.current = result.updatedAt;
+				lastHandledServerUpdatedAtRef.current = result.updatedAt;
+				lastFlushedMarkdownRef.current = markdown;
+				pendingMarkdownRef.current = null;
+				clearDraft(documentId);
+				setSyncStatus("saved");
+				return "done";
+			} catch {
 				setSyncStatus("unsynced");
-				setNeedsRehydrate(true);
+				return "done";
+			}
+		},
+		[documentId, updateMarkdown],
+	);
+
+	const runFlush = useCallback(
+		async (markdownOverride?: string) => {
+			if (flushInFlightRef.current) {
+				pendingFlushAfterInFlightRef.current = true;
 				return;
 			}
 
-			expectedUpdatedAtRef.current = result.updatedAt;
-			lastWrittenUpdatedAtRef.current = result.updatedAt;
-			lastHandledServerUpdatedAtRef.current = result.updatedAt;
-			lastFlushedMarkdownRef.current = markdown;
-			pendingMarkdownRef.current = null;
-			clearDraft(documentId);
-			setSyncStatus("saved");
-		} catch {
-			setSyncStatus("unsynced");
-		} finally {
-			flushInFlightRef.current = false;
-		}
-	}, [documentId, updateMarkdown]);
+			flushInFlightRef.current = true;
+			try {
+				do {
+					pendingFlushAfterInFlightRef.current = false;
+					let outcome = await performFlush(markdownOverride);
+					markdownOverride = undefined;
+					while (outcome === "retry") {
+						outcome = await performFlush();
+					}
+				} while (pendingFlushAfterInFlightRef.current);
+			} finally {
+				flushInFlightRef.current = false;
+			}
+		},
+		[performFlush],
+	);
+
+	const flush = useCallback(async () => {
+		await runFlush();
+	}, [runFlush]);
 
 	const debouncedFlush = useDebouncedCallback(flush, DEBOUNCE_MS);
 
+	const flushMarkdown = useCallback(
+		async (markdown: string) => {
+			debouncedFlush.cancel();
+			await runFlush(markdown);
+		},
+		[debouncedFlush, runFlush],
+	);
+
 	const flushSync = useCallback(async () => {
-		debouncedFlush.flush();
+		debouncedFlush.cancel();
 		await flush();
 		while (flushInFlightRef.current) {
 			await new Promise((r) => setTimeout(r, 10));
@@ -149,7 +190,11 @@ export function useDocumentSync({
 	}, [debouncedFlush, flush]);
 
 	const getCurrentMarkdown = useCallback(() => {
-		return getEditorHandleRef.current()?.getCanonicalMarkdown() ?? "";
+		return (
+			getEditorHandleRef.current()?.getCanonicalMarkdown() ??
+			pendingMarkdownRef.current ??
+			""
+		);
 	}, []);
 
 	const handleEditorChange = useCallback(() => {
@@ -230,7 +275,8 @@ export function useDocumentSync({
 		}
 
 		if (editorRef.isFocused()) {
-			setNeedsRehydrate(true);
+			// Keep local edits; adopt server version for the next save attempt.
+			expectedUpdatedAtRef.current = serverUpdatedAt;
 			lastHandledServerUpdatedAtRef.current = serverUpdatedAt;
 			return;
 		}
@@ -242,29 +288,8 @@ export function useDocumentSync({
 		lastHandledServerUpdatedAtRef.current = serverUpdatedAt;
 		lastFlushedMarkdownRef.current = serverMarkdown;
 		clearDraft(documentId);
-		setNeedsRehydrate(false);
 		setSyncStatus("saved");
 	}, [enabled, documentId, serverMarkdown, serverUpdatedAt]);
-
-	const confirmRehydrate = useCallback(() => {
-		const editorRef = getEditorHandleRef.current();
-		if (!editorRef || serverMarkdown === undefined) return;
-		editorRef.seed(serverMarkdown, { programmatic: true });
-		setWordCount(countWords(serverMarkdown));
-		if (serverUpdatedAt !== undefined) {
-			expectedUpdatedAtRef.current = serverUpdatedAt;
-			lastWrittenUpdatedAtRef.current = serverUpdatedAt;
-			lastHandledServerUpdatedAtRef.current = serverUpdatedAt;
-		}
-		lastFlushedMarkdownRef.current = serverMarkdown;
-		if (documentId) clearDraft(documentId);
-		setNeedsRehydrate(false);
-		setSyncStatus("saved");
-	}, [documentId, serverMarkdown, serverUpdatedAt]);
-
-	const dismissRehydrate = useCallback(() => {
-		setNeedsRehydrate(false);
-	}, []);
 
 	const useDraft = useCallback(() => {
 		if (!documentId) return;
@@ -305,14 +330,12 @@ export function useDocumentSync({
 	return {
 		wordCount,
 		syncStatus,
-		needsRehydrate,
-		confirmRehydrate,
-		dismissRehydrate,
 		pendingConflict,
 		useDraft,
 		useServer,
 		handleEditorChange,
 		flushSync,
+		flushMarkdown,
 		getCurrentMarkdown,
 	};
 }
