@@ -1,9 +1,8 @@
 import type { Options as StringifyOptions } from "remark-stringify";
 
-/** Frozen remark-stringify config — single serialization truth. */
+/** Frozen remark-stringify config — single serialization truth (06-markdown-dialect §2.2). */
 export const CANONICAL_STRINGIFY: Readonly<StringifyOptions> = Object.freeze({
 	bullet: "-",
-	bulletOrdered: ".",
 	emphasis: "_",
 	strong: "*",
 	fence: "`",
@@ -13,6 +12,7 @@ export const CANONICAL_STRINGIFY: Readonly<StringifyOptions> = Object.freeze({
 	ruleRepetition: 3,
 	ruleSpaces: false,
 	setext: false,
+	incrementListMarker: true,
 	tightDefinitions: true,
-	resourceLink: false,
+	resourceLink: true,
 });
