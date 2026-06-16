@@ -655,14 +655,21 @@
 /* Document header — title / subtitle / divider, aligned to the reading measure
    and scaling with the reading zoom (Substack-style). */
 .recto-doc-header {
+	/* The pane (.recto-rich-pane) is a flex column and the header is a direct flex
+	   item. Auto cross-axis margins (margin-inline:auto) DISABLE align-items:stretch,
+	   so without an explicit size the header shrink-wraps to the title's text width
+	   and floats centered — narrower than, and offset from, the writing column.
+	   `inline-size:100%` gives it a definite width to fill before 68ch caps it, so it
+	   centers to the SAME box as the body (which is a block inside .milkdown, and so
+	   never shrink-wrapped). */
+	inline-size: 100%;
 	max-inline-size: 68ch;
 	margin-inline: auto;
 	padding-inline: var(--space-5);
 	padding-block: var(--space-7) 0;
 	font-family: var(--reading-font, var(--font-app-sans));
-	/* The body column measures 68ch against `--text-body * --reading-scale`. The
-	   header must use the SAME basis or its `ch` width drifts from the prose at any
-	   zoom ≠ 100%, pushing the title/subtitle left edge out of line with the body. */
+	/* And match the body's 68ch basis — `--text-body * --reading-scale` — so the two
+	   columns resolve to the same pixel width at any zoom, not just 100%. */
 	font-size: calc(var(--text-body) * var(--reading-scale, 1));
 }
 
