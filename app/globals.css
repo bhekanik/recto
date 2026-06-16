@@ -40,6 +40,10 @@
 	--color-bg-hover: oklch(0.29 0.011 80);
 	--color-accent-wash: oklch(0.74 0.185 24 / 0.16);
 
+	/* The caret — pure white, brighter than the warm off-white ink so it stays
+	   visible against text without the loudness of the coral accent. */
+	--color-caret: oklch(1 0 0);
+
 	/* App font stacks. We use app-prefixed names rather than Tailwind's own
 	   --font-sans / --font-serif theme keys: the latter collide with Tailwind's
 	   generated `--font-sans: var(--font-sans)` self-reference (→ empty → Times). */
@@ -412,9 +416,9 @@
 	margin-block-start: 0;
 }
 
-/* The caret — a clear coral bar, easy to find (not a faint hairline). */
+/* The caret — bright white, brighter than the ink so it reads against text. */
 .milkdown .ProseMirror {
-	caret-color: var(--color-accent);
+	caret-color: var(--color-caret);
 	outline: none;
 	/* ProseMirror requires pre-wrap so soft breaks and trailing spaces survive. */
 	white-space: pre-wrap;
@@ -545,7 +549,7 @@
 
 .cm-editor .cm-cursor {
 	border-left-width: 2.5px;
-	border-left-color: var(--color-accent);
+	border-left-color: var(--color-caret);
 }
 
 .milkdown-slash-menu {
@@ -600,7 +604,7 @@
 	resize: none;
 	overflow: hidden;
 	font-family: inherit;
-	caret-color: var(--color-accent);
+	caret-color: var(--color-caret);
 }
 
 .recto-doc-title {
