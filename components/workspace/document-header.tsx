@@ -69,7 +69,7 @@ export function DocumentHeader({
 	onEnterBody,
 }: DocumentHeaderProps) {
 	return (
-		<div className="recto-doc-header">
+		<div className="recto-doc-header" data-doc-header>
 			<AutoField
 				value={meta.title}
 				onChange={(title) => onChange({ ...meta, title })}

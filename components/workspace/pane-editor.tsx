@@ -76,6 +76,14 @@ export function PaneEditor({
 		richRef.current?.setMeta(meta);
 	}, []);
 
+	// Milkdown reports frontmatter on every seed. While the writer is editing the
+	// header, IT is the source of truth — a seed's (possibly stale) metadata must
+	// not clobber the title/subtitle being typed.
+	const handleEditorMeta = useCallback((meta: DocumentMeta) => {
+		if (document.activeElement?.closest("[data-doc-header]")) return;
+		setHeaderMeta(meta);
+	}, []);
+
 	const documentId = leaf.documentId;
 	const sync = useDocumentSyncFor(documentId);
 	const documents = useQuery(api.documents.list, documentId ? {} : "skip");
@@ -169,6 +177,9 @@ export function PaneEditor({
 		if (paneMarkdown !== null) return; // a local mode-switch owns this pane's content
 		const handle = leaf.mode === "rich" ? richRef.current : cmRef.current;
 		if (!handle || handle.isFocused()) return;
+		// The writer may be editing the title/subtitle (ProseMirror reports itself
+		// as unfocused then) — re-seeding would clobber the header mid-type.
+		if (document.activeElement?.closest("[data-doc-header]")) return;
 
 		handle.seed(sync.markdown, { programmatic: true });
 
@@ -454,7 +465,7 @@ export function PaneEditor({
 								ref={richRef}
 								bridgeSession={bridgeSession}
 								onChange={sync?.handleEditorChange}
-								onMeta={setHeaderMeta}
+								onMeta={handleEditorMeta}
 								className="milkdown"
 							/>
 						</div>
