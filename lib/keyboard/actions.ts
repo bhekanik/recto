@@ -11,7 +11,8 @@ export type ActionSection =
 	| "Panes"
 	| "History"
 	| "Copy/Export"
-	| "View";
+	| "View"
+	| "Theme";
 
 export type ActionId =
 	| "new-document"
@@ -42,7 +43,11 @@ export type ActionId =
 	| "zoom-out"
 	| "zoom-reset"
 	| "toggle-spellcheck"
-	| "toggle-toolbar";
+	| "toggle-toolbar"
+	| "theme-twilight"
+	| "theme-aurora"
+	| "theme-dawn"
+	| "theme-moonlit";
 
 export type ActionDef = {
 	id: ActionId;
@@ -253,6 +258,41 @@ export const ACTIONS: ActionDef[] = [
 		aliases: ["top toolbar", "format bar"],
 		shortcut: { mac: "", other: "" },
 	},
+	{
+		id: "theme-twilight",
+		label: "Theme: Twilight",
+		section: "Theme",
+		aliases: [
+			"indigo",
+			"periwinkle",
+			"calm",
+			"appearance",
+			"palette",
+			"colour",
+		],
+		shortcut: { mac: "", other: "" },
+	},
+	{
+		id: "theme-aurora",
+		label: "Theme: Aurora",
+		section: "Theme",
+		aliases: ["teal", "aqua", "mint", "appearance", "palette", "colour"],
+		shortcut: { mac: "", other: "" },
+	},
+	{
+		id: "theme-dawn",
+		label: "Theme: Dawn",
+		section: "Theme",
+		aliases: ["rose", "lavender", "appearance", "palette", "colour"],
+		shortcut: { mac: "", other: "" },
+	},
+	{
+		id: "theme-moonlit",
+		label: "Theme: Moonlit",
+		section: "Theme",
+		aliases: ["silver", "cyan", "minimal", "appearance", "palette", "colour"],
+		shortcut: { mac: "", other: "" },
+	},
 ];
 
 export const SECTION_ORDER: ActionSection[] = [
@@ -262,6 +302,7 @@ export const SECTION_ORDER: ActionSection[] = [
 	"History",
 	"Copy/Export",
 	"View",
+	"Theme",
 ];
 
 const isMac =

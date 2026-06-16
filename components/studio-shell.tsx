@@ -79,6 +79,13 @@ function StudioWorkspace() {
 
 	const settings = useStudioSettings();
 
+	// Apply the palette to <html> (not just the shell div) so it also reaches
+	// portalled overlays — command palette, switcher, dialogs — and the body
+	// atmosphere wash, all of which mount outside the shell subtree.
+	useEffect(() => {
+		document.documentElement.dataset.theme = settings.theme;
+	}, [settings.theme]);
+
 	const [commandOpen, setCommandOpen] = useState(false);
 	const [commandScope, setCommandScope] = useState<"all" | "documents">("all");
 	const [creating, setCreating] = useState(false);
@@ -337,6 +344,18 @@ function StudioWorkspace() {
 				case "toggle-toolbar":
 					settings.toggleTopToolbar();
 					return;
+				case "theme-twilight":
+					settings.setTheme("twilight");
+					return;
+				case "theme-aurora":
+					settings.setTheme("aurora");
+					return;
+				case "theme-dawn":
+					settings.setTheme("dawn");
+					return;
+				case "theme-moonlit":
+					settings.setTheme("moonlit");
+					return;
 			}
 		},
 		[
@@ -557,6 +576,11 @@ function StudioWorkspace() {
 							syncStatus={activeSync.syncStatus}
 							mode={activeMode}
 							onModeChange={(m) => dispatchModeSwitch(m)}
+							theme={settings.theme}
+							onCycleTheme={() => {
+								settings.cycleTheme();
+								dispatchFocusEditor();
+							}}
 							readingFont={settings.readingFont}
 							onToggleFont={() => {
 								settings.toggleReadingFont();

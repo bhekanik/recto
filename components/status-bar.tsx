@@ -5,6 +5,7 @@ import {
 	FileCode,
 	Keyboard,
 	Minus,
+	Palette,
 	Plus,
 	SpellCheck,
 	SquareDashed,
@@ -17,7 +18,11 @@ import {
 	modeToLabel,
 	type VimSubMode,
 } from "@/lib/modes/types";
-import type { ReadingFont } from "@/lib/studio/use-studio-settings";
+import {
+	type ReadingFont,
+	THEMES,
+	type Theme,
+} from "@/lib/studio/use-studio-settings";
 import type { SyncStatus } from "@/lib/sync/use-document-sync";
 import { cn } from "@/lib/utils";
 
@@ -34,6 +39,8 @@ type StatusBarProps = {
 	mode: Mode;
 	vimSubMode?: VimSubMode;
 	onModeChange: (mode: Mode) => void;
+	theme: Theme;
+	onCycleTheme: () => void;
 	readingFont: ReadingFont;
 	onToggleFont: () => void;
 	readingScale: number;
@@ -140,6 +147,8 @@ export function StatusBar({
 	syncStatus,
 	mode,
 	onModeChange,
+	theme,
+	onCycleTheme,
 	readingFont,
 	onToggleFont,
 	readingScale,
@@ -154,6 +163,7 @@ export function StatusBar({
 	onToggleZen,
 }: StatusBarProps) {
 	const zoomPct = Math.round(readingScale * 100);
+	const themeLabel = THEMES.find((t) => t.id === theme)?.label ?? theme;
 
 	return (
 		<footer
@@ -164,6 +174,23 @@ export function StatusBar({
 			<ModeSwitcher mode={mode} onModeChange={onModeChange} />
 
 			<div className="flex items-center gap-[var(--space-2)]">
+				{/* Colour theme — click to cycle through the calm palettes */}
+				<button
+					type="button"
+					onClick={onCycleTheme}
+					title={`Theme: ${themeLabel} — click to cycle`}
+					aria-label={`Theme: ${themeLabel}. Click to change theme`}
+					className="flex h-6 items-center gap-1.5 rounded-[var(--radius-sm)] px-2 text-[length:var(--text-ui-sm)] text-[var(--color-ink-tertiary)] transition-colors duration-[var(--motion-instant)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-ink-secondary)]"
+				>
+					<Palette
+						aria-hidden
+						className="size-[14px] text-[var(--color-accent)]"
+					/>
+					<span className="hidden sm:inline">{themeLabel}</span>
+				</button>
+
+				<span aria-hidden className="h-3.5 w-px bg-[var(--color-line)]" />
+
 				{/* Body font: sans / serif */}
 				<button
 					type="button"

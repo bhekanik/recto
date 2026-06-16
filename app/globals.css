@@ -6,43 +6,48 @@
 
 /* Recto dark-only design tokens — blueprint 12-design-system.md */
 @theme {
-	/* Warm editorial dark — ink on warm paper-dark. Low chroma so it reads as a
-	   considered neutral, not brown. The writing surface steps up in lightness so
-	   it reads as a defined sheet, not a void. */
-	--color-bg-app: oklch(0.165 0.007 75);
-	--color-bg-surface: oklch(0.215 0.008 78);
-	--color-bg-raised: oklch(0.255 0.009 80);
-	--color-bg-overlay: oklch(0.285 0.01 80);
+	/* ─── Default palette: TWILIGHT (indigo · periwinkle glow). The other calm
+	   themes override these same tokens under :root[data-theme="…"] below. Soft
+	   colour on a deep, considered base — ethereal and calm, never flat grey. The
+	   base carries real (low) chroma so the room reads as dusk, not a void. ─── */
+	--color-bg-app: oklch(0.18 0.028 280);
+	--color-bg-surface: oklch(0.215 0.03 281);
+	--color-bg-raised: oklch(0.255 0.032 282);
+	--color-bg-overlay: oklch(0.285 0.034 282);
 
-	--color-ink-primary: oklch(0.94 0.012 85);
-	--color-ink-secondary: oklch(0.78 0.012 82);
-	--color-ink-tertiary: oklch(0.655 0.011 80);
+	--color-ink-primary: oklch(0.94 0.012 285);
+	--color-ink-secondary: oklch(0.79 0.016 284);
+	--color-ink-tertiary: oklch(0.665 0.018 283);
 
-	--color-line: oklch(0.32 0.009 78);
-	--color-line-strong: oklch(0.44 0.011 78);
+	--color-line: oklch(0.33 0.025 282);
+	--color-line-strong: oklch(0.45 0.03 282);
 
-	/* A bright coral accent (Bear-like) — the single live affordance: caret,
-	   links, active states, list markers. Tuned LIGHT + saturated (L 0.74, hue
-	   ~24 toward red) so it reads as vivid coral on the dark surface rather than
-	   a muddy low-contrast amber. */
-	--color-accent: oklch(0.74 0.185 24);
-	--color-accent-muted: oklch(0.6 0.14 24);
-	--color-accent-2: oklch(0.79 0.17 27);
+	/* The single live affordance — caret, links, list markers, active states.
+	   A soft periwinkle that glows rather than shouts (P5: calm). */
+	--color-accent: oklch(0.74 0.13 288);
+	--color-accent-muted: oklch(0.62 0.11 288);
+	--color-accent-2: oklch(0.78 0.1 250);
 
-	--color-success: oklch(0.8 0.09 150);
-	--color-warning: oklch(0.84 0.11 85);
-	--color-danger: oklch(0.7 0.2 24);
+	--color-success: oklch(0.8 0.095 155);
+	--color-warning: oklch(0.84 0.1 85);
+	--color-danger: oklch(0.7 0.16 20);
 
-	--color-selection: oklch(0.74 0.185 24 / 0.26);
-	--color-focus-ring: oklch(0.77 0.18 27);
+	--color-selection: oklch(0.74 0.13 288 / 0.26);
+	--color-focus-ring: oklch(0.76 0.12 286);
 
 	/* Interaction fills (derived) */
-	--color-bg-hover: oklch(0.29 0.011 80);
-	--color-accent-wash: oklch(0.74 0.185 24 / 0.16);
+	--color-bg-hover: oklch(0.29 0.034 282);
+	--color-accent-wash: oklch(0.74 0.13 288 / 0.15);
 
-	/* The caret — pure white, brighter than the warm off-white ink so it stays
-	   visible against text without the loudness of the coral accent. */
-	--color-caret: oklch(1 0 0);
+	/* Caret — bright and faintly tinted so it reads against text without the
+	   loudness of the accent. */
+	--color-caret: oklch(0.92 0.04 285);
+
+	/* Atmosphere — a faint two-tone aurora wash on the canvas + the overlay
+	   scrim. Per-theme, so the room's colour drifts with the palette. */
+	--atmos-1: oklch(0.5 0.12 290 / 0.4);
+	--atmos-2: oklch(0.42 0.1 255 / 0.4);
+	--scrim: oklch(0.12 0.02 280 / 0.6);
 
 	/* App font stacks. We use app-prefixed names rather than Tailwind's own
 	   --font-sans / --font-serif theme keys: the latter collide with Tailwind's
@@ -105,6 +110,79 @@
 	--ease-in: cubic-bezier(0.4, 0, 1, 1);
 }
 
+/* ─── Calm/ethereal themes (D13). The default (TWILIGHT) lives in @theme above;
+   these override the palette tokens when the studio sets `data-theme` on <html>.
+   Each keeps the same structure — only hue, chroma, accent, glow and scrim move.
+   Semantic success/warning/danger stay constant across themes. ─── */
+:root[data-theme="aurora"] {
+	--color-bg-app: oklch(0.18 0.022 202);
+	--color-bg-surface: oklch(0.215 0.024 202);
+	--color-bg-raised: oklch(0.255 0.026 200);
+	--color-bg-overlay: oklch(0.285 0.028 200);
+	--color-ink-primary: oklch(0.94 0.012 200);
+	--color-ink-secondary: oklch(0.79 0.016 200);
+	--color-ink-tertiary: oklch(0.665 0.018 200);
+	--color-line: oklch(0.33 0.022 200);
+	--color-line-strong: oklch(0.45 0.026 200);
+	--color-accent: oklch(0.78 0.115 178);
+	--color-accent-muted: oklch(0.64 0.1 180);
+	--color-accent-2: oklch(0.8 0.1 205);
+	--color-selection: oklch(0.78 0.115 178 / 0.24);
+	--color-focus-ring: oklch(0.78 0.1 185);
+	--color-bg-hover: oklch(0.29 0.028 200);
+	--color-accent-wash: oklch(0.78 0.115 178 / 0.14);
+	--color-caret: oklch(0.93 0.05 190);
+	--atmos-1: oklch(0.5 0.1 185 / 0.38);
+	--atmos-2: oklch(0.44 0.09 162 / 0.36);
+	--scrim: oklch(0.12 0.018 200 / 0.6);
+}
+
+:root[data-theme="dawn"] {
+	--color-bg-app: oklch(0.185 0.016 330);
+	--color-bg-surface: oklch(0.22 0.018 331);
+	--color-bg-raised: oklch(0.26 0.02 332);
+	--color-bg-overlay: oklch(0.29 0.022 332);
+	--color-ink-primary: oklch(0.94 0.01 330);
+	--color-ink-secondary: oklch(0.79 0.014 330);
+	--color-ink-tertiary: oklch(0.665 0.016 330);
+	--color-line: oklch(0.33 0.018 330);
+	--color-line-strong: oklch(0.45 0.022 330);
+	--color-accent: oklch(0.78 0.09 350);
+	--color-accent-muted: oklch(0.64 0.08 350);
+	--color-accent-2: oklch(0.78 0.08 300);
+	--color-selection: oklch(0.78 0.09 350 / 0.24);
+	--color-focus-ring: oklch(0.78 0.08 345);
+	--color-bg-hover: oklch(0.3 0.022 332);
+	--color-accent-wash: oklch(0.78 0.09 350 / 0.14);
+	--color-caret: oklch(0.93 0.04 345);
+	--atmos-1: oklch(0.55 0.09 350 / 0.34);
+	--atmos-2: oklch(0.5 0.08 298 / 0.34);
+	--scrim: oklch(0.12 0.014 330 / 0.6);
+}
+
+:root[data-theme="moonlit"] {
+	--color-bg-app: oklch(0.155 0.014 250);
+	--color-bg-surface: oklch(0.195 0.016 250);
+	--color-bg-raised: oklch(0.235 0.018 250);
+	--color-bg-overlay: oklch(0.265 0.02 250);
+	--color-ink-primary: oklch(0.94 0.01 250);
+	--color-ink-secondary: oklch(0.79 0.014 250);
+	--color-ink-tertiary: oklch(0.66 0.016 250);
+	--color-line: oklch(0.31 0.018 250);
+	--color-line-strong: oklch(0.43 0.022 250);
+	--color-accent: oklch(0.82 0.08 210);
+	--color-accent-muted: oklch(0.68 0.07 212);
+	--color-accent-2: oklch(0.83 0.08 215);
+	--color-selection: oklch(0.82 0.08 210 / 0.22);
+	--color-focus-ring: oklch(0.82 0.07 212);
+	--color-bg-hover: oklch(0.27 0.02 250);
+	--color-accent-wash: oklch(0.82 0.08 210 / 0.12);
+	--color-caret: oklch(0.94 0.03 230);
+	--atmos-1: oklch(0.42 0.07 240 / 0.4);
+	--atmos-2: oklch(0.22 0.04 250 / 0.5);
+	--scrim: oklch(0.1 0.015 250 / 0.62);
+}
+
 @media (prefers-reduced-motion: reduce) {
 	*,
 	*::before,
@@ -162,16 +240,8 @@
 		z-index: 0;
 		pointer-events: none;
 		background:
-			radial-gradient(
-				120% 90% at 50% -5%,
-				oklch(0.27 0.012 80 / 0.6),
-				transparent 50%
-			),
-			radial-gradient(
-				130% 90% at 50% 115%,
-				oklch(0.12 0.008 70 / 0.7),
-				transparent 60%
-			);
+			radial-gradient(125% 85% at 18% -8%, var(--atmos-1), transparent 55%),
+			radial-gradient(125% 85% at 92% 112%, var(--atmos-2), transparent 58%);
 	}
 
 	body::after {
@@ -257,14 +327,14 @@
 
 	/* Overlay scrim + floating panel — the command palette, switcher, dialogs. */
 	.recto-scrim {
-		background: oklch(0.1 0.008 70 / 0.58);
+		background: var(--scrim);
 		backdrop-filter: blur(2px);
 		animation: recto-fade-in var(--motion-fast) var(--ease-out);
 	}
 
 	@media (prefers-reduced-transparency: reduce) {
 		.recto-scrim {
-			background: oklch(0.12 0.008 70 / 0.92);
+			background: oklch(0.1 0.01 280 / 0.95);
 			backdrop-filter: none;
 		}
 	}

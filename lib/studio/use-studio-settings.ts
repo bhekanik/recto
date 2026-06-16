@@ -5,7 +5,22 @@ import { useCallback, useEffect, useState } from "react";
 /** The writing-body typeface — the chrome is always sans. */
 export type ReadingFont = "sans" | "serif";
 
+/** Calm/ethereal colour themes. Each is a soft-coloured dark palette (D13). */
+export type Theme = "twilight" | "aurora" | "dawn" | "moonlit";
+
+/** Ordered for the cycle control + command palette; first is the default. */
+export const THEMES: { id: Theme; label: string; hint: string }[] = [
+	{ id: "twilight", label: "Twilight", hint: "indigo · periwinkle" },
+	{ id: "aurora", label: "Aurora", hint: "teal · aqua-mint" },
+	{ id: "dawn", label: "Dawn", hint: "charcoal · rose-lavender" },
+	{ id: "moonlit", label: "Moonlit", hint: "near-black · silver-cyan" },
+];
+
+const THEME_IDS = THEMES.map((t) => t.id);
+
 export type StudioSettings = {
+	/** Soft-coloured dark palette for the whole studio. */
+	theme: Theme;
 	/** Body typeface for the writing surface (Bear sans / Substack serif). */
 	readingFont: ReadingFont;
 	/** Text-zoom multiplier for the reading column (not the font size — the whole column). */
@@ -21,6 +36,7 @@ export const READING_SCALE_MAX = 2.0;
 const READING_SCALE_STEP = 0.1;
 
 const DEFAULTS: StudioSettings = {
+	theme: "twilight",
 	readingFont: "sans",
 	readingScale: 1,
 	spellcheck: true,
@@ -45,6 +61,10 @@ function loadSettings(): StudioSettings {
 		if (!raw) return DEFAULTS;
 		const parsed = JSON.parse(raw) as Partial<StudioSettings>;
 		return {
+			theme:
+				parsed.theme && THEME_IDS.includes(parsed.theme)
+					? parsed.theme
+					: DEFAULTS.theme,
 			readingFont: parsed.readingFont === "serif" ? "serif" : "sans",
 			readingScale:
 				typeof parsed.readingScale === "number"
@@ -65,6 +85,8 @@ function loadSettings(): StudioSettings {
 }
 
 export type StudioSettingsApi = StudioSettings & {
+	setTheme: (theme: Theme) => void;
+	cycleTheme: () => void;
 	toggleReadingFont: () => void;
 	setReadingFont: (font: ReadingFont) => void;
 	zoomIn: () => void;
@@ -90,6 +112,18 @@ export function useStudioSettings(): StudioSettingsApi {
 			// Private mode / quota — settings simply won't persist.
 		}
 	}, [settings]);
+
+	const setTheme = useCallback((theme: Theme) => {
+		setSettings((s) => ({ ...s, theme }));
+	}, []);
+
+	const cycleTheme = useCallback(() => {
+		setSettings((s) => {
+			const i = THEME_IDS.indexOf(s.theme);
+			const next = THEME_IDS[(i + 1) % THEME_IDS.length] ?? s.theme;
+			return { ...s, theme: next };
+		});
+	}, []);
 
 	const setReadingFont = useCallback((readingFont: ReadingFont) => {
 		setSettings((s) => ({ ...s, readingFont }));
@@ -130,6 +164,8 @@ export function useStudioSettings(): StudioSettingsApi {
 
 	return {
 		...settings,
+		setTheme,
+		cycleTheme,
 		toggleReadingFont,
 		setReadingFont,
 		zoomIn,
