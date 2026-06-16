@@ -590,6 +590,10 @@
 	padding-inline: var(--space-5);
 	padding-block: var(--space-7) 0;
 	font-family: var(--reading-font, var(--font-app-sans));
+	/* The body column measures 68ch against `--text-body * --reading-scale`. The
+	   header must use the SAME basis or its `ch` width drifts from the prose at any
+	   zoom ≠ 100%, pushing the title/subtitle left edge out of line with the body. */
+	font-size: calc(var(--text-body) * var(--reading-scale, 1));
 }
 
 .recto-doc-title,
