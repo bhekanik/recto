@@ -2,9 +2,12 @@
 
 Writing studio — canonical Markdown, four lenses, branching undo.
 
-## Phase 1 (current)
+**Live:** [recto-dusky.vercel.app](https://recto-dusky.vercel.app)
 
-Production app: Next.js + Convex + Better Auth + one Milkdown editor with debounced cloud sync.
+## Stack
+
+Next.js 16 + Convex + Clerk auth, with rich (Milkdown), raw/Vim (CodeMirror), and
+preview lenses over one canonical Markdown document, debounced cloud sync.
 
 ```bash
 bun install
@@ -31,13 +34,24 @@ bun run convex:configure
 
 Dashboard: [dashboard.convex.dev/t/bhekani-khumalo/recto](https://dashboard.convex.dev/t/bhekani-khumalo/recto)
 
-First visit: create an account at `/login`, then create a document from the empty state.
+First visit: sign in at `/login` (Clerk), then create a document from the empty state.
 
-Env (`.env.local` from `convex dev`):
+Env (`.env.local`):
 
-- `NEXT_PUBLIC_CONVEX_URL`
-- `NEXT_PUBLIC_CONVEX_SITE_URL`
-- `NEXT_PUBLIC_SITE_URL=http://localhost:3000`
+- `NEXT_PUBLIC_CONVEX_URL` / `NEXT_PUBLIC_CONVEX_SITE_URL` (from `convex dev`)
+- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` / `CLERK_SECRET_KEY` (from `clerk env pull`)
+- `NEXT_PUBLIC_CLERK_SIGN_IN_URL=/login`
+
+Convex needs the Clerk issuer to verify JWTs (the `convex` JWT template):
+`npx convex env set CLERK_JWT_ISSUER_DOMAIN https://<your-instance>.clerk.accounts.dev`.
+
+## Deployment
+
+Hosted on Vercel (team **Planetary Escape**), Convex production, Clerk auth.
+**Pushing/merging to `main` auto-deploys to production** — Vercel's Git integration
+runs the build in [`vercel.json`](./vercel.json), which on production builds runs
+`convex deploy` (via `CONVEX_DEPLOY_KEY`) and then `next build`. Production env vars
+(Convex URL, Clerk keys, deploy key) live in the Vercel project settings.
 
 ## Phase 0 spikes
 
