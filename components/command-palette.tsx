@@ -1,149 +1,182 @@
 "use client";
 
 import { Command } from "cmdk";
-import { ChevronRight, Eye, FileCode, Keyboard, Type } from "lucide-react";
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
+
+import type { Id } from "@/convex/_generated/dataModel";
 import {
-	MODE_RING,
-	type Mode,
-	modeToLabel,
-	nextMode,
-	prevMode,
-	type VimSubMode,
-} from "@/lib/modes/types";
-import { cn } from "@/lib/utils";
+	ACTIONS,
+	type ActionId,
+	SECTION_ORDER,
+	shortcutHint,
+} from "@/lib/keyboard/actions";
+
+type DocMeta = {
+	_id: Id<"documents">;
+	title: string;
+	wordCount: number;
+	updatedAt: number;
+};
 
 type CommandPaletteProps = {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
-	mode: Mode;
-	vimSubMode?: VimSubMode;
-	onSwitchMode: (mode: Mode) => void;
+	scope?: "all" | "documents";
+	documents: DocMeta[] | undefined;
+	onRunAction: (id: ActionId) => void;
+	onOpenDocument: (id: Id<"documents">) => void;
 };
 
-const MODE_ICONS: Record<Mode, typeof Type> = {
-	rich: Type,
-	raw: FileCode,
-	vim: Keyboard,
-	preview: Eye,
-};
+const HEADING =
+	"[&_[cmdk-group-heading]]:px-[var(--space-2)] [&_[cmdk-group-heading]]:pt-[var(--space-3)] [&_[cmdk-group-heading]]:pb-[var(--space-1)] [&_[cmdk-group-heading]]:text-[0.6875rem] [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-[0.08em] [&_[cmdk-group-heading]]:text-[var(--color-ink-tertiary)]";
+
+const ITEM =
+	"recto-item flex cursor-pointer items-center gap-[var(--space-2)] px-[var(--space-2)] py-[var(--space-2)] text-[length:var(--text-ui-sm)] text-[var(--color-ink-secondary)]";
 
 export function CommandPalette({
 	open,
 	onOpenChange,
-	mode,
-	vimSubMode,
-	onSwitchMode,
+	scope = "all",
+	documents,
+	onRunAction,
+	onOpenDocument,
 }: CommandPaletteProps) {
 	const close = useCallback(() => onOpenChange(false), [onOpenChange]);
 
-	const run = useCallback(
-		(action: () => void) => {
-			action();
-			close();
-		},
-		[close],
-	);
-
 	useEffect(() => {
 		if (!open) return;
-		const onKeyDown = (event: KeyboardEvent) => {
+		const onKey = (event: KeyboardEvent) => {
 			if (event.key === "Escape") {
 				event.preventDefault();
 				close();
 			}
 		};
-		window.addEventListener("keydown", onKeyDown, true);
-		return () => window.removeEventListener("keydown", onKeyDown, true);
+		window.addEventListener("keydown", onKey, true);
+		return () => window.removeEventListener("keydown", onKey, true);
 	}, [open, close]);
+
+	// Restore focus to the previously-active element when the palette closes (§8).
+	const restoreFocusRef = useRef<HTMLElement | null>(null);
+	useEffect(() => {
+		if (open) {
+			restoreFocusRef.current = document.activeElement as HTMLElement | null;
+		} else if (restoreFocusRef.current) {
+			restoreFocusRef.current.focus?.();
+			restoreFocusRef.current = null;
+		}
+	}, [open]);
 
 	if (!open) return null;
 
+	const run = (fn: () => void) => {
+		// Run synchronously in the gesture (Copy/Export need transient activation).
+		fn();
+		close();
+	};
+
+	const sections =
+		scope === "documents" ? (["Documents"] as const) : SECTION_ORDER;
+	const newDoc = ACTIONS.find((a) => a.id === "new-document");
+
 	return (
 		<div
-			className="fixed inset-0 z-[100] flex items-start justify-center px-4 pt-[min(20vh,8rem)]"
+			className="fixed inset-0 z-[100] flex items-start justify-center px-4 pt-[min(18vh,7rem)]"
 			role="dialog"
 			aria-modal="true"
 			aria-label="Command palette"
 		>
 			<button
 				type="button"
-				className="absolute inset-0 bg-black/40"
+				className="recto-scrim absolute inset-0"
 				aria-label="Close command palette"
 				onClick={close}
 			/>
 			<Command
-				className="relative z-10 w-full max-w-md overflow-hidden rounded-[var(--radius-lg)] border border-border bg-[var(--color-bg-raised)] shadow-xl"
+				className="recto-panel relative z-10 w-full max-w-lg overflow-hidden"
 				onMouseDown={(event) => event.stopPropagation()}
 				loop
 			>
-				<div className="border-b border-border px-3">
+				<div className="border-b border-[var(--color-line)] px-[var(--space-4)]">
 					<Command.Input
-						placeholder="Type a command…"
+						placeholder={
+							scope === "documents"
+								? "Search documents…"
+								: "Search commands and documents…"
+						}
 						autoFocus
-						className="h-11 w-full bg-transparent text-[length:var(--text-ui)] text-[var(--color-ink-primary)] outline-none placeholder:text-[var(--color-ink-tertiary)]"
+						className="h-14 w-full bg-transparent text-[length:var(--text-ui)] leading-[var(--leading-ui)] text-[var(--color-ink-primary)] outline-none placeholder:text-[var(--color-ink-tertiary)]"
 					/>
 				</div>
-				<Command.List className="max-h-72 overflow-y-auto p-1">
-					<Command.Empty className="px-3 py-6 text-center text-[length:var(--text-ui-sm)] text-[var(--color-ink-tertiary)]">
-						No matching commands.
+				<Command.List className="max-h-[22rem] overflow-y-auto p-[var(--space-1)]">
+					<Command.Empty className="px-[var(--space-3)] py-[var(--space-5)] text-center text-[length:var(--text-ui-sm)] text-[var(--color-ink-tertiary)]">
+						No matches.
 					</Command.Empty>
 
-					<Command.Group
-						heading="Mode"
-						className="px-2 py-1 text-[length:var(--text-ui-sm)] text-[var(--color-ink-tertiary)] [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5"
-					>
-						{MODE_RING.map((m) => {
-							const Icon = MODE_ICONS[m];
-							const active = mode === m;
+					{sections.map((section) => {
+						if (section === "Documents") {
 							return (
-								<Command.Item
-									key={m}
-									value={`mode ${modeToLabel(m)} ${m}`}
-									onSelect={() => run(() => onSwitchMode(m))}
-									className={cn(
-										"flex cursor-pointer items-center gap-2 rounded-[var(--radius-md)] px-2 py-2 text-[length:var(--text-ui-sm)] text-[var(--color-ink-secondary)] aria-selected:bg-[var(--color-bg-hover)] aria-selected:text-[var(--color-ink-primary)]",
-										active && "font-medium text-[var(--color-ink-primary)]",
-									)}
+								<Command.Group
+									key="Documents"
+									heading="Documents"
+									className={HEADING}
 								>
-									<Icon className="size-4 shrink-0 opacity-70" aria-hidden />
-									<span className="flex-1">
-										Switch to{" "}
-										{modeToLabel(m, m === "vim" ? vimSubMode : undefined)}
-									</span>
-									{active ? (
-										<span className="text-[var(--color-ink-tertiary)]">
-											Current
-										</span>
-									) : (
-										<ChevronRight className="size-4 opacity-40" aria-hidden />
+									{newDoc && (
+										<Command.Item
+											value="new document create add"
+											onSelect={() => run(() => onRunAction("new-document"))}
+											className={ITEM}
+										>
+											<span className="flex-1 text-[var(--color-ink-primary)]">
+												{newDoc.label}
+											</span>
+											<kbd className="recto-kbd">{shortcutHint(newDoc)}</kbd>
+										</Command.Item>
 									)}
-								</Command.Item>
+									{(documents ?? []).map((doc) => (
+										<Command.Item
+											key={doc._id}
+											value={`document ${doc.title}`}
+											onSelect={() => run(() => onOpenDocument(doc._id))}
+											className={ITEM}
+										>
+											<span className="min-w-0 flex-1 truncate text-[var(--color-ink-primary)]">
+												{doc.title}
+											</span>
+											<span className="shrink-0 text-[var(--color-ink-tertiary)]">
+												{doc.wordCount.toLocaleString()} w
+											</span>
+										</Command.Item>
+									))}
+								</Command.Group>
 							);
-						})}
-						<Command.Item
-							value="mode next cycle"
-							onSelect={() => run(() => onSwitchMode(nextMode(mode)))}
-							className="flex cursor-pointer items-center gap-2 rounded-[var(--radius-md)] px-2 py-2 text-[length:var(--text-ui-sm)] text-[var(--color-ink-secondary)] aria-selected:bg-[var(--color-bg-hover)] aria-selected:text-[var(--color-ink-primary)]"
-						>
-							<ChevronRight
-								className="size-4 shrink-0 opacity-70"
-								aria-hidden
-							/>
-							<span className="flex-1">Next mode</span>
-						</Command.Item>
-						<Command.Item
-							value="mode previous cycle"
-							onSelect={() => run(() => onSwitchMode(prevMode(mode)))}
-							className="flex cursor-pointer items-center gap-2 rounded-[var(--radius-md)] px-2 py-2 text-[length:var(--text-ui-sm)] text-[var(--color-ink-secondary)] aria-selected:bg-[var(--color-bg-hover)] aria-selected:text-[var(--color-ink-primary)]"
-						>
-							<ChevronRight
-								className="size-4 shrink-0 rotate-180 opacity-70"
-								aria-hidden
-							/>
-							<span className="flex-1">Previous mode</span>
-						</Command.Item>
-					</Command.Group>
+						}
+
+						const defs = ACTIONS.filter(
+							(a) => a.section === section && a.id !== "new-document",
+						);
+						if (defs.length === 0) return null;
+						return (
+							<Command.Group
+								key={section}
+								heading={section}
+								className={HEADING}
+							>
+								{defs.map((def) => (
+									<Command.Item
+										key={def.id}
+										value={`${def.label} ${def.aliases?.join(" ") ?? ""} ${section}`}
+										onSelect={() => run(() => onRunAction(def.id))}
+										className={ITEM}
+									>
+										<span className="flex-1">{def.label}</span>
+										{shortcutHint(def) && (
+											<kbd className="recto-kbd">{shortcutHint(def)}</kbd>
+										)}
+									</Command.Item>
+								))}
+							</Command.Group>
+						);
+					})}
 				</Command.List>
 			</Command>
 		</div>

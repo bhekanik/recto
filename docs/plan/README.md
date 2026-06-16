@@ -4,7 +4,13 @@
 
 Each phase file is **self-contained**: it restates its own goal, prerequisites, work breakdown, technical approach, the data-model and dependencies it touches, explicit out-of-scope items, testable exit criteria, and risks. You should be able to hand a single phase file to an implementer and have them execute it without reading the others (though they should read the blueprint).
 
-**Current status:** Phase 0–2 are complete. Next up: [Phase 3 — Multi-doc, split & workspace](./phase-3-multi-doc-split-workspace.md).
+**Current status:** Phases 0–5 are complete — Recto is feature-complete for v1. The studio runs end-to-end (auth → multi-pane workspace → four lossless lenses → branching undo tree + versions → command palette, clipboard/export) on a bespoke dark, typography-first design, verified at runtime in the browser. `bun run typecheck`, `bun run biome`, `bun run test` (97 vitest + 4 spike Convex tests), and `bun run build` are all green.
+
+> **Notable deviations from the blueprint, reconciled during the build:**
+> - **ADR-17 closed:** `documents.create` now inserts a root `docNodes` node; `documents.remove` cascades `docNodes`/`versions`; legacy docs lazily get a root via `docNodes.ensureRoot`. `userId` stays `v.string()` (Better Auth ids) by design.
+> - **Editor registry stores ref objects, not `.current` snapshots** (`lib/workspace/document-registry.ts`) — a snapshot froze a transient `null` while a pane rebound to a new document and the editor briefly unmounted, silently breaking live word-count/autosave/title-derivation on freshly-created docs. Caught only by runtime verification.
+> - **Design — warm editorial direction.** The §2.1 palette was tuned from the cool blue-grey (hue 265) to a **warm paper-dark** (hue ~75–80, low chroma) with a single restrained warm-gold accent and a cool blue-teal for links — it reads as ink on warm paper rather than text on a cold screen. The writing surface is a defined "sheet" (stepped-up lightness + top-light + hairline + soft lift) holding a centered ~68ch serif column (the measure now constrains the editable container itself, fixing block misalignment). `--color-bg-hover`/`--color-accent-wash` added as derived fills; the `--motion-*`/easing set completed to §7.1; `--color-ink-tertiary` tuned for WCAG 4.5:1 on every layer. Hue values are tunable (§2.5) — revert toward 265 if a cooler register is preferred.
+> - **Bridge dep** remains the ADR-15-pinned `@manuscripts/prosemirror-recreate-steps@0.1.4` (migration to a maintained fork deferred).
 
 ---
 
@@ -21,9 +27,9 @@ Recto has two genuinely novel, unproven mechanisms — **live two-mode editing o
 | [0](./phase-0-spikes.md) | **Spikes** | Prove the live two-mode bridge and the cloud undo-tree DAG, or choose fallbacks — before any product UI | `05`, `07`, `10` | ✅ Done |
 | [1](./phase-1-foundation.md) | **Foundation** | Next.js + Convex + Better Auth + dark shell; document CRUD; one rich-text surface that syncs and never loses words; live word count | `02`, `03`, `10`, `12` | ✅ Done |
 | [2](./phase-2-modes-and-losslessness.md) | **Modes & losslessness** | Add raw Markdown, Vim, and preview; lossless mode switching; slash palette; full GFM + footnotes + frontmatter with round-trip tests | `04`, `05`, `06`, `13` | ✅ Done |
-| [3](./phase-3-multi-doc-split-workspace.md) | **Multi-doc, split & workspace** | Document switcher; nested split panes; same-doc-two-live-modes; workspace persistence and cross-device resume | `09`, `10` | — |
-| [4](./phase-4-history.md) | **History** | Undo-tree visualizer wired to the persisted DAG; version history with auto + manual tags; additive restore | `07`, `08` | — |
-| [5](./phase-5-polish-and-export.md) | **Polish & export** | Command palette; clipboard (html+plain) and copy-as-markdown; export .md / .html; bespoke design pass | `11`, `12`, `13` | — |
+| [3](./phase-3-multi-doc-split-workspace.md) | **Multi-doc, split & workspace** | Document switcher; nested split panes; same-doc-two-live-modes; workspace persistence and cross-device resume | `09`, `10` | ✅ Done |
+| [4](./phase-4-history.md) | **History** | Undo-tree visualizer wired to the persisted DAG; version history with auto + manual tags; additive restore | `07`, `08` | ✅ Done |
+| [5](./phase-5-polish-and-export.md) | **Polish & export** | Command palette; clipboard (html+plain) and copy-as-markdown; export .md / .html; bespoke design pass | `11`, `12`, `13` | ✅ Done |
 
 ---
 

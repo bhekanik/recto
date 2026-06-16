@@ -25,6 +25,8 @@ type UseDocumentSyncArgs = {
 	serverMarkdown: string | undefined;
 	serverUpdatedAt: number | undefined;
 	enabled: boolean;
+	deriveTitle?: (markdown: string) => string | undefined;
+	isManualTitle?: boolean;
 };
 
 type UseDocumentSyncResult = {
@@ -57,6 +59,8 @@ export function useDocumentSync({
 	serverMarkdown,
 	serverUpdatedAt,
 	enabled,
+	deriveTitle,
+	isManualTitle = false,
 }: UseDocumentSyncArgs): UseDocumentSyncResult {
 	const updateMarkdown = useMutation(api.documents.updateMarkdown);
 
@@ -114,11 +118,14 @@ export function useDocumentSync({
 			setSyncStatus("saving");
 
 			try {
+				const derivedTitle =
+					!isManualTitle && deriveTitle ? deriveTitle(markdown) : undefined;
 				const result = await updateMarkdown({
 					documentId,
 					markdown,
 					wordCount: words,
 					expectedUpdatedAt: expected,
+					title: derivedTitle,
 				});
 
 				if (result.stale) {
@@ -140,7 +147,7 @@ export function useDocumentSync({
 				return "done";
 			}
 		},
-		[documentId, updateMarkdown],
+		[documentId, deriveTitle, isManualTitle, updateMarkdown],
 	);
 
 	const runFlush = useCallback(
@@ -171,7 +178,11 @@ export function useDocumentSync({
 		await runFlush();
 	}, [runFlush]);
 
-	const debouncedFlush = useDebouncedCallback(flush, DEBOUNCE_MS);
+	// maxWait guarantees a flush even while the writer never pauses (D11 safety
+	// net): a continuous typist still persists at least every ~5s.
+	const debouncedFlush = useDebouncedCallback(flush, DEBOUNCE_MS, {
+		maxWait: 5000,
+	});
 
 	const flushMarkdown = useCallback(
 		async (markdown: string) => {

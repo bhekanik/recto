@@ -13,6 +13,9 @@
 			"complexity": {
 				"noImportantStyles": "off"
 			},
+			"style": {
+				"noDescendingSpecificity": "off"
+			},
 			"a11y": {
 				"useAriaPropsSupportedByRole": "warn",
 				"noLabelWithoutControl": "off"

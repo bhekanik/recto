@@ -1,3 +1,4 @@
+import type { FormatCommand } from "@/lib/editor/format";
 import type { CaretPosition } from "@/lib/modes/types";
 
 /** Shared editor surface API for sync and mode switching. */
@@ -9,6 +10,8 @@ export type EditorHandle = {
 	focus: () => void;
 	isFocused: () => boolean;
 	getRootElement: () => HTMLElement | null;
+	/** Apply a formatting command (from the top toolbar / floating bar). */
+	runFormat: (command: FormatCommand, opts?: { href?: string }) => void;
 };
 
 /** Read-only preview — no editing surface. */
@@ -21,5 +24,6 @@ export function createPreviewHandle(getMarkdown: () => string): EditorHandle {
 		focus() {},
 		isFocused: () => false,
 		getRootElement: () => null,
+		runFormat() {},
 	};
 }

@@ -34,6 +34,10 @@ export class Bridge {
 		return this.version;
 	}
 
+	nextVersion(): number {
+		return this.version;
+	}
+
 	shouldPropagate(isProgrammatic: boolean): boolean {
 		if (this.isApplying) return false;
 		if (isProgrammatic) return false;

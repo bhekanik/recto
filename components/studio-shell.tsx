@@ -1,169 +1,647 @@
 "use client";
 
+import { useClerk } from "@clerk/nextjs";
 import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CommandPalette } from "@/components/command-palette";
-import { EditorPane } from "@/components/editor-pane";
+import { DocumentSwitcher } from "@/components/document-switcher";
 import { EmptyState } from "@/components/empty-state";
-import { ModeToolbar } from "@/components/mode-toolbar";
+import {
+	HistoryPanel,
+	type HistoryView,
+} from "@/components/history/history-panel";
 import { StatusBar } from "@/components/status-bar";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Toaster } from "@/components/toaster";
+import { TopFormatToolbar } from "@/components/top-format-toolbar";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { RenderPaneNode } from "@/components/workspace/render-pane-node";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { authClient } from "@/lib/auth-client";
-import type { CodeMirrorEditorHandle } from "@/lib/editor/codemirror";
-import { createPreviewHandle } from "@/lib/editor/handle";
-import type { MilkdownEditorHandle } from "@/lib/editor/milkdown";
-import { createAppShortcutHandler } from "@/lib/keyboard/app-shortcuts";
 import {
-	type CaretPosition,
-	type Mode,
-	modeToLabel,
-	type VimSubMode,
-} from "@/lib/modes/types";
-import { useDocumentSync } from "@/lib/sync/use-document-sync";
+	copyAsMarkdown,
+	copyAsRichText,
+	type ExportSource,
+	exportHtmlFile,
+	exportMarkdownFile,
+} from "@/lib/export";
+import type { ActionId } from "@/lib/keyboard/actions";
+import {
+	createAppShortcutHandler,
+	dispatchFocusEditor,
+	dispatchModeSwitch,
+	resolveModeAction,
+} from "@/lib/keyboard/app-shortcuts";
+import { StudioSettingsProvider } from "@/lib/studio/settings-context";
+import {
+	READING_SCALE_MAX,
+	READING_SCALE_MIN,
+	useStudioSettings,
+} from "@/lib/studio/use-studio-settings";
+import { cn } from "@/lib/utils";
+import { findLeaf } from "@/lib/workspace/queries";
+import {
+	getActiveLeaf,
+	useDocumentHistoryFor,
+	useWorkspace,
+	WorkspaceProvider,
+} from "@/lib/workspace/workspace-context";
 
-const ACTIVE_DOC_KEY = "recto:active-document";
+function StudioWorkspace() {
+	const {
+		workspace,
+		actions,
+		registry,
+		loading,
+		documentSwitcherOpen,
+		setDocumentSwitcherOpen,
+		getDocumentSync,
+	} = useWorkspace();
+
+	const documents = useQuery(api.documents.list, {});
+	const createDocument = useMutation(api.documents.create).withOptimisticUpdate(
+		(localStore) => {
+			const current = localStore.getQuery(api.documents.list, {});
+			if (current === undefined) return;
+			const now = Date.now();
+			localStore.setQuery(api.documents.list, {}, [
+				{
+					_id: crypto.randomUUID() as Id<"documents">,
+					title: "Untitled",
+					wordCount: 0,
+					updatedAt: now,
+				},
+				...current,
+			]);
+		},
+	);
+
+	const settings = useStudioSettings();
+
+	const [commandOpen, setCommandOpen] = useState(false);
+	const [commandScope, setCommandScope] = useState<"all" | "documents">("all");
+	const [creating, setCreating] = useState(false);
+	const [statusVisible, setStatusVisible] = useState(true);
+
+	// Zen mode: hide all chrome but the canvas; reveal on mouse move, re-hide on
+	// idle (and stay revealed while the pointer is over the chrome).
+	const [zen, setZen] = useState(false);
+	const [chromeRevealed, setChromeRevealed] = useState(false);
+	const overChromeRef = useRef(false);
+	const revealTimerRef = useRef<number | null>(null);
+
+	const clearRevealTimer = useCallback(() => {
+		if (revealTimerRef.current !== null) {
+			window.clearTimeout(revealTimerRef.current);
+			revealTimerRef.current = null;
+		}
+	}, []);
+
+	const scheduleHide = useCallback(() => {
+		clearRevealTimer();
+		revealTimerRef.current = window.setTimeout(() => {
+			if (!overChromeRef.current) setChromeRevealed(false);
+		}, 2200);
+	}, [clearRevealTimer]);
+
+	useEffect(() => {
+		if (!zen) {
+			setChromeRevealed(false);
+			clearRevealTimer();
+			return;
+		}
+		const onMove = () => {
+			setChromeRevealed(true);
+			scheduleHide();
+		};
+		window.addEventListener("mousemove", onMove);
+		// Reveal briefly on entering zen so the exit control is discoverable.
+		setChromeRevealed(true);
+		scheduleHide();
+		return () => {
+			window.removeEventListener("mousemove", onMove);
+			clearRevealTimer();
+		};
+	}, [zen, scheduleHide, clearRevealTimer]);
+
+	const chromeHoverProps = zen
+		? {
+				onMouseEnter: () => {
+					overChromeRef.current = true;
+					clearRevealTimer();
+					setChromeRevealed(true);
+				},
+				onMouseLeave: () => {
+					overChromeRef.current = false;
+					scheduleHide();
+				},
+			}
+		: {};
+
+	// Zen takes the page fullscreen too. Requested from a user gesture (toggle /
+	// shortcut), so the browser allows it; failures degrade to plain zen.
+	useEffect(() => {
+		if (typeof document === "undefined") return;
+		if (zen) {
+			if (!document.fullscreenElement) {
+				document.documentElement.requestFullscreen?.().catch(() => {});
+			}
+		} else if (document.fullscreenElement) {
+			document.exitFullscreen?.().catch(() => {});
+		}
+	}, [zen]);
+
+	// Leaving fullscreen by Esc / F11 should also leave zen.
+	useEffect(() => {
+		const onFullscreenChange = () => {
+			if (!document.fullscreenElement) setZen(false);
+		};
+		document.addEventListener("fullscreenchange", onFullscreenChange);
+		return () =>
+			document.removeEventListener("fullscreenchange", onFullscreenChange);
+	}, []);
+
+	const activeLeaf = workspace ? getActiveLeaf(workspace) : null;
+	const activeMode = activeLeaf?.mode ?? "rich";
+	const activeDocId = activeLeaf?.documentId ?? null;
+	const activeSync = activeDocId ? getDocumentSync(activeDocId) : null;
+	const activeTitle =
+		documents?.find((d) => d._id === activeDocId)?.title ?? "Untitled";
+
+	const activeHistory = useDocumentHistoryFor(activeDocId);
+	const activeHistoryRef = useRef(activeHistory);
+	activeHistoryRef.current = activeHistory;
+	const [historyPanel, setHistoryPanel] = useState<{
+		open: boolean;
+		view: HistoryView;
+	}>({ open: false, view: "tree" });
+
+	const handleCheckpoint = useCallback(() => {
+		const history = activeHistoryRef.current;
+		if (!history) return;
+		const label = window.prompt(
+			"Name this version",
+			`Checkpoint ${new Date().toLocaleString()}`,
+		);
+		if (label === null) return;
+		void history.tagVersion(label || "Checkpoint", "manual");
+	}, []);
+
+	// Vim u / Ctrl-r route to the model-level undo tree via these events.
+	useEffect(() => {
+		const onUndo = () => activeHistoryRef.current?.undo();
+		const onRedo = () => activeHistoryRef.current?.redo();
+		window.addEventListener("recto:history-undo", onUndo);
+		window.addEventListener("recto:history-redo", onRedo);
+		return () => {
+			window.removeEventListener("recto:history-undo", onUndo);
+			window.removeEventListener("recto:history-redo", onRedo);
+		};
+	}, []);
+
+	const handleCreate = useCallback(async () => {
+		setCreating(true);
+		try {
+			const { documentId } = await createDocument({});
+			if (workspace?.activePaneId) {
+				actions.setPaneDocument(workspace.activePaneId, documentId);
+			}
+		} finally {
+			setCreating(false);
+		}
+	}, [actions, createDocument, workspace?.activePaneId]);
+
+	const { signOut } = useClerk();
+	const handleSignOut = useCallback(async () => {
+		await signOut();
+		window.location.href = "/login";
+	}, [signOut]);
+
+	const getExportSource = useCallback((): ExportSource | null => {
+		if (!activeDocId || !workspace) return null;
+		const handle = registry.getPrimaryHandle(
+			activeDocId,
+			workspace.activePaneId,
+		);
+		const markdown =
+			handle?.getCanonicalMarkdown() ?? activeSync?.markdown ?? "";
+		return { title: activeTitle, markdown };
+	}, [activeDocId, workspace, registry, activeSync, activeTitle]);
+
+	// The single action dispatcher — both the chord handler and the command
+	// palette route into this (blueprint 13 §7.3.4: one implementation, two surfaces).
+	const dispatch = useCallback(
+		(id: ActionId) => {
+			switch (id) {
+				case "new-document":
+					void handleCreate();
+					return;
+				case "mode-rich":
+					dispatchModeSwitch("rich");
+					return;
+				case "mode-raw":
+					dispatchModeSwitch("raw");
+					return;
+				case "mode-vim":
+					dispatchModeSwitch("vim");
+					return;
+				case "mode-preview":
+					dispatchModeSwitch("preview");
+					return;
+				case "cycle-next": {
+					const leaf = workspace
+						? findLeaf(workspace.paneTree, workspace.activePaneId)
+						: null;
+					dispatchModeSwitch(resolveModeAction(leaf?.mode ?? "rich", "next"));
+					return;
+				}
+				case "cycle-prev": {
+					const leaf = workspace
+						? findLeaf(workspace.paneTree, workspace.activePaneId)
+						: null;
+					dispatchModeSwitch(resolveModeAction(leaf?.mode ?? "rich", "prev"));
+					return;
+				}
+				case "split-v":
+					actions.splitActivePane("vertical");
+					return;
+				case "split-h":
+					actions.splitActivePane("horizontal");
+					return;
+				case "close-pane":
+					actions.closeActivePane();
+					return;
+				case "focus-next":
+					actions.focusNextPane();
+					return;
+				case "focus-prev":
+					actions.focusPrevPane();
+					return;
+				case "checkpoint":
+					handleCheckpoint();
+					return;
+				case "undo-tree":
+					setHistoryPanel({ open: true, view: "tree" });
+					return;
+				case "version-history":
+					setHistoryPanel({ open: true, view: "versions" });
+					return;
+				case "undo":
+					activeHistoryRef.current?.undo();
+					return;
+				case "redo":
+					activeHistoryRef.current?.redo();
+					return;
+				case "copy-rich": {
+					const source = getExportSource();
+					if (source) void copyAsRichText(source);
+					return;
+				}
+				case "copy-markdown": {
+					const source = getExportSource();
+					if (source) void copyAsMarkdown(source);
+					return;
+				}
+				case "export-md": {
+					const source = getExportSource();
+					if (source) exportMarkdownFile(source);
+					return;
+				}
+				case "export-html": {
+					const source = getExportSource();
+					if (source) exportHtmlFile(source);
+					return;
+				}
+				case "toggle-status":
+					setStatusVisible((v) => !v);
+					return;
+				case "toggle-focus":
+					setZen((v) => !v);
+					return;
+				case "toggle-font":
+					settings.toggleReadingFont();
+					return;
+				case "zoom-in":
+					settings.zoomIn();
+					return;
+				case "zoom-out":
+					settings.zoomOut();
+					return;
+				case "zoom-reset":
+					settings.zoomReset();
+					return;
+				case "toggle-spellcheck":
+					settings.toggleSpellcheck();
+					return;
+				case "toggle-toolbar":
+					settings.toggleTopToolbar();
+					return;
+			}
+		},
+		[
+			actions,
+			handleCreate,
+			handleCheckpoint,
+			getExportSource,
+			workspace,
+			settings,
+		],
+	);
+
+	const dispatchRef = useRef(dispatch);
+	dispatchRef.current = dispatch;
+
+	useEffect(() => {
+		if (!workspace) return;
+
+		const handler = createAppShortcutHandler((action) => {
+			switch (action.type) {
+				case "open-palette":
+					setCommandScope("all");
+					setCommandOpen(true);
+					return;
+				case "open-document-switcher":
+					setDocumentSwitcherOpen(true);
+					return;
+				case "new-document":
+					void handleCreate();
+					return;
+				case "switch-mode":
+					dispatchModeSwitch(action.mode);
+					return;
+				case "cycle-mode": {
+					const leaf = findLeaf(workspace.paneTree, workspace.activePaneId);
+					const current = leaf?.mode ?? "rich";
+					dispatchModeSwitch(resolveModeAction(current, action.direction));
+					return;
+				}
+				case "split-pane":
+					actions.splitActivePane(action.direction);
+					return;
+				case "close-pane":
+					actions.closeActivePane();
+					return;
+				case "focus-pane":
+					if (action.direction === "next") actions.focusNextPane();
+					else actions.focusPrevPane();
+					return;
+				case "focus-spatial":
+					actions.focusDirection(action.direction);
+					return;
+				case "undo":
+					activeHistoryRef.current?.undo();
+					return;
+				case "redo":
+					activeHistoryRef.current?.redo();
+					return;
+				case "checkpoint":
+					handleCheckpoint();
+					return;
+				case "open-undo-tree":
+					setHistoryPanel({ open: true, view: "tree" });
+					return;
+				case "open-version-history":
+					setHistoryPanel({ open: true, view: "versions" });
+					return;
+				case "copy-rich":
+					dispatchRef.current("copy-rich");
+					return;
+				case "copy-markdown":
+					dispatchRef.current("copy-markdown");
+					return;
+				case "export":
+					setCommandScope("all");
+					setCommandOpen(true);
+					return;
+				case "toggle-status":
+					setStatusVisible((v) => !v);
+					return;
+				case "toggle-focus":
+					setZen((v) => !v);
+					return;
+			}
+		});
+
+		// Attach at window level (capture) so reserved chords like Cmd/Ctrl+P are
+		// intercepted before the browser's default (print) regardless of focus.
+		window.addEventListener("keydown", handler, true);
+		return () => window.removeEventListener("keydown", handler, true);
+	}, [
+		actions,
+		handleCreate,
+		handleCheckpoint,
+		setDocumentSwitcherOpen,
+		workspace,
+	]);
+
+	if (loading || !workspace) {
+		return (
+			<div className="flex min-h-dvh items-center justify-center">
+				<Skeleton className="h-8 w-32 rounded-[var(--radius-md)]" />
+			</div>
+		);
+	}
+
+	const showEmpty = documents !== undefined && documents.length === 0;
+	const chromeHidden = zen && !chromeRevealed;
+
+	const topChromeClass = cn(
+		"z-30 flex flex-col transition-[transform,opacity] duration-[var(--motion-base)] ease-[var(--ease-out)] motion-reduce:transition-none",
+		zen ? "fixed inset-x-0 top-0" : "shrink-0",
+		chromeHidden && "pointer-events-none -translate-y-full opacity-0",
+	);
+	const bottomChromeClass = cn(
+		"z-30 transition-[transform,opacity] duration-[var(--motion-base)] ease-[var(--ease-out)] motion-reduce:transition-none",
+		zen ? "fixed inset-x-0 bottom-0" : "shrink-0",
+		chromeHidden && "pointer-events-none translate-y-full opacity-0",
+	);
+
+	return (
+		<StudioSettingsProvider value={settings}>
+			<div
+				className="relative flex h-dvh flex-col bg-[var(--color-bg-app)]"
+				style={
+					{
+						"--reading-scale": settings.readingScale,
+						"--reading-font":
+							settings.readingFont === "serif"
+								? "var(--font-app-serif)"
+								: "var(--font-app-sans)",
+					} as React.CSSProperties
+				}
+				spellCheck={settings.spellcheck}
+			>
+				<div className={topChromeClass} {...chromeHoverProps}>
+					<header className="flex h-10 shrink-0 items-center justify-between gap-[var(--space-3)] border-b border-[var(--color-line)] bg-[var(--color-bg-app)] px-[var(--space-4)]">
+						<div className="flex min-w-0 flex-1 items-center gap-[var(--space-3)]">
+							<span className="select-none font-[family-name:var(--font-ui)] text-[length:var(--text-ui)] font-semibold tracking-tight text-[var(--color-ink-secondary)]">
+								Recto
+							</span>
+							{!showEmpty && (
+								<>
+									<span
+										aria-hidden
+										className="h-3.5 w-px bg-[var(--color-line)]"
+									/>
+									<button
+										type="button"
+										onClick={() => setDocumentSwitcherOpen(true)}
+										title="Switch document (⌘P)"
+										className="min-w-0 truncate text-[length:var(--text-ui-sm)] text-[var(--color-ink-tertiary)] transition-colors duration-[var(--motion-instant)] hover:text-[var(--color-ink-primary)]"
+									>
+										{activeTitle}
+									</button>
+								</>
+							)}
+						</div>
+						<div className="flex items-center gap-[var(--space-1)]">
+							<button
+								type="button"
+								onClick={() => {
+									setCommandScope("all");
+									setCommandOpen(true);
+								}}
+								title="Command palette (⌘K)"
+								aria-label="Open command palette"
+								className="hidden gap-1.5 px-2 text-[var(--color-ink-tertiary)] transition-colors duration-[var(--motion-fast)] hover:text-[var(--color-ink-secondary)] sm:inline-flex"
+							>
+								<span className="recto-kbd" aria-hidden>
+									⌘K
+								</span>
+							</button>
+							<Button
+								variant="ghost"
+								size="sm"
+								className="text-[var(--color-ink-tertiary)] hover:text-[var(--color-ink-primary)]"
+								onClick={() => void handleSignOut()}
+							>
+								Sign out
+							</Button>
+						</div>
+					</header>
+
+					{!showEmpty && settings.topToolbar && (
+						<TopFormatToolbar
+							disabled={activeMode === "preview"}
+							onUndo={() => {
+								dispatchRef.current("undo");
+								dispatchFocusEditor();
+							}}
+							onRedo={() => {
+								dispatchRef.current("redo");
+								dispatchFocusEditor();
+							}}
+						/>
+					)}
+				</div>
+
+				<main className="flex min-h-0 flex-1 flex-col bg-[var(--color-bg-app)]">
+					{showEmpty ? (
+						<EmptyState onCreate={handleCreate} pending={creating} />
+					) : (
+						<div className="min-h-0 flex-1">
+							<RenderPaneNode
+								node={workspace.paneTree}
+								onOpenSwitcher={() => setDocumentSwitcherOpen(true)}
+								onCreate={() => void handleCreate()}
+							/>
+						</div>
+					)}
+				</main>
+
+				{!showEmpty && statusVisible && activeSync && (
+					<div className={bottomChromeClass} {...chromeHoverProps}>
+						<StatusBar
+							wordCount={activeSync.wordCount}
+							syncStatus={activeSync.syncStatus}
+							mode={activeMode}
+							onModeChange={(m) => dispatchModeSwitch(m)}
+							readingFont={settings.readingFont}
+							onToggleFont={() => {
+								settings.toggleReadingFont();
+								dispatchFocusEditor();
+							}}
+							readingScale={settings.readingScale}
+							onZoomIn={() => {
+								settings.zoomIn();
+								dispatchFocusEditor();
+							}}
+							onZoomOut={() => {
+								settings.zoomOut();
+								dispatchFocusEditor();
+							}}
+							onZoomReset={() => {
+								settings.zoomReset();
+								dispatchFocusEditor();
+							}}
+							canZoomIn={settings.readingScale < READING_SCALE_MAX}
+							canZoomOut={settings.readingScale > READING_SCALE_MIN}
+							spellcheck={settings.spellcheck}
+							onToggleSpellcheck={() => {
+								settings.toggleSpellcheck();
+								dispatchFocusEditor();
+							}}
+							zen={zen}
+							onToggleZen={() => {
+								setZen((v) => !v);
+								dispatchFocusEditor();
+							}}
+						/>
+					</div>
+				)}
+
+				<CommandPalette
+					open={commandOpen}
+					onOpenChange={setCommandOpen}
+					scope={commandScope}
+					documents={documents}
+					onRunAction={(id) => dispatchRef.current(id)}
+					onOpenDocument={(id) => {
+						if (workspace?.activePaneId) {
+							actions.setPaneDocument(workspace.activePaneId, id);
+						}
+					}}
+				/>
+
+				<DocumentSwitcher
+					open={documentSwitcherOpen}
+					onOpenChange={(open) => {
+						setDocumentSwitcherOpen(open);
+						if (!open) dispatchFocusEditor();
+					}}
+				/>
+
+				{activeDocId && (
+					<HistoryPanel
+						documentId={activeDocId}
+						open={historyPanel.open}
+						view={historyPanel.view}
+						onViewChange={(view) =>
+							setHistoryPanel((prev) => ({ ...prev, view }))
+						}
+						onClose={() => {
+							setHistoryPanel((prev) => ({ ...prev, open: false }));
+							dispatchFocusEditor();
+						}}
+					/>
+				)}
+
+				<Toaster />
+			</div>
+		</StudioSettingsProvider>
+	);
+}
 
 export function StudioShell() {
 	const router = useRouter();
 	const { isAuthenticated, isLoading: authLoading } = useConvexAuth();
-	const shellRef = useRef<HTMLDivElement>(null);
-
-	const richRef = useRef<MilkdownEditorHandle>(null);
-	const cmRef = useRef<CodeMirrorEditorHandle>(null);
-
-	const [mode, setMode] = useState<Mode>("rich");
-	const [vimSubMode, setVimSubMode] = useState<VimSubMode>("normal");
-	const [documentId, setDocumentId] = useState<Id<"documents"> | null>(null);
-	const [creating, setCreating] = useState(false);
-	const [editorReady, setEditorReady] = useState(false);
-	// Snapshot of canonical markdown captured at the last mode switch. `null`
-	// means "no snapshot yet" — fall back to the server copy. An empty string is
-	// a valid snapshot (the user cleared the document), so we must not use `||`.
-	const [paneMarkdown, setPaneMarkdown] = useState<string | null>(null);
-	const [pendingCaret, setPendingCaret] = useState<CaretPosition | null>(null);
-	const [commandOpen, setCommandOpen] = useState(false);
-
-	const modeRef = useRef(mode);
-	modeRef.current = mode;
-
-	const paneMarkdownRef = useRef<string | null>(paneMarkdown);
-	paneMarkdownRef.current = paneMarkdown;
-
-	const documents = useQuery(api.documents.list, isAuthenticated ? {} : "skip");
-	const createDocument = useMutation(api.documents.create);
-
-	const document = useQuery(
-		api.documents.get,
-		documentId && isAuthenticated ? { documentId } : "skip",
-	);
-
-	const getEditorHandle = useCallback(() => {
-		if (modeRef.current === "rich") return richRef.current;
-		if (modeRef.current === "raw" || modeRef.current === "vim") {
-			return cmRef.current;
-		}
-		return createPreviewHandle(() => paneMarkdownRef.current ?? "");
-	}, []);
-
-	const sync = useDocumentSync({
-		documentId,
-		getEditorHandle,
-		serverMarkdown: document?.markdown,
-		serverUpdatedAt: document?.updatedAt,
-		enabled: editorReady && document !== undefined && document !== null,
-	});
-
-	const { flushMarkdown, getCurrentMarkdown } = sync;
-
-	const switchMode = useCallback(
-		(to: Mode) => {
-			if (to === modeRef.current) return;
-			const outgoing = getEditorHandle();
-			const liveMarkdown =
-				outgoing?.getCanonicalMarkdown() ?? getCurrentMarkdown();
-			const caret = outgoing?.exportCaret() ?? null;
-
-			setPaneMarkdown(liveMarkdown);
-			setPendingCaret(caret);
-			setMode(to);
-
-			void flushMarkdown(liveMarkdown);
-		},
-		[flushMarkdown, getCurrentMarkdown, getEditorHandle],
-	);
-
-	useEffect(() => {
-		if (!isAuthenticated || documents === undefined) return;
-		if (documentId) return;
-
-		const stored = localStorage.getItem(ACTIVE_DOC_KEY);
-		if (stored && documents.some((d) => d._id === stored)) {
-			setDocumentId(stored as Id<"documents">);
-			return;
-		}
-
-		if (documents.length > 0) {
-			const first = documents[0];
-			if (first) {
-				setDocumentId(first._id);
-				localStorage.setItem(ACTIVE_DOC_KEY, first._id);
-			}
-		}
-	}, [isAuthenticated, documents, documentId]);
 
 	useEffect(() => {
 		if (!authLoading && !isAuthenticated) {
 			router.replace("/login");
 		}
 	}, [authLoading, isAuthenticated, router]);
-
-	useEffect(() => {
-		if (document && documentId) {
-			const t = setTimeout(() => setEditorReady(true), 50);
-			return () => clearTimeout(t);
-		}
-		setEditorReady(false);
-	}, [document, documentId]);
-
-	useEffect(() => {
-		const shell = shellRef.current;
-		if (!shell) return;
-		const handler = createAppShortcutHandler((action) => {
-			if (action.type === "open-palette") {
-				setCommandOpen(true);
-				return;
-			}
-			void switchMode(action.mode);
-		});
-		shell.addEventListener("keydown", handler, true);
-		return () => shell.removeEventListener("keydown", handler, true);
-	}, [switchMode]);
-
-	const handleCreate = useCallback(async () => {
-		setCreating(true);
-		try {
-			const { documentId: newId } = await createDocument({});
-			setDocumentId(newId);
-			localStorage.setItem(ACTIVE_DOC_KEY, newId);
-			setEditorReady(false);
-			setPaneMarkdown(null);
-			setPendingCaret(null);
-			setMode("rich");
-		} finally {
-			setCreating(false);
-		}
-	}, [createDocument]);
-
-	const handleSignOut = useCallback(async () => {
-		await authClient.signOut();
-		router.replace("/login");
-		router.refresh();
-	}, [router]);
 
 	if (authLoading || !isAuthenticated) {
 		return (
@@ -173,79 +651,9 @@ export function StudioShell() {
 		);
 	}
 
-	const showEmpty = documents !== undefined && documents.length === 0;
-	const loadingDoc = documentId !== null && document === undefined;
-	const displayMarkdown = paneMarkdown ?? document?.markdown ?? "";
-
 	return (
-		<div ref={shellRef} className="flex min-h-dvh flex-col">
-			<header className="flex h-10 shrink-0 items-center justify-between gap-[var(--space-3)] border-b border-border px-[var(--space-4)] text-[length:var(--text-ui)] text-[var(--color-ink-secondary)]">
-				<span className="min-w-0 flex-1 truncate">
-					{document?.title ?? "Recto"}
-				</span>
-				{!showEmpty && (
-					<ModeToolbar
-						mode={mode}
-						vimSubMode={vimSubMode}
-						onModeChange={(next) => void switchMode(next)}
-						onOpenCommandPalette={() => setCommandOpen(true)}
-					/>
-				)}
-				<Button variant="ghost" size="sm" onClick={handleSignOut}>
-					Sign out
-				</Button>
-			</header>
-
-			<main className="flex flex-1 flex-col bg-background">
-				{showEmpty ? (
-					<EmptyState onCreate={handleCreate} pending={creating} />
-				) : (
-					<>
-						{sync.pendingConflict && (
-							<Alert className="mx-auto mt-[var(--space-4)] max-w-lg">
-								<AlertTitle>Local draft differs</AlertTitle>
-								<AlertDescription className="mt-[var(--space-3)]">
-									<p>Your offline copy doesn&apos;t match the cloud version.</p>
-									<div className="mt-[var(--space-3)] flex justify-center gap-[var(--space-3)]">
-										<Button onClick={sync.useDraft}>Use local draft</Button>
-										<Button variant="ghost" onClick={sync.useServer}>
-											Use cloud copy
-										</Button>
-									</div>
-								</AlertDescription>
-							</Alert>
-						)}
-
-						<EditorPane
-							mode={mode}
-							markdown={displayMarkdown}
-							pendingCaret={pendingCaret}
-							onCaretApplied={() => setPendingCaret(null)}
-							richRef={richRef}
-							cmRef={cmRef}
-							onChange={sync.handleEditorChange}
-							onVimModeChange={setVimSubMode}
-							loading={loadingDoc || !editorReady}
-						/>
-					</>
-				)}
-			</main>
-
-			{!showEmpty && (
-				<StatusBar
-					wordCount={sync.wordCount}
-					modeLabel={modeToLabel(mode, vimSubMode)}
-					syncStatus={sync.syncStatus}
-				/>
-			)}
-
-			<CommandPalette
-				open={commandOpen}
-				onOpenChange={setCommandOpen}
-				mode={mode}
-				vimSubMode={vimSubMode}
-				onSwitchMode={(next) => void switchMode(next)}
-			/>
-		</div>
+		<WorkspaceProvider enabled={isAuthenticated}>
+			<StudioWorkspace />
+		</WorkspaceProvider>
 	);
 }

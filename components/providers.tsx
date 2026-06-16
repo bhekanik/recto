@@ -1,10 +1,10 @@
 "use client";
 
-import { ConvexBetterAuthProvider } from "@convex-dev/better-auth/react";
+import { ClerkProvider, useAuth } from "@clerk/nextjs";
+import { dark } from "@clerk/themes";
 import { ConvexReactClient } from "convex/react";
+import { ConvexProviderWithClerk } from "convex/react-clerk";
 import type { ReactNode } from "react";
-
-import { authClient } from "@/lib/auth-client";
 
 const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
 if (!convexUrl) {
@@ -13,20 +13,28 @@ if (!convexUrl) {
 
 const convex = new ConvexReactClient(convexUrl);
 
-export function Providers({
-	children,
-	initialToken,
-}: {
-	children: ReactNode;
-	initialToken?: string | null;
-}) {
+// Clerk widgets themed to Recto's warm-dark surface + coral accent.
+const clerkAppearance = {
+	baseTheme: dark,
+	variables: {
+		colorPrimary: "#f9826c",
+		colorBackground: "#1f1c17",
+		colorText: "#efe9df",
+		colorTextSecondary: "#c3bcaf",
+		colorInputBackground: "#27231d",
+		colorInputText: "#efe9df",
+		colorNeutral: "#efe9df",
+		borderRadius: "0.5rem",
+		fontFamily: "var(--font-app-sans)",
+	},
+};
+
+export function Providers({ children }: { children: ReactNode }) {
 	return (
-		<ConvexBetterAuthProvider
-			client={convex}
-			authClient={authClient}
-			initialToken={initialToken}
-		>
-			{children}
-		</ConvexBetterAuthProvider>
+		<ClerkProvider appearance={clerkAppearance}>
+			<ConvexProviderWithClerk client={convex} useAuth={useAuth}>
+				{children}
+			</ConvexProviderWithClerk>
+		</ClerkProvider>
 	);
 }

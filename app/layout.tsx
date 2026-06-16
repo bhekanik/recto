@@ -1,35 +1,55 @@
 import type { Metadata } from "next";
+import { Figtree, JetBrains_Mono, Source_Serif_4 } from "next/font/google";
 
 import { Providers } from "@/components/providers";
-import { getToken } from "@/lib/auth-server";
-
-import "./globals.css";
-import { Geist } from "next/font/google";
 import { cn } from "@/lib/utils";
 
-const geist = Geist({ subsets: ["latin"], variable: "--font-sans" });
+import "./globals.css";
+
+// Two writing-body faces the user can switch between (à la Bear sans / Substack
+// serif) — plus mono for source. Chrome always uses the sans. Variable weights
+// give bold headings without extra families.
+const sans = Figtree({
+	subsets: ["latin"],
+	variable: "--font-sans-loaded",
+	display: "swap",
+	weight: ["400", "500", "600", "700", "800"],
+});
+
+// Elegant editorial serif — the optional writing-body face.
+const serif = Source_Serif_4({
+	subsets: ["latin"],
+	variable: "--font-serif-loaded",
+	display: "swap",
+	weight: ["400", "500", "600", "700"],
+	style: ["normal", "italic"],
+});
+
+// Raw + Vim source surfaces.
+const mono = JetBrains_Mono({
+	subsets: ["latin"],
+	variable: "--font-mono-loaded",
+	display: "swap",
+	weight: ["400", "500", "700"],
+});
 
 export const metadata: Metadata = {
 	title: "Recto",
-	description: "Writing studio — canonical Markdown",
+	description: "A private writing studio — one document, four lenses.",
 };
 
-export default async function RootLayout({
+export default function RootLayout({
 	children,
 }: Readonly<{
 	children: React.ReactNode;
 }>) {
-	let token: string | null = null;
-	try {
-		token = (await getToken()) ?? null;
-	} catch {
-		// Convex may not be running yet (e.g. during startup)
-	}
-
 	return (
-		<html lang="en" className={cn("dark font-sans", geist.variable)}>
+		<html
+			lang="en"
+			className={cn("dark", sans.variable, serif.variable, mono.variable)}
+		>
 			<body className="min-h-dvh antialiased">
-				<Providers initialToken={token}>{children}</Providers>
+				<Providers>{children}</Providers>
 			</body>
 		</html>
 	);

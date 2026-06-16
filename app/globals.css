@@ -6,35 +6,56 @@
 
 /* Recto dark-only design tokens — blueprint 12-design-system.md */
 @theme {
-	--color-bg-app: oklch(0.16 0.012 265);
-	--color-bg-surface: oklch(0.2 0.014 265);
-	--color-bg-raised: oklch(0.24 0.016 265);
-	--color-bg-overlay: oklch(0.27 0.018 265);
+	/* Warm editorial dark — ink on warm paper-dark. Low chroma so it reads as a
+	   considered neutral, not brown. The writing surface steps up in lightness so
+	   it reads as a defined sheet, not a void. */
+	--color-bg-app: oklch(0.165 0.007 75);
+	--color-bg-surface: oklch(0.215 0.008 78);
+	--color-bg-raised: oklch(0.255 0.009 80);
+	--color-bg-overlay: oklch(0.285 0.01 80);
 
-	--color-ink-primary: oklch(0.95 0.006 265);
-	--color-ink-secondary: oklch(0.8 0.008 265);
-	--color-ink-tertiary: oklch(0.64 0.01 265);
+	--color-ink-primary: oklch(0.94 0.012 85);
+	--color-ink-secondary: oklch(0.78 0.012 82);
+	--color-ink-tertiary: oklch(0.655 0.011 80);
 
-	--color-line: oklch(0.3 0.012 265);
-	--color-line-strong: oklch(0.4 0.014 265);
+	--color-line: oklch(0.32 0.009 78);
+	--color-line-strong: oklch(0.44 0.011 78);
 
-	--color-accent: oklch(0.78 0.085 235);
-	--color-accent-muted: oklch(0.46 0.055 235);
-	--color-accent-2: oklch(0.8 0.075 165);
+	/* A bright coral accent (Bear-like) — the single live affordance: caret,
+	   links, active states, list markers. Tuned LIGHT + saturated (L 0.74, hue
+	   ~24 toward red) so it reads as vivid coral on the dark surface rather than
+	   a muddy low-contrast amber. */
+	--color-accent: oklch(0.74 0.185 24);
+	--color-accent-muted: oklch(0.6 0.14 24);
+	--color-accent-2: oklch(0.79 0.17 27);
 
 	--color-success: oklch(0.8 0.09 150);
 	--color-warning: oklch(0.84 0.11 85);
-	--color-danger: oklch(0.7 0.14 25);
+	--color-danger: oklch(0.7 0.2 24);
 
-	--color-selection: oklch(0.78 0.085 235 / 0.32);
-	--color-focus-ring: oklch(0.82 0.09 235);
+	--color-selection: oklch(0.74 0.185 24 / 0.26);
+	--color-focus-ring: oklch(0.77 0.18 27);
 
-	--font-reading:
-		"Source Serif 4", Newsreader, Georgia, "Times New Roman", serif;
+	/* Interaction fills (derived) */
+	--color-bg-hover: oklch(0.29 0.011 80);
+	--color-accent-wash: oklch(0.74 0.185 24 / 0.16);
+
+	/* App font stacks. We use app-prefixed names rather than Tailwind's own
+	   --font-sans / --font-serif theme keys: the latter collide with Tailwind's
+	   generated `--font-sans: var(--font-sans)` self-reference (→ empty → Times). */
+	--font-app-sans:
+		var(--font-sans-loaded), "Figtree", ui-sans-serif, system-ui, -apple-system,
+		"Segoe UI", sans-serif;
+	--font-app-serif:
+		var(--font-serif-loaded), "Source Serif 4", Newsreader, Georgia,
+		"Times New Roman", serif;
 	--font-mono:
-		"Berkeley Mono", "Commit Mono", "JetBrains Mono", ui-monospace, "SF Mono",
-		monospace;
-	--font-ui: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+		var(--font-mono-loaded), "JetBrains Mono", "Berkeley Mono", ui-monospace,
+		"SF Mono", monospace;
+	/* The writing-body font is runtime-switchable: --reading-font is set on the
+	   workspace root (sans by default, serif when toggled). Chrome stays sans. */
+	--font-reading: var(--reading-font, var(--font-app-sans));
+	--font-ui: var(--font-app-sans);
 
 	--text-display: 2.027rem;
 	--leading-display: 1.2;
@@ -70,10 +91,14 @@
 	--radius-md: 0.375rem;
 	--radius-lg: 0.5rem;
 
-	--motion-fast: 120ms;
+	--motion-instant: 80ms;
+	--motion-fast: 140ms;
+	--motion-base: 200ms;
 	--motion-normal: 200ms;
-	--motion-slow: 320ms;
+	--motion-slow: 280ms;
 	--ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+	--ease-in-out: cubic-bezier(0.45, 0, 0.55, 1);
+	--ease-in: cubic-bezier(0.4, 0, 1, 1);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -85,12 +110,29 @@
 		transition-duration: 0.01ms !important;
 		scroll-behavior: auto !important;
 	}
+	/* Drop the rise/scale transform entirely — fade only (design system §7.4). */
+	.recto-panel {
+		animation: recto-fade-in 0.01ms linear both !important;
+	}
+}
+
+/* Forced-colors / high-contrast: keep focus + selection visible when the
+   custom-property colors are flattened by the OS (design system §8). */
+@media (forced-colors: active) {
+	:focus-visible {
+		outline-color: CanvasText;
+	}
+	.recto-item[aria-selected="true"],
+	.recto-item[data-selected="true"] {
+		outline: 2px solid Highlight;
+		outline-offset: -2px;
+	}
 }
 
 @layer base {
 	html {
 		color-scheme: dark;
-		@apply font-sans;
+		font-family: var(--font-app-sans);
 	}
 
 	body {
@@ -100,7 +142,49 @@
 		font-size: var(--text-ui);
 		line-height: var(--leading-ui);
 		min-height: 100dvh;
+		font-feature-settings: "ss01", "cv01";
+		-webkit-font-smoothing: antialiased;
+		text-rendering: optimizeLegibility;
 		@apply bg-background text-foreground;
+	}
+
+	/* A whisper of atmosphere on the canvas — a faint top-down lightening and a
+	   barely-there film grain so the dark surface reads as a considered material,
+	   not a flat fill. Fixed, non-interactive, and very subtle (P5: calm). */
+	body::before {
+		content: "";
+		position: fixed;
+		inset: 0;
+		z-index: 0;
+		pointer-events: none;
+		background:
+			radial-gradient(
+				120% 90% at 50% -5%,
+				oklch(0.27 0.012 80 / 0.6),
+				transparent 50%
+			),
+			radial-gradient(
+				130% 90% at 50% 115%,
+				oklch(0.12 0.008 70 / 0.7),
+				transparent 60%
+			);
+	}
+
+	body::after {
+		content: "";
+		position: fixed;
+		inset: 0;
+		z-index: 0;
+		pointer-events: none;
+		opacity: 0.025;
+		mix-blend-mode: soft-light;
+		background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+	}
+
+	#__next,
+	body > div {
+		position: relative;
+		z-index: 1;
 	}
 
 	::selection {
@@ -125,10 +209,127 @@
 	}
 
 	.recto-editor-body {
-		font-family: var(--font-reading);
+		/* Reference --reading-font DIRECTLY (not via --font-reading): a custom prop
+		   resolves its var() at its own declaration site, so --font-reading would
+		   freeze to the root default. Reading it here re-resolves against the
+		   --reading-font the studio root sets (sans/serif toggle). */
+		font-family: var(--reading-font, var(--font-app-sans));
 		font-size: var(--text-body);
 		line-height: var(--leading-body);
 		color: var(--color-ink-primary);
+		font-optical-sizing: auto;
+		/* Flat, clean writing surface — no frame, no lit sheet (Bear-like). */
+		background: var(--color-bg-surface);
+	}
+
+	/* The centered reading column — the single biggest readability/premium lever
+	   (design system §3.4). The editable/content container itself is the measure,
+	   so every block aligns to one left edge of a centered ~68ch column. The deep
+	   bottom padding lets the last paragraph scroll up off the bottom edge. */
+	.milkdown .ProseMirror,
+	.recto-prose {
+		max-inline-size: 68ch;
+		margin-inline: auto;
+		padding-inline: var(--space-5);
+		padding-block: var(--space-7) 40vh;
+		min-block-size: 100%;
+		/* The reading scale (zoom) multiplies the whole column; every block below
+		   uses em, so headings and lists scale proportionally. */
+		font-size: calc(var(--text-body) * var(--reading-scale, 1));
+		line-height: 1.5;
+	}
+
+	/* Raw + Vim source — a centered, bounded monospace column that also scales. */
+	.codemirror .cm-editor {
+		max-inline-size: 84ch;
+		margin-inline: auto;
+		font-size: calc(var(--text-body) * 0.92 * var(--reading-scale, 1));
+	}
+
+	.codemirror .cm-scroller {
+		padding-block: var(--space-6) 40vh;
+		line-height: 1.6;
+	}
+
+	/* Overlay scrim + floating panel — the command palette, switcher, dialogs. */
+	.recto-scrim {
+		background: oklch(0.1 0.008 70 / 0.58);
+		backdrop-filter: blur(2px);
+		animation: recto-fade-in var(--motion-fast) var(--ease-out);
+	}
+
+	@media (prefers-reduced-transparency: reduce) {
+		.recto-scrim {
+			background: oklch(0.12 0.008 70 / 0.92);
+			backdrop-filter: none;
+		}
+	}
+
+	.recto-panel {
+		background: var(--color-bg-overlay);
+		border: 1px solid var(--color-line);
+		border-radius: var(--radius-lg);
+		box-shadow:
+			0 24px 64px -28px oklch(0 0 0 / 0.75),
+			0 2px 10px -6px oklch(0 0 0 / 0.55);
+		animation: recto-rise var(--motion-base) var(--ease-out);
+	}
+
+	/* Keyboard-first list rows (cmdk). The single live affordance carries the
+	   accent — a hairline rail + a faint wash, never a loud fill (P5). */
+	.recto-item {
+		position: relative;
+		border-radius: var(--radius-md);
+		transition: color var(--motion-instant) var(--ease-out);
+	}
+
+	.recto-item[aria-selected="true"],
+	.recto-item[data-selected="true"] {
+		background: var(--color-accent-wash);
+		color: var(--color-ink-primary);
+	}
+
+	.recto-item[aria-selected="true"]::before,
+	.recto-item[data-selected="true"]::before {
+		content: "";
+		position: absolute;
+		inset-block: 20%;
+		inset-inline-start: 0;
+		inline-size: 2px;
+		border-radius: 0 2px 2px 0;
+		background: var(--color-accent);
+	}
+
+	.recto-kbd {
+		font-family: var(--font-ui);
+		font-size: 0.6875rem;
+		letter-spacing: 0.02em;
+		color: var(--color-ink-tertiary);
+		border: 1px solid var(--color-line);
+		border-radius: var(--radius-sm);
+		padding: 0.0625rem 0.3125rem;
+		background: var(--color-bg-app);
+		white-space: nowrap;
+	}
+
+	@keyframes recto-fade-in {
+		from {
+			opacity: 0;
+		}
+		to {
+			opacity: 1;
+		}
+	}
+
+	@keyframes recto-rise {
+		from {
+			opacity: 0;
+			transform: translateY(6px) scale(0.985);
+		}
+		to {
+			opacity: 1;
+			transform: translateY(0) scale(1);
+		}
 	}
 
 	.recto-shimmer {
@@ -170,59 +371,60 @@
 }
 
 :is(.milkdown, .recto-preview) p {
-	margin-block: 0.75em 1em;
+	margin-block: 0 0.7em;
+	text-wrap: pretty;
 }
 
+/* Headings — bold sans, comfortable but calm spacing, em-sized so they scale
+   with the reading zoom. */
+:is(.milkdown, .recto-preview) :is(h1, h2, h3, h4, h5, h6) {
+	font-family: var(--reading-font, var(--font-app-sans));
+	font-weight: 700;
+	letter-spacing: -0.015em;
+	line-height: 1.22;
+	color: var(--color-ink-primary);
+	text-wrap: balance;
+}
 :is(.milkdown, .recto-preview) h1 {
-	font-size: var(--text-h1);
-	line-height: var(--leading-h1);
-	font-weight: 600;
-	margin-block: 1.25em 0.5em;
+	font-size: 1.7em;
+	margin-block: 1.1em 0.35em;
 }
-
 :is(.milkdown, .recto-preview) h2 {
-	font-size: var(--text-h2);
-	line-height: var(--leading-h2);
-	font-weight: 600;
-	margin-block: 1.25em 0.5em;
+	font-size: 1.42em;
+	margin-block: 1.05em 0.35em;
 }
-
 :is(.milkdown, .recto-preview) h3 {
-	font-size: var(--text-h3);
-	line-height: var(--leading-h3);
-	font-weight: 600;
-	margin-block: 1em 0.5em;
+	font-size: 1.22em;
+	margin-block: 1em 0.35em;
 }
-
 :is(.milkdown, .recto-preview) h4 {
-	font-size: var(--text-h4);
-	line-height: var(--leading-h4);
-	font-weight: 600;
-	margin-block: 1em 0.5em;
+	font-size: 1.08em;
+	margin-block: 0.95em 0.35em;
+}
+:is(.milkdown, .recto-preview) :is(h5, h6) {
+	font-size: 1em;
+	margin-block: 0.9em 0.35em;
 }
 
-:is(.milkdown, .recto-preview) h5 {
-	font-size: var(--text-h5);
-	line-height: var(--leading-h5);
-	font-weight: 600;
-	margin-block: 1em 0.5em;
-}
-
-:is(.milkdown, .recto-preview) h6 {
-	font-size: var(--text-h6);
-	line-height: var(--leading-h6);
-	font-weight: 600;
-	margin-block: 1em 0.5em;
-}
-
-/* Collapse the leading margin so content starts at the top of the surface */
-:is(.milkdown, .recto-preview) > :first-child {
+/* Collapse the leading margin so content starts at the top of the column */
+.milkdown .ProseMirror > :first-child,
+.recto-prose > :first-child {
 	margin-block-start: 0;
+}
+
+/* The caret — a clear coral bar, easy to find (not a faint hairline). */
+.milkdown .ProseMirror {
+	caret-color: var(--color-accent);
+	outline: none;
+	/* ProseMirror requires pre-wrap so soft breaks and trailing spaces survive. */
+	white-space: pre-wrap;
+	word-wrap: break-word;
 }
 
 :is(.milkdown, .recto-preview) a {
 	color: var(--color-accent-2);
 	text-decoration: underline;
+	text-decoration-thickness: 1px;
 	text-underline-offset: 2px;
 }
 
@@ -271,8 +473,8 @@
 
 :is(.milkdown, .recto-preview) ul,
 :is(.milkdown, .recto-preview) ol {
-	padding-inline-start: 1.5em;
-	margin-block: 0.75em 1em;
+	padding-inline-start: 1.4em;
+	margin-block: 0.35em 0.7em;
 }
 
 :is(.milkdown, .recto-preview) ul {
@@ -284,7 +486,21 @@
 }
 
 :is(.milkdown, .recto-preview) li {
-	margin-block: 0.25em;
+	margin-block: 0.1em;
+}
+
+/* Tight lists — Milkdown wraps each item's text in a <p>; without this the
+   paragraph margins blow the list apart (the "too much space" problem). */
+:is(.milkdown, .recto-preview) li > p {
+	margin-block: 0;
+}
+
+:is(.milkdown, .recto-preview) :is(ul, ol) :is(ul, ol) {
+	margin-block: 0.1em;
+}
+
+:is(.milkdown, .recto-preview) li::marker {
+	color: var(--color-accent);
 }
 
 :is(.milkdown, .recto-preview) table {
@@ -328,7 +544,8 @@
 }
 
 .cm-editor .cm-cursor {
-	border-left-color: var(--color-ink-primary);
+	border-left-width: 2.5px;
+	border-left-color: var(--color-accent);
 }
 
 .milkdown-slash-menu {
@@ -339,9 +556,99 @@
 	display: none;
 }
 
+/* Floating selection formatting bar (rich mode). floating-ui sets left/top, so
+   it must be absolutely positioned; the provider toggles [data-show]. */
+.recto-selection-toolbar {
+	position: absolute;
+	top: 0;
+	left: 0;
+	z-index: 50;
+	display: flex;
+	padding: var(--space-1);
+	border-radius: var(--radius-md);
+	border: 1px solid var(--color-line-strong);
+	background: var(--color-bg-overlay);
+	box-shadow:
+		0 2px 6px oklch(0 0 0 / 0.35),
+		0 12px 28px -12px oklch(0 0 0 / 0.6);
+	animation: recto-fade-in var(--motion-fast) var(--ease-out);
+}
+
+.recto-selection-toolbar[data-show="false"] {
+	display: none;
+}
+
+/* Document header — title / subtitle / divider, aligned to the reading measure
+   and scaling with the reading zoom (Substack-style). */
+.recto-doc-header {
+	max-inline-size: 68ch;
+	margin-inline: auto;
+	padding-inline: var(--space-5);
+	padding-block: var(--space-7) 0;
+	font-family: var(--reading-font, var(--font-app-sans));
+}
+
+.recto-doc-title,
+.recto-doc-subtitle {
+	display: block;
+	inline-size: 100%;
+	margin: 0;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	outline: none;
+	resize: none;
+	overflow: hidden;
+	font-family: inherit;
+	caret-color: var(--color-accent);
+}
+
+.recto-doc-title {
+	font-size: calc(var(--text-body) * 1.7 * var(--reading-scale, 1));
+	font-weight: 700;
+	letter-spacing: -0.02em;
+	line-height: 1.18;
+	color: var(--color-ink-primary);
+	margin-block-end: 0.2em;
+}
+
+.recto-doc-subtitle {
+	font-size: calc(var(--text-body) * 1.12 * var(--reading-scale, 1));
+	font-weight: 500;
+	line-height: 1.35;
+	color: var(--color-ink-secondary);
+}
+
+.recto-doc-title::placeholder,
+.recto-doc-subtitle::placeholder {
+	color: var(--color-ink-tertiary);
+	opacity: 0.5;
+}
+
+.recto-doc-divider {
+	margin-block: 0.85em 0;
+	border: 0;
+	border-block-start: 1px solid var(--color-line);
+}
+
+/* Rich pane scrolls header + body as one column; the body grows to fill so the
+   click-to-focus area extends below the last line. */
+.recto-rich-pane {
+	display: flex;
+	flex-direction: column;
+}
+
+.recto-rich-pane > .milkdown {
+	flex: 1 0 auto;
+	min-block-size: 0;
+}
+
+/* The header supplies the top breathing room, so the body shouldn't double it. */
+.recto-rich-pane .milkdown .ProseMirror {
+	padding-block-start: var(--space-4);
+}
+
 @theme inline {
-	--font-heading: var(--font-sans);
-	--font-sans: var(--font-sans);
 	--color-sidebar-ring: var(--sidebar-ring);
 	--color-sidebar-border: var(--sidebar-border);
 	--color-sidebar-accent-foreground: var(--sidebar-accent-foreground);

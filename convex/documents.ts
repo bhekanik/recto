@@ -2,24 +2,25 @@ import type { GenericMutationCtx, GenericQueryCtx } from "convex/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
-import { authComponent } from "./auth";
 
 type QueryCtx = GenericQueryCtx<import("./_generated/dataModel").DataModel>;
 type MutationCtx = GenericMutationCtx<
 	import("./_generated/dataModel").DataModel
 >;
 
-/** Resolve authenticated user id or throw. */
-async function requireUserId(ctx: QueryCtx | MutationCtx): Promise<string> {
-	const user = await authComponent.getAuthUser(ctx);
-	if (!user) {
+/** Resolve the authenticated Clerk user id (JWT subject) or throw. */
+export async function requireUserId(
+	ctx: QueryCtx | MutationCtx,
+): Promise<string> {
+	const identity = await ctx.auth.getUserIdentity();
+	if (!identity) {
 		throw new Error("Unauthenticated");
 	}
-	return user._id;
+	return identity.subject;
 }
 
 /** Assert document belongs to caller. */
-async function requireOwnedDocument(
+export async function requireOwnedDocument(
 	ctx: QueryCtx | MutationCtx,
 	documentId: Id<"documents">,
 ): Promise<Doc<"documents">> {
@@ -71,7 +72,7 @@ export const get = query({
 	},
 });
 
-/** Create a new document scoped to the authenticated user. */
+/** Create a new document and its root undo-tree node, in one transaction. */
 export const create = mutation({
 	args: { title: v.optional(v.string()) },
 	handler: async (ctx, args) => {
@@ -90,7 +91,72 @@ export const create = mutation({
 			updatedAt: now,
 		});
 
+		// Root node: full snapshot (empty), no parent (blueprint 03 §3.1, 07 §3.2).
+		await ctx.db.insert("docNodes", {
+			documentId,
+			nodeId: rootNodeId,
+			parentNodeId: null,
+			patch: JSON.stringify({ from: 0, to: 0, insert: "" }),
+			snapshot: "",
+			selection: null,
+			origin: "server",
+			createdAt: now,
+		});
+
 		return { documentId, rootNodeId };
+	},
+});
+
+/** Delete a document and cascade-delete its history (docNodes + versions). */
+export const remove = mutation({
+	args: { documentId: v.id("documents") },
+	handler: async (ctx, args) => {
+		await requireOwnedDocument(ctx, args.documentId);
+
+		// Cascade in batches to respect the per-transaction write ceiling
+		// (blueprint 03 §5). History lives in separate rows by_document.
+		const nodes = await ctx.db
+			.query("docNodes")
+			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+			.collect();
+		for (const node of nodes) await ctx.db.delete(node._id);
+
+		const versions = await ctx.db
+			.query("versions")
+			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+			.collect();
+		for (const version of versions) await ctx.db.delete(version._id);
+
+		await ctx.db.delete(args.documentId);
+	},
+});
+
+/**
+ * Move the undo-tree pointer (last-write-wins by updatedAt). The materialized
+ * markdown for the target node is written alongside so an idle reader hydrates
+ * the right text (blueprint 07 §5, 03 §3.1; ADR-10 LWW pointer).
+ */
+export const updateCurrentNodeId = mutation({
+	args: {
+		documentId: v.id("documents"),
+		currentNodeId: v.string(),
+		markdown: v.string(),
+		wordCount: v.number(),
+		updatedAt: v.number(),
+	},
+	handler: async (ctx, args) => {
+		const doc = await requireOwnedDocument(ctx, args.documentId);
+		if (args.updatedAt < doc.updatedAt) {
+			return { applied: false, currentNodeId: doc.currentNodeId };
+		}
+		const updatedAt = Date.now();
+		await ctx.db.patch(args.documentId, {
+			currentNodeId: args.currentNodeId,
+			markdown: args.markdown,
+			wordCount: args.wordCount,
+			updatedAt,
+		});
+		return { applied: true, currentNodeId: args.currentNodeId, updatedAt };
 	},
 });
 
@@ -116,20 +182,40 @@ export const updateMarkdown = mutation({
 		markdown: v.string(),
 		wordCount: v.number(),
 		expectedUpdatedAt: v.number(),
+		title: v.optional(v.string()),
 	},
 	handler: async (ctx, args) => {
 		const doc = await requireOwnedDocument(ctx, args.documentId);
+
+		// Guard the Convex ~1 MiB per-value ceiling (blueprint 03 §5). Book-length
+		// manuscripts are an explicit non-goal; fail loudly rather than let Convex
+		// reject the whole mutation opaquely. The editor keeps the text locally.
+		if (args.markdown.length > 950_000) {
+			throw new Error(
+				"Document exceeds the ~1 MiB size limit; split it into multiple documents.",
+			);
+		}
 
 		if (doc.updatedAt !== args.expectedUpdatedAt) {
 			return { updatedAt: doc.updatedAt, stale: true };
 		}
 
 		const updatedAt = Date.now();
-		await ctx.db.patch(args.documentId, {
+		const patch: {
+			markdown: string;
+			wordCount: number;
+			updatedAt: number;
+			title?: string;
+		} = {
 			markdown: args.markdown,
 			wordCount: args.wordCount,
 			updatedAt,
-		});
+		};
+		if (args.title !== undefined) {
+			patch.title = args.title.trim() || "Untitled";
+		}
+
+		await ctx.db.patch(args.documentId, patch);
 
 		return { updatedAt, stale: false };
 	},
