@@ -87,6 +87,14 @@
 	--text-ui-sm: 0.8125rem;
 	--leading-ui-sm: 1.4;
 
+	/* Reading-column width. A font-INDEPENDENT measure (em, not ch): `ch` is the
+	   width of "0", which differs ~145px between Figtree (sans) and Source Serif 4,
+	   so a 68ch column visibly jumped when toggling fonts. em is relative to the
+	   element's font-size — identical for both faces and still scaling with
+	   --reading-scale. 43.5em ≈ the prior sans 68ch width, so the default is
+	   unchanged and serif now matches it. */
+	--reading-measure: 43.5em;
+
 	--space-1: 0.25rem;
 	--space-2: 0.5rem;
 	--space-3: 0.75rem;
@@ -302,7 +310,7 @@
 	   bottom padding lets the last paragraph scroll up off the bottom edge. */
 	.milkdown .ProseMirror,
 	.recto-prose {
-		max-inline-size: 68ch;
+		max-inline-size: var(--reading-measure);
 		margin-inline: auto;
 		padding-inline: var(--space-5);
 		padding-block: var(--space-7) 40vh;
@@ -622,6 +630,29 @@
 	border-left-color: var(--color-caret);
 }
 
+/* Vim block cursor (normal / visual mode). @replit/codemirror-vim ships a
+   hard-coded pink block that we never themed, and renders only a faint hollow
+   outline when the editor isn't focused — so leaving insert mode read as "the
+   cursor vanished / I'm no longer in vim". Theme it to the caret colour as a
+   solid block (focused) and a clear outline (unfocused), so normal mode is
+   unmistakable and the cursor never disappears. `!important` overrides the
+   library's Prec.highest theme. */
+.cm-editor .cm-fat-cursor {
+	background: var(--color-caret) !important;
+	/* invert the glyph under the block so it stays legible */
+	color: var(--color-bg-app) !important;
+	outline: none !important;
+}
+.cm-editor:not(.cm-focused) .cm-fat-cursor {
+	background: color-mix(
+		in oklab,
+		var(--color-caret) 35%,
+		transparent
+	) !important;
+	outline: 1px solid var(--color-caret) !important;
+	color: inherit !important;
+}
+
 .milkdown-slash-menu {
 	z-index: 50;
 }
@@ -663,7 +694,7 @@
 	   centers to the SAME box as the body (which is a block inside .milkdown, and so
 	   never shrink-wrapped). */
 	inline-size: 100%;
-	max-inline-size: 68ch;
+	max-inline-size: var(--reading-measure);
 	margin-inline: auto;
 	padding-inline: var(--space-5);
 	padding-block: var(--space-7) 0;
