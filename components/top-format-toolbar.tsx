@@ -18,10 +18,15 @@ type TopFormatToolbarProps = {
 };
 
 const btn =
-	"flex size-8 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-ink-secondary)] transition-colors duration-[var(--motion-instant)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-ink-primary)]";
+	"flex size-8 shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-ink-secondary)] transition-colors duration-[var(--motion-instant)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-ink-primary)]";
 
 function Divider() {
-	return <span aria-hidden className="mx-1 h-5 w-px bg-[var(--color-line)]" />;
+	return (
+		<span
+			aria-hidden
+			className="mx-1 h-5 w-px shrink-0 bg-[var(--color-line)]"
+		/>
+	);
 }
 
 function FormatButton({ action }: { action: FormatAction }) {
@@ -57,7 +62,9 @@ export function TopFormatToolbar({
 			aria-label="Formatting"
 			aria-disabled={disabled}
 			className={cn(
-				"flex shrink-0 items-center justify-center gap-0.5 border-b border-[var(--color-line)] bg-[var(--color-bg-app)] px-[var(--space-3)] py-1",
+				// On phones the full button row is wider than the screen — let it scroll
+				// horizontally (hidden scrollbar) instead of clipping; centered when it fits.
+				"flex shrink-0 items-center justify-start gap-0.5 overflow-x-auto border-b border-[var(--color-line)] bg-[var(--color-bg-app)] px-[var(--space-3)] py-1 [scrollbar-width:none] sm:justify-center [&::-webkit-scrollbar]:hidden",
 				disabled && "pointer-events-none opacity-40",
 			)}
 		>

@@ -2,6 +2,7 @@
 
 import { useClerk } from "@clerk/nextjs";
 import { useConvexAuth, useMutation, useQuery } from "convex/react";
+import { Command as CommandIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CommandPalette } from "@/components/command-palette";
@@ -34,6 +35,7 @@ import {
 	resolveModeAction,
 } from "@/lib/keyboard/app-shortcuts";
 import { StudioSettingsProvider } from "@/lib/studio/settings-context";
+import { useIsMobile } from "@/lib/studio/use-is-mobile";
 import {
 	READING_SCALE_MAX,
 	READING_SCALE_MIN,
@@ -78,6 +80,7 @@ function StudioWorkspace() {
 	);
 
 	const settings = useStudioSettings();
+	const isMobile = useIsMobile();
 
 	// Apply the palette to <html> (not just the shell div) so it also reaches
 	// portalled overlays — command palette, switcher, dialogs — and the body
@@ -123,11 +126,14 @@ function StudioWorkspace() {
 			scheduleHide();
 		};
 		window.addEventListener("mousemove", onMove);
+		// Touch has no mousemove — reveal the chrome (and its exit control) on tap.
+		window.addEventListener("touchstart", onMove, { passive: true });
 		// Reveal briefly on entering zen so the exit control is discoverable.
 		setChromeRevealed(true);
 		scheduleHide();
 		return () => {
 			window.removeEventListener("mousemove", onMove);
+			window.removeEventListener("touchstart", onMove);
 			clearRevealTimer();
 		};
 	}, [zen, scheduleHide, clearRevealTimer]);
@@ -271,9 +277,13 @@ function StudioWorkspace() {
 					return;
 				}
 				case "split-v":
+					// Splits are hidden on mobile (only the active pane renders), so
+					// creating one would silently mutate an invisible tree.
+					if (isMobile) return;
 					actions.splitActivePane("vertical");
 					return;
 				case "split-h":
+					if (isMobile) return;
 					actions.splitActivePane("horizontal");
 					return;
 				case "close-pane":
@@ -365,6 +375,7 @@ function StudioWorkspace() {
 			getExportSource,
 			workspace,
 			settings,
+			isMobile,
 		],
 	);
 
@@ -523,9 +534,11 @@ function StudioWorkspace() {
 								}}
 								title="Command palette (⌘K)"
 								aria-label="Open command palette"
-								className="hidden gap-1.5 px-2 text-[var(--color-ink-tertiary)] transition-colors duration-[var(--motion-fast)] hover:text-[var(--color-ink-secondary)] sm:inline-flex"
+								className="inline-flex items-center gap-1.5 px-2 text-[var(--color-ink-tertiary)] transition-colors duration-[var(--motion-fast)] hover:text-[var(--color-ink-secondary)]"
 							>
-								<span className="recto-kbd" aria-hidden>
+								{/* Touch has no ⌘K — show a tappable icon; keep the hint on desktop. */}
+								<CommandIcon aria-hidden className="size-[18px] sm:hidden" />
+								<span className="recto-kbd hidden sm:inline" aria-hidden>
 									⌘K
 								</span>
 							</button>
@@ -560,8 +573,11 @@ function StudioWorkspace() {
 						<EmptyState onCreate={handleCreate} pending={creating} />
 					) : (
 						<div className="min-h-0 flex-1">
+							{/* Mobile: side-by-side splits don't fit, so render only the active
+							    pane full-screen. The split tree still persists and returns on a
+							    wider viewport; panes are reachable via "Focus next/prev pane". */}
 							<RenderPaneNode
-								node={workspace.paneTree}
+								node={isMobile && activeLeaf ? activeLeaf : workspace.paneTree}
 								onOpenSwitcher={() => setDocumentSwitcherOpen(true)}
 								onCreate={() => void handleCreate()}
 							/>

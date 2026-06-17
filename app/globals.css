@@ -733,6 +733,16 @@
 	padding-block-start: var(--space-4);
 }
 
+/* Phones: trim the side gutters so the writing column keeps its width on a
+   narrow screen (the 1.5rem rails eat too much of a ~360px viewport). */
+@media (max-width: 640px) {
+	.milkdown .ProseMirror,
+	.recto-prose,
+	.recto-doc-header {
+		padding-inline: var(--space-4);
+	}
+}
+
 @theme inline {
 	--color-sidebar-ring: var(--sidebar-ring);
 	--color-sidebar-border: var(--sidebar-border);

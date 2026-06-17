@@ -99,7 +99,9 @@ function SyncIndicator({ status }: { status: SyncStatus }) {
 				)}
 				aria-hidden="true"
 			/>
-			<span className="inline-block min-w-[3.75rem]">{meta?.label ?? ""}</span>
+			<span className="hidden min-w-[3.75rem] sm:inline-block">
+				{meta?.label ?? ""}
+			</span>
 		</span>
 	);
 }
@@ -189,74 +191,80 @@ export function StatusBar({
 					<span className="hidden sm:inline">{themeLabel}</span>
 				</button>
 
-				<span aria-hidden className="h-3.5 w-px bg-[var(--color-line)]" />
+				{/* Secondary controls — folded away on phones; all remain reachable
+				    from the command palette. */}
+				<div className="hidden items-center gap-[var(--space-2)] sm:flex">
+					<span aria-hidden className="h-3.5 w-px bg-[var(--color-line)]" />
 
-				{/* Body font: sans / serif */}
-				<button
-					type="button"
-					onClick={onToggleFont}
-					title={`Body font: ${readingFont === "serif" ? "Serif" : "Sans"} — click to switch`}
-					aria-label="Toggle body font"
-					className="flex h-6 items-center rounded-[var(--radius-sm)] px-2 text-[length:var(--text-ui-sm)] text-[var(--color-ink-tertiary)] transition-colors duration-[var(--motion-instant)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-ink-secondary)]"
-				>
-					<span
-						className={cn(
-							readingFont === "serif"
-								? "font-[family-name:var(--font-app-serif)]"
-								: "font-[family-name:var(--font-app-sans)]",
-						)}
-					>
-						{readingFont === "serif" ? "Serif" : "Sans"}
-					</span>
-				</button>
-
-				<span aria-hidden className="h-3.5 w-px bg-[var(--color-line)]" />
-
-				{/* Text zoom */}
-				<div className="flex items-center gap-0.5">
+					{/* Body font: sans / serif */}
 					<button
 						type="button"
-						className={iconBtn}
-						onClick={onZoomOut}
-						disabled={!canZoomOut}
-						title="Smaller text"
-						aria-label="Decrease text size"
+						onClick={onToggleFont}
+						title={`Body font: ${readingFont === "serif" ? "Serif" : "Sans"} — click to switch`}
+						aria-label="Toggle body font"
+						className="flex h-6 items-center rounded-[var(--radius-sm)] px-2 text-[length:var(--text-ui-sm)] text-[var(--color-ink-tertiary)] transition-colors duration-[var(--motion-instant)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-ink-secondary)]"
 					>
-						<Minus aria-hidden className="size-[14px]" />
+						<span
+							className={cn(
+								readingFont === "serif"
+									? "font-[family-name:var(--font-app-serif)]"
+									: "font-[family-name:var(--font-app-sans)]",
+							)}
+						>
+							{readingFont === "serif" ? "Serif" : "Sans"}
+						</span>
 					</button>
+
+					<span aria-hidden className="h-3.5 w-px bg-[var(--color-line)]" />
+
+					{/* Text zoom */}
+					<div className="flex items-center gap-0.5">
+						<button
+							type="button"
+							className={iconBtn}
+							onClick={onZoomOut}
+							disabled={!canZoomOut}
+							title="Smaller text"
+							aria-label="Decrease text size"
+						>
+							<Minus aria-hidden className="size-[14px]" />
+						</button>
+						<button
+							type="button"
+							onClick={onZoomReset}
+							title="Reset text size"
+							aria-label="Reset text size"
+							className="min-w-[3ch] rounded-[var(--radius-sm)] px-1 text-center tabular-nums text-[var(--color-ink-tertiary)] transition-colors duration-[var(--motion-instant)] hover:text-[var(--color-ink-secondary)]"
+						>
+							{zoomPct}%
+						</button>
+						<button
+							type="button"
+							className={iconBtn}
+							onClick={onZoomIn}
+							disabled={!canZoomIn}
+							title="Bigger text"
+							aria-label="Increase text size"
+						>
+							<Plus aria-hidden className="size-[14px]" />
+						</button>
+					</div>
+
+					<span aria-hidden className="h-3.5 w-px bg-[var(--color-line)]" />
+
 					<button
 						type="button"
-						onClick={onZoomReset}
-						title="Reset text size"
-						aria-label="Reset text size"
-						className="min-w-[3ch] rounded-[var(--radius-sm)] px-1 text-center tabular-nums text-[var(--color-ink-tertiary)] transition-colors duration-[var(--motion-instant)] hover:text-[var(--color-ink-secondary)]"
+						className={cn(iconBtn, spellcheck && "text-[var(--color-accent)]")}
+						onClick={onToggleSpellcheck}
+						aria-pressed={spellcheck}
+						title={`Spellcheck: ${spellcheck ? "On" : "Off"}`}
+						aria-label="Toggle spellcheck"
 					>
-						{zoomPct}%
-					</button>
-					<button
-						type="button"
-						className={iconBtn}
-						onClick={onZoomIn}
-						disabled={!canZoomIn}
-						title="Bigger text"
-						aria-label="Increase text size"
-					>
-						<Plus aria-hidden className="size-[14px]" />
+						<SpellCheck aria-hidden className="size-[15px]" />
 					</button>
 				</div>
 
 				<span aria-hidden className="h-3.5 w-px bg-[var(--color-line)]" />
-
-				<button
-					type="button"
-					className={cn(iconBtn, spellcheck && "text-[var(--color-accent)]")}
-					onClick={onToggleSpellcheck}
-					aria-pressed={spellcheck}
-					title={`Spellcheck: ${spellcheck ? "On" : "Off"}`}
-					aria-label="Toggle spellcheck"
-				>
-					<SpellCheck aria-hidden className="size-[15px]" />
-				</button>
 
 				<button
 					type="button"
@@ -271,10 +279,13 @@ export function StatusBar({
 
 				<span aria-hidden className="h-3.5 w-px bg-[var(--color-line)]" />
 
-				<span className="inline-block min-w-[4.5rem] cursor-default text-right tabular-nums text-[var(--color-ink-tertiary)]">
+				<span className="hidden cursor-default text-right tabular-nums text-[var(--color-ink-tertiary)] min-[360px]:inline-block sm:min-w-[4.5rem]">
 					{formatWordCount(wordCount)}
 				</span>
-				<span aria-hidden className="text-[var(--color-line-strong)]">
+				<span
+					aria-hidden
+					className="hidden text-[var(--color-line-strong)] min-[360px]:inline"
+				>
 					·
 				</span>
 				<SyncIndicator status={syncStatus} />

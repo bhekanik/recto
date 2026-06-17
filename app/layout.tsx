@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Figtree, JetBrains_Mono, Source_Serif_4 } from "next/font/google";
 
 import { Providers } from "@/components/providers";
@@ -36,6 +36,17 @@ const mono = JetBrains_Mono({
 export const metadata: Metadata = {
 	title: "Recto",
 	description: "A private writing studio — one document, four lenses.",
+};
+
+export const viewport: Viewport = {
+	width: "device-width",
+	initialScale: 1,
+	// Don't cap zoom — pinch-zoom stays available for accessibility.
+	viewportFit: "cover",
+	// Shrink the layout (100dvh) when the on-screen keyboard opens instead of
+	// letting it overlay the editor and status bar.
+	interactiveWidget: "resizes-content",
+	themeColor: "#1c1a24",
 };
 
 export default function RootLayout({

@@ -173,7 +173,7 @@ export function HistoryPanel({
 				onClick={onClose}
 			/>
 			<aside
-				className="recto-panel relative z-10 flex h-full w-[clamp(20rem,28vw,24rem)] flex-col rounded-none border-y-0 border-r-0 border-l"
+				className="recto-panel relative z-10 flex h-full w-[min(24rem,100vw)] flex-col rounded-none border-y-0 border-r-0 border-l"
 				role="dialog"
 				aria-modal="true"
 				aria-labelledby="recto-history-title"
