@@ -22,20 +22,23 @@ larger and phased; ship the craft features first.
 | 006 | Keyboard-driven find & replace (regex) | P2 | S | — | DONE |
 | 007 | Smart paste — Word/web → clean canonical Markdown | P2 | M | — | DONE |
 | 008 | Newsletter authoring layer (subject/preview text, email preview, image storage) | P2 | L | — | DONE |
-| 009 | AI reversible assist — undo-tree transforms, critique panel, RAG over own drafts | P3 | L | — | DONE (one follow-up: see notes) |
+| 009 | AI reversible assist — undo-tree transforms, critique panel, RAG over own drafts | P3 | L | — | DONE |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | REJECTED (one-line rationale)
 
 ## Post-implementation notes (2026-06-18)
 
-All nine plans implemented and committed to `main` (not pushed), one commit per plan, after passing `typecheck` + `biome` + `test` + `build` each time (test suite grew from 105 → 225). Deviations and follow-ups worth knowing:
+All nine plans implemented and committed to `main` (not pushed), one commit per plan, after passing `typecheck` + `biome` + `test` + `build` each time. The four deferred/blocked items from the first pass were then fixed in a follow-up pass (also committed). Test suite grew from 105 → 234.
 
-- **009 — Phase C cron re-embedding (only open follow-up).** The client "Re-index this draft" path works end-to-end (chunk → embed via the Next route → Convex vector search). The *scheduled* daily re-embed (`convex/embeddings.ts → reindexSweep`, registered in `convex/crons.ts`) is scaffolded but inert because the embedding key lives in the Next env, not the Convex env, so the cron can't reach it. **To unblock:** `npx convex env set OPENROUTER_API_KEY <value>` and replace the marked block in `reindexSweep` with a direct OpenRouter `/embeddings` fetch (the chunk + request builders already exist). OpenRouter *does* expose an embeddings endpoint, so nothing else blocks it.
-- **009 — provider/transport.** Implemented via OpenRouter (OpenAI-compatible) through Clerk-guarded Next App Router routes (`app/api/ai/{transform,critique,embed}`) with SSE streaming, instead of the plan's Anthropic-SDK-in-a-Convex-action. Model ids are configurable constants in `lib/ai/config.ts` (default chat `anthropic/claude-sonnet-4.6`, embeddings `openai/text-embedding-3-small`, 1536 dims). `aiEnabled` defaults OFF. Smoke-tested live against the key.
-- **009 — rich-lens transforms deferred.** Selection→transform is wired for the raw/vim (CodeMirror) lenses where selection offsets are exact markdown offsets; in rich (Milkdown) the summon shows a "switch lens" hint. Follow-up: a ProseMirror-position → markdown-offset bridge for rich-lens transforms.
-- **008 — image paste is raw/vim only.** Milkdown rich-mode image paste was deferred per the plan; image paste/drop → Convex storage works in the CodeMirror lenses.
-- **006 — preview-lens ⌘F.** In the read-only preview lens, ⌘F is suppressed (no native browser find) as an accepted tradeoff; revisit if native find in preview is wanted.
-- **Runtime checks pending.** Gates are static (types/lint/tests/build) plus one live OpenRouter smoke call. The interactive behaviors (focus-mode scroll feel, AI accept/reject in the live app, image upload round-trip, email preview rendering) should get a manual smoke pass in the running app.
+**Follow-up fixes (all DONE):**
+- **009 — Phase C cron re-embedding: FIXED.** `OPENROUTER_API_KEY` set on the Convex **dev** deployment; `convex/embeddings.ts → reindexSweep` now generates embeddings server-side via a direct OpenRouter `/embeddings` fetch and stores them. Verified live: `bunx convex run embeddings:reindexSweep` → `{ scanned: 7, embedded: 7 }`. ⚠️ When deploying to production, set the key there too: `npx convex env set OPENROUTER_API_KEY <value>` against the prod deployment.
+- **009 — rich-lens transforms: FIXED.** Selection→AI transform now works in the rich (Milkdown) lens via slice-serialize + replace (lands as one reversible undo-tree node), in addition to raw/vim. Block-vs-inline AI results are reconciled by ProseMirror slice-fitting (non-corrupting; may shift structure slightly).
+- **008 — image paste: FIXED.** Image paste/drop → Convex storage now works in BOTH the rich (Milkdown) and raw/vim (CodeMirror) lenses.
+- **006 — preview-lens ⌘F: FIXED.** Native browser find now works in the read-only preview lens; ⌘F is only intercepted for editable lenses.
+
+**Still worth knowing:**
+- **009 — provider/transport.** OpenRouter (OpenAI-compatible) through Clerk-guarded Next App Router routes (`app/api/ai/{transform,critique,embed}`) with SSE streaming. Model ids are configurable constants in `lib/ai/config.ts` (default chat `anthropic/claude-sonnet-4.6`, embeddings `openai/text-embedding-3-small`, 1536 dims). `aiEnabled` defaults OFF.
+- **Runtime checks pending.** Gates are static (types/lint/tests/build) plus live OpenRouter smoke calls (chat, embeddings, and the cron sweep). The interactive behaviors (focus-mode scroll feel, AI accept/reject in the live app, image upload round-trip, email preview rendering) should still get a manual smoke pass in the running app.
 
 ## Recommended sequence (by leverage)
 
