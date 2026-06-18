@@ -15,6 +15,7 @@ import type * as embeddings from "../embeddings.js";
 import type * as files from "../files.js";
 import type * as history from "../history.js";
 import type * as retention from "../retention.js";
+import type * as review from "../review.js";
 import type * as versions from "../versions.js";
 import type * as workspaces from "../workspaces.js";
 import type * as writingStats from "../writingStats.js";
@@ -33,6 +34,7 @@ declare const fullApi: ApiFromModules<{
   files: typeof files;
   history: typeof history;
   retention: typeof retention;
+  review: typeof review;
   versions: typeof versions;
   workspaces: typeof workspaces;
   writingStats: typeof writingStats;

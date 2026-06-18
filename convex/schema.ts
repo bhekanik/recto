@@ -50,6 +50,57 @@ export default defineSchema({
 		createdAt: v.number(),
 	}).index("by_document", ["documentId"]),
 
+	// Invite-based per-document ACL (plan 010). Owner shares one document with an
+	// invited email; once that email signs in, granteeUserId is resolved & cached.
+	documentShares: defineTable({
+		documentId: v.id("documents"),
+		ownerUserId: v.string(),
+		granteeEmail: v.string(), // lowercased at write time
+		granteeUserId: v.optional(v.string()), // resolved on first access by that user
+		role: v.union(v.literal("commenter"), v.literal("suggester")),
+		createdAt: v.number(),
+	})
+		.index("by_document", ["documentId"])
+		.index("by_grantee_email", ["granteeEmail"])
+		.index("by_grantee_user", ["granteeUserId"]),
+
+	// A reviewer's shadow suggestion branch off the owner's tree (plan 010).
+	// headNodeId advances as the reviewer appends; status drives the review surface.
+	// Reject = status "rejected" (the abandoned branch is pruned by retention).
+	reviewBranches: defineTable({
+		documentId: v.id("documents"),
+		reviewerUserId: v.string(),
+		baseNodeId: v.string(), // owner's currentNodeId when the branch opened
+		headNodeId: v.string(), // latest reviewer node on this branch
+		status: v.union(
+			v.literal("open"),
+			v.literal("accepted"),
+			v.literal("rejected"),
+		),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+	})
+		.index("by_document", ["documentId"])
+		.index("by_document_reviewer", ["documentId", "reviewerUserId"]),
+
+	// Anchored comments on a shared document (plan 010, Phase B). Anchor stores the
+	// quoted text + position hint; re-located by search so it survives edits.
+	comments: defineTable({
+		documentId: v.id("documents"),
+		authorUserId: v.string(),
+		authorName: v.string(),
+		anchor: v.object({
+			quote: v.string(), // exact quoted substring of canonical markdown
+			prefix: v.string(), // up to ~32 chars before the quote (disambiguator)
+			suffix: v.string(), // up to ~32 chars after the quote
+			offsetHint: v.number(), // char offset at anchor time (tie-breaker only)
+		}),
+		body: v.string(),
+		threadParentId: v.optional(v.id("comments")),
+		resolved: v.boolean(),
+		createdAt: v.number(),
+	}).index("by_document", ["documentId"]),
+
 	// RAG over the writer's own drafts (plan 009, Phase C): paragraph-windowed
 	// chunks of each document with their embedding. The vectorIndex dimensions
 	// MUST equal AI_EMBEDDING_DIM in lib/ai/config.ts (1536 — verified for

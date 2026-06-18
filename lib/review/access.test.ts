@@ -1,0 +1,305 @@
+import { convexTest } from "convex-test";
+import { describe, expect, it } from "vitest";
+import { api } from "@/convex/_generated/api";
+import type { Id } from "@/convex/_generated/dataModel";
+import schema from "@/convex/schema";
+import { diffRuns } from "@/lib/history/diff";
+
+// Explicit module map for convex-test. Keys must include a "_generated" path so
+// convex-test can locate the function-bundle root (it splits a key on
+// "_generated"). Mirrors spikes/undo-tree/tests/convex.bun.test.ts; import.meta.glob
+// is avoided here because the root tsconfig has no vite/client types.
+const modules: Record<string, () => Promise<unknown>> = {
+	"../../convex/schema.ts": () => import("@/convex/schema"),
+	"../../convex/documents.ts": () => import("@/convex/documents"),
+	"../../convex/docNodes.ts": () => import("@/convex/docNodes"),
+	"../../convex/versions.ts": () => import("@/convex/versions"),
+	"../../convex/history.ts": () => import("@/convex/history"),
+	"../../convex/review.ts": () => import("@/convex/review"),
+	"../../convex/_generated/api.js": () => import("@/convex/_generated/api"),
+	"../../convex/_generated/server.js": () =>
+		import("@/convex/_generated/server"),
+};
+
+const OWNER = { subject: "owner-user", email: "owner@example.com" };
+const REVIEWER = { subject: "reviewer-user", email: "reviewer@example.com" };
+const COMMENTER = { subject: "commenter-user", email: "commenter@example.com" };
+
+/** Build a contiguous full-replace patch (matches the spike/restore shape). */
+function fullReplacePatch(from: string, to: string): string {
+	return JSON.stringify({ from: 0, to: from.length, insert: to });
+}
+
+describe("plan 010 SPIKE — reviewer-branch isolation + accept/reject", () => {
+	it("Step 0: identity.email flows through ctx.auth.getUserIdentity()", async () => {
+		const t = convexTest(schema, modules);
+		// Inline query (no named function) — exercises the same identity path
+		// requireDocumentAccess relies on, so invite-by-email can key on email.
+		const who = await t.withIdentity(OWNER).query(async (ctx) => {
+			const id = await ctx.auth.getUserIdentity();
+			return id ? { subject: id.subject, email: id.email } : null;
+		});
+		expect(who).not.toBeNull();
+		expect(who?.email).toBe("owner@example.com");
+		expect(typeof who?.email).toBe("string");
+		expect((who?.email ?? "").length).toBeGreaterThan(0);
+	});
+
+	it("isolates reviewer suggestions from the owner document, accepts additively, rejects as a no-op", async () => {
+		const t = convexTest(schema, modules);
+		const owner = t.withIdentity(OWNER);
+		const reviewer = t.withIdentity(REVIEWER);
+
+		// 1. Owner creates a doc and types an edit (append node + advance pointer).
+		const { documentId, rootNodeId } = await owner.mutation(
+			api.documents.create,
+			{ title: "Draft" },
+		);
+
+		// updateCurrentNodeId is LWW-guarded by updatedAt, so the pointer write must
+		// carry a timestamp >= the doc's creation updatedAt.
+		const created = await t.run(async (ctx) => ctx.db.get(documentId));
+		const baseTime = (created?.updatedAt ?? Date.now()) + 1000;
+
+		const ownerNodeId = crypto.randomUUID();
+		const ownerText = "The owner wrote this sentence.";
+		await owner.mutation(api.docNodes.append, {
+			documentId,
+			nodeId: ownerNodeId,
+			parentNodeId: rootNodeId,
+			patch: fullReplacePatch("", ownerText),
+			snapshot: ownerText,
+			selection: null,
+			origin: "device-owner",
+			createdAt: baseTime,
+		});
+		await owner.mutation(api.documents.updateCurrentNodeId, {
+			documentId,
+			currentNodeId: ownerNodeId,
+			markdown: ownerText,
+			wordCount: 5,
+			updatedAt: baseTime,
+		});
+
+		const doc0 = await t.run(async (ctx) => ctx.db.get(documentId));
+		const ownerMarkdown0 = doc0?.markdown ?? "";
+		const ownerCurrentNodeId0 = doc0?.currentNodeId ?? "";
+		const ownerUpdatedAt0 = doc0?.updatedAt ?? 0;
+		expect(ownerMarkdown0).toBe(ownerText);
+		expect(ownerCurrentNodeId0).toBe(ownerNodeId);
+
+		// 2. Reviewer with no share is blocked.
+		await expect(
+			reviewer.mutation(api.review.reviewerAppend, {
+				documentId,
+				nodeId: crypto.randomUUID(),
+				parentNodeId: ownerCurrentNodeId0,
+				patch: fullReplacePatch(ownerText, `${ownerText} (suggested)`),
+				selection: null,
+				createdAt: 3000,
+			}),
+		).rejects.toThrow("Document not found");
+
+		// 3. Grant suggester (direct db write — fine for the spike), then append 2 nodes.
+		await t.run(async (ctx) => {
+			await ctx.db.insert("documentShares", {
+				documentId,
+				ownerUserId: OWNER.subject,
+				granteeEmail: REVIEWER.email,
+				role: "suggester",
+				createdAt: 100,
+			});
+		});
+
+		const revNode1 = crypto.randomUUID();
+		const revText1 = `${ownerText} It needs more detail.`;
+		const r1 = await reviewer.mutation(api.review.reviewerAppend, {
+			documentId,
+			nodeId: revNode1,
+			parentNodeId: ownerCurrentNodeId0,
+			patch: fullReplacePatch(ownerText, revText1),
+			snapshot: revText1,
+			selection: null,
+			createdAt: 3000,
+		});
+		const branchId = r1.branchId;
+
+		const revNode2 = crypto.randomUUID();
+		const revText2 = `${revText1} And a closing line.`;
+		await reviewer.mutation(api.review.reviewerAppend, {
+			documentId,
+			branchId,
+			nodeId: revNode2,
+			parentNodeId: revNode1,
+			patch: fullReplacePatch(revText1, revText2),
+			snapshot: revText2,
+			selection: null,
+			createdAt: 4000,
+		});
+
+		// Each reviewer node carries origin `review:<reviewerSubject>`.
+		const reviewerNodes = await t.run(async (ctx) => {
+			const rows = await ctx.db
+				.query("docNodes")
+				.withIndex("by_document", (q) => q.eq("documentId", documentId))
+				.collect();
+			return rows.filter((n) => n.nodeId === revNode1 || n.nodeId === revNode2);
+		});
+		expect(reviewerNodes).toHaveLength(2);
+		for (const n of reviewerNodes) {
+			expect(n.origin).toBe(`review:${REVIEWER.subject}`);
+		}
+
+		// The reviewBranches row tracks the reviewer's own head.
+		const branch = await t.run(async (ctx) =>
+			ctx.db.get(branchId as Id<"reviewBranches">),
+		);
+		expect(branch?.status).toBe("open");
+		expect(branch?.baseNodeId).toBe(ownerCurrentNodeId0);
+		expect(branch?.headNodeId).toBe(revNode2);
+		expect(branch?.reviewerUserId).toBe(REVIEWER.subject);
+
+		// 4. LOAD-BEARING: owner document is byte-for-byte untouched.
+		const doc1 = await t.run(async (ctx) => ctx.db.get(documentId));
+		expect(doc1?.markdown).toBe(ownerMarkdown0);
+		expect(doc1?.currentNodeId).toBe(ownerCurrentNodeId0);
+		expect(doc1?.updatedAt).toBe(ownerUpdatedAt0);
+
+		// 5. The diff is materializable and non-trivial.
+		const diff = await owner.query(api.review.getBranchDiff, {
+			documentId,
+			branchId: branchId as Id<"reviewBranches">,
+		});
+		expect(diff.currentMarkdown).toBe(ownerMarkdown0);
+		expect(diff.branchMarkdown).toBe(revText2);
+		expect(diff.branchMarkdown).not.toBe(diff.currentMarkdown);
+		const runs = diffRuns(diff.currentMarkdown, diff.branchMarkdown);
+		expect(runs.some((r) => r.type === "add" || r.type === "del")).toBe(true);
+
+		// 8 (early): reviewer cannot accept/reject.
+		await expect(
+			reviewer.mutation(api.review.acceptBranch, {
+				documentId,
+				branchId: branchId as Id<"reviewBranches">,
+			}),
+		).rejects.toThrow("Document not found");
+		await expect(
+			reviewer.mutation(api.review.rejectBranch, {
+				documentId,
+				branchId: branchId as Id<"reviewBranches">,
+			}),
+		).rejects.toThrow("Document not found");
+
+		// 6. Accept is additive: new tip, merged markdown, OLD node survives.
+		const accept = await owner.mutation(api.review.acceptBranch, {
+			documentId,
+			branchId: branchId as Id<"reviewBranches">,
+		});
+		const doc2 = await t.run(async (ctx) => ctx.db.get(documentId));
+		expect(doc2?.currentNodeId).toBe(accept.newNodeId);
+		expect(doc2?.currentNodeId).not.toBe(ownerCurrentNodeId0);
+		expect(doc2?.markdown).toBe(revText2);
+
+		const preAcceptNodeStillExists = await t.run(async (ctx) => {
+			const rows = await ctx.db
+				.query("docNodes")
+				.withIndex("by_document", (q) => q.eq("documentId", documentId))
+				.collect();
+			return rows.some((n) => n.nodeId === ownerCurrentNodeId0);
+		});
+		expect(preAcceptNodeStillExists).toBe(true);
+
+		const acceptedBranch = await t.run(async (ctx) =>
+			ctx.db.get(branchId as Id<"reviewBranches">),
+		);
+		expect(acceptedBranch?.status).toBe("accepted");
+		// The accepted-from node parents at the owner's pre-accept tip (additive).
+		const newNode = await t.run(async (ctx) => {
+			const rows = await ctx.db
+				.query("docNodes")
+				.withIndex("by_document", (q) => q.eq("documentId", documentId))
+				.collect();
+			return rows.find((n) => n.nodeId === accept.newNodeId);
+		});
+		expect(newNode?.parentNodeId).toBe(ownerCurrentNodeId0);
+		expect(newNode?.origin).toBe("review-accept");
+
+		// 7. Reject is a no-op on data: open a SECOND branch, reject it.
+		const doc3Before = await t.run(async (ctx) => ctx.db.get(documentId));
+		const nodeCountBefore = await t.run(async (ctx) => {
+			const rows = await ctx.db
+				.query("docNodes")
+				.withIndex("by_document", (q) => q.eq("documentId", documentId))
+				.collect();
+			return rows.length;
+		});
+
+		const rev2Node1 = crypto.randomUUID();
+		const baseForBranch2 = doc3Before?.markdown ?? "";
+		const r2 = await reviewer.mutation(api.review.reviewerAppend, {
+			documentId,
+			nodeId: rev2Node1,
+			parentNodeId: doc3Before?.currentNodeId ?? "",
+			patch: fullReplacePatch(baseForBranch2, `${baseForBranch2} second pass.`),
+			snapshot: `${baseForBranch2} second pass.`,
+			selection: null,
+			createdAt: 5000,
+		});
+		await owner.mutation(api.review.rejectBranch, {
+			documentId,
+			branchId: r2.branchId as Id<"reviewBranches">,
+		});
+
+		const rejectedBranch = await t.run(async (ctx) =>
+			ctx.db.get(r2.branchId as Id<"reviewBranches">),
+		);
+		expect(rejectedBranch?.status).toBe("rejected");
+
+		// No docNodes deleted by reject (only the second-branch append added one).
+		const nodeCountAfter = await t.run(async (ctx) => {
+			const rows = await ctx.db
+				.query("docNodes")
+				.withIndex("by_document", (q) => q.eq("documentId", documentId))
+				.collect();
+			return rows.length;
+		});
+		expect(nodeCountAfter).toBe(nodeCountBefore + 1);
+
+		// Owner doc unchanged by the reject (still the accepted state).
+		const doc3After = await t.run(async (ctx) => ctx.db.get(documentId));
+		expect(doc3After?.markdown).toBe(doc3Before?.markdown);
+		expect(doc3After?.currentNodeId).toBe(doc3Before?.currentNodeId);
+	});
+
+	it("a commenter cannot suggest (role below suggester)", async () => {
+		const t = convexTest(schema, modules);
+		const owner = t.withIdentity(OWNER);
+		const commenter = t.withIdentity(COMMENTER);
+
+		const { documentId, rootNodeId } = await owner.mutation(
+			api.documents.create,
+			{ title: "Draft" },
+		);
+
+		await t.run(async (ctx) => {
+			await ctx.db.insert("documentShares", {
+				documentId,
+				ownerUserId: OWNER.subject,
+				granteeEmail: COMMENTER.email,
+				role: "commenter",
+				createdAt: 100,
+			});
+		});
+
+		await expect(
+			commenter.mutation(api.review.reviewerAppend, {
+				documentId,
+				nodeId: crypto.randomUUID(),
+				parentNodeId: rootNodeId,
+				patch: fullReplacePatch("", "commenter tried to edit"),
+				selection: null,
+				createdAt: 3000,
+			}),
+		).rejects.toThrow("Document not found");
+	});
+});
