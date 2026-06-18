@@ -208,6 +208,11 @@ function StudioWorkspace() {
 
 	const activeLeaf = workspace ? getActiveLeaf(workspace) : null;
 	const activeMode = activeLeaf?.mode ?? "rich";
+	// Live mirror of the active lens for the (stable) shortcut handler, so the
+	// find chord can fall through to native page find in the read-only preview
+	// lens without re-subscribing the keydown listener on every mode switch.
+	const activeModeRef = useRef(activeMode);
+	activeModeRef.current = activeMode;
 	const activeDocId = activeLeaf?.documentId ?? null;
 	const activeSync = activeDocId ? getDocumentSync(activeDocId) : null;
 	const activeTitle =
@@ -811,102 +816,105 @@ function StudioWorkspace() {
 	useEffect(() => {
 		if (!workspace) return;
 
-		const handler = createAppShortcutHandler((action) => {
-			switch (action.type) {
-				case "open-palette":
-					setCommandScope("all");
-					setCommandOpen(true);
-					return;
-				case "open-document-switcher":
-					setDocumentSwitcherOpen(true);
-					return;
-				case "new-document":
-					void handleCreate();
-					return;
-				case "switch-mode":
-					dispatchModeSwitch(action.mode);
-					return;
-				case "cycle-mode": {
-					const leaf = findLeaf(workspace.paneTree, workspace.activePaneId);
-					const current = leaf?.mode ?? "rich";
-					dispatchModeSwitch(resolveModeAction(current, action.direction));
-					return;
+		const handler = createAppShortcutHandler(
+			(action) => {
+				switch (action.type) {
+					case "open-palette":
+						setCommandScope("all");
+						setCommandOpen(true);
+						return;
+					case "open-document-switcher":
+						setDocumentSwitcherOpen(true);
+						return;
+					case "new-document":
+						void handleCreate();
+						return;
+					case "switch-mode":
+						dispatchModeSwitch(action.mode);
+						return;
+					case "cycle-mode": {
+						const leaf = findLeaf(workspace.paneTree, workspace.activePaneId);
+						const current = leaf?.mode ?? "rich";
+						dispatchModeSwitch(resolveModeAction(current, action.direction));
+						return;
+					}
+					case "split-pane":
+						actions.splitActivePane(action.direction);
+						return;
+					case "close-pane":
+						actions.closeActivePane();
+						return;
+					case "focus-pane":
+						if (action.direction === "next") actions.focusNextPane();
+						else actions.focusPrevPane();
+						return;
+					case "focus-spatial":
+						actions.focusDirection(action.direction);
+						return;
+					case "undo":
+						activeHistoryRef.current?.undo();
+						return;
+					case "redo":
+						activeHistoryRef.current?.redo();
+						return;
+					case "checkpoint":
+						handleCheckpoint();
+						return;
+					case "open-undo-tree":
+						setHistoryPanel({ open: true, view: "tree" });
+						return;
+					case "open-version-history":
+						setHistoryPanel({ open: true, view: "versions" });
+						return;
+					case "copy-rich":
+						dispatchRef.current("copy-rich");
+						return;
+					case "copy-markdown":
+						dispatchRef.current("copy-markdown");
+						return;
+					case "export":
+						setCommandScope("all");
+						setCommandOpen(true);
+						return;
+					case "toggle-status":
+						setStatusVisible((v) => !v);
+						return;
+					case "toggle-focus":
+						setZen((v) => !v);
+						return;
+					case "toggle-typewriter":
+						// Route through dispatchRef so the keydown listener isn't re-subscribed
+						// on every settings change (settings stays out of this effect's deps).
+						dispatchRef.current("toggle-typewriter");
+						return;
+					case "toggle-focus-dim":
+						dispatchRef.current("toggle-focus-dim");
+						return;
+					case "open-go-to-heading":
+						setCommandScope("headings");
+						setCommandOpen(true);
+						return;
+					case "toggle-outline":
+						// Route through dispatchRef so this effect's deps stay free of settings.
+						dispatchRef.current("toggle-outline");
+						return;
+					case "find-replace":
+						// Route through dispatchRef (stable) so this effect isn't re-subscribed.
+						dispatchRef.current("find-replace");
+						return;
+					case "ai-transform":
+						dispatchRef.current("ai-transform");
+						return;
+					case "ai-critique":
+						dispatchRef.current("ai-critique");
+						return;
+					case "ai-related":
+						dispatchRef.current("ai-related");
+						return;
 				}
-				case "split-pane":
-					actions.splitActivePane(action.direction);
-					return;
-				case "close-pane":
-					actions.closeActivePane();
-					return;
-				case "focus-pane":
-					if (action.direction === "next") actions.focusNextPane();
-					else actions.focusPrevPane();
-					return;
-				case "focus-spatial":
-					actions.focusDirection(action.direction);
-					return;
-				case "undo":
-					activeHistoryRef.current?.undo();
-					return;
-				case "redo":
-					activeHistoryRef.current?.redo();
-					return;
-				case "checkpoint":
-					handleCheckpoint();
-					return;
-				case "open-undo-tree":
-					setHistoryPanel({ open: true, view: "tree" });
-					return;
-				case "open-version-history":
-					setHistoryPanel({ open: true, view: "versions" });
-					return;
-				case "copy-rich":
-					dispatchRef.current("copy-rich");
-					return;
-				case "copy-markdown":
-					dispatchRef.current("copy-markdown");
-					return;
-				case "export":
-					setCommandScope("all");
-					setCommandOpen(true);
-					return;
-				case "toggle-status":
-					setStatusVisible((v) => !v);
-					return;
-				case "toggle-focus":
-					setZen((v) => !v);
-					return;
-				case "toggle-typewriter":
-					// Route through dispatchRef so the keydown listener isn't re-subscribed
-					// on every settings change (settings stays out of this effect's deps).
-					dispatchRef.current("toggle-typewriter");
-					return;
-				case "toggle-focus-dim":
-					dispatchRef.current("toggle-focus-dim");
-					return;
-				case "open-go-to-heading":
-					setCommandScope("headings");
-					setCommandOpen(true);
-					return;
-				case "toggle-outline":
-					// Route through dispatchRef so this effect's deps stay free of settings.
-					dispatchRef.current("toggle-outline");
-					return;
-				case "find-replace":
-					// Route through dispatchRef (stable) so this effect isn't re-subscribed.
-					dispatchRef.current("find-replace");
-					return;
-				case "ai-transform":
-					dispatchRef.current("ai-transform");
-					return;
-				case "ai-critique":
-					dispatchRef.current("ai-critique");
-					return;
-				case "ai-related":
-					dispatchRef.current("ai-related");
-					return;
-			}
-		});
+			},
+			() => activeModeRef.current,
+		);
 
 		// Attach at window level (capture) so reserved chords like Cmd/Ctrl+P are
 		// intercepted before the browser's default (print) regardless of focus.

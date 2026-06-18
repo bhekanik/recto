@@ -97,13 +97,25 @@ function isCheckpointKey(event: KeyboardEvent): boolean {
 }
 
 /** Cmd/Ctrl+F — open find & replace in the active editor. */
-function isFindKey(event: KeyboardEvent): boolean {
+export function isFindKey(event: KeyboardEvent): boolean {
 	return (
 		event.key.toLowerCase() === "f" &&
 		(event.metaKey || event.ctrlKey) &&
 		!event.shiftKey &&
 		!event.altKey
 	);
+}
+
+/**
+ * Whether ⌘F / Ctrl+F should be intercepted to open find & replace. Editable
+ * lenses (rich/raw/vim) intercept; the read-only preview lens falls through to
+ * the browser's native page find (nothing to search in the editor there).
+ */
+export function shouldInterceptFind(
+	event: KeyboardEvent,
+	activeMode: Mode,
+): boolean {
+	return isFindKey(event) && activeMode !== "preview";
 }
 
 function isUndoKey(event: KeyboardEvent): boolean {
@@ -127,6 +139,7 @@ function isRedoKey(event: KeyboardEvent): boolean {
 /** Capture-phase handler for app-level shortcuts. */
 export function createAppShortcutHandler(
 	onAction: (action: AppShortcutAction) => void,
+	getActiveMode: () => Mode = () => "rich",
 ): (event: KeyboardEvent) => void {
 	return (event: KeyboardEvent) => {
 		// History — model-level undo tree (engine bypass). Stay native in overlays.
@@ -136,9 +149,11 @@ export function createAppShortcutHandler(
 			onAction({ type: "checkpoint" });
 			return;
 		}
-		// Find & replace — only when the editor body (not the panel's own inputs or
-		// a dialog) has focus, so re-pressing ⌘F inside the panel stays native.
-		if (isFindKey(event) && !inOverlayOrInput()) {
+		// Find & replace — only in editable lenses (rich/raw/vim) and only when the
+		// editor body (not the panel's own inputs or a dialog) has focus, so
+		// re-pressing ⌘F inside the panel stays native. In the read-only preview
+		// lens we don't intercept at all, so the browser's native page find runs.
+		if (shouldInterceptFind(event, getActiveMode()) && !inOverlayOrInput()) {
 			event.preventDefault();
 			event.stopPropagation();
 			onAction({ type: "find-replace" });
