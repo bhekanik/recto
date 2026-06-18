@@ -1,10 +1,11 @@
 "use client";
 
-import { Sparkles } from "lucide-react";
+import { MessageSquarePlus, Sparkles } from "lucide-react";
 
 import { SELECTION_ACTIONS } from "@/components/format-actions";
 import { dispatchAiTransform, isAiEnabled } from "@/lib/ai/summon";
 import { dispatchFormat } from "@/lib/editor/format";
+import { dispatchAddComment, isCommentingEnabled } from "@/lib/review/summon";
 
 /**
  * The floating action bar shown above a non-empty selection in rich mode.
@@ -12,8 +13,9 @@ import { dispatchFormat } from "@/lib/editor/format";
  * (the tooltip provider then keeps the bar visible while the command applies).
  */
 export function SelectionToolbar() {
-	// Read the module mirror (this bar mounts outside the React settings provider).
+	// Read the module mirrors (this bar mounts outside the React settings provider).
 	const aiEnabled = isAiEnabled();
+	const commentingEnabled = isCommentingEnabled();
 	return (
 		<div
 			role="toolbar"
@@ -36,6 +38,18 @@ export function SelectionToolbar() {
 					</button>
 				);
 			})}
+			{commentingEnabled && (
+				<button
+					type="button"
+					title="Add comment"
+					aria-label="Add comment"
+					onPointerDown={(event) => event.preventDefault()}
+					onClick={() => dispatchAddComment()}
+					className="flex size-7 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-ink-secondary)] transition-colors duration-[var(--motion-instant)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-ink-primary)]"
+				>
+					<MessageSquarePlus aria-hidden className="size-[15px]" />
+				</button>
+			)}
 			{aiEnabled && (
 				<button
 					type="button"

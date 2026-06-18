@@ -38,6 +38,8 @@ export type ActionId =
 	| "undo"
 	| "redo"
 	| "manage-sharing"
+	| "toggle-comments"
+	| "add-comment"
 	| "ai-transform"
 	| "ai-critique"
 	| "ai-related"
@@ -214,6 +216,20 @@ export const ACTIONS: ActionDef[] = [
 		label: "Manage sharing…",
 		section: "Review",
 		aliases: ["share", "invite", "collaborate", "reviewer", "comment access"],
+		shortcut: { mac: "", other: "" },
+	},
+	{
+		id: "toggle-comments",
+		label: "Toggle comments panel",
+		section: "Review",
+		aliases: ["comments", "notes", "feedback", "annotations", "review"],
+		shortcut: { mac: "", other: "" },
+	},
+	{
+		id: "add-comment",
+		label: "Add comment on selection",
+		section: "Review",
+		aliases: ["comment", "annotate", "note", "leave a comment"],
 		shortcut: { mac: "", other: "" },
 	},
 	{

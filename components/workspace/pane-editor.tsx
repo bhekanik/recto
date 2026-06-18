@@ -29,6 +29,10 @@ import {
 	splitFrontmatter,
 } from "@/lib/markdown";
 import type { CaretPosition, Mode, VimSubMode } from "@/lib/modes/types";
+import {
+	SET_COMMENTS_EVENT,
+	type SetCommentsDetail,
+} from "@/lib/review/summon";
 import { useStudioSettingsContext } from "@/lib/studio/settings-context";
 import { useIsMobile } from "@/lib/studio/use-is-mobile";
 import { cn } from "@/lib/utils";
@@ -192,6 +196,35 @@ export function PaneEditor({
 			}),
 		);
 	}, [isActive, lint, lintCount]);
+
+	// Comment highlights (plan 010 Phase B): studio-shell owns the comment query +
+	// anchoring and pushes located marks here for the ACTIVE pane only. We forward
+	// them into whichever editors are mounted — CM takes resolved offsets, Milkdown
+	// re-searches by quote. Display-only; the editor's document value is untouched.
+	// A ref keeps the latest marks so a mode switch (fresh editor) can re-apply them.
+	const lastCommentsRef = useRef<SetCommentsDetail>({ cm: [], pm: [] });
+	useEffect(() => {
+		if (!isActive) return;
+		const onSetComments = (event: CustomEvent<SetCommentsDetail>) => {
+			lastCommentsRef.current = event.detail;
+			cmRef.current?.setCommentHighlights(event.detail.cm);
+			richRef.current?.setCommentHighlights(event.detail.pm);
+		};
+		window.addEventListener(SET_COMMENTS_EVENT, onSetComments as EventListener);
+		return () =>
+			window.removeEventListener(
+				SET_COMMENTS_EVENT,
+				onSetComments as EventListener,
+			);
+	}, [isActive]);
+
+	// Re-apply the latest comment marks into the editor that just became active on a
+	// mode switch (mirrors the lint re-push on leaf.mode change).
+	// biome-ignore lint/correctness/useExhaustiveDependencies: leaf.mode re-applies current marks into the freshly mounted editor
+	useEffect(() => {
+		cmRef.current?.setCommentHighlights(lastCommentsRef.current.cm);
+		richRef.current?.setCommentHighlights(lastCommentsRef.current.pm);
+	}, [leaf.mode]);
 
 	useEffect(() => {
 		if (!documentId) return;

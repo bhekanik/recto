@@ -40,6 +40,13 @@
 	--color-lint-adverb: oklch(0.78 0.08 250); /* soft blue */
 	--color-lint-weasel: oklch(0.7 0.09 330); /* muted rose */
 
+	/* Comment-anchor highlights (plan 010 Phase B) — a filled tint (not a squiggle)
+	   so a commented span reads as a highlighted region, distinct from the wavy lint
+	   underlines and the diff add/del colours. Low-chroma teal stays in the palette. */
+	--color-comment: oklch(0.82 0.09 195); /* teal, the "annotation" hue */
+	--color-comment-wash: oklch(0.82 0.09 195 / 0.16);
+	--color-comment-wash-strong: oklch(0.82 0.09 195 / 0.28);
+
 	--color-selection: oklch(0.74 0.13 288 / 0.26);
 	--color-focus-ring: oklch(0.76 0.12 286);
 
@@ -755,6 +762,25 @@
 }
 .recto-lint--weasel {
 	text-decoration-color: var(--color-lint-weasel);
+}
+
+/* Comment-anchor highlights (plan 010 Phase B) — a filled background tint plus a
+   bottom border so the commented span is visible without reflowing text. Shared by
+   both editors (CM marks and PM inline decorations carry the same class). A resolved
+   comment fades to a quieter underline so it stays discoverable but recedes. */
+.recto-comment-mark {
+	background-color: var(--color-comment-wash);
+	border-bottom: 2px solid var(--color-comment);
+	border-radius: 2px;
+	cursor: pointer;
+}
+.recto-comment-mark:hover {
+	background-color: var(--color-comment-wash-strong);
+}
+.recto-comment-mark--resolved {
+	background-color: transparent;
+	border-bottom-color: var(--color-line-strong);
+	border-bottom-style: dotted;
 }
 
 .milkdown-slash-menu {

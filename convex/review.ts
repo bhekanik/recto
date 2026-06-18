@@ -491,3 +491,172 @@ export const rejectBranch = mutation({
 		return { rejected: true };
 	},
 });
+
+// ---------------------------------------------------------------------------
+// Phase B — comments (anchored, cross-lens, threaded, resolvable)
+// ---------------------------------------------------------------------------
+
+const anchorValidator = v.object({
+	quote: v.string(),
+	prefix: v.string(),
+	suffix: v.string(),
+	offsetHint: v.number(),
+});
+
+/**
+ * Add an anchored comment. The CALLER must have at least `commenter` access
+ * (owner / suggester pass too). PROGRAMMATIC author seam for plan 011 (cross-cutting
+ * rule b): the *attributed* author is separate from the *caller*.
+ *
+ * - Human path: omit `author` → the comment is attributed to the caller, with a
+ *   display name from the Clerk identity (name → email → "Reviewer").
+ * - AI / owner-attributed path: pass `author: { authorName, authorId }` to attribute
+ *   the comment to a non-caller (e.g. a synthetic AI reviewer `"AI · <model>"`).
+ *   This override is **owner-only** — a reviewer cannot spoof another author, but the
+ *   owner (and plan 011's AI path, which runs as the owner over their own un-shared
+ *   doc) can. Authorization (≥ commenter) still gates the caller regardless.
+ */
+export const addComment = mutation({
+	args: {
+		documentId: v.id("documents"),
+		anchor: anchorValidator,
+		body: v.string(),
+		threadParentId: v.optional(v.id("comments")),
+		// Optional explicit author override — honored ONLY when the caller is the
+		// document owner (the programmatic AI-reviewer seam for plan 011).
+		author: v.optional(
+			v.object({ authorName: v.string(), authorId: v.string() }),
+		),
+	},
+	handler: async (ctx, args) => {
+		const { role, userId } = await requireDocumentAccess(
+			ctx,
+			args.documentId,
+			"commenter",
+		);
+
+		const body = args.body.trim();
+		if (!body) throw new Error("A comment body is required.");
+
+		const identity = await ctx.auth.getUserIdentity();
+		const callerName =
+			(identity?.name as string | undefined) ?? identity?.email ?? "Reviewer";
+
+		// Attribute to the caller by default; honor an explicit override ONLY for the
+		// owner so a reviewer can never spoof another author.
+		let authorUserId = userId;
+		let authorName = callerName;
+		if (args.author) {
+			if (role !== "owner") {
+				throw new Error(
+					"Only the document owner can attribute a comment to another author.",
+				);
+			}
+			authorUserId = args.author.authorId;
+			authorName = args.author.authorName;
+		}
+
+		// A reply must belong to the same document and be a top-level comment (one
+		// level of threading — replies-to-replies collapse onto the root thread).
+		if (args.threadParentId) {
+			const parent = await ctx.db.get(args.threadParentId);
+			if (!parent || parent.documentId !== args.documentId) {
+				throw new Error("Parent comment not found");
+			}
+			if (parent.threadParentId) {
+				throw new Error("Cannot reply to a reply");
+			}
+		}
+
+		const commentId = await ctx.db.insert("comments", {
+			documentId: args.documentId,
+			authorUserId,
+			authorName,
+			anchor: args.anchor,
+			body,
+			threadParentId: args.threadParentId,
+			resolved: false,
+			createdAt: Date.now(),
+		});
+		return { commentId };
+	},
+});
+
+/** List a document's comments (oldest first). Access ≥ commenter. */
+export const listComments = query({
+	args: { documentId: v.id("documents") },
+	handler: async (ctx, args) => {
+		await requireDocumentAccess(ctx, args.documentId, "commenter");
+		const rows = await ctx.db
+			.query("comments")
+			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+			.collect();
+		rows.sort((a, b) => a.createdAt - b.createdAt);
+		return rows.map((c) => ({
+			_id: c._id,
+			authorUserId: c.authorUserId,
+			authorName: c.authorName,
+			anchor: c.anchor,
+			body: c.body,
+			threadParentId: c.threadParentId,
+			resolved: c.resolved,
+			createdAt: c.createdAt,
+		}));
+	},
+});
+
+/**
+ * Resolve or unresolve a comment. Allowed for the comment's AUTHOR or the document
+ * OWNER (any other grantee is rejected). Resolving the thread root resolves the
+ * whole thread implicitly via the panel's grouping — replies keep their own flag.
+ */
+export const setCommentResolved = mutation({
+	args: { commentId: v.id("comments"), resolved: v.boolean() },
+	handler: async (ctx, args) => {
+		const comment = await ctx.db.get(args.commentId);
+		if (!comment) throw new Error("Comment not found");
+		const { role, userId } = await requireDocumentAccess(
+			ctx,
+			comment.documentId,
+			"commenter",
+		);
+		if (comment.authorUserId !== userId && role !== "owner") {
+			throw new Error("Only the author or the document owner can do that.");
+		}
+		await ctx.db.patch(args.commentId, { resolved: args.resolved });
+		return { resolved: args.resolved };
+	},
+});
+
+/**
+ * Delete a comment. Allowed for the comment's AUTHOR or the document OWNER. When a
+ * thread root is deleted, its replies are deleted too (no dangling threads).
+ */
+export const removeComment = mutation({
+	args: { commentId: v.id("comments") },
+	handler: async (ctx, args) => {
+		const comment = await ctx.db.get(args.commentId);
+		if (!comment) throw new Error("Comment not found");
+		const { role, userId } = await requireDocumentAccess(
+			ctx,
+			comment.documentId,
+			"commenter",
+		);
+		if (comment.authorUserId !== userId && role !== "owner") {
+			throw new Error("Only the author or the document owner can do that.");
+		}
+
+		// Cascade replies when deleting a thread root.
+		if (!comment.threadParentId) {
+			const replies = await ctx.db
+				.query("comments")
+				.withIndex("by_document", (q) => q.eq("documentId", comment.documentId))
+				.filter((q) => q.eq(q.field("threadParentId"), args.commentId))
+				.collect();
+			for (const reply of replies) await ctx.db.delete(reply._id);
+		}
+
+		await ctx.db.delete(args.commentId);
+		return { removed: true };
+	},
+});

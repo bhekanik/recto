@@ -28,6 +28,11 @@ import type { LintIssue } from "@/lib/lint";
 import { markdownFromHtml, normalizeMarkdown } from "@/lib/markdown";
 import { exportCaretFromCm, importCaretToCm } from "@/lib/modes/caret";
 import type { CaretPosition, VimSubMode } from "@/lib/modes/types";
+import {
+	type CommentHighlight,
+	commentHighlightExtension,
+	setCommentHighlights,
+} from "@/lib/review/comment-decorations-cm";
 import { lintExtension, setLintIssues } from "./lint-extension";
 
 export type CodeMirrorEditorHandle = EditorHandle & {
@@ -35,6 +40,8 @@ export type CodeMirrorEditorHandle = EditorHandle & {
 	getCmView: () => EditorView | null;
 	/** Push display-only prose-lint decorations (full-doc offsets). */
 	setLintIssues: (issues: LintIssue[]) => void;
+	/** Push display-only comment highlights (full-doc offsets; plan 010 Phase B). */
+	setCommentHighlights: (highlights: CommentHighlight[]) => void;
 	/** Open the find/replace panel (focuses the editor first). */
 	openSearch: () => void;
 };
@@ -458,6 +465,7 @@ export const CodeMirrorEditor = forwardRef<
 				},
 			}),
 			lintExtension(),
+			commentHighlightExtension(),
 			search({ top: true }),
 			// AFTER vimExt so vim's keymap wins in normal mode (its `/` search keeps
 			// working); the search keymap only binds panel chords (Mod-F, Enter, etc.).
@@ -598,6 +606,11 @@ export const CodeMirrorEditor = forwardRef<
 			const view = viewRef.current;
 			if (!view) return;
 			view.dispatch({ effects: setLintIssues.of(issues) });
+		},
+		setCommentHighlights(highlights: CommentHighlight[]) {
+			const view = viewRef.current;
+			if (!view) return;
+			view.dispatch({ effects: setCommentHighlights.of(highlights) });
 		},
 		openSearch() {
 			const view = viewRef.current;

@@ -571,3 +571,189 @@ describe("plan 010 PHASE A — sharing / ACL", () => {
 		expect(after.nodes).toBe(0);
 	});
 });
+
+describe("plan 010 PHASE B — comments (auth, threading, author/origin seam)", () => {
+	const anchorOf = (quote: string) => ({
+		quote,
+		prefix: "",
+		suffix: "",
+		offsetHint: 0,
+	});
+
+	async function sharedDoc(t: ReturnType<typeof convexTest>) {
+		const owner = t.withIdentity(OWNER);
+		const { documentId } = await owner.mutation(api.documents.create, {
+			title: "Draft",
+		});
+		await owner.mutation(api.review.addShare, {
+			documentId,
+			email: COMMENTER.email,
+			role: "commenter",
+		});
+		await owner.mutation(api.review.addShare, {
+			documentId,
+			email: REVIEWER.email,
+			role: "suggester",
+		});
+		return { documentId };
+	}
+
+	it("a commenter can add + list; a stranger cannot", async () => {
+		const t = convexTest(schema, modules);
+		const { documentId } = await sharedDoc(t);
+		const commenter = t.withIdentity(COMMENTER);
+		const stranger = t.withIdentity({
+			subject: "stranger",
+			email: "stranger@example.com",
+		});
+
+		const { commentId } = await commenter.mutation(api.review.addComment, {
+			documentId,
+			anchor: anchorOf("draft"),
+			body: "Tighten this.",
+		});
+		expect(commentId).toBeDefined();
+
+		const list = await commenter.query(api.review.listComments, { documentId });
+		expect(list).toHaveLength(1);
+		expect(list[0]?.authorUserId).toBe(COMMENTER.subject);
+		expect(list[0]?.authorName).toBe(COMMENTER.email); // no name claim → email
+		expect(list[0]?.resolved).toBe(false);
+
+		await expect(
+			stranger.mutation(api.review.addComment, {
+				documentId,
+				anchor: anchorOf("draft"),
+				body: "I shouldn't be here.",
+			}),
+		).rejects.toThrow("Document not found");
+		await expect(
+			stranger.query(api.review.listComments, { documentId }),
+		).rejects.toThrow("Document not found");
+	});
+
+	it("an empty body is rejected", async () => {
+		const t = convexTest(schema, modules);
+		const { documentId } = await sharedDoc(t);
+		const commenter = t.withIdentity(COMMENTER);
+		await expect(
+			commenter.mutation(api.review.addComment, {
+				documentId,
+				anchor: anchorOf("draft"),
+				body: "   ",
+			}),
+		).rejects.toThrow();
+	});
+
+	it("author OR owner can resolve/delete; another grantee cannot", async () => {
+		const t = convexTest(schema, modules);
+		const { documentId } = await sharedDoc(t);
+		const owner = t.withIdentity(OWNER);
+		const commenter = t.withIdentity(COMMENTER);
+		const reviewer = t.withIdentity(REVIEWER);
+
+		const { commentId } = await commenter.mutation(api.review.addComment, {
+			documentId,
+			anchor: anchorOf("draft"),
+			body: "A note.",
+		});
+
+		// Another grantee (reviewer) cannot resolve or delete someone else's comment.
+		await expect(
+			reviewer.mutation(api.review.setCommentResolved, {
+				commentId,
+				resolved: true,
+			}),
+		).rejects.toThrow("author or the document owner");
+		await expect(
+			reviewer.mutation(api.review.removeComment, { commentId }),
+		).rejects.toThrow("author or the document owner");
+
+		// The author can resolve.
+		await commenter.mutation(api.review.setCommentResolved, {
+			commentId,
+			resolved: true,
+		});
+		let list = await owner.query(api.review.listComments, { documentId });
+		expect(list[0]?.resolved).toBe(true);
+
+		// The OWNER can unresolve someone else's comment.
+		await owner.mutation(api.review.setCommentResolved, {
+			commentId,
+			resolved: false,
+		});
+		list = await owner.query(api.review.listComments, { documentId });
+		expect(list[0]?.resolved).toBe(false);
+
+		// The owner can delete it.
+		await owner.mutation(api.review.removeComment, { commentId });
+		list = await owner.query(api.review.listComments, { documentId });
+		expect(list).toHaveLength(0);
+	});
+
+	it("threaded replies: a reply attaches to its root; deleting the root cascades", async () => {
+		const t = convexTest(schema, modules);
+		const { documentId } = await sharedDoc(t);
+		const owner = t.withIdentity(OWNER);
+		const commenter = t.withIdentity(COMMENTER);
+
+		const { commentId: rootId } = await commenter.mutation(
+			api.review.addComment,
+			{ documentId, anchor: anchorOf("draft"), body: "Root." },
+		);
+		const { commentId: replyId } = await owner.mutation(api.review.addComment, {
+			documentId,
+			anchor: anchorOf("draft"),
+			body: "Reply.",
+			threadParentId: rootId,
+		});
+
+		// A reply-to-a-reply is rejected (one level of threading).
+		await expect(
+			commenter.mutation(api.review.addComment, {
+				documentId,
+				anchor: anchorOf("draft"),
+				body: "Nested.",
+				threadParentId: replyId,
+			}),
+		).rejects.toThrow("Cannot reply to a reply");
+
+		let list = await owner.query(api.review.listComments, { documentId });
+		expect(list).toHaveLength(2);
+		expect(list.find((c) => c._id === replyId)?.threadParentId).toBe(rootId);
+
+		// Deleting the root cascades its replies.
+		await owner.mutation(api.review.removeComment, { commentId: rootId });
+		list = await owner.query(api.review.listComments, { documentId });
+		expect(list).toHaveLength(0);
+	});
+
+	it("author/origin override is OWNER-ONLY: owner can attribute, a reviewer cannot spoof", async () => {
+		const t = convexTest(schema, modules);
+		const { documentId } = await sharedDoc(t);
+		const owner = t.withIdentity(OWNER);
+		const reviewer = t.withIdentity(REVIEWER);
+
+		// The owner (plan 011's AI path) attributes a comment to a synthetic author.
+		const { commentId } = await owner.mutation(api.review.addComment, {
+			documentId,
+			anchor: anchorOf("draft"),
+			body: "Consider a stronger verb here.",
+			author: { authorName: "AI · gpt-5", authorId: "ai:review:gpt-5" },
+		});
+		const list = await owner.query(api.review.listComments, { documentId });
+		const aiComment = list.find((c) => c._id === commentId);
+		expect(aiComment?.authorName).toBe("AI · gpt-5");
+		expect(aiComment?.authorUserId).toBe("ai:review:gpt-5");
+
+		// A reviewer (non-owner) CANNOT attribute to another author.
+		await expect(
+			reviewer.mutation(api.review.addComment, {
+				documentId,
+				anchor: anchorOf("draft"),
+				body: "Trying to spoof.",
+				author: { authorName: "Someone Else", authorId: "victim-user" },
+			}),
+		).rejects.toThrow("Only the document owner can attribute");
+	});
+});

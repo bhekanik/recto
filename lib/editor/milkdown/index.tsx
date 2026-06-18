@@ -57,6 +57,11 @@ import {
 } from "@/lib/markdown";
 import { exportCaretFromCm, importCaretToCm } from "@/lib/modes/caret";
 import type { CaretPosition } from "@/lib/modes/types";
+import {
+	type CommentMark,
+	commentPlugin,
+	setCommentMeta,
+} from "@/lib/review/comment-decorations-pm";
 import { lintPlugin, setLintMeta } from "./lint-plugin";
 import { SelectionToolbarView } from "./selection-toolbar-view";
 import { SlashMenuView } from "./slash-menu-view";
@@ -68,6 +73,8 @@ export type MilkdownEditorHandle = EditorHandle & {
 	setMeta: (meta: DocumentMeta) => void;
 	/** Push display-only prose-lint decorations (body-relative offsets, text re-search). */
 	setLintIssues: (issues: LintIssue[]) => void;
+	/** Push display-only comment highlights (located by quote text; plan 010 Phase B). */
+	setCommentHighlights: (marks: CommentMark[]) => void;
 };
 
 const rectoSlash = slashFactory("RECTO_SLASH");
@@ -388,6 +395,9 @@ const MilkdownEditorInner = forwardRef<MilkdownEditorHandle, InnerProps>(
 				// plugin alongside the focus one. Issues arrive via tr meta; it never
 				// edits the document, history, or selection.
 				.use($prose(() => lintPlugin()))
+				// Comment highlights (plan 010 Phase B) — display-only $prose plugin;
+				// marks arrive via tr meta and are located by searching for the quote.
+				.use($prose(() => commentPlugin()))
 				.config((ctx) => {
 					ctx.get(listenerCtx).markdownUpdated((_ctx, md, prevMd) => {
 						if (programmaticRef.current) return;
@@ -630,6 +640,16 @@ const MilkdownEditorInner = forwardRef<MilkdownEditorHandle, InnerProps>(
 				try {
 					const view = editor.ctx.get(editorViewCtx);
 					view.dispatch(view.state.tr.setMeta(setLintMeta, issues));
+				} catch {
+					// editor still mounting — next push will land once the view exists
+				}
+			},
+			setCommentHighlights(marks: CommentMark[]) {
+				const editor = editorRef.current;
+				if (!editor) return;
+				try {
+					const view = editor.ctx.get(editorViewCtx);
+					view.dispatch(view.state.tr.setMeta(setCommentMeta, marks));
 				} catch {
 					// editor still mounting — next push will land once the view exists
 				}
