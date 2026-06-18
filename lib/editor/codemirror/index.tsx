@@ -1,6 +1,7 @@
 "use client";
 
 import { markdown } from "@codemirror/lang-markdown";
+import { openSearchPanel, search, searchKeymap } from "@codemirror/search";
 import {
 	Compartment,
 	EditorState,
@@ -12,6 +13,7 @@ import {
 	type DecorationSet,
 	drawSelection,
 	EditorView,
+	keymap,
 	ViewPlugin,
 	type ViewUpdate,
 } from "@codemirror/view";
@@ -33,6 +35,8 @@ export type CodeMirrorEditorHandle = EditorHandle & {
 	getCmView: () => EditorView | null;
 	/** Push display-only prose-lint decorations (full-doc offsets). */
 	setLintIssues: (issues: LintIssue[]) => void;
+	/** Open the find/replace panel (focuses the editor first). */
+	openSearch: () => void;
 };
 
 type CodeMirrorEditorProps = {
@@ -363,6 +367,10 @@ export const CodeMirrorEditor = forwardRef<
 			drawSelection(),
 			markdown(),
 			lintExtension(),
+			search({ top: true }),
+			// AFTER vimExt so vim's keymap wins in normal mode (its `/` search keeps
+			// working); the search keymap only binds panel chords (Mod-F, Enter, etc.).
+			keymap.of(searchKeymap),
 			updateListener,
 			EditorView.lineWrapping,
 			EditorState.tabSize.of(2),
@@ -500,7 +508,21 @@ export const CodeMirrorEditor = forwardRef<
 			if (!view) return;
 			view.dispatch({ effects: setLintIssues.of(issues) });
 		},
+		openSearch() {
+			const view = viewRef.current;
+			if (!view) return;
+			view.focus();
+			openSearchPanel(view);
+		},
 	}));
 
 	return <div ref={containerRef} className={className} />;
 });
+
+/** Window event name for "open the find/replace panel in the active editor". */
+export const SEARCH_EVENT = "recto:open-search";
+
+/** Ask the active pane's CodeMirror editor to open its search panel. */
+export function dispatchOpenSearch(): void {
+	window.dispatchEvent(new CustomEvent(SEARCH_EVENT));
+}

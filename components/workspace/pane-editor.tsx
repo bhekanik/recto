@@ -11,6 +11,7 @@ import { api } from "@/convex/_generated/api";
 import {
 	CodeMirrorEditor,
 	type CodeMirrorEditorHandle,
+	SEARCH_EVENT,
 } from "@/lib/editor/codemirror";
 import { FORMAT_EVENT, type FormatEventDetail } from "@/lib/editor/format";
 import { createPreviewHandle, type EditorHandle } from "@/lib/editor/handle";
@@ -412,6 +413,19 @@ export function PaneEditor({
 				onModeShortcut as EventListener,
 			);
 	}, [isActive, switchMode]);
+
+	// Find/replace lives in the CodeMirror-backed lenses (raw/vim). The rich lens
+	// routes to raw first (in studio-shell); preview falls through to native find.
+	useEffect(() => {
+		if (!isActive) return;
+		const onSearch = () => {
+			if (leaf.mode !== "raw" && leaf.mode !== "vim") return;
+			cmRef.current?.openSearch();
+		};
+		window.addEventListener(SEARCH_EVENT, onSearch as EventListener);
+		return () =>
+			window.removeEventListener(SEARCH_EVENT, onSearch as EventListener);
+	}, [isActive, leaf.mode]);
 
 	// Formatting commands (top toolbar + floating selection bar) target the active
 	// pane's current editor; the preview handle's runFormat is a harmless no-op.

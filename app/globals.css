@@ -661,6 +661,56 @@
 	color: inherit !important;
 }
 
+/* CodeMirror find/replace panel (plan 006) — themed to the dark OKLCH surface so
+   it reads as part of the studio (not the library's bright default) across all
+   four themes. Tokens only — no raw hex. */
+.cm-panels {
+	background: var(--color-bg-overlay);
+	color: var(--color-ink-primary);
+	border-top: 1px solid var(--color-line);
+}
+.cm-panel.cm-search {
+	padding: var(--space-2) var(--space-3);
+	font-family: var(--font-ui);
+	font-size: var(--text-ui);
+}
+.cm-panel.cm-search input,
+.cm-panel.cm-search button,
+.cm-panel.cm-search label {
+	color: var(--color-ink-primary);
+}
+.cm-panel.cm-search input[type="text"] {
+	background: var(--color-bg-raised);
+	border: 1px solid var(--color-line);
+	border-radius: var(--radius-sm);
+	padding: 2px 6px;
+}
+.cm-panel.cm-search input[type="text"]:focus-visible {
+	outline: 2px solid var(--color-focus-ring);
+	outline-offset: 1px;
+}
+.cm-panel.cm-search button {
+	background: var(--color-bg-raised);
+	border: 1px solid var(--color-line);
+	border-radius: var(--radius-sm);
+}
+.cm-panel.cm-search button:hover {
+	background: var(--color-bg-hover);
+}
+.cm-panel.cm-search label input[type="checkbox"] {
+	accent-color: var(--color-accent);
+}
+.cm-panel.cm-search .cm-button {
+	background-image: none;
+}
+/* Search match highlights — accent wash for matches, selection for the current. */
+.cm-searchMatch {
+	background: var(--color-accent-wash);
+}
+.cm-searchMatch.cm-searchMatch-selected {
+	background: var(--color-selection);
+}
+
 /* Focus dimming (plan 003) — when on, the editable surface fades to tertiary ink
    and only the active sentence/paragraph (decorated .recto-focus-active) stays at
    primary. A single colour transition on the container gives the smooth fade for

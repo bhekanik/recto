@@ -24,7 +24,8 @@ export type AppShortcutAction =
 	| { type: "toggle-typewriter" }
 	| { type: "toggle-focus-dim" }
 	| { type: "open-go-to-heading" }
-	| { type: "toggle-outline" };
+	| { type: "toggle-outline" }
+	| { type: "find-replace" };
 
 const isMac =
 	typeof navigator !== "undefined" &&
@@ -92,6 +93,16 @@ function isCheckpointKey(event: KeyboardEvent): boolean {
 	);
 }
 
+/** Cmd/Ctrl+F — open find & replace in the active editor. */
+function isFindKey(event: KeyboardEvent): boolean {
+	return (
+		event.key.toLowerCase() === "f" &&
+		(event.metaKey || event.ctrlKey) &&
+		!event.shiftKey &&
+		!event.altKey
+	);
+}
+
 function isUndoKey(event: KeyboardEvent): boolean {
 	return (
 		event.key.toLowerCase() === "z" &&
@@ -120,6 +131,14 @@ export function createAppShortcutHandler(
 			event.preventDefault();
 			event.stopPropagation();
 			onAction({ type: "checkpoint" });
+			return;
+		}
+		// Find & replace — only when the editor body (not the panel's own inputs or
+		// a dialog) has focus, so re-pressing ⌘F inside the panel stays native.
+		if (isFindKey(event) && !inOverlayOrInput()) {
+			event.preventDefault();
+			event.stopPropagation();
+			onAction({ type: "find-replace" });
 			return;
 		}
 		if (!inOverlayOrInput()) {

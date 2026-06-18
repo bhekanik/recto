@@ -39,6 +39,7 @@ export type ActionId =
 	| "copy-markdown"
 	| "export-md"
 	| "export-html"
+	| "find-replace"
 	| "toggle-status"
 	| "toggle-focus"
 	| "toggle-font"
@@ -225,6 +226,13 @@ export const ACTIONS: ActionDef[] = [
 		section: "Copy/Export",
 		aliases: ["download html"],
 		shortcut: { mac: "Ctrl+⇧+E", other: "Ctrl+Shift+E" },
+	},
+	{
+		id: "find-replace",
+		label: "Find & replace",
+		section: "View",
+		aliases: ["search", "replace", "regex", "find"],
+		shortcut: { mac: `${M}F`, other: "Ctrl+F" },
 	},
 	{
 		id: "toggle-status",

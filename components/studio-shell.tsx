@@ -22,6 +22,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { RenderPaneNode } from "@/components/workspace/render-pane-node";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { dispatchOpenSearch } from "@/lib/editor/codemirror";
 import {
 	copyAsMarkdown,
 	copyAsRichText,
@@ -415,6 +416,25 @@ function StudioWorkspace() {
 		[activeDocId, workspace, registry],
 	);
 
+	// Find & replace lives in the CodeMirror-backed lenses (raw/vim). Rich does a
+	// lossless, instant switch to raw and opens the panel there; preview falls
+	// through to the browser's native page find (no panel).
+	const openFindReplace = useCallback(() => {
+		if (!workspace) return;
+		const leaf = findLeaf(workspace.paneTree, workspace.activePaneId);
+		const mode = leaf?.mode ?? "rich";
+		if (mode === "preview") return; // native browser find handles preview
+		if (mode === "rich") {
+			dispatchModeSwitch("raw");
+			// Open once the raw editor has mounted + seeded (two frames after switch).
+			requestAnimationFrame(() => {
+				requestAnimationFrame(() => dispatchOpenSearch());
+			});
+			return;
+		}
+		dispatchOpenSearch();
+	}, [workspace]);
+
 	// The single action dispatcher — both the chord handler and the command
 	// palette route into this (blueprint 13 §7.3.4: one implementation, two surfaces).
 	const dispatch = useCallback(
@@ -510,6 +530,9 @@ function StudioWorkspace() {
 					if (source) exportHtmlFile(source);
 					return;
 				}
+				case "find-replace":
+					openFindReplace();
+					return;
 				case "toggle-status":
 					setStatusVisible((v) => !v);
 					return;
@@ -571,6 +594,7 @@ function StudioWorkspace() {
 			handleCreate,
 			handleCheckpoint,
 			getExportSource,
+			openFindReplace,
 			workspace,
 			settings,
 			isMobile,
@@ -663,6 +687,10 @@ function StudioWorkspace() {
 				case "toggle-outline":
 					// Route through dispatchRef so this effect's deps stay free of settings.
 					dispatchRef.current("toggle-outline");
+					return;
+				case "find-replace":
+					// Route through dispatchRef (stable) so this effect isn't re-subscribed.
+					dispatchRef.current("find-replace");
 					return;
 			}
 		});
