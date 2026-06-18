@@ -330,15 +330,16 @@ function StudioWorkspace() {
 
 	const { reindexDocument } = useRag();
 
-	// Summon the AI transform over the current selection. Phase A scopes to the
-	// CodeMirror lenses (raw/vim), where exportCaret offsets are markdown offsets;
-	// rich (Milkdown) selection-to-markdown is deferred (positions differ).
+	// Summon the AI transform over the current selection. Works in the CodeMirror
+	// lenses (raw/vim) — where exportCaret offsets ARE markdown offsets — and in the
+	// rich (Milkdown) lens, where the handle serializes the selected slice to
+	// markdown (no position→offset math). Preview has no editable selection.
 	const summonAiTransform = useCallback(() => {
 		if (!settings.aiEnabled) return;
 		const mode = activeLeaf?.mode ?? "rich";
-		if (mode !== "raw" && mode !== "vim") {
+		if (mode === "preview") {
 			window.alert(
-				"AI transform works in Raw or Vim mode (where the selection maps to the Markdown source). Switch lens, select text, and try again.",
+				"AI transform needs an editable selection. Switch to Rich, Raw, or Vim, select text, and try again.",
 			);
 			return;
 		}
@@ -348,6 +349,24 @@ function StudioWorkspace() {
 			workspace.activePaneId,
 		);
 		if (!handle) return;
+
+		if (mode === "rich") {
+			// Rich lens: serialize the live selection to canonical markdown. The
+			// offset range is unused on this path (richReplace splices via a PM
+			// transaction at commit time), so carry a placeholder range.
+			const text = handle.getSelectedMarkdown?.() ?? null;
+			if (!text) {
+				window.alert("Select some text first, then summon the AI transform.");
+				return;
+			}
+			aiTransform.reset();
+			setAiPopover({
+				open: true,
+				selection: { text, range: { from: 0, to: 0 } },
+			});
+			return;
+		}
+
 		const caret = handle.exportCaret();
 		const from = Math.min(caret.anchor, caret.head);
 		const to = Math.max(caret.anchor, caret.head);
@@ -378,14 +397,30 @@ function StudioWorkspace() {
 
 	const runAiTransform = useCallback(
 		(req: AiTransformRequest) => {
+			// Rich lens: hand the transform a closure that splices the AI text into
+			// the live ProseMirror selection and returns the new full canonical
+			// markdown (committed once by the hook). raw/vim use the offset path.
+			const mode = activeLeaf?.mode ?? "rich";
+			const richReplace =
+				mode === "rich"
+					? (aiText: string): string | null => {
+							if (!activeDocId || !workspace) return null;
+							const handle = registry.getPrimaryHandle(
+								activeDocId,
+								workspace.activePaneId,
+							);
+							return handle?.replaceSelectionMarkdown?.(aiText) ?? null;
+						}
+					: undefined;
 			void aiTransform.transform({
 				instruction: req.instruction,
 				instructionLabel: req.instructionLabel,
 				range: req.range,
 				selection: req.selection,
+				richReplace,
 			});
 		},
-		[aiTransform],
+		[aiTransform, activeLeaf, activeDocId, workspace, registry],
 	);
 
 	// "Re-index this draft for search" (Phase C) — chunk + embed via the Next

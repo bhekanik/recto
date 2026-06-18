@@ -7,6 +7,7 @@ import {
 	editorViewOptionsCtx,
 	parserCtx,
 	rootCtx,
+	serializerCtx,
 } from "@milkdown/core";
 import { listener, listenerCtx } from "@milkdown/plugin-listener";
 import { slashFactory } from "@milkdown/plugin-slash";
@@ -44,6 +45,7 @@ import { BRIDGE_META } from "@/lib/bridge/protocol";
 import { activeFocusRange, type FocusScope } from "@/lib/editor/focus-range";
 import type { FormatCommand } from "@/lib/editor/format";
 import type { EditorHandle } from "@/lib/editor/handle";
+import { isImageFile } from "@/lib/editor/image-upload";
 import type { LintIssue } from "@/lib/lint";
 import {
 	composeFrontmatter,
@@ -144,6 +146,38 @@ function centerCaret(view: PMEditorView): void {
 	scroller.scrollTop += caretMidY - viewportMidY;
 }
 
+/**
+ * Upload an image, then insert a canonical inline `image` node (`![alt](src)`) at
+ * `pos`. Mirrors the CodeMirror image path (plan 008): the upload is async, so it
+ * reads the view back from the ref on resolve (the view may have unmounted or the
+ * doc shifted) and clamps the position. `uploadImage` already toasts + rethrows on
+ * failure, so a failed upload silently leaves the doc untouched. The image insert
+ * is a normal user edit (no programmaticRef / BRIDGE_META), so the
+ * markdownUpdated listener forwards it to sync automatically.
+ */
+function insertUploadedImage(
+	getView: () => PMEditorView | null,
+	uploader: (file: File | Blob) => Promise<{ url: string; alt: string }>,
+	file: File | Blob,
+	pos: number,
+): void {
+	void uploader(file)
+		.then(({ url, alt }) => {
+			const view = getView();
+			if (!view) return;
+			const imageType = view.state.schema.nodes.image;
+			if (!imageType) return;
+			const node = imageType.create({ src: url, alt });
+			const at = Math.min(Math.max(0, pos), view.state.doc.content.size);
+			const tr = view.state.tr.insert(at, node);
+			view.dispatch(tr);
+			view.focus();
+		})
+		.catch(() => {
+			// uploadImage already surfaced a toast; nothing to insert.
+		});
+}
+
 type InnerProps = {
 	onChange?: () => void;
 	bridgeSession?: BridgeSession | null;
@@ -153,6 +187,8 @@ type InnerProps = {
 	focusDimScope?: FocusScope;
 	/** Smart paste — convert pasted rich HTML into canonical Markdown (plan 007). */
 	smartPaste?: boolean;
+	/** Upload a pasted/dropped image and resolve to a servable URL + alt (plan 008). */
+	onUploadImage?: (file: File | Blob) => Promise<{ url: string; alt: string }>;
 };
 
 const MilkdownEditorInner = forwardRef<MilkdownEditorHandle, InnerProps>(
@@ -165,6 +201,7 @@ const MilkdownEditorInner = forwardRef<MilkdownEditorHandle, InnerProps>(
 			focusDim = false,
 			focusDimScope = "sentence",
 			smartPaste = true,
+			onUploadImage,
 		},
 		ref,
 	) {
@@ -188,6 +225,20 @@ const MilkdownEditorInner = forwardRef<MilkdownEditorHandle, InnerProps>(
 		// handlePaste reads the live setting via a ref so toggling smart-paste never
 		// rebuilds the ProseMirror editor.
 		const smartPasteRef = useRef(smartPaste);
+		// handlePaste/handleDrop read the uploader via a ref so the long-lived
+		// ProseMirror view never rebuilds when the (memoized) uploader changes.
+		const onUploadImageRef = useRef(onUploadImage);
+		// Resolve the live ProseMirror view on demand (async image upload may finish
+		// after the handler returns); reads from editorRef so it survives the await.
+		const getViewRef = useRef((): PMEditorView | null => {
+			const editor = editorRef.current;
+			if (!editor) return null;
+			try {
+				return editor.ctx.get(editorViewCtx);
+			} catch {
+				return null;
+			}
+		});
 
 		onChangeRef.current = onChange;
 		bridgeSessionRef.current = bridgeSession;
@@ -196,6 +247,7 @@ const MilkdownEditorInner = forwardRef<MilkdownEditorHandle, InnerProps>(
 		focusDimRef.current = focusDim;
 		focusScopeRef.current = focusDimScope;
 		smartPasteRef.current = smartPaste;
+		onUploadImageRef.current = onUploadImage;
 
 		useEditor((root) => {
 			rootRef.current = root;
@@ -214,9 +266,28 @@ const MilkdownEditorInner = forwardRef<MilkdownEditorHandle, InnerProps>(
 					// EditorProps hook), not under an `editorProps` key.
 					ctx.set(editorViewOptionsCtx, {
 						handlePaste: (view, event) => {
+							// Image branch (plan 008) — runs BEFORE the smart-paste text/html
+							// path so a pasted image is never treated as text. An image item
+							// in the clipboard uploads to Convex storage, then inserts a
+							// canonical `image` node at the caret.
+							const uploader = onUploadImageRef.current;
+							const items = event.clipboardData?.items;
+							const imageFile = items
+								? [...items]
+										.map((i) => (i.kind === "file" ? i.getAsFile() : null))
+										.find((f): f is File => !!f && isImageFile(f))
+								: undefined;
+							if (imageFile && uploader) {
+								event.preventDefault();
+								insertUploadedImage(
+									getViewRef.current,
+									uploader,
+									imageFile,
+									view.state.selection.head,
+								);
+								return true;
+							}
 							if (!smartPasteRef.current) return false;
-							// Plan 008 will branch here on image/file clipboard items
-							// before this text/html path.
 							const html = event.clipboardData?.getData("text/html");
 							if (!html) return false; // no rich content — default paste
 							const md = markdownFromHtml(html);
@@ -231,6 +302,25 @@ const MilkdownEditorInner = forwardRef<MilkdownEditorHandle, InnerProps>(
 							const { from, to } = view.state.selection;
 							const tr = view.state.tr.replaceWith(from, to, doc.content);
 							view.dispatch(tr);
+							return true;
+						},
+						handleDrop: (view, event) => {
+							// Drag-dropped image (plan 008) → Convex storage, inserted at the
+							// drop coordinates (falls back to the caret). Non-image drops fall
+							// through to ProseMirror's default handling.
+							const uploader = onUploadImageRef.current;
+							const files = event.dataTransfer?.files;
+							const file = files
+								? [...files].find((f) => isImageFile(f))
+								: undefined;
+							if (!file || !uploader) return false;
+							event.preventDefault();
+							const dropPos = view.posAtCoords({
+								left: event.clientX,
+								top: event.clientY,
+							});
+							const pos = dropPos?.pos ?? view.state.selection.head;
+							insertUploadedImage(getViewRef.current, uploader, file, pos);
 							return true;
 						},
 					});
@@ -493,6 +583,47 @@ const MilkdownEditorInner = forwardRef<MilkdownEditorHandle, InnerProps>(
 			getParser() {
 				return parserRef.current;
 			},
+			getSelectedMarkdown() {
+				const editor = editorRef.current;
+				if (!editor) return null;
+				try {
+					const view = editor.ctx.get(editorViewCtx);
+					const { from, to } = view.state.selection;
+					if (to <= from) return null;
+					// getMarkdown serializes the sliced range with Milkdown's own
+					// serializer — no ProseMirror-position → markdown-offset math.
+					const md = editor.action(getMarkdown({ from, to }));
+					const trimmed = md.trim();
+					return trimmed.length > 0 ? trimmed : null;
+				} catch {
+					return null;
+				}
+			},
+			replaceSelectionMarkdown(replacement: string) {
+				const editor = editorRef.current;
+				if (!editor) return null;
+				try {
+					const view = editor.ctx.get(editorViewCtx);
+					const { from, to } = view.state.selection;
+					if (to <= from) return null;
+					const parser = editor.ctx.get(parserCtx);
+					const serializer = editor.ctx.get(serializerCtx);
+					// Parse the AI Markdown to a full doc node, then fit its content into
+					// the selection range via a THROWAWAY transaction — the live editor is
+					// never mutated here. replaceWith lets ProseMirror reconcile the slice
+					// into the surrounding context (inline-into-inline, block-into-block).
+					const parsed = parser(replacement);
+					if (!parsed) return null;
+					const tr = view.state.tr.replaceWith(from, to, parsed.content);
+					// Serialize the resulting doc back to canonical body Markdown and
+					// re-attach this pane's frontmatter so the handle contract still
+					// speaks full canonical Markdown. The caller commits this once.
+					const body = serializer(tr.doc);
+					return composeFrontmatter(metaRef.current, body, extraRef.current);
+				} catch {
+					return null;
+				}
+			},
 			setLintIssues(issues: LintIssue[]) {
 				const editor = editorRef.current;
 				if (!editor) return;
@@ -519,6 +650,8 @@ type MilkdownEditorProps = {
 	focusDimScope?: FocusScope;
 	/** Smart paste — convert pasted rich HTML into canonical Markdown (plan 007). */
 	smartPaste?: boolean;
+	/** Upload a pasted/dropped image and resolve to a servable URL + alt (plan 008). */
+	onUploadImage?: (file: File | Blob) => Promise<{ url: string; alt: string }>;
 };
 
 export const MilkdownEditor = forwardRef<
@@ -534,6 +667,7 @@ export const MilkdownEditor = forwardRef<
 		focusDim,
 		focusDimScope,
 		smartPaste,
+		onUploadImage,
 	},
 	ref,
 ) {
@@ -549,6 +683,7 @@ export const MilkdownEditor = forwardRef<
 					focusDim={focusDim}
 					focusDimScope={focusDimScope}
 					smartPaste={smartPaste}
+					onUploadImage={onUploadImage}
 				/>
 			</div>
 		</MilkdownProvider>

@@ -94,9 +94,10 @@ export function PaneEditor({
 		richRef.current?.setMeta(meta);
 	}, []);
 
-	// Image paste/drop (plan 008) — upload to Convex storage, then the CM handler
-	// inserts a canonical `![alt](url)` reference. The URL resolve happens inside
-	// an event handler, so use the imperative client (not a reactive useQuery).
+	// Image paste/drop (plan 008) — upload to Convex storage, then the editor's
+	// paste/drop handler (CodeMirror or Milkdown) inserts a canonical image. The
+	// URL resolve happens inside an event handler, so use the imperative client
+	// (not a reactive useQuery).
 	const generateUploadUrl = useMutation(api.files.generateUploadUrl);
 	const convex = useConvex();
 	const handleUploadImage = useCallback(
@@ -560,6 +561,7 @@ export function PaneEditor({
 								focusDim={focusDim}
 								focusDimScope={focusDimScope}
 								smartPaste={smartPaste}
+								onUploadImage={handleUploadImage}
 								className="milkdown"
 							/>
 						</div>

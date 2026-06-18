@@ -57,13 +57,22 @@ export function useAiTransform(args: {
 		setState(INITIAL);
 	}, []);
 
-	/** Stream + commit. `range` is offsets into the CURRENT doc markdown. */
+	/**
+	 * Stream + commit. For the CodeMirror lenses (raw/vim) `range` is offsets into
+	 * the CURRENT doc markdown and the rewrite splices in via {@link applyTransform}.
+	 * For the rich (Milkdown) lens ProseMirror positions are not markdown offsets,
+	 * so `richReplace(aiText)` returns the new FULL canonical markdown with the
+	 * selection replaced (computed by the editor handle); when present it is used
+	 * instead of the offset splice. Either way the result is committed exactly once.
+	 */
 	const transform = useCallback(
 		async (input: {
 			instruction: string;
 			instructionLabel: string;
 			range: TransformRange;
 			selection: string;
+			/** Rich-lens path: compute new full markdown from the AI text. */
+			richReplace?: (aiText: string) => string | null;
 		}) => {
 			const controller = getController();
 			if (!controller) {
@@ -134,20 +143,36 @@ export function useAiTransform(args: {
 				return;
 			}
 
-			// Splice into the freshest doc markdown (the live editor is the source of
-			// truth; re-read in case anything shifted while streaming).
-			const doc = getDocMarkdown();
-			const range = clampRange(input.range, doc.length);
+			// Compute the new full canonical markdown. Rich lens: ask the editor handle
+			// to splice via a ProseMirror transaction over the live selection (no
+			// offset math). CodeMirror lenses: splice by offset into the freshest doc
+			// markdown (the live editor is the source of truth; re-read in case
+			// anything shifted while streaming).
 			let newDoc: string;
-			try {
-				newDoc = applyTransform(doc, range, aiText);
-			} catch (err) {
-				setState({
-					...INITIAL,
-					status: "error",
-					error: (err as Error).message,
-				});
-				return;
+			if (input.richReplace) {
+				const replaced = input.richReplace(aiText);
+				if (replaced === null) {
+					setState({
+						...INITIAL,
+						status: "error",
+						error: "Lost the selection — select again and retry",
+					});
+					return;
+				}
+				newDoc = replaced;
+			} else {
+				const doc = getDocMarkdown();
+				const range = clampRange(input.range, doc.length);
+				try {
+					newDoc = applyTransform(doc, range, aiText);
+				} catch (err) {
+					setState({
+						...INITIAL,
+						status: "error",
+						error: (err as Error).message,
+					});
+					return;
+				}
 			}
 
 			const committed = controller.commitProgrammatic(newDoc, {
