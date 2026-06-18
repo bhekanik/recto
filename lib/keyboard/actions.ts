@@ -11,6 +11,7 @@ export type ActionSection =
 	| "Panes"
 	| "Navigate"
 	| "History"
+	| "Review"
 	| "AI"
 	| "Copy/Export"
 	| "View"
@@ -36,6 +37,7 @@ export type ActionId =
 	| "version-history"
 	| "undo"
 	| "redo"
+	| "manage-sharing"
 	| "ai-transform"
 	| "ai-critique"
 	| "ai-related"
@@ -206,6 +208,13 @@ export const ACTIONS: ActionDef[] = [
 		label: "Redo",
 		section: "History",
 		shortcut: { mac: `${M}${S}Z`, other: "Ctrl+Y" },
+	},
+	{
+		id: "manage-sharing",
+		label: "Manage sharing…",
+		section: "Review",
+		aliases: ["share", "invite", "collaborate", "reviewer", "comment access"],
+		shortcut: { mac: "", other: "" },
 	},
 	{
 		id: "ai-transform",
@@ -431,6 +440,7 @@ export const SECTION_ORDER: ActionSection[] = [
 	"Panes",
 	"Navigate",
 	"History",
+	"Review",
 	"AI",
 	"Copy/Export",
 	"View",

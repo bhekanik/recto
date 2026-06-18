@@ -2,7 +2,7 @@ import type { GenericMutationCtx, GenericQueryCtx } from "convex/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
-import { requireOwnedDocument } from "./documents";
+import { requireOwnedDocument, requireUserId } from "./documents";
 import { materialize, type ServerNode } from "./history";
 
 type QueryCtx = GenericQueryCtx<import("./_generated/dataModel").DataModel>;
@@ -92,6 +92,215 @@ export async function requireDocumentAccess(
 	}
 	return { doc, role, userId };
 }
+
+// ---------------------------------------------------------------------------
+// Phase A — sharing / ACL (invite by email, see shared docs)
+// ---------------------------------------------------------------------------
+
+const granteeRoleValidator = v.union(
+	v.literal("commenter"),
+	v.literal("suggester"),
+);
+
+/**
+ * Owner shares one document with an invited email at a given role. Owner-only.
+ * The email is lowercased + trimmed; sharing with oneself or an empty email is
+ * rejected. Idempotent on (documentId, granteeEmail): a repeat invite updates the
+ * existing row's role rather than inserting a duplicate.
+ */
+export const addShare = mutation({
+	args: {
+		documentId: v.id("documents"),
+		email: v.string(),
+		role: granteeRoleValidator,
+	},
+	handler: async (ctx, args) => {
+		await requireOwnedDocument(ctx, args.documentId);
+		const identity = await ctx.auth.getUserIdentity();
+		const ownerUserId = identity?.subject ?? (await requireUserId(ctx));
+		const ownerEmail = (identity?.email ?? "").toLowerCase().trim();
+
+		const email = args.email.toLowerCase().trim();
+		if (!email) throw new Error("An email address is required.");
+		if (email === ownerEmail) {
+			throw new Error("You already have full access to your own document.");
+		}
+
+		// Upsert by (documentId, granteeEmail) — small N per document, scan the
+		// document's shares in memory rather than add a composite index.
+		const existing = await ctx.db
+			.query("documentShares")
+			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+			.collect();
+		const match = existing.find((s) => s.granteeEmail === email);
+		if (match) {
+			if (match.role !== args.role) {
+				await ctx.db.patch(match._id, { role: args.role });
+			}
+			return { shareId: match._id, updated: true };
+		}
+
+		const shareId = await ctx.db.insert("documentShares", {
+			documentId: args.documentId,
+			ownerUserId,
+			granteeEmail: email,
+			role: args.role,
+			createdAt: Date.now(),
+		});
+		return { shareId, updated: false };
+	},
+});
+
+/** List a document's shares. Owner-only. */
+export const listShares = query({
+	args: { documentId: v.id("documents") },
+	handler: async (ctx, args) => {
+		await requireOwnedDocument(ctx, args.documentId);
+		const rows = await ctx.db
+			.query("documentShares")
+			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+			.collect();
+		return rows.map((row) => ({
+			_id: row._id,
+			granteeEmail: row.granteeEmail,
+			granteeUserId: row.granteeUserId,
+			role: row.role,
+			createdAt: row.createdAt,
+		}));
+	},
+});
+
+/**
+ * Revoke a share. Owner-only. Deletes only the ACL row — the reviewer's existing
+ * branches/comments are intentionally LEFT in place so the owner can still review
+ * and accept work done before revocation (plan 010 Maintenance: a "purge on
+ * revoke" would be a separate, explicit feature).
+ */
+export const revokeShare = mutation({
+	args: { shareId: v.id("documentShares") },
+	handler: async (ctx, args) => {
+		const userId = await requireUserId(ctx);
+		const share = await ctx.db.get(args.shareId);
+		if (!share || share.ownerUserId !== userId) {
+			throw new Error("Share not found");
+		}
+		await ctx.db.delete(args.shareId);
+		return { revoked: true };
+	},
+});
+
+/**
+ * Documents shared WITH the caller (as a grantee). Gathers shares by resolved
+ * user id AND by email (covers an invite not yet bound to a user id — queries
+ * can't write, so the binding is resolved lazily on the first mutation via
+ * requireDocumentAccess). Returns owner-doc metadata flagged shared + role.
+ */
+export const listSharedWithMe = query({
+	args: {},
+	handler: async (ctx) => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error("Unauthenticated");
+		const userId = identity.subject;
+		const email = (identity.email ?? "").toLowerCase();
+
+		const byUser = await ctx.db
+			.query("documentShares")
+			.withIndex("by_grantee_user", (q) => q.eq("granteeUserId", userId))
+			.collect();
+		const byEmail = email
+			? await ctx.db
+					.query("documentShares")
+					.withIndex("by_grantee_email", (q) => q.eq("granteeEmail", email))
+					.collect()
+			: [];
+
+		// De-dupe by share id (a row resolved to this user can also match by email).
+		const seen = new Set<string>();
+		const shares: Doc<"documentShares">[] = [];
+		for (const s of [...byUser, ...byEmail]) {
+			if (seen.has(s._id)) continue;
+			// Don't surface the caller's own documents as "shared with me".
+			if (s.ownerUserId === userId) continue;
+			seen.add(s._id);
+			shares.push(s);
+		}
+
+		const docs: {
+			_id: Id<"documents">;
+			title: string;
+			wordCount: number;
+			updatedAt: number;
+			role: GranteeRole;
+			ownerUserId: string;
+			shared: true;
+		}[] = [];
+		for (const share of shares) {
+			const doc = await ctx.db.get(share.documentId);
+			if (!doc) continue; // skip docs deleted since the invite
+			docs.push({
+				_id: doc._id,
+				title: doc.title,
+				wordCount: doc.wordCount,
+				updatedAt: doc.updatedAt,
+				role: share.role,
+				ownerUserId: share.ownerUserId,
+				shared: true,
+			});
+		}
+		docs.sort((a, b) => b.updatedAt - a.updatedAt);
+		return docs;
+	},
+});
+
+/**
+ * Whether a document the CALLER is involved with is currently shared — the gate
+ * the client reads to disable AI on a shared-for-review document (plan 010
+ * cross-cutting rule). Returns null when the doc isn't visible to the caller (so
+ * a query for a doc you can't see never throws / leaks existence).
+ *
+ * - Owner side: `shared` is true when the doc has ≥1 active documentShares row.
+ * - Reviewer side: a grantee always sees `shared: true` (they opened a shared doc).
+ */
+export const documentShareState = query({
+	args: { documentId: v.id("documents") },
+	handler: async (ctx, args) => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) return null;
+		const userId = identity.subject;
+		const email = (identity.email ?? "").toLowerCase();
+
+		const doc = await ctx.db.get(args.documentId);
+		if (!doc) return null;
+
+		if (doc.userId === userId) {
+			const shares = await ctx.db
+				.query("documentShares")
+				.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+				.collect();
+			return {
+				role: "owner" as const,
+				shareCount: shares.length,
+				shared: shares.length > 0,
+			};
+		}
+
+		// Grantee? Resolve via user id, then email (read-only — no lazy patch here).
+		let share = await ctx.db
+			.query("documentShares")
+			.withIndex("by_grantee_user", (q) => q.eq("granteeUserId", userId))
+			.filter((q) => q.eq(q.field("documentId"), args.documentId))
+			.unique();
+		if (!share && email) {
+			share = await ctx.db
+				.query("documentShares")
+				.withIndex("by_grantee_email", (q) => q.eq("granteeEmail", email))
+				.filter((q) => q.eq(q.field("documentId"), args.documentId))
+				.unique();
+		}
+		if (!share) return null;
+		return { role: share.role, shareCount: 1, shared: true };
+	},
+});
 
 /**
  * SPIKE: reviewer suggestion append. APPEND-ONLY, access-gated at "suggester".

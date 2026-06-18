@@ -2,9 +2,10 @@
 
 import { Command } from "cmdk";
 import { useMutation, useQuery } from "convex/react";
-import { FilePlus, Pencil, Trash2 } from "lucide-react";
+import { FilePlus, Pencil, Share2, Trash2, Users } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
+import { ShareDialog } from "@/components/share-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { api } from "@/convex/_generated/api";
@@ -24,6 +25,12 @@ export function DocumentSwitcher({
 }: DocumentSwitcherProps) {
 	const { workspace, actions, registry } = useWorkspace();
 	const documents = useQuery(api.documents.list, open ? {} : "skip");
+	// Docs shared WITH the caller — a SEPARATE query (not merged into
+	// documents.list) so the switcher's optimistic-update contract is untouched.
+	const sharedWithMe = useQuery(
+		api.review.listSharedWithMe,
+		open ? {} : "skip",
+	);
 	const createDocument = useMutation(api.documents.create).withOptimisticUpdate(
 		(localStore) => {
 			const current = localStore.getQuery(api.documents.list, {});
@@ -77,6 +84,10 @@ export function DocumentSwitcher({
 	const [selectedDocId, setSelectedDocId] = useState<Id<"documents"> | null>(
 		null,
 	);
+	const [shareTarget, setShareTarget] = useState<{
+		id: Id<"documents">;
+		title: string;
+	} | null>(null);
 
 	const close = useCallback(() => onOpenChange(false), [onOpenChange]);
 	const activePaneId = workspace?.activePaneId ?? "";
@@ -205,111 +216,158 @@ export function DocumentSwitcher({
 	}
 
 	return (
-		<div
-			className="fixed inset-0 z-[100] flex items-start justify-center px-4 pt-[min(20vh,8rem)]"
-			role="dialog"
-			aria-modal="true"
-			aria-label="Document switcher"
-		>
-			<button
-				type="button"
-				className="recto-scrim absolute inset-0"
-				aria-label="Close document switcher"
-				onClick={close}
-			/>
-			<Command
-				className="recto-panel relative z-10 w-full max-w-lg overflow-hidden"
-				onMouseDown={(event) => event.stopPropagation()}
-				onKeyDown={(event) => {
-					if (event.key === "Enter" && event.shiftKey && selectedDocId) {
-						event.preventDefault();
-						handleOpenInSplit(selectedDocId);
-					}
-				}}
-				loop
+		<>
+			<div
+				className="fixed inset-0 z-[100] flex items-start justify-center px-4 pt-[min(20vh,8rem)]"
+				role="dialog"
+				aria-modal="true"
+				aria-label="Document switcher"
 			>
-				<div className="border-b border-[var(--color-line)] px-[var(--space-4)]">
-					<Command.Input
-						placeholder="Search documents…"
-						autoFocus
-						className="h-12 w-full bg-transparent text-[length:var(--text-ui)] text-[var(--color-ink-primary)] outline-none placeholder:text-[var(--color-ink-tertiary)]"
-					/>
-				</div>
-				<Command.List className="max-h-80 overflow-y-auto p-[var(--space-2)]">
-					<Command.Empty className="px-[var(--space-3)] py-[var(--space-6)] text-center text-[length:var(--text-ui-sm)] text-[var(--color-ink-tertiary)]">
-						No matching documents.
-					</Command.Empty>
+				<button
+					type="button"
+					className="recto-scrim absolute inset-0"
+					aria-label="Close document switcher"
+					onClick={close}
+				/>
+				<Command
+					className="recto-panel relative z-10 w-full max-w-lg overflow-hidden"
+					onMouseDown={(event) => event.stopPropagation()}
+					onKeyDown={(event) => {
+						if (event.key === "Enter" && event.shiftKey && selectedDocId) {
+							event.preventDefault();
+							handleOpenInSplit(selectedDocId);
+						}
+					}}
+					loop
+				>
+					<div className="border-b border-[var(--color-line)] px-[var(--space-4)]">
+						<Command.Input
+							placeholder="Search documents…"
+							autoFocus
+							className="h-12 w-full bg-transparent text-[length:var(--text-ui)] text-[var(--color-ink-primary)] outline-none placeholder:text-[var(--color-ink-tertiary)]"
+						/>
+					</div>
+					<Command.List className="max-h-80 overflow-y-auto p-[var(--space-2)]">
+						<Command.Empty className="px-[var(--space-3)] py-[var(--space-6)] text-center text-[length:var(--text-ui-sm)] text-[var(--color-ink-tertiary)]">
+							No matching documents.
+						</Command.Empty>
 
-					<Command.Group heading="Actions">
-						<Command.Item
-							value="create new document"
-							onSelect={() => void handleCreate()}
-							className="recto-item flex cursor-pointer items-center gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--text-ui-sm)] text-[var(--color-ink-secondary)]"
-						>
-							<FilePlus
-								aria-hidden
-								className="size-4 text-[var(--color-ink-tertiary)]"
-							/>
-							<span>Create new document</span>
-						</Command.Item>
-					</Command.Group>
-
-					<Command.Group heading="Documents">
-						{documents?.map((doc) => (
+						<Command.Group heading="Actions">
 							<Command.Item
-								key={doc._id}
-								value={`${doc.title} ${doc.wordCount}`}
-								onSelect={() => handleSwitch(doc._id)}
-								onPointerMove={() => setSelectedDocId(doc._id)}
-								className="recto-item group flex cursor-pointer items-center gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--text-ui-sm)]"
+								value="create new document"
+								onSelect={() => void handleCreate()}
+								className="recto-item flex cursor-pointer items-center gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--text-ui-sm)] text-[var(--color-ink-secondary)]"
 							>
-								<span className="min-w-0 flex-1 truncate text-[var(--color-ink-primary)]">
-									{doc.title}
-								</span>
-								<span className="text-[length:var(--text-ui-sm)] text-[var(--color-ink-tertiary)] tabular-nums">
-									{doc.wordCount.toLocaleString()} w
-								</span>
-								<Button
-									type="button"
-									variant="ghost"
-									size="sm"
-									className="size-7 px-0 text-[var(--color-ink-tertiary)] opacity-0 transition-opacity duration-[var(--motion-fast)] group-hover:opacity-100 group-aria-selected:opacity-100"
-									onClick={(event) => {
-										event.stopPropagation();
-										setRenameId(doc._id);
-										setRenameValue(doc.title);
-									}}
-									aria-label={`Rename ${doc.title}`}
-								>
-									<Pencil aria-hidden className="size-3.5" />
-								</Button>
-								<Button
-									type="button"
-									variant="ghost"
-									size="sm"
-									className="size-7 px-0 text-[var(--color-ink-tertiary)] opacity-0 transition-opacity duration-[var(--motion-fast)] hover:text-[var(--color-danger)] group-hover:opacity-100 group-aria-selected:opacity-100"
-									onClick={(event) => {
-										event.stopPropagation();
-										void handleDelete(doc._id, doc.title);
-									}}
-									aria-label={`Delete ${doc.title}`}
-								>
-									<Trash2 aria-hidden className="size-3.5" />
-								</Button>
+								<FilePlus
+									aria-hidden
+									className="size-4 text-[var(--color-ink-tertiary)]"
+								/>
+								<span>Create new document</span>
 							</Command.Item>
-						))}
-					</Command.Group>
-				</Command.List>
-				<div className="flex items-center gap-[var(--space-2)] border-t border-[var(--color-line)] px-[var(--space-4)] py-[var(--space-3)] text-[length:var(--text-ui-sm)] text-[var(--color-ink-tertiary)]">
-					<kbd className="recto-kbd">Enter</kbd>
-					<span>switch</span>
-					<span aria-hidden className="text-[var(--color-line-strong)]">
-						·
-					</span>
-					<kbd className="recto-kbd">Shift+Enter</kbd>
-					<span>open in split</span>
-				</div>
-			</Command>
-		</div>
+						</Command.Group>
+
+						<Command.Group heading="Documents">
+							{documents?.map((doc) => (
+								<Command.Item
+									key={doc._id}
+									value={`${doc.title} ${doc.wordCount}`}
+									onSelect={() => handleSwitch(doc._id)}
+									onPointerMove={() => setSelectedDocId(doc._id)}
+									className="recto-item group flex cursor-pointer items-center gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--text-ui-sm)]"
+								>
+									<span className="min-w-0 flex-1 truncate text-[var(--color-ink-primary)]">
+										{doc.title}
+									</span>
+									<span className="text-[length:var(--text-ui-sm)] text-[var(--color-ink-tertiary)] tabular-nums">
+										{doc.wordCount.toLocaleString()} w
+									</span>
+									<Button
+										type="button"
+										variant="ghost"
+										size="sm"
+										className="size-7 px-0 text-[var(--color-ink-tertiary)] opacity-0 transition-opacity duration-[var(--motion-fast)] group-hover:opacity-100 group-aria-selected:opacity-100"
+										onClick={(event) => {
+											event.stopPropagation();
+											setRenameId(doc._id);
+											setRenameValue(doc.title);
+										}}
+										aria-label={`Rename ${doc.title}`}
+									>
+										<Pencil aria-hidden className="size-3.5" />
+									</Button>
+									<Button
+										type="button"
+										variant="ghost"
+										size="sm"
+										className="size-7 px-0 text-[var(--color-ink-tertiary)] opacity-0 transition-opacity duration-[var(--motion-fast)] group-hover:opacity-100 group-aria-selected:opacity-100"
+										onClick={(event) => {
+											event.stopPropagation();
+											setShareTarget({ id: doc._id, title: doc.title });
+										}}
+										aria-label={`Share ${doc.title}`}
+									>
+										<Share2 aria-hidden className="size-3.5" />
+									</Button>
+									<Button
+										type="button"
+										variant="ghost"
+										size="sm"
+										className="size-7 px-0 text-[var(--color-ink-tertiary)] opacity-0 transition-opacity duration-[var(--motion-fast)] hover:text-[var(--color-danger)] group-hover:opacity-100 group-aria-selected:opacity-100"
+										onClick={(event) => {
+											event.stopPropagation();
+											void handleDelete(doc._id, doc.title);
+										}}
+										aria-label={`Delete ${doc.title}`}
+									>
+										<Trash2 aria-hidden className="size-3.5" />
+									</Button>
+								</Command.Item>
+							))}
+						</Command.Group>
+
+						{sharedWithMe && sharedWithMe.length > 0 && (
+							<Command.Group heading="Shared with you">
+								{sharedWithMe.map((doc) => (
+									<Command.Item
+										key={doc._id}
+										value={`shared ${doc.title}`}
+										onSelect={() => handleSwitch(doc._id)}
+										className="recto-item flex cursor-pointer items-center gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--text-ui-sm)]"
+									>
+										<Users
+											aria-hidden
+											className="size-3.5 shrink-0 text-[var(--color-ink-tertiary)]"
+										/>
+										<span className="min-w-0 flex-1 truncate text-[var(--color-ink-primary)]">
+											{doc.title}
+										</span>
+										<span className="shrink-0 rounded-[var(--radius-sm)] bg-[var(--color-bg-hover)] px-[var(--space-2)] py-px text-[length:var(--text-ui-sm)] text-[var(--color-ink-tertiary)]">
+											{doc.role === "suggester" ? "Suggest" : "Comment"}
+										</span>
+									</Command.Item>
+								))}
+							</Command.Group>
+						)}
+					</Command.List>
+					<div className="flex items-center gap-[var(--space-2)] border-t border-[var(--color-line)] px-[var(--space-4)] py-[var(--space-3)] text-[length:var(--text-ui-sm)] text-[var(--color-ink-tertiary)]">
+						<kbd className="recto-kbd">Enter</kbd>
+						<span>switch</span>
+						<span aria-hidden className="text-[var(--color-line-strong)]">
+							·
+						</span>
+						<kbd className="recto-kbd">Shift+Enter</kbd>
+						<span>open in split</span>
+					</div>
+				</Command>
+			</div>
+			<ShareDialog
+				documentId={shareTarget?.id ?? null}
+				title={shareTarget?.title ?? ""}
+				open={shareTarget !== null}
+				onOpenChange={(o) => {
+					if (!o) setShareTarget(null);
+				}}
+			/>
+		</>
 	);
 }

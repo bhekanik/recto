@@ -107,14 +107,18 @@ export const create = mutation({
 	},
 });
 
-/** Delete a document and cascade-delete its history (docNodes + versions). */
+/**
+ * Delete a document and cascade-delete everything keyed by_document: history
+ * (docNodes + versions) plus the review collaboration rows (documentShares +
+ * reviewBranches + comments, plan 010). Each lives in separate rows indexed
+ * by_document, deleted in batches to respect the per-transaction write ceiling
+ * (blueprint 03 §5).
+ */
 export const remove = mutation({
 	args: { documentId: v.id("documents") },
 	handler: async (ctx, args) => {
 		await requireOwnedDocument(ctx, args.documentId);
 
-		// Cascade in batches to respect the per-transaction write ceiling
-		// (blueprint 03 §5). History lives in separate rows by_document.
 		const nodes = await ctx.db
 			.query("docNodes")
 			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
@@ -126,6 +130,24 @@ export const remove = mutation({
 			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
 			.collect();
 		for (const version of versions) await ctx.db.delete(version._id);
+
+		const shares = await ctx.db
+			.query("documentShares")
+			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+			.collect();
+		for (const share of shares) await ctx.db.delete(share._id);
+
+		const branches = await ctx.db
+			.query("reviewBranches")
+			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+			.collect();
+		for (const branch of branches) await ctx.db.delete(branch._id);
+
+		const comments = await ctx.db
+			.query("comments")
+			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+			.collect();
+		for (const comment of comments) await ctx.db.delete(comment._id);
 
 		await ctx.db.delete(args.documentId);
 	},

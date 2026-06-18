@@ -20,6 +20,7 @@ import {
 	type HistoryView,
 } from "@/components/history/history-panel";
 import { OutlinePanel } from "@/components/outline/outline-panel";
+import { ShareDialog } from "@/components/share-dialog";
 import { StatusBar } from "@/components/status-bar";
 import { Toaster } from "@/components/toaster";
 import { TopFormatToolbar } from "@/components/top-format-toolbar";
@@ -219,6 +220,24 @@ function StudioWorkspace() {
 		documents?.find((d) => d._id === activeDocId)?.title ?? "Untitled";
 	const activeWordCount = activeSync?.wordCount ?? 0;
 
+	// Is the active document shared (owner has invited reviewers) OR shared-with-me?
+	// While true, AI is forced OFF for everyone (plan 010 cross-cutting rule): a
+	// reviewer must never trigger the owner's spend and AI must not muddy the
+	// suggestion/branch flow mid-review. Read once per active doc; null while
+	// loading or for a doc the caller can't see.
+	const activeShareState = useQuery(
+		api.review.documentShareState,
+		activeDocId ? { documentId: activeDocId } : "skip",
+	);
+	const activeDocShared = activeShareState?.shared ?? false;
+	// The owner can manage sharing; a grantee cannot.
+	const activeDocIsOwned =
+		activeShareState === undefined || activeShareState === null
+			? true
+			: activeShareState.role === "owner";
+	const effectiveAiEnabled = settings.aiEnabled && !activeDocShared;
+	const [shareDialogOpen, setShareDialogOpen] = useState(false);
+
 	// --- Word goals, session stats, and the cross-device streak (plan 002) ---
 	const [goalConfigOpen, setGoalConfigOpen] = useState(false);
 
@@ -305,11 +324,13 @@ function StudioWorkspace() {
 		view: HistoryView;
 	}>({ open: false, view: "tree" });
 
-	// --- AI features (plan 009) — all gated behind settings.aiEnabled ---
-	// Keep the out-of-tree selection toolbar's AI button in sync with the setting.
+	// --- AI features (plan 009) — gated behind settings.aiEnabled AND the active
+	// document not being shared for review (plan 010). Keep the out-of-tree
+	// selection toolbar's AI button in sync with the EFFECTIVE flag so it hides on
+	// a shared document.
 	useEffect(() => {
-		setAiEnabledMirror(settings.aiEnabled);
-	}, [settings.aiEnabled]);
+		setAiEnabledMirror(effectiveAiEnabled);
+	}, [effectiveAiEnabled]);
 
 	// Read the live markdown of the active document from its primary handle.
 	const getActiveMarkdown = useCallback((): string => {
@@ -340,7 +361,7 @@ function StudioWorkspace() {
 	// rich (Milkdown) lens, where the handle serializes the selected slice to
 	// markdown (no position→offset math). Preview has no editable selection.
 	const summonAiTransform = useCallback(() => {
-		if (!settings.aiEnabled) return;
+		if (!effectiveAiEnabled) return;
 		const mode = activeLeaf?.mode ?? "rich";
 		if (mode === "preview") {
 			window.alert(
@@ -384,7 +405,7 @@ function StudioWorkspace() {
 		aiTransform.reset();
 		setAiPopover({ open: true, selection: { text, range: { from, to } } });
 	}, [
-		settings.aiEnabled,
+		effectiveAiEnabled,
 		activeLeaf,
 		activeDocId,
 		workspace,
@@ -431,7 +452,7 @@ function StudioWorkspace() {
 	// "Re-index this draft for search" (Phase C) — chunk + embed via the Next
 	// route, persist to Convex. Runs on demand, never per keystroke.
 	const handleReindex = useCallback(async () => {
-		if (!settings.aiEnabled || !activeDocId) return;
+		if (!effectiveAiEnabled || !activeDocId) return;
 		const history = activeHistoryRef.current;
 		const currentNodeId = history?.currentNodeId;
 		if (!currentNodeId) return;
@@ -446,7 +467,7 @@ function StudioWorkspace() {
 		} catch (err) {
 			window.alert(`Re-index failed: ${(err as Error).message}`);
 		}
-	}, [settings.aiEnabled, activeDocId, getActiveMarkdown, reindexDocument]);
+	}, [effectiveAiEnabled, activeDocId, getActiveMarkdown, reindexDocument]);
 
 	// Open a cited related passage: switch the active pane to that doc, then jump
 	// to the passage offset once the editor has mounted + seeded.
@@ -696,20 +717,23 @@ function StudioWorkspace() {
 				case "redo":
 					activeHistoryRef.current?.redo();
 					return;
+				case "manage-sharing":
+					if (activeDocId && activeDocIsOwned) setShareDialogOpen(true);
+					return;
 				case "toggle-ai":
 					settings.toggleAiEnabled();
 					return;
 				case "ai-transform":
-					if (settings.aiEnabled) summonAiTransform();
+					if (effectiveAiEnabled) summonAiTransform();
 					return;
 				case "ai-critique":
-					if (settings.aiEnabled) setCritiqueOpen(true);
+					if (effectiveAiEnabled) setCritiqueOpen(true);
 					return;
 				case "ai-related":
-					if (settings.aiEnabled) setRelatedOpen(true);
+					if (effectiveAiEnabled) setRelatedOpen(true);
 					return;
 				case "ai-reindex":
-					if (settings.aiEnabled) void handleReindex();
+					if (effectiveAiEnabled) void handleReindex();
 					return;
 				case "copy-rich": {
 					const source = getExportSource();
@@ -807,6 +831,9 @@ function StudioWorkspace() {
 			isMobile,
 			summonAiTransform,
 			handleReindex,
+			effectiveAiEnabled,
+			activeDocId,
+			activeDocIsOwned,
 		],
 	);
 
@@ -1139,7 +1166,8 @@ function StudioWorkspace() {
 					scope={commandScope}
 					documents={documents}
 					headings={outline}
-					aiEnabled={settings.aiEnabled}
+					aiEnabled={effectiveAiEnabled}
+					canManageSharing={activeDocId !== null && activeDocIsOwned}
 					onRunAction={(id) => dispatchRef.current(id)}
 					onOpenDocument={(id) => {
 						if (workspace?.activePaneId) {
@@ -1190,7 +1218,19 @@ function StudioWorkspace() {
 					/>
 				)}
 
-				{settings.aiEnabled && (
+				{activeDocId && activeDocIsOwned && (
+					<ShareDialog
+						documentId={activeDocId}
+						title={activeTitle}
+						open={shareDialogOpen}
+						onOpenChange={(open) => {
+							setShareDialogOpen(open);
+							if (!open) dispatchFocusEditor();
+						}}
+					/>
+				)}
+
+				{effectiveAiEnabled && (
 					<>
 						<AiTransformPopover
 							open={aiPopover.open}

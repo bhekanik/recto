@@ -28,6 +28,8 @@ type CommandPaletteProps = {
 	headings: OutlineHeadingItem[];
 	/** Gate AI commands (plan 009) — hidden unless AI features are enabled. */
 	aiEnabled: boolean;
+	/** Gate the Review section (plan 010) — only the owner can manage sharing. */
+	canManageSharing: boolean;
 	onRunAction: (id: ActionId) => void;
 	onOpenDocument: (id: Id<"documents">) => void;
 	onJumpToHeading: (index: number) => void;
@@ -46,6 +48,7 @@ export function CommandPalette({
 	documents,
 	headings,
 	aiEnabled,
+	canManageSharing,
 	onRunAction,
 	onOpenDocument,
 	onJumpToHeading,
@@ -191,6 +194,10 @@ export function CommandPalette({
 							// user can turn it on; otherwise no AI UI appears (plan 009).
 							if (section === "AI" && !aiEnabled) {
 								defs = defs.filter((a) => a.id === "toggle-ai");
+							}
+							// Review actions (manage sharing) are owner-only (plan 010).
+							if (section === "Review" && !canManageSharing) {
+								defs = [];
 							}
 							if (defs.length === 0) return null;
 							return (

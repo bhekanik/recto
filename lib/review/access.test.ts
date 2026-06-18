@@ -303,3 +303,271 @@ describe("plan 010 SPIKE — reviewer-branch isolation + accept/reject", () => {
 		).rejects.toThrow("Document not found");
 	});
 });
+
+describe("plan 010 PHASE A — sharing / ACL", () => {
+	it("addShare lowercases + trims email, rejects empty and self, and upserts on duplicate", async () => {
+		const t = convexTest(schema, modules);
+		const owner = t.withIdentity(OWNER);
+		const { documentId } = await owner.mutation(api.documents.create, {
+			title: "Draft",
+		});
+
+		// Empty email rejected.
+		await expect(
+			owner.mutation(api.review.addShare, {
+				documentId,
+				email: "   ",
+				role: "commenter",
+			}),
+		).rejects.toThrow();
+
+		// Sharing with self rejected.
+		await expect(
+			owner.mutation(api.review.addShare, {
+				documentId,
+				email: OWNER.email.toUpperCase(),
+				role: "commenter",
+			}),
+		).rejects.toThrow();
+
+		// Mixed-case / padded email is normalized.
+		const first = await owner.mutation(api.review.addShare, {
+			documentId,
+			email: "  Reviewer@Example.COM ",
+			role: "commenter",
+		});
+		expect(first.updated).toBe(false);
+
+		const sharesAfterFirst = await owner.query(api.review.listShares, {
+			documentId,
+		});
+		expect(sharesAfterFirst).toHaveLength(1);
+		expect(sharesAfterFirst[0]?.granteeEmail).toBe("reviewer@example.com");
+		expect(sharesAfterFirst[0]?.role).toBe("commenter");
+
+		// Re-inviting the same email updates the role (no duplicate row).
+		const second = await owner.mutation(api.review.addShare, {
+			documentId,
+			email: "reviewer@example.com",
+			role: "suggester",
+		});
+		expect(second.updated).toBe(true);
+
+		const sharesAfterUpsert = await owner.query(api.review.listShares, {
+			documentId,
+		});
+		expect(sharesAfterUpsert).toHaveLength(1);
+		expect(sharesAfterUpsert[0]?.role).toBe("suggester");
+	});
+
+	it("revokeShare removes only the targeted row and only for the owner", async () => {
+		const t = convexTest(schema, modules);
+		const owner = t.withIdentity(OWNER);
+		const reviewer = t.withIdentity(REVIEWER);
+		const { documentId } = await owner.mutation(api.documents.create, {
+			title: "Draft",
+		});
+
+		await owner.mutation(api.review.addShare, {
+			documentId,
+			email: REVIEWER.email,
+			role: "suggester",
+		});
+		await owner.mutation(api.review.addShare, {
+			documentId,
+			email: COMMENTER.email,
+			role: "commenter",
+		});
+
+		const shares = await owner.query(api.review.listShares, { documentId });
+		expect(shares).toHaveLength(2);
+		const reviewerShare = shares.find((s) => s.granteeEmail === REVIEWER.email);
+		expect(reviewerShare).toBeDefined();
+
+		// A non-owner cannot revoke.
+		await expect(
+			reviewer.mutation(api.review.revokeShare, {
+				shareId: reviewerShare?._id as Id<"documentShares">,
+			}),
+		).rejects.toThrow("Share not found");
+
+		// Owner revokes the reviewer's share only.
+		await owner.mutation(api.review.revokeShare, {
+			shareId: reviewerShare?._id as Id<"documentShares">,
+		});
+		const remaining = await owner.query(api.review.listShares, { documentId });
+		expect(remaining).toHaveLength(1);
+		expect(remaining[0]?.granteeEmail).toBe(COMMENTER.email);
+	});
+
+	it("non-owners cannot addShare / listShares", async () => {
+		const t = convexTest(schema, modules);
+		const owner = t.withIdentity(OWNER);
+		const reviewer = t.withIdentity(REVIEWER);
+		const { documentId } = await owner.mutation(api.documents.create, {
+			title: "Draft",
+		});
+
+		await expect(
+			reviewer.mutation(api.review.addShare, {
+				documentId,
+				email: COMMENTER.email,
+				role: "commenter",
+			}),
+		).rejects.toThrow("Document not found");
+
+		await expect(
+			reviewer.query(api.review.listShares, { documentId }),
+		).rejects.toThrow("Document not found");
+	});
+
+	it("listSharedWithMe returns docs for both an email-only and a user-resolved grantee", async () => {
+		const t = convexTest(schema, modules);
+		const owner = t.withIdentity(OWNER);
+		const reviewer = t.withIdentity(REVIEWER);
+		const { documentId } = await owner.mutation(api.documents.create, {
+			title: "Shared draft",
+		});
+
+		// Email-only invite (granteeUserId still unset).
+		await owner.mutation(api.review.addShare, {
+			documentId,
+			email: REVIEWER.email,
+			role: "suggester",
+		});
+
+		// Email-only path: the reviewer sees the doc even before any mutation binds
+		// their user id.
+		const emailOnly = await reviewer.query(api.review.listSharedWithMe, {});
+		expect(emailOnly).toHaveLength(1);
+		expect(emailOnly[0]?._id).toBe(documentId);
+		expect(emailOnly[0]?.role).toBe("suggester");
+		expect(emailOnly[0]?.shared).toBe(true);
+		expect(emailOnly[0]?.ownerUserId).toBe(OWNER.subject);
+
+		// A mutation resolves granteeUserId; the doc still appears (user-resolved).
+		await reviewer.mutation(api.review.reviewerAppend, {
+			documentId,
+			nodeId: crypto.randomUUID(),
+			parentNodeId: "missing-base", // materialize isn't exercised here
+			patch: fullReplacePatch("", "a suggestion"),
+			selection: null,
+			createdAt: 9000,
+		});
+		const resolved = await reviewer.query(api.review.listSharedWithMe, {});
+		expect(resolved).toHaveLength(1);
+		expect(resolved[0]?._id).toBe(documentId);
+
+		// The owner never sees their own doc in listSharedWithMe.
+		const ownerView = await owner.query(api.review.listSharedWithMe, {});
+		expect(ownerView).toHaveLength(0);
+	});
+
+	it("documentShareState reports shared for owner-with-shares and for a grantee", async () => {
+		const t = convexTest(schema, modules);
+		const owner = t.withIdentity(OWNER);
+		const reviewer = t.withIdentity(REVIEWER);
+		const stranger = t.withIdentity({
+			subject: "stranger-user",
+			email: "stranger@example.com",
+		});
+		const { documentId } = await owner.mutation(api.documents.create, {
+			title: "Draft",
+		});
+
+		// No shares yet → owner sees shared:false.
+		const before = await owner.query(api.review.documentShareState, {
+			documentId,
+		});
+		expect(before?.role).toBe("owner");
+		expect(before?.shared).toBe(false);
+
+		await owner.mutation(api.review.addShare, {
+			documentId,
+			email: REVIEWER.email,
+			role: "commenter",
+		});
+
+		// Owner now sees shared:true.
+		const after = await owner.query(api.review.documentShareState, {
+			documentId,
+		});
+		expect(after?.shared).toBe(true);
+		expect(after?.shareCount).toBe(1);
+
+		// Grantee sees shared:true with their role.
+		const granteeView = await reviewer.query(api.review.documentShareState, {
+			documentId,
+		});
+		expect(granteeView?.shared).toBe(true);
+		expect(granteeView?.role).toBe("commenter");
+
+		// A non-grantee, non-owner gets null (no existence leak).
+		const strangerView = await stranger.query(api.review.documentShareState, {
+			documentId,
+		});
+		expect(strangerView).toBeNull();
+	});
+
+	it("documents.remove cascades documentShares + reviewBranches + comments", async () => {
+		const t = convexTest(schema, modules);
+		const owner = t.withIdentity(OWNER);
+		const reviewer = t.withIdentity(REVIEWER);
+		const { documentId, rootNodeId } = await owner.mutation(
+			api.documents.create,
+			{ title: "Draft" },
+		);
+
+		// Share + a reviewer branch + a comment row, then delete the doc.
+		await owner.mutation(api.review.addShare, {
+			documentId,
+			email: REVIEWER.email,
+			role: "suggester",
+		});
+		await reviewer.mutation(api.review.reviewerAppend, {
+			documentId,
+			nodeId: crypto.randomUUID(),
+			parentNodeId: rootNodeId,
+			patch: fullReplacePatch("", "suggested text"),
+			snapshot: "suggested text",
+			selection: null,
+			createdAt: 1000,
+		});
+		await t.run(async (ctx) => {
+			await ctx.db.insert("comments", {
+				documentId,
+				authorUserId: REVIEWER.subject,
+				authorName: "Reviewer",
+				anchor: { quote: "suggested", prefix: "", suffix: "", offsetHint: 0 },
+				body: "A note",
+				resolved: false,
+				createdAt: 1000,
+			});
+		});
+
+		// Sanity: rows exist before the delete.
+		const before = await t.run(async (ctx) => ({
+			shares: (await ctx.db.query("documentShares").collect()).length,
+			branches: (await ctx.db.query("reviewBranches").collect()).length,
+			comments: (await ctx.db.query("comments").collect()).length,
+		}));
+		expect(before.shares).toBe(1);
+		expect(before.branches).toBe(1);
+		expect(before.comments).toBe(1);
+
+		await owner.mutation(api.documents.remove, { documentId });
+
+		const after = await t.run(async (ctx) => ({
+			doc: await ctx.db.get(documentId),
+			shares: (await ctx.db.query("documentShares").collect()).length,
+			branches: (await ctx.db.query("reviewBranches").collect()).length,
+			comments: (await ctx.db.query("comments").collect()).length,
+			nodes: (await ctx.db.query("docNodes").collect()).length,
+		}));
+		expect(after.doc).toBeNull();
+		expect(after.shares).toBe(0);
+		expect(after.branches).toBe(0);
+		expect(after.comments).toBe(0);
+		expect(after.nodes).toBe(0);
+	});
+});
