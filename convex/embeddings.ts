@@ -23,12 +23,129 @@ import { requireOwnedDocument, requireUserId } from "./documents";
  * Query-time search mirrors that: the client embeds the query text via the Next
  * route, then calls `embeddings.searchByVector` (action) with the vector.
  *
- * The scheduled cron path (`reindexSweep`) is scaffolded but cannot generate
- * embeddings from inside Convex without the key — see the BLOCKED note there.
+ * The scheduled cron path (`reindexSweep`) now generates embeddings directly from
+ * inside the Convex action via a `fetch` to OpenRouter, using the
+ * `OPENROUTER_API_KEY` that lives in the Convex deployment env. It mirrors the
+ * request/response shape of the Next route.
  */
 
 const CHUNK_LIMIT = 256; // safety cap on chunks per document
 const VECTOR_RESULTS = 8;
+
+/**
+ * Embedding model + dimension, kept in sync with lib/ai/config.ts and the
+ * `docChunks` vectorIndex in convex/schema.ts (1536). Inlined here rather than
+ * imported because app `lib/` code isn't on the Convex bundle/path-alias graph
+ * (the embedding request/server helpers pull in `server-only`/Clerk).
+ */
+const AI_EMBEDDING_MODEL = "openai/text-embedding-3-small";
+const AI_EMBEDDING_DIM = 1536;
+const OPENROUTER_EMBEDDINGS_URL = "https://openrouter.ai/api/v1/embeddings";
+
+/** How many stale documents to embed per scheduled sweep (bounds action time). */
+const SWEEP_DOC_LIMIT = 25;
+
+/** Target chunk window in characters — mirrors CHUNK_TARGET_CHARS in lib/ai/chunk.ts. */
+const CHUNK_TARGET_CHARS = 1500;
+
+type CronChunk = { charStart: number; charEnd: number; text: string };
+
+/**
+ * Paragraph-windowed chunking — a self-contained copy of lib/ai/chunk.ts's
+ * `chunk` (same algorithm, so cron-side chunks match the client path). Splits on
+ * blank lines, greedily packs paragraphs into ~CHUNK_TARGET_CHARS windows with
+ * one-paragraph overlap, carrying exact source offsets.
+ */
+function chunkMarkdown(markdown: string): CronChunk[] {
+	const paras: { start: number; end: number }[] = [];
+	const len = markdown.length;
+	let i = 0;
+	while (i < len) {
+		while (i < len && /\s/.test(markdown[i] as string)) i++;
+		if (i >= len) break;
+		const start = i;
+		while (i < len) {
+			if (markdown[i] === "\n") {
+				let j = i + 1;
+				while (
+					j < len &&
+					markdown[j] !== "\n" &&
+					/\s/.test(markdown[j] as string)
+				) {
+					j++;
+				}
+				if (j >= len || markdown[j] === "\n") break;
+			}
+			i++;
+		}
+		const end = i;
+		if (markdown.slice(start, end).trim().length > 0)
+			paras.push({ start, end });
+	}
+	if (paras.length === 0) return [];
+
+	const chunks: CronChunk[] = [];
+	let p = 0;
+	while (p < paras.length) {
+		const windowStart = paras[p]?.start ?? 0;
+		let windowEnd = paras[p]?.end ?? 0;
+		let j = p + 1;
+		while (j < paras.length) {
+			const next = paras[j];
+			if (!next) break;
+			if (next.end - windowStart > CHUNK_TARGET_CHARS) break;
+			windowEnd = next.end;
+			j++;
+		}
+		chunks.push({
+			charStart: windowStart,
+			charEnd: windowEnd,
+			text: markdown.slice(windowStart, windowEnd),
+		});
+		if (j >= paras.length) break;
+		p = j - 1 > p ? j - 1 : j;
+	}
+	return chunks;
+}
+
+/** OpenRouter embeddings response shape (OpenAI-compatible). */
+type EmbeddingsResponse = { data?: { embedding: number[] }[] };
+
+/**
+ * Embed a batch of texts via OpenRouter's OpenAI-compatible `/embeddings`
+ * endpoint. Mirrors the Next route's request (`{ model, input }`) and response
+ * (`{ data: [{ embedding }] }`) handling. Empty strings are dropped (the API
+ * rejects them); order is preserved so callers can zip vectors back to chunks.
+ */
+async function embedTexts(
+	apiKey: string,
+	texts: string[],
+): Promise<number[][]> {
+	const input = texts.map((s) => s.trim()).filter((s) => s.length > 0);
+	if (input.length === 0) return [];
+	const res = await fetch(OPENROUTER_EMBEDDINGS_URL, {
+		method: "POST",
+		headers: {
+			Authorization: `Bearer ${apiKey}`,
+			"Content-Type": "application/json",
+			"X-Title": "Recto",
+		},
+		body: JSON.stringify({ model: AI_EMBEDDING_MODEL, input }),
+	});
+	if (!res.ok) {
+		throw new Error(`OpenRouter embeddings failed: ${res.status}`);
+	}
+	const json = (await res.json()) as EmbeddingsResponse;
+	const vectors = (json.data ?? []).map((d) => d.embedding);
+	for (const vec of vectors) {
+		if (vec.length !== AI_EMBEDDING_DIM) {
+			throw new Error(
+				`OpenRouter embeddings returned dim ${vec.length}, expected ${AI_EMBEDDING_DIM}`,
+			);
+		}
+	}
+	return vectors;
+}
 
 /** One chunk in the client → Convex upsert payload. */
 const chunkValidator = v.object({
@@ -245,28 +362,77 @@ export const replaceChunksInternal = internalMutation({
 /**
  * Scheduled re-embed sweep (cron entry, plan 009 Phase C).
  *
- * ⚠️ BLOCKED — embedding generation: this scheduled action runs inside Convex,
- * which does NOT have the embedding provider key. Per the provider override the
- * key (`OPENROUTER_API_KEY`) lives only in the Next server env, and a Convex cron
- * cannot call the Clerk-protected Next route. So the cron path can identify stale
- * documents but cannot generate embeddings on its own.
+ * For each stale document (currentNodeId ≠ stored embeddedNodeId): chunk its
+ * markdown, embed the chunks via OpenRouter's `/embeddings` endpoint using the
+ * Convex-side `OPENROUTER_API_KEY`, then persist via `replaceChunksInternal` and
+ * advance `embeddedNodeId` to the current node so it isn't re-embedded next sweep.
  *
- * To unblock: set an embedding key in CONVEX env (e.g.
- * `npx convex env set OPENROUTER_API_KEY <value>`) and replace the marked block
- * below with a fetch to the OpenRouter embeddings endpoint (the chunking +
- * request shapes already exist in lib/ai/chunk.ts and lib/ai/embed-request.ts).
- * Until then, re-indexing runs through the client "Re-index drafts" command,
- * which uses the Next route.
+ * Bounded to `SWEEP_DOC_LIMIT` documents per run to respect Convex action limits;
+ * remaining stale docs are picked up on the next daily run. If the key is missing
+ * the sweep logs and returns gracefully (it does NOT throw — a cron failure would
+ * just retry forever). Per-document errors are logged and skipped so one bad doc
+ * doesn't abort the whole sweep.
  */
 export const reindexSweep = internalAction({
 	args: {},
 	handler: async (ctx): Promise<{ scanned: number; embedded: number }> => {
 		const stale = await ctx.runQuery(internal.embeddings.allStaleDocuments, {});
-		// BLOCKED: cannot generate embeddings here without a Convex-side key.
-		// When unblocked, for each `stale` doc: chunk(markdown) → embed via
-		// OpenRouter → ctx.runMutation(internal.embeddings.replaceChunksInternal,
-		// { documentId, embeddedNodeId: currentNodeId, chunks }).
-		return { scanned: stale.length, embedded: 0 };
+
+		const apiKey = process.env.OPENROUTER_API_KEY;
+		if (!apiKey) {
+			console.warn(
+				"reindexSweep: OPENROUTER_API_KEY not set in Convex env — skipping embedding generation",
+			);
+			return { scanned: stale.length, embedded: 0 };
+		}
+
+		let embedded = 0;
+		for (const doc of stale.slice(0, SWEEP_DOC_LIMIT)) {
+			try {
+				const chunks = chunkMarkdown(doc.markdown).slice(0, CHUNK_LIMIT);
+				if (chunks.length === 0) {
+					// No content to embed — still advance the pointer so an empty doc
+					// isn't rescanned every sweep.
+					await ctx.runMutation(internal.embeddings.replaceChunksInternal, {
+						documentId: doc.documentId,
+						embeddedNodeId: doc.currentNodeId,
+						chunks: [],
+					});
+					embedded++;
+					continue;
+				}
+
+				const vectors = await embedTexts(
+					apiKey,
+					chunks.map((c) => c.text),
+				);
+				if (vectors.length !== chunks.length) {
+					console.warn(
+						`reindexSweep: vector/chunk count mismatch for ${doc.documentId} (${vectors.length} vs ${chunks.length}) — skipping`,
+					);
+					continue;
+				}
+
+				await ctx.runMutation(internal.embeddings.replaceChunksInternal, {
+					documentId: doc.documentId,
+					embeddedNodeId: doc.currentNodeId,
+					chunks: chunks.map((c, idx) => ({
+						charStart: c.charStart,
+						charEnd: c.charEnd,
+						text: c.text,
+						embedding: vectors[idx] as number[],
+					})),
+				});
+				embedded++;
+			} catch (err) {
+				console.error(
+					`reindexSweep: failed to re-embed ${doc.documentId}:`,
+					err instanceof Error ? err.message : err,
+				);
+			}
+		}
+
+		return { scanned: stale.length, embedded };
 	},
 });
 
