@@ -12,11 +12,13 @@
 export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 
 /**
- * Chat model for transforms + critique. A current Anthropic Claude Sonnet-class
- * id on OpenRouter (verified streaming end-to-end). Keep modest; transforms are
- * short edits, not long generations.
+ * Chat model for transforms + critique. GLM 5.2 on OpenRouter (user-selected,
+ * verified end-to-end). It is a reasoning model, so the route handlers pass the
+ * OpenRouter `reasoning: { enabled: false }` extension to keep short edits snappy
+ * and stop reasoning tokens from starving the output budget. Keep token caps
+ * modest; transforms are short edits, not long generations.
  */
-export const AI_CHAT_MODEL = "anthropic/claude-sonnet-4.6";
+export const AI_CHAT_MODEL = "z-ai/glm-5.2";
 
 /** Cap output for selection transforms — they rewrite a span, not a document. */
 export const AI_TRANSFORM_MAX_TOKENS = 1024;

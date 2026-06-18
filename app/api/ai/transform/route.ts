@@ -1,3 +1,4 @@
+import type OpenAI from "openai";
 import { AI_CHAT_MODEL, AI_TRANSFORM_MAX_TOKENS } from "@/lib/ai/config";
 import { openRouter, requireUser } from "@/lib/ai/server";
 import {
@@ -49,16 +50,21 @@ export async function POST(req: Request): Promise<Response> {
 	const stream = new ReadableStream<Uint8Array>({
 		async start(controller) {
 			try {
-				const completion = await client.chat.completions.create(
-					{
-						model: AI_CHAT_MODEL,
-						max_tokens: AI_TRANSFORM_MAX_TOKENS,
-						stream: true,
-						messages,
-					},
+				const params: OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming & {
+					reasoning?: { enabled: boolean };
+				} = {
+					model: AI_CHAT_MODEL,
+					max_tokens: AI_TRANSFORM_MAX_TOKENS,
+					stream: true,
+					messages,
+					// OpenRouter extension: GLM 5.2 is a reasoning model; disable
+					// reasoning so content streams immediately for short edits.
+					reasoning: { enabled: false },
+				};
+				const completion = await client.chat.completions.create(params, {
 					// Abort the upstream request when the client disconnects.
-					{ signal: req.signal },
-				);
+					signal: req.signal,
+				});
 				for await (const part of completion) {
 					const delta = part.choices?.[0]?.delta?.content ?? "";
 					if (delta) controller.enqueue(encoder.encode(delta));

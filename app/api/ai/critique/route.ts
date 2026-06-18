@@ -1,3 +1,4 @@
+import type OpenAI from "openai";
 import { AI_CHAT_MODEL, AI_CRITIQUE_MAX_TOKENS } from "@/lib/ai/config";
 import { openRouter, requireUser } from "@/lib/ai/server";
 import {
@@ -39,14 +40,19 @@ export async function POST(req: Request): Promise<Response> {
 	}
 
 	try {
-		const completion = await client.chat.completions.create(
-			{
-				model: AI_CHAT_MODEL,
-				max_tokens: AI_CRITIQUE_MAX_TOKENS,
-				messages: buildCritiqueMessages(body),
-			},
-			{ signal: req.signal },
-		);
+		const params: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming & {
+			reasoning?: { enabled: boolean };
+		} = {
+			model: AI_CHAT_MODEL,
+			max_tokens: AI_CRITIQUE_MAX_TOKENS,
+			messages: buildCritiqueMessages(body),
+			// OpenRouter extension: disable GLM 5.2 reasoning so the JSON output
+			// isn't starved by reasoning tokens.
+			reasoning: { enabled: false },
+		};
+		const completion = await client.chat.completions.create(params, {
+			signal: req.signal,
+		});
 		const raw = completion.choices?.[0]?.message?.content ?? "";
 		const notes = parseCritique(raw);
 		return Response.json({ notes });
