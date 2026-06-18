@@ -25,7 +25,10 @@ export type AppShortcutAction =
 	| { type: "toggle-focus-dim" }
 	| { type: "open-go-to-heading" }
 	| { type: "toggle-outline" }
-	| { type: "find-replace" };
+	| { type: "find-replace" }
+	| { type: "ai-transform" }
+	| { type: "ai-critique" }
+	| { type: "ai-related" };
 
 const isMac =
 	typeof navigator !== "undefined" &&
@@ -219,6 +222,25 @@ export function createAppShortcutHandler(
 			event.preventDefault();
 			event.stopPropagation();
 			onAction({ type: "toggle-focus-dim" });
+			return;
+		}
+		// AI (plan 009) — the studio handlers no-op when AI features are disabled.
+		if (matchCtrlShift(event, "i")) {
+			event.preventDefault();
+			event.stopPropagation();
+			onAction({ type: "ai-transform" });
+			return;
+		}
+		if (matchCtrlShift(event, "j")) {
+			event.preventDefault();
+			event.stopPropagation();
+			onAction({ type: "ai-critique" });
+			return;
+		}
+		if (matchCtrlShift(event, "k")) {
+			event.preventDefault();
+			event.stopPropagation();
+			onAction({ type: "ai-related" });
 			return;
 		}
 

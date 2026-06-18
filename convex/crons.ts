@@ -10,4 +10,14 @@ crons.daily(
 	internal.retention.sweep,
 );
 
+// Daily RAG re-embed sweep (plan 009 Phase C). Scaffolded; embedding generation
+// is BLOCKED on a Convex-side provider key (see convex/embeddings.ts → reindexSweep).
+// Re-indexing currently runs through the client "Re-index drafts" command, which
+// uses the Next route where the key lives.
+crons.daily(
+	"rag re-embed sweep",
+	{ hourUTC: 9, minuteUTC: 0 },
+	internal.embeddings.reindexSweep,
+);
+
 export default crons;

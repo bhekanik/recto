@@ -35,6 +35,14 @@ export type GoalScope = "document" | "daily";
  */
 export type PreviewVariant = "rendered" | "email";
 
+/**
+ * How an accepted AI transform lands (plan 009 — switchable A/B fork, never a
+ * hard pick). `"replace"`: the AI node becomes the tip immediately (reject =
+ * undo). `"pending"`: the AI node still lands (reversible by construction) but
+ * the UI shows an explicit accept/reject affordance and auto-undoes on reject.
+ */
+export type AiTransformMode = "pending" | "replace";
+
 const GOAL_KINDS: GoalKind[] = ["at-least", "about", "at-most"];
 
 /** Clamp a goal target to a non-negative integer (0 = no goal). */
@@ -94,6 +102,10 @@ export type StudioSettings = {
 	outlineOpen: boolean;
 	/** Preview-mode render: rendered Markdown or the inbox/email preview (plan 008). */
 	previewVariant: PreviewVariant;
+	/** Master gate for all AI features (plan 009) — opt-in, OFF by default. */
+	aiEnabled: boolean;
+	/** How an accepted AI transform lands (switchable A/B fork; plan 009). */
+	aiTransformMode: AiTransformMode;
 };
 
 export const READING_SCALE_MIN = 0.8;
@@ -134,6 +146,11 @@ const DEFAULTS: StudioSettings = {
 	// Preview mode shows the rendered Markdown by default; the email/inbox preview
 	// is opt-in (a newsletter-specific lens), toggled per device.
 	previewVariant: "rendered",
+	// AI features are opt-in — OFF by default so the studio is unchanged on first
+	// run and AI is never ambient (plan 009; AUGMENT, don't replace).
+	aiEnabled: false,
+	// Default to the safer "pending" confirm UX for AI transforms (plan 009).
+	aiTransformMode: "pending",
 };
 
 const STORAGE_KEY = "recto:studio-settings";
@@ -224,6 +241,12 @@ function loadSettings(): StudioSettings {
 					? parsed.outlineOpen
 					: DEFAULTS.outlineOpen,
 			previewVariant: parsed.previewVariant === "email" ? "email" : "rendered",
+			aiEnabled:
+				typeof parsed.aiEnabled === "boolean"
+					? parsed.aiEnabled
+					: DEFAULTS.aiEnabled,
+			aiTransformMode:
+				parsed.aiTransformMode === "replace" ? "replace" : "pending",
 		};
 	} catch {
 		return DEFAULTS;
@@ -262,6 +285,10 @@ export type StudioSettingsApi = StudioSettings & {
 	setOutlineOpen: (open: boolean) => void;
 	setPreviewVariant: (variant: PreviewVariant) => void;
 	togglePreviewVariant: () => void;
+	setAiEnabled: (enabled: boolean) => void;
+	toggleAiEnabled: () => void;
+	setAiTransformMode: (mode: AiTransformMode) => void;
+	toggleAiTransformMode: () => void;
 };
 
 /**
@@ -442,6 +469,25 @@ export function useStudioSettings(): StudioSettingsApi {
 		}));
 	}, []);
 
+	const setAiEnabled = useCallback((aiEnabled: boolean) => {
+		setSettings((s) => ({ ...s, aiEnabled }));
+	}, []);
+
+	const toggleAiEnabled = useCallback(() => {
+		setSettings((s) => ({ ...s, aiEnabled: !s.aiEnabled }));
+	}, []);
+
+	const setAiTransformMode = useCallback((aiTransformMode: AiTransformMode) => {
+		setSettings((s) => ({ ...s, aiTransformMode }));
+	}, []);
+
+	const toggleAiTransformMode = useCallback(() => {
+		setSettings((s) => ({
+			...s,
+			aiTransformMode: s.aiTransformMode === "pending" ? "replace" : "pending",
+		}));
+	}, []);
+
 	return {
 		...settings,
 		setTheme,
@@ -475,5 +521,9 @@ export function useStudioSettings(): StudioSettingsApi {
 		setOutlineOpen,
 		setPreviewVariant,
 		togglePreviewVariant,
+		setAiEnabled,
+		toggleAiEnabled,
+		setAiTransformMode,
+		toggleAiTransformMode,
 	};
 }

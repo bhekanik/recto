@@ -50,6 +50,30 @@ export default defineSchema({
 		createdAt: v.number(),
 	}).index("by_document", ["documentId"]),
 
+	// RAG over the writer's own drafts (plan 009, Phase C): paragraph-windowed
+	// chunks of each document with their embedding. The vectorIndex dimensions
+	// MUST equal AI_EMBEDDING_DIM in lib/ai/config.ts (1536 — verified for
+	// openai/text-embedding-3-small via OpenRouter). Changing the model means a new
+	// index + a full re-embed.
+	docChunks: defineTable({
+		userId: v.string(),
+		documentId: v.id("documents"),
+		charStart: v.number(),
+		charEnd: v.number(),
+		text: v.string(),
+		embedding: v.array(v.float64()),
+		// The document's currentNodeId when this chunk was embedded — lets the cron
+		// skip documents that haven't changed since their last embed.
+		embeddedNodeId: v.string(),
+		updatedAt: v.number(),
+	})
+		.index("by_document", ["documentId"])
+		.vectorIndex("by_embedding", {
+			vectorField: "embedding",
+			dimensions: 1536,
+			filterFields: ["userId"],
+		}),
+
 	// Per-user daily writing aggregates (local-date keyed) — powers the streak and
 	// the optional daily goal. Single-user; scoped by userId. (plan 002)
 	writingStats: defineTable({

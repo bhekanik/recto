@@ -88,6 +88,12 @@ export function nodeLabel(
 ): string {
 	if (parentNodeId == null) return "Document created";
 	if (origin === "restore") return "Restored a version";
+	// AI transforms tag their node `ai:<instruction label>` (plan 009).
+	if (origin?.startsWith("ai:")) {
+		const label = origin.slice(3).trim();
+		return label ? `AI: ${label}` : "AI edit";
+	}
+	if (origin === "ai") return "AI edit";
 	try {
 		const { from, to, insert } = JSON.parse(patch) as {
 			from: number;

@@ -26,6 +26,8 @@ type CommandPaletteProps = {
 	scope?: "all" | "documents" | "headings";
 	documents: DocMeta[] | undefined;
 	headings: OutlineHeadingItem[];
+	/** Gate AI commands (plan 009) — hidden unless AI features are enabled. */
+	aiEnabled: boolean;
 	onRunAction: (id: ActionId) => void;
 	onOpenDocument: (id: Id<"documents">) => void;
 	onJumpToHeading: (index: number) => void;
@@ -43,6 +45,7 @@ export function CommandPalette({
 	scope = "all",
 	documents,
 	headings,
+	aiEnabled,
 	onRunAction,
 	onOpenDocument,
 	onJumpToHeading,
@@ -181,9 +184,14 @@ export function CommandPalette({
 								);
 							}
 
-							const defs = ACTIONS.filter(
+							let defs = ACTIONS.filter(
 								(a) => a.section === section && a.id !== "new-document",
 							);
+							// AI is opt-in: when disabled, only the toggle is reachable so the
+							// user can turn it on; otherwise no AI UI appears (plan 009).
+							if (section === "AI" && !aiEnabled) {
+								defs = defs.filter((a) => a.id === "toggle-ai");
+							}
 							if (defs.length === 0) return null;
 							return (
 								<Command.Group

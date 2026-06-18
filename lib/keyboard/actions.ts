@@ -11,6 +11,7 @@ export type ActionSection =
 	| "Panes"
 	| "Navigate"
 	| "History"
+	| "AI"
 	| "Copy/Export"
 	| "View"
 	| "Theme";
@@ -35,6 +36,11 @@ export type ActionId =
 	| "version-history"
 	| "undo"
 	| "redo"
+	| "ai-transform"
+	| "ai-critique"
+	| "ai-related"
+	| "ai-reindex"
+	| "toggle-ai"
 	| "copy-rich"
 	| "copy-markdown"
 	| "export-md"
@@ -200,6 +206,41 @@ export const ACTIONS: ActionDef[] = [
 		label: "Redo",
 		section: "History",
 		shortcut: { mac: `${M}${S}Z`, other: "Ctrl+Y" },
+	},
+	{
+		id: "ai-transform",
+		label: "Transform selection with AI…",
+		section: "AI",
+		aliases: ["rewrite", "tighten", "expand", "fix grammar", "edit", "ai"],
+		shortcut: { mac: "Ctrl+⇧+I", other: "Ctrl+Shift+I" },
+	},
+	{
+		id: "ai-critique",
+		label: "Editorial critique…",
+		section: "AI",
+		aliases: ["feedback", "review", "critique", "notes", "ai"],
+		shortcut: { mac: "Ctrl+⇧+J", other: "Ctrl+Shift+J" },
+	},
+	{
+		id: "ai-related",
+		label: "Related passages from past drafts…",
+		section: "AI",
+		aliases: ["rag", "search drafts", "related", "similar", "ai"],
+		shortcut: { mac: "Ctrl+⇧+K", other: "Ctrl+Shift+K" },
+	},
+	{
+		id: "ai-reindex",
+		label: "Re-index this draft for search",
+		section: "AI",
+		aliases: ["embed", "index", "reindex", "rag", "ai"],
+		shortcut: { mac: "", other: "" },
+	},
+	{
+		id: "toggle-ai",
+		label: "Toggle AI features",
+		section: "AI",
+		aliases: ["enable ai", "disable ai", "ai off", "ai on"],
+		shortcut: { mac: "", other: "" },
 	},
 	{
 		id: "copy-rich",
@@ -390,6 +431,7 @@ export const SECTION_ORDER: ActionSection[] = [
 	"Panes",
 	"Navigate",
 	"History",
+	"AI",
 	"Copy/Export",
 	"View",
 	"Theme",

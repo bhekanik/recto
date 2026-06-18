@@ -33,6 +33,18 @@ export type HistoryController = {
 	navigateTo: (nodeId: string) => void;
 	restoreVersion: (versionNodeId: string) => void;
 	recordChange: (opts?: { structural?: boolean }) => void;
+	/**
+	 * Commit a programmatic full-document replacement as a NEW child node, with an
+	 * optional origin override (e.g. `"ai:tighten"`). Used by the reversible AI
+	 * transform (plan 009): seed the new markdown, record it through the grouping
+	 * path so it lands as a child node, and flush immediately. Reversible by
+	 * construction — `undo()` returns to the pre-edit text. Returns the new tip
+	 * nodeId (or null if no commit happened).
+	 */
+	commitProgrammatic: (
+		markdown: string,
+		opts?: { origin?: string },
+	) => string | null;
 	flush: () => void;
 	tagVersion: (label: string, kind?: "auto" | "manual") => Promise<void>;
 	materializeAt: (nodeId: string) => string | null;
@@ -140,16 +152,23 @@ export function useDocumentHistory(args: {
 		}).catch(() => {});
 	}, AUTO_VERSION_MS);
 
+	// A one-shot origin override consumed by the next commit (AI transforms tag
+	// their node `ai:<label>`); cleared after use so normal edits keep the device
+	// origin (plan 009).
+	const originOverrideRef = useRef<string | null>(null);
+
 	const onCommit = useCallback(
 		(commit: GroupCommit) => {
 			if (!documentId) return;
+			const commitOrigin = originOverrideRef.current ?? origin;
+			originOverrideRef.current = null;
 			const node: HistoryNode = {
 				nodeId: commit.nodeId,
 				parentNodeId: commit.parentNodeId,
 				patch: commit.patch,
 				snapshot: commit.snapshot,
 				selection: commit.selection,
-				origin,
+				origin: commitOrigin,
 				createdAt: Date.now(),
 			};
 			setLocalNodes((prev) => [...prev, node]);
@@ -161,7 +180,7 @@ export function useDocumentHistory(args: {
 				patch: commit.patch,
 				snapshot: commit.snapshot,
 				selection: commit.selection,
-				origin,
+				origin: commitOrigin,
 				createdAt: node.createdAt,
 			}).catch(() => {});
 			debouncedPointer(commit.nodeId);
@@ -332,6 +351,30 @@ export function useDocumentHistory(args: {
 		[nodesById],
 	);
 
+	// Commit a programmatic full-document replacement as a child node (plan 009 —
+	// the reversible AI transform). Same shape as restoreVersion: flush any draft,
+	// seed the new markdown into the live editor, record it as a structural child
+	// through the grouping path, then flush immediately. The optional origin
+	// override tags the node (e.g. "ai:tighten"). Returns the new tip nodeId.
+	const commitProgrammatic = useCallback(
+		(markdown: string, opts?: { origin?: string }): string | null => {
+			const controller = controllerRef.current;
+			if (!controller) return null;
+			const before = controller.currentNodeId;
+			if (opts?.origin) originOverrideRef.current = opts.origin;
+			controller.flush();
+			const handle = getHandleRef.current();
+			handle?.seed(markdown, { programmatic: true });
+			controller.record(markdown, null, { structural: true });
+			controller.flush();
+			const after = controller.currentNodeId;
+			// Clear an unused override if record() found nothing to commit (no change).
+			if (after === before) originOverrideRef.current = null;
+			return after === before ? null : after;
+		},
+		[],
+	);
+
 	const materializeAt = useCallback(
 		(nodeId: string) => {
 			if (!nodesById.has(nodeId)) return null;
@@ -381,6 +424,7 @@ export function useDocumentHistory(args: {
 		navigateTo,
 		restoreVersion,
 		recordChange,
+		commitProgrammatic,
 		flush,
 		tagVersion,
 		materializeAt,

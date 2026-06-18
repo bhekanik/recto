@@ -6,6 +6,12 @@ import { Command as CommandIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDebouncedCallback } from "use-debounce";
+import {
+	AiTransformPopover,
+	type AiTransformRequest,
+} from "@/components/ai/ai-transform-popover";
+import { CritiquePanel } from "@/components/ai/critique-panel";
+import { RelatedPassagesPanel } from "@/components/ai/related-passages-panel";
 import { CommandPalette } from "@/components/command-palette";
 import { DocumentSwitcher } from "@/components/document-switcher";
 import { EmptyState } from "@/components/empty-state";
@@ -22,6 +28,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { RenderPaneNode } from "@/components/workspace/render-pane-node";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import type { TransformRange } from "@/lib/ai/apply-transform";
+import { AI_TRANSFORM_SUMMON_EVENT, setAiEnabledMirror } from "@/lib/ai/summon";
+import { useAiTransform } from "@/lib/ai/use-ai-transform";
+import { useRag } from "@/lib/ai/use-rag";
 import { dispatchOpenSearch } from "@/lib/editor/codemirror";
 import {
 	copyAsMarkdown,
@@ -290,6 +300,141 @@ function StudioWorkspace() {
 		view: HistoryView;
 	}>({ open: false, view: "tree" });
 
+	// --- AI features (plan 009) — all gated behind settings.aiEnabled ---
+	// Keep the out-of-tree selection toolbar's AI button in sync with the setting.
+	useEffect(() => {
+		setAiEnabledMirror(settings.aiEnabled);
+	}, [settings.aiEnabled]);
+
+	// Read the live markdown of the active document from its primary handle.
+	const getActiveMarkdown = useCallback((): string => {
+		if (!activeDocId || !workspace) return "";
+		const handle = registry.getPrimaryHandle(
+			activeDocId,
+			workspace.activePaneId,
+		);
+		return handle?.getCanonicalMarkdown() ?? activeSync?.markdown ?? "";
+	}, [activeDocId, workspace, registry, activeSync]);
+
+	const aiTransform = useAiTransform({
+		getController: () => activeHistoryRef.current,
+		getDocMarkdown: getActiveMarkdown,
+		mode: settings.aiTransformMode,
+	});
+	const [aiPopover, setAiPopover] = useState<{
+		open: boolean;
+		selection: { text: string; range: TransformRange } | null;
+	}>({ open: false, selection: null });
+	const [critiqueOpen, setCritiqueOpen] = useState(false);
+	const [relatedOpen, setRelatedOpen] = useState(false);
+
+	const { reindexDocument } = useRag();
+
+	// Summon the AI transform over the current selection. Phase A scopes to the
+	// CodeMirror lenses (raw/vim), where exportCaret offsets are markdown offsets;
+	// rich (Milkdown) selection-to-markdown is deferred (positions differ).
+	const summonAiTransform = useCallback(() => {
+		if (!settings.aiEnabled) return;
+		const mode = activeLeaf?.mode ?? "rich";
+		if (mode !== "raw" && mode !== "vim") {
+			window.alert(
+				"AI transform works in Raw or Vim mode (where the selection maps to the Markdown source). Switch lens, select text, and try again.",
+			);
+			return;
+		}
+		if (!activeDocId || !workspace) return;
+		const handle = registry.getPrimaryHandle(
+			activeDocId,
+			workspace.activePaneId,
+		);
+		if (!handle) return;
+		const caret = handle.exportCaret();
+		const from = Math.min(caret.anchor, caret.head);
+		const to = Math.max(caret.anchor, caret.head);
+		if (from === to) {
+			window.alert("Select some text first, then summon the AI transform.");
+			return;
+		}
+		const doc = handle.getCanonicalMarkdown();
+		const text = doc.slice(from, to);
+		aiTransform.reset();
+		setAiPopover({ open: true, selection: { text, range: { from, to } } });
+	}, [
+		settings.aiEnabled,
+		activeLeaf,
+		activeDocId,
+		workspace,
+		registry,
+		aiTransform,
+	]);
+
+	// The selection toolbar's AI button (out of tree) summons via this event.
+	useEffect(() => {
+		const onSummon = () => summonAiTransform();
+		window.addEventListener(AI_TRANSFORM_SUMMON_EVENT, onSummon);
+		return () =>
+			window.removeEventListener(AI_TRANSFORM_SUMMON_EVENT, onSummon);
+	}, [summonAiTransform]);
+
+	const runAiTransform = useCallback(
+		(req: AiTransformRequest) => {
+			void aiTransform.transform({
+				instruction: req.instruction,
+				instructionLabel: req.instructionLabel,
+				range: req.range,
+				selection: req.selection,
+			});
+		},
+		[aiTransform],
+	);
+
+	// "Re-index this draft for search" (Phase C) — chunk + embed via the Next
+	// route, persist to Convex. Runs on demand, never per keystroke.
+	const handleReindex = useCallback(async () => {
+		if (!settings.aiEnabled || !activeDocId) return;
+		const history = activeHistoryRef.current;
+		const currentNodeId = history?.currentNodeId;
+		if (!currentNodeId) return;
+		const markdown = getActiveMarkdown();
+		try {
+			const count = await reindexDocument({
+				documentId: activeDocId,
+				currentNodeId,
+				markdown,
+			});
+			window.alert(`Indexed ${count} passage${count === 1 ? "" : "s"}.`);
+		} catch (err) {
+			window.alert(`Re-index failed: ${(err as Error).message}`);
+		}
+	}, [settings.aiEnabled, activeDocId, getActiveMarkdown, reindexDocument]);
+
+	// Open a cited related passage: switch the active pane to that doc, then jump
+	// to the passage offset once the editor has mounted + seeded.
+	const openRelatedPassage = useCallback(
+		(documentId: Id<"documents">, charStart: number) => {
+			if (!workspace?.activePaneId) return;
+			actions.setPaneDocument(workspace.activePaneId, documentId);
+			setRelatedOpen(false);
+			// Defer the caret jump until the editor for the new doc is mounted.
+			let tries = 0;
+			const tryJump = () => {
+				const handle = registry.getPrimaryHandle(
+					documentId,
+					workspace.activePaneId,
+				);
+				if (handle) {
+					const md = handle.getCanonicalMarkdown();
+					handle.importCaret(caretAtOffset(charStart, md.length));
+					handle.focus();
+					return;
+				}
+				if (tries++ < 40) requestAnimationFrame(tryJump);
+			};
+			requestAnimationFrame(tryJump);
+		},
+		[workspace, actions, registry],
+	);
+
 	const handleCheckpoint = useCallback(() => {
 		const history = activeHistoryRef.current;
 		if (!history) return;
@@ -511,6 +656,21 @@ function StudioWorkspace() {
 				case "redo":
 					activeHistoryRef.current?.redo();
 					return;
+				case "toggle-ai":
+					settings.toggleAiEnabled();
+					return;
+				case "ai-transform":
+					if (settings.aiEnabled) summonAiTransform();
+					return;
+				case "ai-critique":
+					if (settings.aiEnabled) setCritiqueOpen(true);
+					return;
+				case "ai-related":
+					if (settings.aiEnabled) setRelatedOpen(true);
+					return;
+				case "ai-reindex":
+					if (settings.aiEnabled) void handleReindex();
+					return;
 				case "copy-rich": {
 					const source = getExportSource();
 					if (source) void copyAsRichText(source);
@@ -605,6 +765,8 @@ function StudioWorkspace() {
 			workspace,
 			settings,
 			isMobile,
+			summonAiTransform,
+			handleReindex,
 		],
 	);
 
@@ -698,6 +860,15 @@ function StudioWorkspace() {
 				case "find-replace":
 					// Route through dispatchRef (stable) so this effect isn't re-subscribed.
 					dispatchRef.current("find-replace");
+					return;
+				case "ai-transform":
+					dispatchRef.current("ai-transform");
+					return;
+				case "ai-critique":
+					dispatchRef.current("ai-critique");
+					return;
+				case "ai-related":
+					dispatchRef.current("ai-related");
 					return;
 			}
 		});
@@ -925,6 +1096,7 @@ function StudioWorkspace() {
 					scope={commandScope}
 					documents={documents}
 					headings={outline}
+					aiEnabled={settings.aiEnabled}
 					onRunAction={(id) => dispatchRef.current(id)}
 					onOpenDocument={(id) => {
 						if (workspace?.activePaneId) {
@@ -973,6 +1145,45 @@ function StudioWorkspace() {
 							dispatchFocusEditor();
 						}}
 					/>
+				)}
+
+				{settings.aiEnabled && (
+					<>
+						<AiTransformPopover
+							open={aiPopover.open}
+							onOpenChange={(open) => {
+								setAiPopover((p) => ({ ...p, open }));
+								if (!open) {
+									aiTransform.reset();
+									dispatchFocusEditor();
+								}
+							}}
+							selection={aiPopover.selection}
+							state={aiTransform.state}
+							onRun={runAiTransform}
+							onAccept={aiTransform.accept}
+							onReject={aiTransform.reject}
+							onCancel={aiTransform.cancel}
+						/>
+						<CritiquePanel
+							open={critiqueOpen}
+							getText={getActiveMarkdown}
+							onClose={() => {
+								setCritiqueOpen(false);
+								dispatchFocusEditor();
+							}}
+						/>
+						<RelatedPassagesPanel
+							open={relatedOpen}
+							activeDocumentId={activeDocId}
+							getQueryText={getActiveMarkdown}
+							onOpenPassage={openRelatedPassage}
+							onClose={() => {
+								setRelatedOpen(false);
+								dispatchFocusEditor();
+							}}
+						/>
+					</>
 				)}
 
 				<Toaster />

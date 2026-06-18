@@ -11,6 +11,7 @@
 import type * as crons from "../crons.js";
 import type * as docNodes from "../docNodes.js";
 import type * as documents from "../documents.js";
+import type * as embeddings from "../embeddings.js";
 import type * as files from "../files.js";
 import type * as history from "../history.js";
 import type * as retention from "../retention.js";
@@ -28,6 +29,7 @@ declare const fullApi: ApiFromModules<{
   crons: typeof crons;
   docNodes: typeof docNodes;
   documents: typeof documents;
+  embeddings: typeof embeddings;
   files: typeof files;
   history: typeof history;
   retention: typeof retention;

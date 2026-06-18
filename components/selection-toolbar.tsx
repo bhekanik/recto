@@ -1,6 +1,9 @@
 "use client";
 
+import { Sparkles } from "lucide-react";
+
 import { SELECTION_ACTIONS } from "@/components/format-actions";
+import { dispatchAiTransform, isAiEnabled } from "@/lib/ai/summon";
 import { dispatchFormat } from "@/lib/editor/format";
 
 /**
@@ -9,6 +12,8 @@ import { dispatchFormat } from "@/lib/editor/format";
  * (the tooltip provider then keeps the bar visible while the command applies).
  */
 export function SelectionToolbar() {
+	// Read the module mirror (this bar mounts outside the React settings provider).
+	const aiEnabled = isAiEnabled();
 	return (
 		<div
 			role="toolbar"
@@ -31,6 +36,18 @@ export function SelectionToolbar() {
 					</button>
 				);
 			})}
+			{aiEnabled && (
+				<button
+					type="button"
+					title="Transform with AI"
+					aria-label="Transform with AI"
+					onPointerDown={(event) => event.preventDefault()}
+					onClick={() => dispatchAiTransform()}
+					className="flex size-7 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-ink-secondary)] transition-colors duration-[var(--motion-instant)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-ink-primary)]"
+				>
+					<Sparkles aria-hidden className="size-[15px]" />
+				</button>
+			)}
 		</div>
 	);
 }
