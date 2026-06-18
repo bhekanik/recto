@@ -37,6 +37,7 @@ import {
 	dispatchModeSwitch,
 	resolveModeAction,
 } from "@/lib/keyboard/app-shortcuts";
+import { readingTimeMinutes } from "@/lib/markdown";
 import { caretAtOffset } from "@/lib/modes/caret";
 import { extractOutline } from "@/lib/outline/extract";
 import { scrollRootToHeadingIndex } from "@/lib/outline/scroll-to-heading";
@@ -569,6 +570,9 @@ function StudioWorkspace() {
 				case "cycle-dim-scope":
 					settings.cycleFocusDimScope();
 					return;
+				case "toggle-email-preview":
+					settings.togglePreviewVariant();
+					return;
 				case "set-goal":
 					setGoalConfigOpen(true);
 					return;
@@ -834,6 +838,7 @@ function StudioWorkspace() {
 					<div className={bottomChromeClass} {...chromeHoverProps}>
 						<StatusBar
 							wordCount={activeSync.wordCount}
+							readingMinutes={readingTimeMinutes(activeSync.wordCount)}
 							syncStatus={activeSync.syncStatus}
 							mode={activeMode}
 							onModeChange={(m) => dispatchModeSwitch(m)}

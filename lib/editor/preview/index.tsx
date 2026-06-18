@@ -2,18 +2,37 @@
 
 import { useMemo } from "react";
 
+import { EmailPreview } from "@/components/workspace/email-preview";
 import { splitFrontmatter } from "@/lib/markdown";
 import { renderPreviewHtml } from "@/lib/preview/render";
+import { useStudioSettingsContext } from "@/lib/studio/settings-context";
 
 type PreviewPaneProps = {
 	markdown: string;
+	/** Falls back to this when the doc has no subject/title (email preview). */
+	fallbackTitle?: string;
 	className?: string;
 };
 
-export function PreviewPane({ markdown, className }: PreviewPaneProps) {
+export function PreviewPane({
+	markdown,
+	fallbackTitle = "Untitled",
+	className,
+}: PreviewPaneProps) {
+	const { previewVariant } = useStudioSettingsContext();
 	const { meta, body } = useMemo(() => splitFrontmatter(markdown), [markdown]);
 	const html = useMemo(() => renderPreviewHtml(body), [body]);
 	const hasHeader = Boolean(meta.title.trim() || meta.subtitle.trim());
+
+	if (previewVariant === "email") {
+		return (
+			<EmailPreview
+				markdown={markdown}
+				fallbackTitle={fallbackTitle}
+				className={className}
+			/>
+		);
+	}
 
 	return (
 		<article className={className}>

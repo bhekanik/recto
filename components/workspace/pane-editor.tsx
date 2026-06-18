@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "convex/react";
+import { useConvex, useMutation, useQuery } from "convex/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Skeleton } from "@/components/ui/skeleton";
@@ -8,6 +8,7 @@ import { DocumentHeader } from "@/components/workspace/document-header";
 import { EmptyPaneBound } from "@/components/workspace/empty-pane";
 import { PaneShell } from "@/components/workspace/pane-shell";
 import { api } from "@/convex/_generated/api";
+import type { Id } from "@/convex/_generated/dataModel";
 import {
 	CodeMirrorEditor,
 	type CodeMirrorEditorHandle,
@@ -15,13 +16,18 @@ import {
 } from "@/lib/editor/codemirror";
 import { FORMAT_EVENT, type FormatEventDetail } from "@/lib/editor/format";
 import { createPreviewHandle, type EditorHandle } from "@/lib/editor/handle";
+import { uploadImage } from "@/lib/editor/image-upload";
 import {
 	MilkdownEditor,
 	type MilkdownEditorHandle,
 } from "@/lib/editor/milkdown";
 import { PreviewPane } from "@/lib/editor/preview";
 import { useProseLint } from "@/lib/lint/use-prose-lint";
-import { type DocumentMeta, splitFrontmatter } from "@/lib/markdown";
+import {
+	type DocumentMeta,
+	EMPTY_META,
+	splitFrontmatter,
+} from "@/lib/markdown";
 import type { CaretPosition, Mode, VimSubMode } from "@/lib/modes/types";
 import { useStudioSettingsContext } from "@/lib/studio/settings-context";
 import { useIsMobile } from "@/lib/studio/use-is-mobile";
@@ -81,15 +87,30 @@ export function PaneEditor({
 	const [pendingCaret, setPendingCaret] = useState<CaretPosition | null>(null);
 	// Title/subtitle frontmatter surfaced as the rich-mode header. Milkdown reports
 	// it via onMeta (on seed); the header writes back via richRef.setMeta.
-	const [headerMeta, setHeaderMeta] = useState<DocumentMeta>({
-		title: "",
-		subtitle: "",
-	});
+	const [headerMeta, setHeaderMeta] = useState<DocumentMeta>({ ...EMPTY_META });
 
 	const handleMetaChange = useCallback((meta: DocumentMeta) => {
 		setHeaderMeta(meta);
 		richRef.current?.setMeta(meta);
 	}, []);
+
+	// Image paste/drop (plan 008) — upload to Convex storage, then the CM handler
+	// inserts a canonical `![alt](url)` reference. The URL resolve happens inside
+	// an event handler, so use the imperative client (not a reactive useQuery).
+	const generateUploadUrl = useMutation(api.files.generateUploadUrl);
+	const convex = useConvex();
+	const handleUploadImage = useCallback(
+		(file: File | Blob) =>
+			uploadImage({
+				file,
+				generateUploadUrl,
+				resolveUrl: (storageId) =>
+					convex.query(api.files.getImageUrl, {
+						storageId: storageId as Id<"_storage">,
+					}),
+			}),
+		[generateUploadUrl, convex],
+	);
 
 	// Milkdown reports frontmatter on every seed. While the writer is editing the
 	// header, IT is the source of truth — a seed's (possibly stale) metadata must
@@ -555,6 +576,7 @@ export function PaneEditor({
 							typewriter={typewriterEffective}
 							focusDim={focusDim}
 							focusDimScope={focusDimScope}
+							onUploadImage={handleUploadImage}
 							className={`codemirror ${surfaceClass} font-[family-name:var(--font-mono)] text-[length:var(--text-body)]`}
 						/>
 					</div>
@@ -564,6 +586,7 @@ export function PaneEditor({
 					>
 						<PreviewPane
 							markdown={markdown}
+							fallbackTitle={title}
 							className={`recto-preview ${surfaceClass} text-[length:var(--text-body)] leading-[var(--leading-body)] text-[var(--color-ink-primary)]`}
 						/>
 					</div>

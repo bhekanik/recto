@@ -28,6 +28,13 @@ export type GoalStyle = "ring" | "bar";
 /** Which goal the status-bar widget tracks (A/B toggle 2). */
 export type GoalScope = "document" | "daily";
 
+/**
+ * What the preview mode renders: the standard rendered Markdown, or the
+ * inbox/email render (subject + preheader chrome + email-safe inline-CSS body).
+ * A switchable variant of preview mode — not a fifth mode (plan 008).
+ */
+export type PreviewVariant = "rendered" | "email";
+
 const GOAL_KINDS: GoalKind[] = ["at-least", "about", "at-most"];
 
 /** Clamp a goal target to a non-negative integer (0 = no goal). */
@@ -85,6 +92,8 @@ export type StudioSettings = {
 	lintCategories: LintOptions;
 	/** Docked document-outline panel visibility (plan 005). */
 	outlineOpen: boolean;
+	/** Preview-mode render: rendered Markdown or the inbox/email preview (plan 008). */
+	previewVariant: PreviewVariant;
 };
 
 export const READING_SCALE_MIN = 0.8;
@@ -122,6 +131,9 @@ const DEFAULTS: StudioSettings = {
 	},
 	// Outline panel is closed by default — it docks over the canvas on demand.
 	outlineOpen: false,
+	// Preview mode shows the rendered Markdown by default; the email/inbox preview
+	// is opt-in (a newsletter-specific lens), toggled per device.
+	previewVariant: "rendered",
 };
 
 const STORAGE_KEY = "recto:studio-settings";
@@ -211,6 +223,7 @@ function loadSettings(): StudioSettings {
 				typeof parsed.outlineOpen === "boolean"
 					? parsed.outlineOpen
 					: DEFAULTS.outlineOpen,
+			previewVariant: parsed.previewVariant === "email" ? "email" : "rendered",
 		};
 	} catch {
 		return DEFAULTS;
@@ -247,6 +260,8 @@ export type StudioSettingsApi = StudioSettings & {
 	toggleLintCategory: (category: LintCategory) => void;
 	toggleOutline: () => void;
 	setOutlineOpen: (open: boolean) => void;
+	setPreviewVariant: (variant: PreviewVariant) => void;
+	togglePreviewVariant: () => void;
 };
 
 /**
@@ -416,6 +431,17 @@ export function useStudioSettings(): StudioSettingsApi {
 		setSettings((s) => ({ ...s, outlineOpen }));
 	}, []);
 
+	const setPreviewVariant = useCallback((previewVariant: PreviewVariant) => {
+		setSettings((s) => ({ ...s, previewVariant }));
+	}, []);
+
+	const togglePreviewVariant = useCallback(() => {
+		setSettings((s) => ({
+			...s,
+			previewVariant: s.previewVariant === "rendered" ? "email" : "rendered",
+		}));
+	}, []);
+
 	return {
 		...settings,
 		setTheme,
@@ -447,5 +473,7 @@ export function useStudioSettings(): StudioSettingsApi {
 		toggleLintCategory,
 		toggleOutline,
 		setOutlineOpen,
+		setPreviewVariant,
+		togglePreviewVariant,
 	};
 }

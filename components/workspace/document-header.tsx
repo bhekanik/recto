@@ -86,6 +86,22 @@ export function DocumentHeader({
 				ariaLabel="Document subtitle"
 				className="recto-doc-subtitle"
 			/>
+			<AutoField
+				value={meta.subject}
+				onChange={(subject) => onChange({ ...meta, subject })}
+				onEnter={onEnterBody}
+				placeholder="Subject line (for email)"
+				ariaLabel="Newsletter subject line"
+				className="recto-doc-meta-field"
+			/>
+			<AutoField
+				value={meta.preview}
+				onChange={(preview) => onChange({ ...meta, preview })}
+				onEnter={onEnterBody}
+				placeholder="Preview text (inbox preheader)"
+				ariaLabel="Newsletter preview text"
+				className="recto-doc-meta-field"
+			/>
 			<hr className="recto-doc-divider" />
 		</div>
 	);

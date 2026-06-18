@@ -809,7 +809,8 @@
 }
 
 .recto-doc-title,
-.recto-doc-subtitle {
+.recto-doc-subtitle,
+.recto-doc-meta-field {
 	display: block;
 	inline-size: 100%;
 	margin: 0;
@@ -839,8 +840,19 @@
 	color: var(--color-ink-secondary);
 }
 
+/* Newsletter metadata (subject / preview) — quiet, smaller, tertiary ink so it
+   reads as metadata rather than body. Sits below the subtitle, above the rule. */
+.recto-doc-meta-field {
+	font-size: calc(var(--text-body) * 0.82 * var(--reading-scale, 1));
+	font-weight: 400;
+	line-height: 1.4;
+	color: var(--color-ink-tertiary);
+	margin-block-start: 0.35em;
+}
+
 .recto-doc-title::placeholder,
-.recto-doc-subtitle::placeholder {
+.recto-doc-subtitle::placeholder,
+.recto-doc-meta-field::placeholder {
 	color: var(--color-ink-tertiary);
 	opacity: 0.5;
 }

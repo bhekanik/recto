@@ -5,21 +5,28 @@ import { normalizeMarkdown } from "./normalize";
 import { parseMarkdown } from "./parse";
 import { stringifyMdast } from "./serialize";
 
-/** The two header fields Recto surfaces from YAML frontmatter. */
+/** The header/metadata fields Recto surfaces from YAML frontmatter. */
 export type DocumentMeta = {
 	title: string;
 	subtitle: string;
+	subject: string; // newsletter subject line (email "Subject:")
+	preview: string; // newsletter preview / preheader text (inbox snippet)
 };
 
 export type SplitDocument = {
 	meta: DocumentMeta;
-	/** Frontmatter keys other than title/subtitle — preserved on recompose. */
+	/** Frontmatter keys beyond title/subtitle/subject/preview — preserved on recompose. */
 	extra: Record<string, unknown>;
 	/** Canonical Markdown body with the frontmatter block removed. */
 	body: string;
 };
 
-export const EMPTY_META: DocumentMeta = { title: "", subtitle: "" };
+export const EMPTY_META: DocumentMeta = {
+	title: "",
+	subtitle: "",
+	subject: "",
+	preview: "",
+};
 
 function toStringField(value: unknown): string {
 	if (typeof value === "string") return value;
@@ -53,10 +60,12 @@ export function splitFrontmatter(markdown: string): SplitDocument {
 	}
 
 	const parsed = parseYaml(first.value);
-	const { title, subtitle, ...extra } = parsed;
+	const { title, subtitle, subject, preview, ...extra } = parsed;
 	const meta: DocumentMeta = {
 		title: toStringField(title),
 		subtitle: toStringField(subtitle),
+		subject: toStringField(subject),
+		preview: toStringField(preview),
 	};
 
 	const bodyRoot: Root = { type: "root", children: restNodes };
@@ -67,8 +76,8 @@ export function splitFrontmatter(markdown: string): SplitDocument {
 
 /**
  * Recompose canonical Markdown from header meta + body. Emits no frontmatter
- * block at all when title, subtitle, and extra are all empty (so docs aren't
- * littered with empty `---`). `extra` round-trips unknown keys.
+ * block at all when title/subtitle/subject/preview and extra are all empty (so
+ * docs aren't littered with empty `---`). `extra` round-trips unknown keys.
  */
 export function composeFrontmatter(
 	meta: DocumentMeta,
@@ -78,8 +87,11 @@ export function composeFrontmatter(
 	const ordered: Record<string, unknown> = {};
 	if (meta.title.trim()) ordered.title = meta.title;
 	if (meta.subtitle.trim()) ordered.subtitle = meta.subtitle;
+	if (meta.subject.trim()) ordered.subject = meta.subject;
+	if (meta.preview.trim()) ordered.preview = meta.preview;
 	for (const [key, value] of Object.entries(extra)) {
-		if (key !== "title" && key !== "subtitle") ordered[key] = value;
+		if (!["title", "subtitle", "subject", "preview"].includes(key))
+			ordered[key] = value;
 	}
 
 	const trimmedBody = body.trim();

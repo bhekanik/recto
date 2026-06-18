@@ -52,6 +52,7 @@ export type ActionId =
 	| "toggle-typewriter"
 	| "toggle-focus-dim"
 	| "cycle-dim-scope"
+	| "toggle-email-preview"
 	| "set-goal"
 	| "toggle-goal-style"
 	| "toggle-goal-scope"
@@ -316,6 +317,13 @@ export const ACTIONS: ActionDef[] = [
 		label: "Focus scope: sentence / paragraph",
 		section: "View",
 		aliases: ["sentence", "paragraph", "scope", "dim scope"],
+		shortcut: { mac: "", other: "" },
+	},
+	{
+		id: "toggle-email-preview",
+		label: "Toggle email/inbox preview",
+		section: "View",
+		aliases: ["email", "newsletter", "inbox", "preheader", "subject"],
 		shortcut: { mac: "", other: "" },
 	},
 	{

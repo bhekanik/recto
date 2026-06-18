@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 
 import { GoalPopover } from "@/components/goal-popover";
+import { formatReadingTime } from "@/lib/markdown";
 import {
 	MODE_RING,
 	type Mode,
@@ -44,6 +45,7 @@ const MODE_ICON: Record<Mode, typeof Type> = {
 
 type StatusBarProps = {
 	wordCount: number;
+	readingMinutes: number;
 	syncStatus: SyncStatus;
 	mode: Mode;
 	vimSubMode?: VimSubMode;
@@ -245,6 +247,7 @@ function GoalIndicator({
 
 export function StatusBar({
 	wordCount,
+	readingMinutes,
 	syncStatus,
 	mode,
 	onModeChange,
@@ -522,6 +525,19 @@ export function StatusBar({
 
 				<span className="hidden cursor-default text-right tabular-nums text-[var(--color-ink-tertiary)] min-[360px]:inline-block sm:min-w-[4.5rem]">
 					{formatWordCount(wordCount)}
+				</span>
+				{/* Estimated reading time — folds away with the word count on phones. */}
+				<span
+					aria-hidden
+					className="hidden text-[var(--color-line-strong)] sm:inline"
+				>
+					·
+				</span>
+				<span
+					className="hidden cursor-default tabular-nums text-[var(--color-ink-tertiary)] sm:inline-block"
+					title="Estimated reading time"
+				>
+					{formatReadingTime(readingMinutes)}
 				</span>
 				<span
 					aria-hidden

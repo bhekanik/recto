@@ -55,6 +55,8 @@ type CodeMirrorEditorProps = {
 	focusDim?: boolean;
 	/** Granularity of the focus-dim highlight. */
 	focusDimScope?: FocusScope;
+	/** Upload a pasted/dropped image and resolve to a servable URL + alt (plan 008). */
+	onUploadImage?: (file: File | Blob) => Promise<{ url: string; alt: string }>;
 };
 
 function spellcheckAttrs(enabled: boolean): Extension {
@@ -248,6 +250,35 @@ function applyCmFormat(
 	}
 }
 
+/**
+ * Upload an image, then insert a canonical `![alt](url)` reference at `pos`. The
+ * upload is async, so it reads the view back from the ref on resolve (the view
+ * may have unmounted or the doc shifted). `uploadImage` already toasts + rethrows
+ * on failure, so a failed upload silently leaves the doc untouched.
+ */
+function insertUploadedImage(
+	viewRef: { current: EditorView | null },
+	uploader: (file: File | Blob) => Promise<{ url: string; alt: string }>,
+	file: File | Blob,
+	pos: number,
+): void {
+	void uploader(file)
+		.then(({ url, alt }) => {
+			const view = viewRef.current;
+			if (!view) return;
+			const insert = `![${alt}](${url})`;
+			const at = Math.min(pos, view.state.doc.length);
+			view.dispatch({
+				changes: { from: at, insert },
+				selection: { anchor: at + insert.length },
+			});
+			view.focus();
+		})
+		.catch(() => {
+			// uploadImage already surfaced a toast; nothing to insert.
+		});
+}
+
 type VimApi = {
 	defineAction: (name: string, fn: () => void) => void;
 	mapCommand: (
@@ -307,12 +338,15 @@ export const CodeMirrorEditor = forwardRef<
 		typewriter = false,
 		focusDim = false,
 		focusDimScope = "sentence",
+		onUploadImage,
 	},
 	ref,
 ) {
 	const containerRef = useRef<HTMLDivElement>(null);
 	const viewRef = useRef<EditorView | null>(null);
 	const onChangeRef = useRef(onChange);
+	const onUploadImageRef = useRef(onUploadImage);
+	onUploadImageRef.current = onUploadImage;
 	const onVimModeChangeRef = useRef(onVimModeChange);
 	const bridgeSessionRef = useRef(bridgeSession);
 	const programmaticRef = useRef(false);
@@ -371,16 +405,32 @@ export const CodeMirrorEditor = forwardRef<
 			),
 			drawSelection(),
 			markdown(),
-			// Smart paste: route rich clipboard HTML through the canonical
-			// HTML→Markdown converter so a paste from Word/Docs/web lands as clean
-			// canonical Markdown. Off (or no text/html) falls through to CM's
-			// default text/plain paste — that IS the "paste as plain" branch.
+			// Image paste/drop → Convex storage (plan 008), then smart paste: route
+			// rich clipboard HTML through the canonical HTML→Markdown converter so a
+			// paste from Word/Docs/web lands as clean canonical Markdown. Image items
+			// are handled BEFORE the text/html branch. Off (or no image/html) falls
+			// through to CM's default text/plain paste — that IS the "paste as plain"
+			// branch.
 			EditorView.domEventHandlers({
 				paste(event, view) {
 					const data = event.clipboardData;
 					if (!data) return false; // let CM handle it
-					// Plan 008 will branch here on image/file clipboard items
-					// (data.files / image/* types) before the text/html path.
+					// Image branch: an image item in the clipboard uploads + inserts a
+					// canonical `![alt](url)` reference. Runs before the text/html path.
+					const uploader = onUploadImageRef.current;
+					const imageFile = [...data.items]
+						.find((i) => i.type.startsWith("image/"))
+						?.getAsFile();
+					if (imageFile && uploader) {
+						event.preventDefault();
+						insertUploadedImage(
+							viewRef,
+							uploader,
+							imageFile,
+							view.state.selection.main.head,
+						);
+						return true;
+					}
 					const html = data.getData("text/html");
 					if (!smartPasteRef.current || !html) return false;
 					const md = markdownFromHtml(html);
@@ -391,6 +441,19 @@ export const CodeMirrorEditor = forwardRef<
 						changes: { from, to, insert: md },
 						selection: { anchor: from + md.length },
 					});
+					return true;
+				},
+				drop(event, view) {
+					const uploader = onUploadImageRef.current;
+					const file = [...(event.dataTransfer?.files ?? [])].find((f) =>
+						f.type.startsWith("image/"),
+					);
+					if (!file || !uploader) return false;
+					event.preventDefault();
+					const pos =
+						view.posAtCoords({ x: event.clientX, y: event.clientY }) ??
+						view.state.selection.main.head;
+					insertUploadedImage(viewRef, uploader, file, pos);
 					return true;
 				},
 			}),
