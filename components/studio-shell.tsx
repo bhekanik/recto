@@ -13,6 +13,7 @@ import {
 	HistoryPanel,
 	type HistoryView,
 } from "@/components/history/history-panel";
+import { OutlinePanel } from "@/components/outline/outline-panel";
 import { StatusBar } from "@/components/status-bar";
 import { Toaster } from "@/components/toaster";
 import { TopFormatToolbar } from "@/components/top-format-toolbar";
@@ -35,6 +36,9 @@ import {
 	dispatchModeSwitch,
 	resolveModeAction,
 } from "@/lib/keyboard/app-shortcuts";
+import { caretAtOffset } from "@/lib/modes/caret";
+import { extractOutline } from "@/lib/outline/extract";
+import { scrollRootToHeadingIndex } from "@/lib/outline/scroll-to-heading";
 import { currentStreak, goalProgress, localDateKey } from "@/lib/stats/streak";
 import { StudioSettingsProvider } from "@/lib/studio/settings-context";
 import { useIsMobile } from "@/lib/studio/use-is-mobile";
@@ -92,7 +96,9 @@ function StudioWorkspace() {
 	}, [settings.theme]);
 
 	const [commandOpen, setCommandOpen] = useState(false);
-	const [commandScope, setCommandScope] = useState<"all" | "documents">("all");
+	const [commandScope, setCommandScope] = useState<
+		"all" | "documents" | "headings"
+	>("all");
 	const [creating, setCreating] = useState(false);
 	const [statusVisible, setStatusVisible] = useState(true);
 	// Active pane's prose-lint issue count, fed by a window event from PaneEditor.
@@ -334,6 +340,81 @@ function StudioWorkspace() {
 		return { title: activeTitle, markdown };
 	}, [activeDocId, workspace, registry, activeSync, activeTitle]);
 
+	// --- Document outline (plan 005) ---
+	// Read from the live handle (falling back to the synced markdown), matching
+	// getExportSource. Recompute is debounced (D3) so typing stays off the parse
+	// hot path; the panel and palette re-read whenever they open.
+	const [outlineMarkdown, setOutlineMarkdown] = useState("");
+	const refreshOutlineMarkdown = useCallback(() => {
+		if (!activeDocId || !workspace) {
+			setOutlineMarkdown("");
+			return;
+		}
+		const handle = registry.getPrimaryHandle(
+			activeDocId,
+			workspace.activePaneId,
+		);
+		const markdown =
+			handle?.getCanonicalMarkdown() ?? activeSync?.markdown ?? "";
+		setOutlineMarkdown(markdown);
+	}, [activeDocId, workspace, registry, activeSync]);
+
+	// The arg is the change signal only — the refresh always re-reads the live
+	// handle (the synced markdown can lag the live editor by a frame).
+	const debouncedRefreshOutline = useDebouncedCallback((_signal: string) => {
+		refreshOutlineMarkdown();
+	}, 250);
+
+	// Re-arm the debounced refresh whenever the synced markdown changes.
+	const syncedMarkdown = activeSync?.markdown ?? "";
+	useEffect(() => {
+		debouncedRefreshOutline(syncedMarkdown);
+	}, [syncedMarkdown, debouncedRefreshOutline]);
+
+	// Refresh immediately when the panel or the headings palette opens, so the
+	// list is current the moment it's shown (the debounce can lag a recent edit).
+	const outlinePanelOpen = settings.outlineOpen;
+	const headingsPaletteOpen = commandOpen && commandScope === "headings";
+	useEffect(() => {
+		if (outlinePanelOpen || headingsPaletteOpen) refreshOutlineMarkdown();
+	}, [outlinePanelOpen, headingsPaletteOpen, refreshOutlineMarkdown]);
+
+	const outline = useMemo(
+		() => extractOutline(outlineMarkdown),
+		[outlineMarkdown],
+	);
+	const outlineRef = useRef(outline);
+	outlineRef.current = outline;
+
+	const jumpToHeading = useCallback(
+		(index: number) => {
+			if (!activeDocId || !workspace) return;
+			const handle = registry.getPrimaryHandle(
+				activeDocId,
+				workspace.activePaneId,
+			);
+			// Scroll (works in rich/preview via rendered <hN> elements under the root).
+			let root = handle?.getRootElement() ?? null;
+			// Preview mode registers no handle — reach the active pane's preview DOM (D1a).
+			if (!root) {
+				root =
+					document.querySelector<HTMLElement>(
+						`[data-pane-id="${workspace.activePaneId}"] .recto-preview`,
+					) ?? document.querySelector<HTMLElement>(".recto-preview");
+			}
+			scrollRootToHeadingIndex(root, index);
+			// Best-effort caret: offset-exact for CodeMirror (raw/vim), a bonus for
+			// Milkdown where the offset space differs. Focusing scrolls CM to the caret.
+			const h = outlineRef.current[index];
+			if (handle && h) {
+				const md = handle.getCanonicalMarkdown();
+				handle.importCaret(caretAtOffset(h.offset, md.length));
+				handle.focus();
+			}
+		},
+		[activeDocId, workspace, registry],
+	);
+
 	// The single action dispatcher — both the chord handler and the command
 	// palette route into this (blueprint 13 §7.3.4: one implementation, two surfaces).
 	const dispatch = useCallback(
@@ -386,6 +467,13 @@ function StudioWorkspace() {
 					return;
 				case "focus-prev":
 					actions.focusPrevPane();
+					return;
+				case "go-to-heading":
+					setCommandScope("headings");
+					setCommandOpen(true);
+					return;
+				case "toggle-outline":
+					settings.toggleOutline();
 					return;
 				case "checkpoint":
 					handleCheckpoint();
@@ -567,6 +655,14 @@ function StudioWorkspace() {
 					return;
 				case "toggle-focus-dim":
 					dispatchRef.current("toggle-focus-dim");
+					return;
+				case "open-go-to-heading":
+					setCommandScope("headings");
+					setCommandOpen(true);
+					return;
+				case "toggle-outline":
+					// Route through dispatchRef so this effect's deps stay free of settings.
+					dispatchRef.current("toggle-outline");
 					return;
 			}
 		});
@@ -792,11 +888,16 @@ function StudioWorkspace() {
 					onOpenChange={setCommandOpen}
 					scope={commandScope}
 					documents={documents}
+					headings={outline}
 					onRunAction={(id) => dispatchRef.current(id)}
 					onOpenDocument={(id) => {
 						if (workspace?.activePaneId) {
 							actions.setPaneDocument(workspace.activePaneId, id);
 						}
+					}}
+					onJumpToHeading={(i) => {
+						jumpToHeading(i);
+						dispatchFocusEditor();
 					}}
 				/>
 
@@ -818,6 +919,21 @@ function StudioWorkspace() {
 						}
 						onClose={() => {
 							setHistoryPanel((prev) => ({ ...prev, open: false }));
+							dispatchFocusEditor();
+						}}
+					/>
+				)}
+
+				{!showEmpty && (
+					<OutlinePanel
+						open={settings.outlineOpen}
+						headings={outline}
+						onJumpToHeading={(i) => {
+							jumpToHeading(i);
+							dispatchFocusEditor();
+						}}
+						onClose={() => {
+							settings.setOutlineOpen(false);
 							dispatchFocusEditor();
 						}}
 					/>

@@ -9,6 +9,7 @@ export type ActionSection =
 	| "Documents"
 	| "Modes"
 	| "Panes"
+	| "Navigate"
 	| "History"
 	| "Copy/Export"
 	| "View"
@@ -27,6 +28,8 @@ export type ActionId =
 	| "close-pane"
 	| "focus-next"
 	| "focus-prev"
+	| "go-to-heading"
+	| "toggle-outline"
 	| "checkpoint"
 	| "undo-tree"
 	| "version-history"
@@ -147,6 +150,20 @@ export const ACTIONS: ActionDef[] = [
 		label: "Focus previous pane",
 		section: "Panes",
 		shortcut: { mac: "Ctrl+⇧+←", other: "Ctrl+Shift+←" },
+	},
+	{
+		id: "go-to-heading",
+		label: "Go to heading…",
+		section: "Navigate",
+		aliases: ["outline", "jump", "heading", "section", "toc"],
+		shortcut: { mac: "Ctrl+⇧+O", other: "Ctrl+Shift+O" },
+	},
+	{
+		id: "toggle-outline",
+		label: "Toggle outline panel",
+		section: "Navigate",
+		aliases: ["outline", "table of contents", "toc", "sidebar"],
+		shortcut: { mac: "", other: "" },
 	},
 	{
 		id: "checkpoint",
@@ -347,6 +364,7 @@ export const SECTION_ORDER: ActionSection[] = [
 	"Documents",
 	"Modes",
 	"Panes",
+	"Navigate",
 	"History",
 	"Copy/Export",
 	"View",

@@ -81,6 +81,8 @@ export type StudioSettings = {
 	lint: boolean;
 	/** Per-category lint toggles (passive / readability / adverb / weasel). */
 	lintCategories: LintOptions;
+	/** Docked document-outline panel visibility (plan 005). */
+	outlineOpen: boolean;
 };
 
 export const READING_SCALE_MIN = 0.8;
@@ -113,6 +115,8 @@ const DEFAULTS: StudioSettings = {
 		adverb: true,
 		weasel: true,
 	},
+	// Outline panel is closed by default — it docks over the canvas on demand.
+	outlineOpen: false,
 };
 
 const STORAGE_KEY = "recto:studio-settings";
@@ -194,6 +198,10 @@ function loadSettings(): StudioSettings {
 				parsed.focusDimScope === "paragraph" ? "paragraph" : "sentence",
 			lint: typeof parsed.lint === "boolean" ? parsed.lint : DEFAULTS.lint,
 			lintCategories: loadLintCategories(parsed.lintCategories),
+			outlineOpen:
+				typeof parsed.outlineOpen === "boolean"
+					? parsed.outlineOpen
+					: DEFAULTS.outlineOpen,
 		};
 	} catch {
 		return DEFAULTS;
@@ -227,6 +235,8 @@ export type StudioSettingsApi = StudioSettings & {
 	cycleFocusDimScope: () => void;
 	toggleLint: () => void;
 	toggleLintCategory: (category: LintCategory) => void;
+	toggleOutline: () => void;
+	setOutlineOpen: (open: boolean) => void;
 };
 
 /**
@@ -384,6 +394,14 @@ export function useStudioSettings(): StudioSettingsApi {
 		}));
 	}, []);
 
+	const toggleOutline = useCallback(() => {
+		setSettings((s) => ({ ...s, outlineOpen: !s.outlineOpen }));
+	}, []);
+
+	const setOutlineOpen = useCallback((outlineOpen: boolean) => {
+		setSettings((s) => ({ ...s, outlineOpen }));
+	}, []);
+
 	return {
 		...settings,
 		setTheme,
@@ -412,5 +430,7 @@ export function useStudioSettings(): StudioSettingsApi {
 		cycleFocusDimScope,
 		toggleLint,
 		toggleLintCategory,
+		toggleOutline,
+		setOutlineOpen,
 	};
 }

@@ -18,13 +18,17 @@ type DocMeta = {
 	updatedAt: number;
 };
 
+type OutlineHeadingItem = { text: string; depth: number; index: number };
+
 type CommandPaletteProps = {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
-	scope?: "all" | "documents";
+	scope?: "all" | "documents" | "headings";
 	documents: DocMeta[] | undefined;
+	headings: OutlineHeadingItem[];
 	onRunAction: (id: ActionId) => void;
 	onOpenDocument: (id: Id<"documents">) => void;
+	onJumpToHeading: (index: number) => void;
 };
 
 const HEADING =
@@ -38,8 +42,10 @@ export function CommandPalette({
 	onOpenChange,
 	scope = "all",
 	documents,
+	headings,
 	onRunAction,
 	onOpenDocument,
+	onJumpToHeading,
 }: CommandPaletteProps) {
 	const close = useCallback(() => onOpenChange(false), [onOpenChange]);
 
@@ -101,7 +107,9 @@ export function CommandPalette({
 						placeholder={
 							scope === "documents"
 								? "Search documents…"
-								: "Search commands and documents…"
+								: scope === "headings"
+									? "Go to heading…"
+									: "Search commands and documents…"
 						}
 						autoFocus
 						className="h-14 w-full bg-transparent text-[length:var(--text-ui)] leading-[var(--leading-ui)] text-[var(--color-ink-primary)] outline-none placeholder:text-[var(--color-ink-tertiary)]"
@@ -112,71 +120,94 @@ export function CommandPalette({
 						No matches.
 					</Command.Empty>
 
-					{sections.map((section) => {
-						if (section === "Documents") {
+					{scope === "headings" ? (
+						<Command.Group heading="Headings" className={HEADING}>
+							{headings.map((h) => (
+								<Command.Item
+									key={h.index}
+									value={`heading ${h.text} ${h.index}`}
+									onSelect={() => run(() => onJumpToHeading(h.index))}
+									className={ITEM}
+								>
+									<span
+										className="min-w-0 flex-1 truncate text-[var(--color-ink-primary)]"
+										style={{ paddingInlineStart: `${(h.depth - 1) * 12}px` }}
+									>
+										{h.text || "(untitled heading)"}
+									</span>
+									<span className="shrink-0 text-[var(--color-ink-tertiary)]">
+										H{h.depth}
+									</span>
+								</Command.Item>
+							))}
+						</Command.Group>
+					) : (
+						sections.map((section) => {
+							if (section === "Documents") {
+								return (
+									<Command.Group
+										key="Documents"
+										heading="Documents"
+										className={HEADING}
+									>
+										{newDoc && (
+											<Command.Item
+												value="new document create add"
+												onSelect={() => run(() => onRunAction("new-document"))}
+												className={ITEM}
+											>
+												<span className="flex-1 text-[var(--color-ink-primary)]">
+													{newDoc.label}
+												</span>
+												<kbd className="recto-kbd">{shortcutHint(newDoc)}</kbd>
+											</Command.Item>
+										)}
+										{(documents ?? []).map((doc) => (
+											<Command.Item
+												key={doc._id}
+												value={`document ${doc.title}`}
+												onSelect={() => run(() => onOpenDocument(doc._id))}
+												className={ITEM}
+											>
+												<span className="min-w-0 flex-1 truncate text-[var(--color-ink-primary)]">
+													{doc.title}
+												</span>
+												<span className="shrink-0 text-[var(--color-ink-tertiary)]">
+													{doc.wordCount.toLocaleString()} w
+												</span>
+											</Command.Item>
+										))}
+									</Command.Group>
+								);
+							}
+
+							const defs = ACTIONS.filter(
+								(a) => a.section === section && a.id !== "new-document",
+							);
+							if (defs.length === 0) return null;
 							return (
 								<Command.Group
-									key="Documents"
-									heading="Documents"
+									key={section}
+									heading={section}
 									className={HEADING}
 								>
-									{newDoc && (
+									{defs.map((def) => (
 										<Command.Item
-											value="new document create add"
-											onSelect={() => run(() => onRunAction("new-document"))}
+											key={def.id}
+											value={`${def.label} ${def.aliases?.join(" ") ?? ""} ${section}`}
+											onSelect={() => run(() => onRunAction(def.id))}
 											className={ITEM}
 										>
-											<span className="flex-1 text-[var(--color-ink-primary)]">
-												{newDoc.label}
-											</span>
-											<kbd className="recto-kbd">{shortcutHint(newDoc)}</kbd>
-										</Command.Item>
-									)}
-									{(documents ?? []).map((doc) => (
-										<Command.Item
-											key={doc._id}
-											value={`document ${doc.title}`}
-											onSelect={() => run(() => onOpenDocument(doc._id))}
-											className={ITEM}
-										>
-											<span className="min-w-0 flex-1 truncate text-[var(--color-ink-primary)]">
-												{doc.title}
-											</span>
-											<span className="shrink-0 text-[var(--color-ink-tertiary)]">
-												{doc.wordCount.toLocaleString()} w
-											</span>
+											<span className="flex-1">{def.label}</span>
+											{shortcutHint(def) && (
+												<kbd className="recto-kbd">{shortcutHint(def)}</kbd>
+											)}
 										</Command.Item>
 									))}
 								</Command.Group>
 							);
-						}
-
-						const defs = ACTIONS.filter(
-							(a) => a.section === section && a.id !== "new-document",
-						);
-						if (defs.length === 0) return null;
-						return (
-							<Command.Group
-								key={section}
-								heading={section}
-								className={HEADING}
-							>
-								{defs.map((def) => (
-									<Command.Item
-										key={def.id}
-										value={`${def.label} ${def.aliases?.join(" ") ?? ""} ${section}`}
-										onSelect={() => run(() => onRunAction(def.id))}
-										className={ITEM}
-									>
-										<span className="flex-1">{def.label}</span>
-										{shortcutHint(def) && (
-											<kbd className="recto-kbd">{shortcutHint(def)}</kbd>
-										)}
-									</Command.Item>
-								))}
-							</Command.Group>
-						);
-					})}
+						})
+					)}
 				</Command.List>
 			</Command>
 		</div>
