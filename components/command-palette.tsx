@@ -30,6 +30,8 @@ type CommandPaletteProps = {
 	aiEnabled: boolean;
 	/** Gate "Manage sharing…" (plan 010) — only the owner can manage sharing. */
 	canManageSharing: boolean;
+	/** Gate "Review suggestions…" (plan 010 Phase C) — owner with open branches. */
+	canReview: boolean;
 	/** Gate the comment actions (plan 010 Phase B) — owner or any grantee. */
 	canComment: boolean;
 	onRunAction: (id: ActionId) => void;
@@ -51,6 +53,7 @@ export function CommandPalette({
 	headings,
 	aiEnabled,
 	canManageSharing,
+	canReview,
 	canComment,
 	onRunAction,
 	onOpenDocument,
@@ -199,10 +202,12 @@ export function CommandPalette({
 								defs = defs.filter((a) => a.id === "toggle-ai");
 							}
 							// Review section (plan 010): "Manage sharing…" is owner-only;
+							// "Review suggestions…" needs the owner to have open branches;
 							// the comment actions show for the owner or any grantee.
 							if (section === "Review") {
 								defs = defs.filter((a) => {
 									if (a.id === "manage-sharing") return canManageSharing;
+									if (a.id === "review-surface") return canReview;
 									if (a.id === "toggle-comments" || a.id === "add-comment") {
 										return canComment;
 									}

@@ -493,6 +493,130 @@ export const rejectBranch = mutation({
 });
 
 // ---------------------------------------------------------------------------
+// Phase C — reviewer editing session + owner review surface
+// ---------------------------------------------------------------------------
+
+/**
+ * Read a shared document FOR A GRANTEE (access ≥ commenter). `documents.get` is
+ * owner-only and returns null for a reviewer, so this is the reviewer-side seed
+ * source: it materializes the owner's CURRENT node and returns the title +
+ * markdown + the base nodeId the reviewer branch will fork from.
+ *
+ * READ-ONLY: this only resolves the share (lazy granteeUserId binding happens on
+ * the first reviewerAppend mutation) and never writes the documents row. The
+ * reviewer editor seeds ONCE from this; it must NOT bind its live value to this
+ * reactive query (plan 010 "editor owns live state").
+ */
+export const getReviewerDocument = query({
+	args: { documentId: v.id("documents") },
+	handler: async (ctx, args) => {
+		const { doc } = await requireDocumentAccess(
+			ctx,
+			args.documentId,
+			"commenter",
+		);
+		const rows = await ctx.db
+			.query("docNodes")
+			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+			.collect();
+		const nodes = rows.map(toServerNode);
+		let markdown = doc.markdown;
+		// Prefer the materialized current node (canonical) but fall back to the
+		// stored markdown if the node graph can't be walked (legacy/edge).
+		try {
+			markdown = materialize(doc.currentNodeId, nodes);
+		} catch {
+			markdown = doc.markdown;
+		}
+		return {
+			title: doc.title,
+			markdown,
+			baseNodeId: doc.currentNodeId,
+		};
+	},
+});
+
+/**
+ * Owner-only: open review branches for a document, enriched for the review
+ * surface — each row carries the latest reviewer node count and the reviewer's
+ * display name (resolved from the matching share, falling back to the user id).
+ * Only `status:"open"` branches are returned (accepted/rejected are hidden).
+ */
+export const listOpenBranches = query({
+	args: { documentId: v.id("documents") },
+	handler: async (ctx, args) => {
+		await requireOwnedDocument(ctx, args.documentId);
+
+		const branches = await ctx.db
+			.query("reviewBranches")
+			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+			.filter((q) => q.eq(q.field("status"), "open"))
+			.collect();
+		if (branches.length === 0) return [];
+
+		// Count this document's nodes per reviewer (origin `review:<userId>`) so the
+		// surface can show "N edits" without materializing each branch up front.
+		const nodes = await ctx.db
+			.query("docNodes")
+			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+			.collect();
+		const countByReviewer = new Map<string, number>();
+		for (const node of nodes) {
+			if (node.origin.startsWith("review:")) {
+				const reviewer = node.origin.slice("review:".length);
+				countByReviewer.set(reviewer, (countByReviewer.get(reviewer) ?? 0) + 1);
+			}
+		}
+
+		// Resolve a friendly reviewer name from the share's invited email.
+		const shares = await ctx.db
+			.query("documentShares")
+			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+			.collect();
+		const nameByUser = new Map<string, string>();
+		for (const share of shares) {
+			if (share.granteeUserId) {
+				nameByUser.set(share.granteeUserId, share.granteeEmail);
+			}
+		}
+
+		branches.sort((a, b) => b.updatedAt - a.updatedAt);
+		return branches.map((branch) => ({
+			_id: branch._id,
+			reviewerUserId: branch.reviewerUserId,
+			reviewerName:
+				nameByUser.get(branch.reviewerUserId) ?? branch.reviewerUserId,
+			baseNodeId: branch.baseNodeId,
+			headNodeId: branch.headNodeId,
+			nodeCount: countByReviewer.get(branch.reviewerUserId) ?? 0,
+			createdAt: branch.createdAt,
+			updatedAt: branch.updatedAt,
+		}));
+	},
+});
+
+/**
+ * Owner-only: whether a document the owner owns has any OPEN review branches —
+ * the cheap gate the studio reads to show a subtle "has feedback" indicator and
+ * to gate the "Open review surface" action. Returns 0 for a doc with no open
+ * branches (or one the caller doesn't own — same null-safe shape as the owner
+ * branch listing, but a non-owner simply gets a thrown access error upstream so
+ * this is only ever called for owned docs).
+ */
+export const openBranchCount = query({
+	args: { documentId: v.id("documents") },
+	handler: async (ctx, args) => {
+		await requireOwnedDocument(ctx, args.documentId);
+		const branches = await ctx.db
+			.query("reviewBranches")
+			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+			.filter((q) => q.eq(q.field("status"), "open"))
+			.collect();
+		return branches.length;
+	},
+});
+
+// ---------------------------------------------------------------------------
 // Phase B — comments (anchored, cross-lens, threaded, resolvable)
 // ---------------------------------------------------------------------------
 

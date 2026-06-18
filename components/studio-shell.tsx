@@ -2,7 +2,7 @@
 
 import { useClerk } from "@clerk/nextjs";
 import { useConvexAuth, useMutation, useQuery } from "convex/react";
-import { Command as CommandIcon } from "lucide-react";
+import { Command as CommandIcon, GitBranch } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDebouncedCallback } from "use-debounce";
@@ -24,6 +24,7 @@ import {
 	type CommentDraft,
 	CommentsPanel,
 } from "@/components/review/comments-panel";
+import { ReviewSurface } from "@/components/review/review-surface";
 import { ShareDialog } from "@/components/share-dialog";
 import { StatusBar } from "@/components/status-bar";
 import { Toaster } from "@/components/toaster";
@@ -265,6 +266,18 @@ function StudioWorkspace() {
 			Boolean(activeShareState.role));
 	const [commentsOpen, setCommentsOpen] = useState(false);
 	const [commentDraft, setCommentDraft] = useState<CommentDraft | null>(null);
+
+	// Owner review surface (plan 010 Phase C). The owner of the active doc sees
+	// open reviewer suggestion branches; a subtle header indicator appears when
+	// there are any. `openBranchCount` is owner-only (it throws for a non-owner),
+	// so only query it when the active doc is owned.
+	const openBranchCount = useQuery(
+		api.review.openBranchCount,
+		activeDocId && activeDocIsOwned ? { documentId: activeDocId } : "skip",
+	);
+	const hasOpenBranches = (openBranchCount ?? 0) > 0;
+	const canReview = activeDocIsOwned && hasOpenBranches;
+	const [reviewOpen, setReviewOpen] = useState(false);
 
 	// --- Word goals, session stats, and the cross-device streak (plan 002) ---
 	const [goalConfigOpen, setGoalConfigOpen] = useState(false);
@@ -888,6 +901,9 @@ function StudioWorkspace() {
 				case "manage-sharing":
 					if (activeDocId && activeDocIsOwned) setShareDialogOpen(true);
 					return;
+				case "review-surface":
+					if (activeDocId && activeDocIsOwned) setReviewOpen(true);
+					return;
 				case "toggle-comments":
 					if (canComment) setCommentsOpen((v) => !v);
 					return;
@@ -1188,6 +1204,22 @@ function StudioWorkspace() {
 									>
 										{activeTitle}
 									</button>
+									{/* Subtle indicator: this owned doc has open reviewer
+									    suggestions. Click to open the review surface. */}
+									{canReview && (
+										<button
+											type="button"
+											onClick={() => setReviewOpen(true)}
+											title={`${openBranchCount} open suggestion${
+												openBranchCount === 1 ? "" : "s"
+											} — review`}
+											aria-label="Review suggestions"
+											className="inline-flex shrink-0 items-center gap-1 rounded-[var(--radius-sm)] bg-[var(--color-accent-wash)] px-1.5 py-0.5 text-[0.6875rem] text-[var(--color-accent-2)] transition-colors hover:bg-[var(--color-accent-muted)]"
+										>
+											<GitBranch aria-hidden className="size-3" />
+											{openBranchCount}
+										</button>
+									)}
 								</>
 							)}
 						</div>
@@ -1344,6 +1376,7 @@ function StudioWorkspace() {
 					headings={outline}
 					aiEnabled={effectiveAiEnabled}
 					canManageSharing={activeDocId !== null && activeDocIsOwned}
+					canReview={activeDocId !== null && canReview}
 					canComment={canComment}
 					onRunAction={(id) => dispatchRef.current(id)}
 					onOpenDocument={(id) => {
@@ -1403,6 +1436,17 @@ function StudioWorkspace() {
 						onOpenChange={(open) => {
 							setShareDialogOpen(open);
 							if (!open) dispatchFocusEditor();
+						}}
+					/>
+				)}
+
+				{activeDocId && activeDocIsOwned && (
+					<ReviewSurface
+						documentId={activeDocId}
+						open={reviewOpen}
+						onClose={() => {
+							setReviewOpen(false);
+							dispatchFocusEditor();
 						}}
 					/>
 				)}

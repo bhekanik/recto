@@ -1,5 +1,6 @@
 "use client";
 
+import { useAuth } from "@clerk/nextjs";
 import { useQuery } from "convex/react";
 import {
 	createContext,
@@ -21,6 +22,7 @@ import {
 	useDocumentHistory,
 } from "@/lib/history/use-document-history";
 import { deriveTitleFromMarkdown } from "@/lib/markdown";
+import { useReviewerHistory } from "@/lib/review/use-reviewer-history";
 import { type SyncStatus, useDocumentSync } from "@/lib/sync/use-document-sync";
 import { DocumentModelRegistry } from "./document-registry";
 import { openDocumentIdsFromTree } from "./queries";
@@ -77,13 +79,7 @@ export function useDocumentHistoryFor(documentId: Id<"documents"> | null) {
 	return getDocumentHistory(documentId);
 }
 
-function DocumentSyncHost({
-	documentId,
-	activePaneId,
-	registry,
-	onSyncUpdate,
-	onHistoryUpdate,
-}: {
+type SyncHostProps = {
 	documentId: Id<"documents">;
 	activePaneId: string;
 	registry: DocumentModelRegistry;
@@ -92,7 +88,52 @@ function DocumentSyncHost({
 		documentId: Id<"documents">,
 		controller: HistoryController,
 	) => void;
-}) {
+};
+
+/**
+ * Per-document sync/history host dispatcher (plan 010 Phase C). The OWNER sync
+ * path (`OwnerSyncHost`) writes `documents.markdown` + advances
+ * `documents.currentNodeId`. A GRANTEE on a doc shared WITH them must do NEITHER
+ * — so for any non-owner grantee we mount `ReviewerSyncHost` INSTEAD (a full
+ * replacement, never both): it seeds the editor from the owner's current
+ * materialized markdown and, for a `suggester`, routes edits to the reviewer's
+ * shadow branch via `review.reviewerAppend`. It NEVER reaches the owner-only sync
+ * mutations. A `commenter` gets the same read-only seed (so comments anchor
+ * against the live text) but no editing write path at all — its edits are
+ * dropped, not appended.
+ *
+ * The branch decision keys on `review.documentShareState`: a non-null `role`
+ * other than "owner" means the caller opened a shared-with-me doc.
+ */
+function DocumentSyncHost(props: SyncHostProps) {
+	const shareState = useQuery(api.review.documentShareState, {
+		documentId: props.documentId,
+	});
+
+	// Loading: render nothing rather than briefly mounting the owner path for a
+	// doc that may turn out to be shared-with-me (which would risk an owner write).
+	if (shareState === undefined) return null;
+
+	const isGrantee = shareState !== null && shareState.role !== "owner";
+
+	if (isGrantee) {
+		return (
+			<ReviewerSyncHost
+				{...props}
+				canSuggest={shareState.role === "suggester"}
+			/>
+		);
+	}
+	return <OwnerSyncHost {...props} />;
+}
+
+function OwnerSyncHost({
+	documentId,
+	activePaneId,
+	registry,
+	onSyncUpdate,
+	onHistoryUpdate,
+}: SyncHostProps) {
 	const document = useQuery(api.documents.get, { documentId });
 	const [editorReady, setEditorReady] = useState(false);
 
@@ -174,6 +215,131 @@ function DocumentSyncHost({
 
 	// Push the history controller whenever the tree shape or pointer changes so
 	// the visualizer/version panel and the undo/redo chords see live state.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: pointer + node count are the display-relevant triggers
+	useEffect(() => {
+		onHistoryUpdate(documentId, historyRef.current);
+	}, [
+		documentId,
+		history.currentNodeId,
+		history.nodes.length,
+		onHistoryUpdate,
+	]);
+
+	return null;
+}
+
+/**
+ * Reviewer-mode sync/history host (plan 010 Phase C). Mounted INSTEAD of
+ * `OwnerSyncHost` for a doc shared-with-me (any non-owner grantee). It
+ * deliberately does NOT run `useDocumentSync` (the owner autosave) nor the owner
+ * `useDocumentHistory` (which advances the owner pointer). Instead it seeds the
+ * editor once from `review.getReviewerDocument` and — for a `suggester` only —
+ * routes edits to the reviewer's shadow branch via `useReviewerHistory` →
+ * `review.reviewerAppend`. A `commenter` gets the same read-only seed (so
+ * comments anchor against the live text) but its edits are dropped.
+ *
+ * This is the UI-side isolation boundary: the owner's `documents` row is never
+ * written by a grantee's keystrokes. The `DocumentSyncState` it publishes has a
+ * neutral "synced" status (reviewer suggestions are append-only and don't carry
+ * the owner's save lifecycle) and a no-op `flushMarkdown`/conflict surface.
+ */
+function ReviewerSyncHost({
+	documentId,
+	activePaneId,
+	registry,
+	onSyncUpdate,
+	onHistoryUpdate,
+	canSuggest,
+}: SyncHostProps & { canSuggest: boolean }) {
+	const { userId } = useAuth();
+	const shared = useQuery(api.review.getReviewerDocument, { documentId });
+	const [editorReady, setEditorReady] = useState(false);
+	const seededRef = useRef(false);
+
+	const getEditorHandle = useCallback(
+		() => registry.getPrimaryHandle(documentId, activePaneId),
+		[registry, documentId, activePaneId],
+	);
+
+	const enabled = editorReady && shared !== undefined;
+	const wordCount = shared
+		? shared.markdown.trim()
+			? shared.markdown.trim().split(/\s+/).length
+			: 0
+		: 0;
+
+	const history = useReviewerHistory({
+		documentId,
+		reviewerUserId: userId ?? "",
+		getEditorHandle,
+		seedMarkdown: shared?.markdown,
+		baseNodeId: shared?.baseNodeId,
+		enabled,
+	});
+
+	// Seed the reviewer editor ONCE from the owner's current materialized markdown.
+	// The editor then owns live state — it is NEVER re-bound to this reactive query
+	// (re-seeding would clobber the reviewer's in-progress branch). Retry until the
+	// editor handle is mounted.
+	useEffect(() => {
+		if (!enabled || seededRef.current || shared === undefined || !shared)
+			return;
+		const trySeed = (): boolean => {
+			const handle = getEditorHandle();
+			if (!handle) return false;
+			handle.seed(shared.markdown, { programmatic: true });
+			seededRef.current = true;
+			return true;
+		};
+		if (trySeed()) return;
+		const interval = window.setInterval(() => {
+			if (trySeed()) window.clearInterval(interval);
+		}, 50);
+		return () => window.clearInterval(interval);
+	}, [enabled, getEditorHandle, shared]);
+
+	useEffect(() => {
+		if (shared) {
+			const t = setTimeout(() => setEditorReady(true), 50);
+			return () => clearTimeout(t);
+		}
+		setEditorReady(false);
+	}, [shared]);
+
+	// Only a `suggester` records edits onto a branch; a `commenter` is read-only
+	// (its keystrokes are dropped, never appended — the editor stays a viewer).
+	const recordHistory = history.recordChange;
+	const handleEditorChange = useCallback(() => {
+		if (canSuggest) recordHistory();
+	}, [canSuggest, recordHistory]);
+	const noopRecord = useCallback(() => {}, []);
+	const noopFlush = useCallback(() => {}, []);
+
+	const stateRef = useRef<DocumentSyncState | null>(null);
+	stateRef.current = {
+		wordCount,
+		// Reviewer suggestions are append-only; there is no owner-save lifecycle to
+		// surface, so show a settled status rather than the autosave states.
+		syncStatus: "saved",
+		pendingConflict: false,
+		markdown: shared?.markdown ?? "",
+		handleEditorChange,
+		// No owner write path for a grantee — flushing markdown is a no-op.
+		flushMarkdown: async () => {},
+		useDraft: () => {},
+		useServer: () => {},
+		recordHistory: canSuggest ? history.recordChange : noopRecord,
+		flushHistory: canSuggest ? history.flush : noopFlush,
+	};
+
+	const historyRef = useRef<HistoryController>(history);
+	historyRef.current = history;
+
+	// biome-ignore lint/correctness/useExhaustiveDependencies: word count + seed availability are the display-relevant triggers; body reads live stateRef
+	useEffect(() => {
+		if (stateRef.current) onSyncUpdate(documentId, stateRef.current);
+	}, [documentId, wordCount, shared?.markdown, onSyncUpdate]);
+
 	// biome-ignore lint/correctness/useExhaustiveDependencies: pointer + node count are the display-relevant triggers
 	useEffect(() => {
 		onHistoryUpdate(documentId, historyRef.current);

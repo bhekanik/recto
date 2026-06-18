@@ -38,6 +38,7 @@ export type ActionId =
 	| "undo"
 	| "redo"
 	| "manage-sharing"
+	| "review-surface"
 	| "toggle-comments"
 	| "add-comment"
 	| "ai-transform"
@@ -216,6 +217,21 @@ export const ACTIONS: ActionDef[] = [
 		label: "Manage sharing…",
 		section: "Review",
 		aliases: ["share", "invite", "collaborate", "reviewer", "comment access"],
+		shortcut: { mac: "", other: "" },
+	},
+	{
+		id: "review-surface",
+		label: "Review suggestions…",
+		section: "Review",
+		aliases: [
+			"review",
+			"suggestions",
+			"branches",
+			"accept",
+			"reject",
+			"changes",
+			"feedback",
+		],
 		shortcut: { mac: "", other: "" },
 	},
 	{

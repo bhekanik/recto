@@ -757,3 +757,213 @@ describe("plan 010 PHASE B — comments (auth, threading, author/origin seam)", 
 		).rejects.toThrow("Only the document owner can attribute");
 	});
 });
+
+describe("plan 010 PHASE C — reviewer editing path + owner review surface", () => {
+	/** Owner creates a doc, types one node, advances the pointer. Returns ids. */
+	async function ownedDocWithText(
+		t: ReturnType<typeof convexTest>,
+		text: string,
+	) {
+		const owner = t.withIdentity(OWNER);
+		const { documentId, rootNodeId } = await owner.mutation(
+			api.documents.create,
+			{ title: "Draft" },
+		);
+		const created = await t.run(async (ctx) => ctx.db.get(documentId));
+		const baseTime = (created?.updatedAt ?? Date.now()) + 1000;
+		const ownerNodeId = crypto.randomUUID();
+		await owner.mutation(api.docNodes.append, {
+			documentId,
+			nodeId: ownerNodeId,
+			parentNodeId: rootNodeId,
+			patch: fullReplacePatch("", text),
+			snapshot: text,
+			selection: null,
+			origin: "device-owner",
+			createdAt: baseTime,
+		});
+		await owner.mutation(api.documents.updateCurrentNodeId, {
+			documentId,
+			currentNodeId: ownerNodeId,
+			markdown: text,
+			wordCount: text.split(/\s+/).length,
+			updatedAt: baseTime,
+		});
+		return { documentId, ownerNodeId, baseTime };
+	}
+
+	it("getReviewerDocument seeds a grantee from the owner's current materialized node, never the documents.get owner gate", async () => {
+		const t = convexTest(schema, modules);
+		const reviewer = t.withIdentity(REVIEWER);
+		const ownerText = "The owner wrote this sentence.";
+		const { documentId, ownerNodeId } = await ownedDocWithText(t, ownerText);
+
+		await t.run(async (ctx) => {
+			await ctx.db.insert("documentShares", {
+				documentId,
+				ownerUserId: OWNER.subject,
+				granteeEmail: REVIEWER.email,
+				role: "suggester",
+				createdAt: 100,
+			});
+		});
+
+		// documents.get is owner-only → null for the reviewer (the reason
+		// getReviewerDocument exists as the reviewer-side seed source).
+		const ownerGet = await reviewer.query(api.documents.get, { documentId });
+		expect(ownerGet).toBeNull();
+
+		const seed = await reviewer.query(api.review.getReviewerDocument, {
+			documentId,
+		});
+		expect(seed.markdown).toBe(ownerText);
+		expect(seed.baseNodeId).toBe(ownerNodeId);
+		expect(seed.title).toBe("Draft");
+
+		// A stranger (no share) is blocked with the existence-safe message.
+		const stranger = t.withIdentity({
+			subject: "stranger",
+			email: "stranger@example.com",
+		});
+		await expect(
+			stranger.query(api.review.getReviewerDocument, { documentId }),
+		).rejects.toThrow("Document not found");
+	});
+
+	it("listOpenBranches / openBranchCount are owner-only, list only open branches with reviewer name + node count", async () => {
+		const t = convexTest(schema, modules);
+		const owner = t.withIdentity(OWNER);
+		const reviewer = t.withIdentity(REVIEWER);
+		const ownerText = "Base text.";
+		const { documentId, ownerNodeId } = await ownedDocWithText(t, ownerText);
+
+		await owner.mutation(api.review.addShare, {
+			documentId,
+			email: REVIEWER.email,
+			role: "suggester",
+		});
+
+		// No branches yet.
+		expect(await owner.query(api.review.openBranchCount, { documentId })).toBe(
+			0,
+		);
+		expect(
+			await owner.query(api.review.listOpenBranches, { documentId }),
+		).toHaveLength(0);
+
+		// Reviewer appends two nodes onto their branch (binds granteeUserId too).
+		const rev1 = crypto.randomUUID();
+		const rev1Text = `${ownerText} A suggestion.`;
+		const r1 = await reviewer.mutation(api.review.reviewerAppend, {
+			documentId,
+			nodeId: rev1,
+			parentNodeId: ownerNodeId,
+			patch: fullReplacePatch(ownerText, rev1Text),
+			snapshot: rev1Text,
+			selection: null,
+			createdAt: 3000,
+		});
+		const rev2 = crypto.randomUUID();
+		const rev2Text = `${rev1Text} Another.`;
+		await reviewer.mutation(api.review.reviewerAppend, {
+			documentId,
+			branchId: r1.branchId,
+			nodeId: rev2,
+			parentNodeId: rev1,
+			patch: fullReplacePatch(rev1Text, rev2Text),
+			snapshot: rev2Text,
+			selection: null,
+			createdAt: 4000,
+		});
+
+		// A non-owner cannot list / count.
+		await expect(
+			reviewer.query(api.review.listOpenBranches, { documentId }),
+		).rejects.toThrow("Document not found");
+		await expect(
+			reviewer.query(api.review.openBranchCount, { documentId }),
+		).rejects.toThrow("Document not found");
+
+		const list = await owner.query(api.review.listOpenBranches, {
+			documentId,
+		});
+		expect(list).toHaveLength(1);
+		expect(list[0]?._id).toBe(r1.branchId);
+		expect(list[0]?.reviewerUserId).toBe(REVIEWER.subject);
+		// Reviewer name resolves from the share's invited email once bound.
+		expect(list[0]?.reviewerName).toBe(REVIEWER.email);
+		expect(list[0]?.nodeCount).toBe(2);
+		expect(await owner.query(api.review.openBranchCount, { documentId })).toBe(
+			1,
+		);
+	});
+
+	it("after accept the branch leaves listOpenBranches and the owner doc advances; after reject it leaves and the doc is unchanged", async () => {
+		const t = convexTest(schema, modules);
+		const owner = t.withIdentity(OWNER);
+		const reviewer = t.withIdentity(REVIEWER);
+		const ownerText = "Original draft.";
+		const { documentId, ownerNodeId } = await ownedDocWithText(t, ownerText);
+		await owner.mutation(api.review.addShare, {
+			documentId,
+			email: REVIEWER.email,
+			role: "suggester",
+		});
+
+		// Branch 1 — will be accepted.
+		const a1 = crypto.randomUUID();
+		const a1Text = `${ownerText} Accepted edit.`;
+		const ra = await reviewer.mutation(api.review.reviewerAppend, {
+			documentId,
+			nodeId: a1,
+			parentNodeId: ownerNodeId,
+			patch: fullReplacePatch(ownerText, a1Text),
+			snapshot: a1Text,
+			selection: null,
+			createdAt: 3000,
+		});
+
+		let open = await owner.query(api.review.listOpenBranches, { documentId });
+		expect(open).toHaveLength(1);
+
+		await owner.mutation(api.review.acceptBranch, {
+			documentId,
+			branchId: ra.branchId as Id<"reviewBranches">,
+		});
+
+		open = await owner.query(api.review.listOpenBranches, { documentId });
+		expect(open).toHaveLength(0);
+		const docAfterAccept = await t.run(async (ctx) => ctx.db.get(documentId));
+		expect(docAfterAccept?.markdown).toBe(a1Text);
+		expect(docAfterAccept?.currentNodeId).not.toBe(ownerNodeId);
+
+		// Branch 2 — opened off the new tip, will be rejected.
+		const liveNodeId = docAfterAccept?.currentNodeId ?? "";
+		const liveText = docAfterAccept?.markdown ?? "";
+		const r1 = crypto.randomUUID();
+		const rr = await reviewer.mutation(api.review.reviewerAppend, {
+			documentId,
+			nodeId: r1,
+			parentNodeId: liveNodeId,
+			patch: fullReplacePatch(liveText, `${liveText} Rejected edit.`),
+			snapshot: `${liveText} Rejected edit.`,
+			selection: null,
+			createdAt: 5000,
+		});
+
+		open = await owner.query(api.review.listOpenBranches, { documentId });
+		expect(open).toHaveLength(1);
+
+		const beforeReject = await t.run(async (ctx) => ctx.db.get(documentId));
+		await owner.mutation(api.review.rejectBranch, {
+			documentId,
+			branchId: rr.branchId as Id<"reviewBranches">,
+		});
+
+		open = await owner.query(api.review.listOpenBranches, { documentId });
+		expect(open).toHaveLength(0);
+		const afterReject = await t.run(async (ctx) => ctx.db.get(documentId));
+		expect(afterReject?.markdown).toBe(beforeReject?.markdown);
+		expect(afterReject?.currentNodeId).toBe(beforeReject?.currentNodeId);
+	});
+});
