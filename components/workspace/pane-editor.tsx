@@ -19,6 +19,7 @@ import {
 	type MilkdownEditorHandle,
 } from "@/lib/editor/milkdown";
 import { PreviewPane } from "@/lib/editor/preview";
+import { useProseLint } from "@/lib/lint/use-prose-lint";
 import { type DocumentMeta, splitFrontmatter } from "@/lib/markdown";
 import type { CaretPosition, Mode, VimSubMode } from "@/lib/modes/types";
 import { useStudioSettingsContext } from "@/lib/studio/settings-context";
@@ -58,8 +59,14 @@ export function PaneEditor({
 	onClose,
 }: PaneEditorProps) {
 	const { actions, registry } = useWorkspace();
-	const { spellcheck, typewriter, focusDim, focusDimScope } =
-		useStudioSettingsContext();
+	const {
+		spellcheck,
+		typewriter,
+		focusDim,
+		focusDimScope,
+		lint,
+		lintCategories,
+	} = useStudioSettingsContext();
 	// Typewriter fights the mobile soft keyboard (which manages the viewport
 	// itself), so disable centering on phones; dimming stays on for all viewports.
 	const isMobile = useIsMobile();
@@ -120,6 +127,47 @@ export function PaneEditor({
 		}
 		return createPreviewHandle(() => paneMarkdownRef.current ?? markdown);
 	}, [markdown]);
+
+	// Prose linter (plan 004). A per-keystroke tick (incremented from the editors'
+	// onChange) is the linter's only re-analyze signal — it reads live editor text,
+	// never a reactive query, so the editor keeps owning live state. The hook
+	// debounces + runs off the typing hot path (worker, idle fallback).
+	const [changeTick, setChangeTick] = useState(0);
+	const handleEditorChange = useCallback(() => {
+		sync?.handleEditorChange();
+		setChangeTick((t) => t + 1);
+	}, [sync]);
+
+	const {
+		docIssues,
+		bodyIssues,
+		count: lintCount,
+	} = useProseLint(
+		() => getEditorHandle()?.getCanonicalMarkdown() ?? "",
+		lintCategories,
+		lint,
+		changeTick,
+	);
+
+	// Push fresh issues into whichever surfaces are mounted: CM takes full-doc
+	// offsets, Milkdown takes body-relative issues (it re-searches by text). Also
+	// re-pushes on a mode switch so a freshly mounted editor shows current marks.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: leaf.mode re-pushes current issues into the editor that just became active on a mode switch
+	useEffect(() => {
+		cmRef.current?.setLintIssues(docIssues);
+		richRef.current?.setLintIssues(bodyIssues);
+	}, [docIssues, bodyIssues, leaf.mode]);
+
+	// Surface the active pane's issue count to the status bar via a window event
+	// (avoids prop-drilling through the recursive pane renderer).
+	useEffect(() => {
+		if (!isActive) return;
+		window.dispatchEvent(
+			new CustomEvent("recto:lint-count", {
+				detail: { count: lint ? lintCount : 0 },
+			}),
+		);
+	}, [isActive, lint, lintCount]);
 
 	useEffect(() => {
 		if (!documentId) return;
@@ -470,7 +518,7 @@ export function PaneEditor({
 							<MilkdownEditor
 								ref={richRef}
 								bridgeSession={bridgeSession}
-								onChange={sync?.handleEditorChange}
+								onChange={handleEditorChange}
 								onMeta={handleEditorMeta}
 								typewriter={typewriterEffective}
 								focusDim={focusDim}
@@ -484,7 +532,7 @@ export function PaneEditor({
 							ref={cmRef}
 							vimEnabled={leaf.mode === "vim"}
 							bridgeSession={bridgeSession}
-							onChange={sync?.handleEditorChange}
+							onChange={handleEditorChange}
 							onVimModeChange={setVimSubMode}
 							spellcheck={spellcheck}
 							typewriter={typewriterEffective}

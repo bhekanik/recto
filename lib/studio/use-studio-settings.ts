@@ -3,9 +3,14 @@
 import { useCallback, useEffect, useState } from "react";
 
 import type { FocusScope } from "@/lib/editor/focus-range";
+import {
+	ALL_CATEGORIES,
+	type LintCategory,
+	type LintOptions,
+} from "@/lib/lint";
 import type { GoalKind } from "@/lib/stats/streak";
 
-export type { FocusScope };
+export type { FocusScope, LintCategory, LintOptions };
 
 /** The writing-body typeface — the chrome is always sans. */
 export type ReadingFont = "sans" | "serif";
@@ -72,6 +77,10 @@ export type StudioSettings = {
 	focusDim: boolean;
 	/** Granularity of the focus-dim highlight (A/B toggle). */
 	focusDimScope: FocusScope;
+	/** Prose linter on/off (plan 004) — opt-in highlight-only, off by default. */
+	lint: boolean;
+	/** Per-category lint toggles (passive / readability / adverb / weasel). */
+	lintCategories: LintOptions;
 };
 
 export const READING_SCALE_MIN = 0.8;
@@ -95,9 +104,33 @@ const DEFAULTS: StudioSettings = {
 	typewriter: false,
 	focusDim: false,
 	focusDimScope: "sentence",
+	// Prose linter is opt-in — off by default (highlighting fights minimalism); all
+	// categories on once enabled, each individually toggleable.
+	lint: false,
+	lintCategories: {
+		passive: true,
+		readability: true,
+		adverb: true,
+		weasel: true,
+	},
 };
 
 const STORAGE_KEY = "recto:studio-settings";
+
+/** Coerce a stored lint-categories blob to a complete, boolean-valued map. */
+function loadLintCategories(value: unknown): LintOptions {
+	const source =
+		value && typeof value === "object"
+			? (value as Record<string, unknown>)
+			: {};
+	const result = {} as LintOptions;
+	for (const category of ALL_CATEGORIES) {
+		const stored = source[category];
+		// Default each category to on (the only way to turn one off is to opt out).
+		result[category] = typeof stored === "boolean" ? stored : true;
+	}
+	return result;
+}
 
 function clampScale(value: number): number {
 	const clamped = Math.min(
@@ -159,6 +192,8 @@ function loadSettings(): StudioSettings {
 					: DEFAULTS.focusDim,
 			focusDimScope:
 				parsed.focusDimScope === "paragraph" ? "paragraph" : "sentence",
+			lint: typeof parsed.lint === "boolean" ? parsed.lint : DEFAULTS.lint,
+			lintCategories: loadLintCategories(parsed.lintCategories),
 		};
 	} catch {
 		return DEFAULTS;
@@ -190,6 +225,8 @@ export type StudioSettingsApi = StudioSettings & {
 	toggleFocusDim: () => void;
 	setFocusDimScope: (scope: FocusScope) => void;
 	cycleFocusDimScope: () => void;
+	toggleLint: () => void;
+	toggleLintCategory: (category: LintCategory) => void;
 };
 
 /**
@@ -333,6 +370,20 @@ export function useStudioSettings(): StudioSettingsApi {
 		}));
 	}, []);
 
+	const toggleLint = useCallback(() => {
+		setSettings((s) => ({ ...s, lint: !s.lint }));
+	}, []);
+
+	const toggleLintCategory = useCallback((category: LintCategory) => {
+		setSettings((s) => ({
+			...s,
+			lintCategories: {
+				...s.lintCategories,
+				[category]: !s.lintCategories[category],
+			},
+		}));
+	}, []);
+
 	return {
 		...settings,
 		setTheme,
@@ -359,5 +410,7 @@ export function useStudioSettings(): StudioSettingsApi {
 		toggleFocusDim,
 		setFocusDimScope,
 		cycleFocusDimScope,
+		toggleLint,
+		toggleLintCategory,
 	};
 }

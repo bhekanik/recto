@@ -95,6 +95,17 @@ function StudioWorkspace() {
 	const [commandScope, setCommandScope] = useState<"all" | "documents">("all");
 	const [creating, setCreating] = useState(false);
 	const [statusVisible, setStatusVisible] = useState(true);
+	// Active pane's prose-lint issue count, fed by a window event from PaneEditor.
+	const [lintCount, setLintCount] = useState(0);
+
+	useEffect(() => {
+		const onCount = (event: CustomEvent<{ count: number }>) => {
+			setLintCount(event.detail.count);
+		};
+		window.addEventListener("recto:lint-count", onCount as EventListener);
+		return () =>
+			window.removeEventListener("recto:lint-count", onCount as EventListener);
+	}, []);
 
 	// Zen mode: hide all chrome but the canvas; reveal on mouse move, re-hide on
 	// idle (and stay revealed while the pointer is over the chrome).
@@ -729,6 +740,12 @@ function StudioWorkspace() {
 								settings.toggleSpellcheck();
 								dispatchFocusEditor();
 							}}
+							lint={settings.lint}
+							onToggleLint={() => {
+								settings.toggleLint();
+								dispatchFocusEditor();
+							}}
+							lintCount={lintCount}
 							typewriter={settings.typewriter}
 							onToggleTypewriter={() => {
 								settings.toggleTypewriter();

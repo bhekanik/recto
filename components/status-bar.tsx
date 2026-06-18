@@ -10,6 +10,7 @@ import {
 	Minus,
 	Palette,
 	Plus,
+	ScanText,
 	SpellCheck,
 	SquareDashed,
 	Type,
@@ -59,6 +60,10 @@ type StatusBarProps = {
 	canZoomOut: boolean;
 	spellcheck: boolean;
 	onToggleSpellcheck: () => void;
+	// Prose linter (plan 004) — opt-in, highlight-only. Count is optional.
+	lint: boolean;
+	onToggleLint: () => void;
+	lintCount: number;
 	// Focus mode (plan 003) — typewriter scroll + sentence/paragraph dimming.
 	typewriter: boolean;
 	onToggleTypewriter: () => void;
@@ -255,6 +260,9 @@ export function StatusBar({
 	canZoomOut,
 	spellcheck,
 	onToggleSpellcheck,
+	lint,
+	onToggleLint,
+	lintCount,
 	typewriter,
 	onToggleTypewriter,
 	focusDim,
@@ -379,6 +387,26 @@ export function StatusBar({
 					>
 						<SpellCheck aria-hidden className="size-[15px]" />
 					</button>
+
+					{/* Prose linter — opt-in mechanics highlights (passive/adverb/long/weasel). */}
+					<button
+						type="button"
+						className={cn(iconBtn, lint && "text-[var(--color-accent)]")}
+						onClick={onToggleLint}
+						aria-pressed={lint}
+						title={`Prose linter: ${lint ? "On" : "Off"}`}
+						aria-label="Toggle prose linter"
+					>
+						<ScanText aria-hidden className="size-[15px]" />
+					</button>
+					{lint && lintCount > 0 && (
+						<span
+							className="tabular-nums text-[var(--color-ink-tertiary)]"
+							title={`${lintCount} prose ${lintCount === 1 ? "suggestion" : "suggestions"}`}
+						>
+							{lintCount.toLocaleString()}
+						</span>
+					)}
 
 					<span aria-hidden className="h-3.5 w-px bg-[var(--color-line)]" />
 

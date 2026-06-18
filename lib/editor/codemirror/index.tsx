@@ -22,13 +22,17 @@ import { bridgeOrigin } from "@/lib/bridge/protocol";
 import { activeFocusRange, type FocusScope } from "@/lib/editor/focus-range";
 import type { FormatCommand } from "@/lib/editor/format";
 import type { EditorHandle } from "@/lib/editor/handle";
+import type { LintIssue } from "@/lib/lint";
 import { normalizeMarkdown } from "@/lib/markdown";
 import { exportCaretFromCm, importCaretToCm } from "@/lib/modes/caret";
 import type { CaretPosition, VimSubMode } from "@/lib/modes/types";
+import { lintExtension, setLintIssues } from "./lint-extension";
 
 export type CodeMirrorEditorHandle = EditorHandle & {
 	setVimEnabled: (enabled: boolean) => void;
 	getCmView: () => EditorView | null;
+	/** Push display-only prose-lint decorations (full-doc offsets). */
+	setLintIssues: (issues: LintIssue[]) => void;
 };
 
 type CodeMirrorEditorProps = {
@@ -358,6 +362,7 @@ export const CodeMirrorEditor = forwardRef<
 			),
 			drawSelection(),
 			markdown(),
+			lintExtension(),
 			updateListener,
 			EditorView.lineWrapping,
 			EditorState.tabSize.of(2),
@@ -489,6 +494,11 @@ export const CodeMirrorEditor = forwardRef<
 		},
 		getCmView() {
 			return viewRef.current;
+		},
+		setLintIssues(issues: LintIssue[]) {
+			const view = viewRef.current;
+			if (!view) return;
+			view.dispatch({ effects: setLintIssues.of(issues) });
 		},
 	}));
 

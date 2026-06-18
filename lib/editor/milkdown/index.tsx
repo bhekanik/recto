@@ -43,6 +43,7 @@ import { BRIDGE_META } from "@/lib/bridge/protocol";
 import { activeFocusRange, type FocusScope } from "@/lib/editor/focus-range";
 import type { FormatCommand } from "@/lib/editor/format";
 import type { EditorHandle } from "@/lib/editor/handle";
+import type { LintIssue } from "@/lib/lint";
 import {
 	composeFrontmatter,
 	type DocumentMeta,
@@ -52,6 +53,7 @@ import {
 } from "@/lib/markdown";
 import { exportCaretFromCm, importCaretToCm } from "@/lib/modes/caret";
 import type { CaretPosition } from "@/lib/modes/types";
+import { lintPlugin, setLintMeta } from "./lint-plugin";
 import { SelectionToolbarView } from "./selection-toolbar-view";
 import { SlashMenuView } from "./slash-menu-view";
 
@@ -60,6 +62,8 @@ export type MilkdownEditorHandle = EditorHandle & {
 	getParser: () => Parser | null;
 	/** Update the title/subtitle frontmatter from the document header inputs. */
 	setMeta: (meta: DocumentMeta) => void;
+	/** Push display-only prose-lint decorations (body-relative offsets, text re-search). */
+	setLintIssues: (issues: LintIssue[]) => void;
 };
 
 const rectoSlash = slashFactory("RECTO_SLASH");
@@ -251,6 +255,10 @@ const MilkdownEditorInner = forwardRef<MilkdownEditorHandle, InnerProps>(
 							}),
 					),
 				)
+				// Prose-lint decorations (plan 004) — a separate, display-only $prose
+				// plugin alongside the focus one. Issues arrive via tr meta; it never
+				// edits the document, history, or selection.
+				.use($prose(() => lintPlugin()))
 				.config((ctx) => {
 					ctx.get(listenerCtx).markdownUpdated((_ctx, md, prevMd) => {
 						if (programmaticRef.current) return;
@@ -445,6 +453,16 @@ const MilkdownEditorInner = forwardRef<MilkdownEditorHandle, InnerProps>(
 			},
 			getParser() {
 				return parserRef.current;
+			},
+			setLintIssues(issues: LintIssue[]) {
+				const editor = editorRef.current;
+				if (!editor) return;
+				try {
+					const view = editor.ctx.get(editorViewCtx);
+					view.dispatch(view.state.tr.setMeta(setLintMeta, issues));
+				} catch {
+					// editor still mounting — next push will land once the view exists
+				}
 			},
 		}));
 

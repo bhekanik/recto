@@ -32,6 +32,14 @@
 	--color-warning: oklch(0.84 0.1 85);
 	--color-danger: oklch(0.7 0.16 20);
 
+	/* Prose-lint squiggles (plan 004) — calm, per-category, OKLCH. Wavy underlines
+	   only, so they never shift layout (no borders/backgrounds that change box
+	   size). Low chroma to stay in the restrained dark palette, not loud Hemingway. */
+	--color-lint-passive: oklch(0.74 0.1 290); /* periwinkle, like the accent */
+	--color-lint-readability: oklch(0.84 0.1 85); /* amber = "slow down" */
+	--color-lint-adverb: oklch(0.78 0.08 250); /* soft blue */
+	--color-lint-weasel: oklch(0.7 0.09 330); /* muted rose */
+
 	--color-selection: oklch(0.74 0.13 288 / 0.26);
 	--color-focus-ring: oklch(0.76 0.12 286);
 
@@ -674,6 +682,29 @@
 	.ProseMirror.recto-focus-dim {
 		transition: none;
 	}
+}
+
+/* Prose-lint highlights (plan 004) — display-only wavy underlines, shared by both
+   editors (CM marks and PM inline decorations carry the same class names). Underline
+   only so the highlight never reflows the text. Per-category colour from OKLCH tokens. */
+.recto-lint {
+	text-decoration-line: underline;
+	text-decoration-style: wavy;
+	text-decoration-thickness: 1px;
+	text-underline-offset: 3px;
+	text-decoration-skip-ink: none;
+}
+.recto-lint--passive {
+	text-decoration-color: var(--color-lint-passive);
+}
+.recto-lint--readability {
+	text-decoration-color: var(--color-lint-readability);
+}
+.recto-lint--adverb {
+	text-decoration-color: var(--color-lint-adverb);
+}
+.recto-lint--weasel {
+	text-decoration-color: var(--color-lint-weasel);
 }
 
 .milkdown-slash-menu {
