@@ -8,6 +8,11 @@ export type ReadingFont = "sans" | "serif";
 /** Calm/ethereal colour themes. Each is a soft-coloured dark palette (D13). */
 export type Theme = "twilight" | "aurora" | "dawn" | "moonlit";
 
+/** How the history compare diff splits text. */
+export type DiffGranularity = "word" | "line";
+/** How the history compare diff is laid out. */
+export type DiffLayout = "inline" | "side-by-side";
+
 /** Ordered for the cycle control + command palette; first is the default. */
 export const THEMES: { id: Theme; label: string; hint: string }[] = [
 	{ id: "twilight", label: "Twilight", hint: "indigo · periwinkle" },
@@ -29,6 +34,10 @@ export type StudioSettings = {
 	spellcheck: boolean;
 	/** Persistent top formatting toolbar visibility. */
 	topToolbar: boolean;
+	/** Granularity of the history compare diff (word = prose standard). */
+	diffGranularity: DiffGranularity;
+	/** Layout of the history compare diff. */
+	diffLayout: DiffLayout;
 };
 
 export const READING_SCALE_MIN = 0.8;
@@ -41,6 +50,8 @@ const DEFAULTS: StudioSettings = {
 	readingScale: 1,
 	spellcheck: true,
 	topToolbar: true,
+	diffGranularity: "word",
+	diffLayout: "inline",
 };
 
 const STORAGE_KEY = "recto:studio-settings";
@@ -78,6 +89,9 @@ function loadSettings(): StudioSettings {
 				typeof parsed.topToolbar === "boolean"
 					? parsed.topToolbar
 					: DEFAULTS.topToolbar,
+			diffGranularity: parsed.diffGranularity === "line" ? "line" : "word",
+			diffLayout:
+				parsed.diffLayout === "side-by-side" ? "side-by-side" : "inline",
 		};
 	} catch {
 		return DEFAULTS;
@@ -94,6 +108,10 @@ export type StudioSettingsApi = StudioSettings & {
 	zoomReset: () => void;
 	toggleSpellcheck: () => void;
 	toggleTopToolbar: () => void;
+	setDiffGranularity: (g: DiffGranularity) => void;
+	toggleDiffGranularity: () => void;
+	setDiffLayout: (l: DiffLayout) => void;
+	toggleDiffLayout: () => void;
 };
 
 /**
@@ -162,6 +180,28 @@ export function useStudioSettings(): StudioSettingsApi {
 		setSettings((s) => ({ ...s, topToolbar: !s.topToolbar }));
 	}, []);
 
+	const setDiffGranularity = useCallback((diffGranularity: DiffGranularity) => {
+		setSettings((s) => ({ ...s, diffGranularity }));
+	}, []);
+
+	const toggleDiffGranularity = useCallback(() => {
+		setSettings((s) => ({
+			...s,
+			diffGranularity: s.diffGranularity === "word" ? "line" : "word",
+		}));
+	}, []);
+
+	const setDiffLayout = useCallback((diffLayout: DiffLayout) => {
+		setSettings((s) => ({ ...s, diffLayout }));
+	}, []);
+
+	const toggleDiffLayout = useCallback(() => {
+		setSettings((s) => ({
+			...s,
+			diffLayout: s.diffLayout === "inline" ? "side-by-side" : "inline",
+		}));
+	}, []);
+
 	return {
 		...settings,
 		setTheme,
@@ -173,5 +213,9 @@ export function useStudioSettings(): StudioSettingsApi {
 		zoomReset,
 		toggleSpellcheck,
 		toggleTopToolbar,
+		setDiffGranularity,
+		toggleDiffGranularity,
+		setDiffLayout,
+		toggleDiffLayout,
 	};
 }

@@ -6,13 +6,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { diffLines, nodeLabel } from "@/lib/history/diff";
+import { diffRuns, nodeLabel } from "@/lib/history/diff";
 import {
 	childrenByParent,
 	type DocNode,
 	indexNodes,
 } from "@/lib/history/materialize";
 import type { HistoryNode } from "@/lib/history/use-document-history";
+import { useStudioSettingsContext } from "@/lib/studio/settings-context";
 import { cn } from "@/lib/utils";
 import { useDocumentHistoryFor } from "@/lib/workspace/workspace-context";
 
@@ -74,6 +75,12 @@ export function HistoryPanel({
 	onClose,
 }: HistoryPanelProps) {
 	const history = useDocumentHistoryFor(documentId);
+	const {
+		diffGranularity,
+		diffLayout,
+		toggleDiffGranularity,
+		toggleDiffLayout,
+	} = useStudioSettingsContext();
 	const versions = useQuery(
 		api.versions.list,
 		open ? { documentId } : "skip",
@@ -129,13 +136,18 @@ export function HistoryPanel({
 		[history],
 	);
 
-	const compareDiff = useMemo(() => {
+	const compareTexts = useMemo(() => {
 		if (!compare || !history) return null;
 		const a = history.materializeAt(compare[0]);
 		const b = history.materializeAt(compare[1]);
 		if (a == null || b == null) return null;
-		return diffLines(a, b);
+		return { a, b };
 	}, [compare, history]);
+
+	const compareDiff = useMemo(() => {
+		if (!compareTexts) return null;
+		return diffRuns(compareTexts.a, compareTexts.b, diffGranularity);
+	}, [compareTexts, diffGranularity]);
 
 	const handleTagCurrent = useCallback(() => {
 		if (!history) return;
@@ -224,8 +236,12 @@ export function HistoryPanel({
 							{rows.map(({ node, depth }) => {
 								const isCurrent = node.nodeId === history.currentNodeId;
 								const tags = taggedByNode.get(node.nodeId) ?? [];
+								const compareSelected = compareSel.includes(node.nodeId);
 								return (
-									<li key={node.nodeId}>
+									<li
+										key={node.nodeId}
+										className="recto-item flex items-center"
+									>
 										<button
 											type="button"
 											style={{ paddingInlineStart: `${depth * 16 + 8}px` }}
@@ -236,7 +252,7 @@ export function HistoryPanel({
 												setPreview(history.materializeAt(node.nodeId))
 											}
 											onClick={() => history.navigateTo(node.nodeId)}
-											className="recto-item flex w-full items-center gap-[var(--space-2)] px-[var(--space-2)] py-1.5 text-left text-[length:var(--text-ui-sm)]"
+											className="flex min-w-0 flex-1 items-center gap-[var(--space-2)] px-[var(--space-2)] py-1.5 text-left text-[length:var(--text-ui-sm)]"
 										>
 											<span
 												aria-hidden
@@ -268,6 +284,20 @@ export function HistoryPanel({
 											<span className="shrink-0 text-[var(--color-ink-tertiary)]">
 												{formatTime(node.createdAt)}
 											</span>
+										</button>
+										<button
+											type="button"
+											onClick={() => setCompareSelection(node.nodeId)}
+											className={cn(
+												"shrink-0 px-1.5 py-1 text-[0.625rem] uppercase tracking-wide transition-colors",
+												compareSelected
+													? "text-[var(--color-accent)]"
+													: "text-[var(--color-ink-tertiary)] hover:text-[var(--color-ink-primary)]",
+											)}
+											aria-label="Select for compare"
+											aria-pressed={compareSelected}
+										>
+											{compareSelected ? "✓" : "⇄"}
 										</button>
 									</li>
 								);
@@ -383,24 +413,85 @@ export function HistoryPanel({
 				</div>
 
 				{compareDiff ? (
-					<div className="max-h-[40%] shrink-0 overflow-y-auto border-t border-[var(--color-line)] bg-[var(--color-bg-app)] px-[var(--space-3)] py-[var(--space-2)] font-[family-name:var(--font-mono)] text-[0.75rem] leading-relaxed">
-						{compareDiff.map((line, i) => (
-							<div
-								// biome-ignore lint/suspicious/noArrayIndexKey: diff is positional
-								key={i}
-								className={cn(
-									"whitespace-pre-wrap",
-									line.type === "add" &&
-										"bg-[oklch(0.8_0.09_150/0.12)] text-[var(--color-success)]",
-									line.type === "del" &&
-										"bg-[oklch(0.7_0.14_25/0.12)] text-[var(--color-danger)]",
-									line.type === "same" && "text-[var(--color-ink-tertiary)]",
-								)}
+					<div className="flex max-h-[40%] shrink-0 flex-col border-t border-[var(--color-line)] bg-[var(--color-bg-app)]">
+						<div className="flex shrink-0 items-center gap-[var(--space-2)] px-[var(--space-3)] py-1.5 text-[0.6875rem] text-[var(--color-ink-tertiary)]">
+							<button
+								type="button"
+								onClick={toggleDiffGranularity}
+								className="transition-colors hover:text-[var(--color-ink-primary)]"
 							>
-								{line.type === "add" ? "+ " : line.type === "del" ? "- " : "  "}
-								{line.text || " "}
-							</div>
-						))}
+								{diffGranularity === "word" ? "Word" : "Line"} diff
+							</button>
+							<span aria-hidden>·</span>
+							<button
+								type="button"
+								onClick={toggleDiffLayout}
+								className="transition-colors hover:text-[var(--color-ink-primary)]"
+							>
+								{diffLayout === "inline" ? "Inline" : "Side by side"}
+							</button>
+						</div>
+						<div className="min-h-0 flex-1 overflow-y-auto px-[var(--space-3)] py-[var(--space-2)] font-[family-name:var(--font-mono)] text-[0.75rem] leading-relaxed">
+							{diffLayout === "inline" ? (
+								<p className="whitespace-pre-wrap">
+									{compareDiff.map((run, i) => (
+										<span
+											// biome-ignore lint/suspicious/noArrayIndexKey: diff is positional
+											key={i}
+											className={cn(
+												run.type === "add" &&
+													"bg-[oklch(0.8_0.09_150/0.12)] text-[var(--color-success)]",
+												run.type === "del" &&
+													"bg-[oklch(0.7_0.14_25/0.12)] text-[var(--color-danger)] line-through",
+												run.type === "same" &&
+													"text-[var(--color-ink-tertiary)]",
+											)}
+										>
+											{run.text}
+										</span>
+									))}
+								</p>
+							) : (
+								<div className="grid grid-cols-2 gap-[var(--space-3)]">
+									<div className="whitespace-pre-wrap">
+										{compareDiff
+											.filter((r) => r.type !== "add")
+											.map((run, i) => (
+												<span
+													// biome-ignore lint/suspicious/noArrayIndexKey: diff is positional
+													key={i}
+													className={cn(
+														run.type === "del" &&
+															"bg-[oklch(0.7_0.14_25/0.12)] text-[var(--color-danger)]",
+														run.type === "same" &&
+															"text-[var(--color-ink-tertiary)]",
+													)}
+												>
+													{run.text}
+												</span>
+											))}
+									</div>
+									<div className="whitespace-pre-wrap">
+										{compareDiff
+											.filter((r) => r.type !== "del")
+											.map((run, i) => (
+												<span
+													// biome-ignore lint/suspicious/noArrayIndexKey: diff is positional
+													key={i}
+													className={cn(
+														run.type === "add" &&
+															"bg-[oklch(0.8_0.09_150/0.12)] text-[var(--color-success)]",
+														run.type === "same" &&
+															"text-[var(--color-ink-tertiary)]",
+													)}
+												>
+													{run.text}
+												</span>
+											))}
+									</div>
+								</div>
+							)}
+						</div>
 					</div>
 				) : preview != null ? (
 					<div className="max-h-[28%] shrink-0 overflow-y-auto border-t border-[var(--color-line)] bg-[var(--color-bg-app)] px-[var(--space-3)] py-[var(--space-2)] font-[family-name:var(--font-mono)] text-[0.75rem] text-[var(--color-ink-tertiary)]">

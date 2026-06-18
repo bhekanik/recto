@@ -54,6 +54,7 @@
 		"codemirror": "^6.0.2",
 		"convex": "^1.40.0",
 		"convex-test": "^0.0.53",
+		"diff": "^9.0.0",
 		"happy-dom": "^20.10.2",
 		"js-yaml": "^4.2.0",
 		"jsdom": "^29.1.1",

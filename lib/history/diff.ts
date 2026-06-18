@@ -1,4 +1,31 @@
+import { diffWordsWithSpace, diffLines as jsDiffLines } from "diff";
+
 export type DiffLine = { type: "add" | "del" | "same"; text: string };
+
+/** One inline run in a token diff: added / deleted / unchanged text. */
+export type DiffRun = { type: "add" | "del" | "same"; text: string };
+
+/** Diff granularity the user can choose (mirrors a studio setting). */
+export type DiffGranularity = "word" | "line";
+
+/**
+ * Token-level diff of two canonical-Markdown strings, producing inline
+ * ins/del/same runs (blueprint 08 §5 — diff the source, not rendered HTML).
+ * "word" uses jsdiff diffWordsWithSpace (whitespace preserved → prose-friendly);
+ * "line" uses jsdiff diffLines. Read-only, pure.
+ */
+export function diffRuns(
+	a: string,
+	b: string,
+	granularity: DiffGranularity = "word",
+): DiffRun[] {
+	const changes =
+		granularity === "word" ? diffWordsWithSpace(a, b) : jsDiffLines(a, b);
+	return changes.map((c) => ({
+		type: c.added ? "add" : c.removed ? "del" : "same",
+		text: c.value,
+	}));
+}
 
 /**
  * A minimal LCS line diff of two canonical-Markdown strings (blueprint 08 §5 —
