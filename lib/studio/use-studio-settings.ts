@@ -57,6 +57,8 @@ export type StudioSettings = {
 	spellcheck: boolean;
 	/** Persistent top formatting toolbar visibility. */
 	topToolbar: boolean;
+	/** Convert pasted rich HTML (Word/Docs/web) into canonical Markdown on paste. */
+	smartPaste: boolean;
 	/** Granularity of the history compare diff (word = prose standard). */
 	diffGranularity: DiffGranularity;
 	/** Layout of the history compare diff. */
@@ -95,6 +97,9 @@ const DEFAULTS: StudioSettings = {
 	readingScale: 1,
 	spellcheck: true,
 	topToolbar: true,
+	// Smart paste defaults ON — pasting from Word/Docs/web should land as clean
+	// canonical Markdown, not raw style spans (plan 007).
+	smartPaste: true,
 	diffGranularity: "word",
 	diffLayout: "inline",
 	wordGoalTarget: 0,
@@ -169,6 +174,10 @@ function loadSettings(): StudioSettings {
 				typeof parsed.topToolbar === "boolean"
 					? parsed.topToolbar
 					: DEFAULTS.topToolbar,
+			smartPaste:
+				typeof parsed.smartPaste === "boolean"
+					? parsed.smartPaste
+					: DEFAULTS.smartPaste,
 			diffGranularity: parsed.diffGranularity === "line" ? "line" : "word",
 			diffLayout:
 				parsed.diffLayout === "side-by-side" ? "side-by-side" : "inline",
@@ -218,6 +227,7 @@ export type StudioSettingsApi = StudioSettings & {
 	zoomReset: () => void;
 	toggleSpellcheck: () => void;
 	toggleTopToolbar: () => void;
+	toggleSmartPaste: () => void;
 	setDiffGranularity: (g: DiffGranularity) => void;
 	toggleDiffGranularity: () => void;
 	setDiffLayout: (l: DiffLayout) => void;
@@ -303,6 +313,10 @@ export function useStudioSettings(): StudioSettingsApi {
 
 	const toggleTopToolbar = useCallback(() => {
 		setSettings((s) => ({ ...s, topToolbar: !s.topToolbar }));
+	}, []);
+
+	const toggleSmartPaste = useCallback(() => {
+		setSettings((s) => ({ ...s, smartPaste: !s.smartPaste }));
 	}, []);
 
 	const setDiffGranularity = useCallback((diffGranularity: DiffGranularity) => {
@@ -413,6 +427,7 @@ export function useStudioSettings(): StudioSettingsApi {
 		zoomReset,
 		toggleSpellcheck,
 		toggleTopToolbar,
+		toggleSmartPaste,
 		setDiffGranularity,
 		toggleDiffGranularity,
 		setDiffLayout,

@@ -25,7 +25,7 @@ import { activeFocusRange, type FocusScope } from "@/lib/editor/focus-range";
 import type { FormatCommand } from "@/lib/editor/format";
 import type { EditorHandle } from "@/lib/editor/handle";
 import type { LintIssue } from "@/lib/lint";
-import { normalizeMarkdown } from "@/lib/markdown";
+import { markdownFromHtml, normalizeMarkdown } from "@/lib/markdown";
 import { exportCaretFromCm, importCaretToCm } from "@/lib/modes/caret";
 import type { CaretPosition, VimSubMode } from "@/lib/modes/types";
 import { lintExtension, setLintIssues } from "./lint-extension";
@@ -47,6 +47,8 @@ type CodeMirrorEditorProps = {
 	bridgeSession?: BridgeSession | null;
 	/** Native browser spellcheck. CM force-sets false, so we override explicitly. */
 	spellcheck?: boolean;
+	/** Smart paste — convert pasted rich HTML into canonical Markdown (plan 007). */
+	smartPaste?: boolean;
 	/** Typewriter scrolling — keep the caret line vertically centered (plan 003). */
 	typewriter?: boolean;
 	/** Focus dimming — fade everything but the active sentence/paragraph. */
@@ -301,6 +303,7 @@ export const CodeMirrorEditor = forwardRef<
 		className,
 		bridgeSession,
 		spellcheck = true,
+		smartPaste = true,
 		typewriter = false,
 		focusDim = false,
 		focusDimScope = "sentence",
@@ -320,6 +323,8 @@ export const CodeMirrorEditor = forwardRef<
 	vimEnabledRef.current = vimEnabled;
 	const spellcheckRef = useRef(spellcheck);
 	spellcheckRef.current = spellcheck;
+	const smartPasteRef = useRef(smartPaste);
+	smartPasteRef.current = smartPaste;
 	const typewriterRef = useRef(typewriter);
 	typewriterRef.current = typewriter;
 	const focusDimRef = useRef(focusDim);
@@ -366,6 +371,29 @@ export const CodeMirrorEditor = forwardRef<
 			),
 			drawSelection(),
 			markdown(),
+			// Smart paste: route rich clipboard HTML through the canonical
+			// HTML→Markdown converter so a paste from Word/Docs/web lands as clean
+			// canonical Markdown. Off (or no text/html) falls through to CM's
+			// default text/plain paste — that IS the "paste as plain" branch.
+			EditorView.domEventHandlers({
+				paste(event, view) {
+					const data = event.clipboardData;
+					if (!data) return false; // let CM handle it
+					// Plan 008 will branch here on image/file clipboard items
+					// (data.files / image/* types) before the text/html path.
+					const html = data.getData("text/html");
+					if (!smartPasteRef.current || !html) return false;
+					const md = markdownFromHtml(html);
+					if (!md.trim()) return false;
+					event.preventDefault();
+					const { from, to } = view.state.selection.main;
+					view.dispatch({
+						changes: { from, to, insert: md },
+						selection: { anchor: from + md.length },
+					});
+					return true;
+				},
+			}),
 			lintExtension(),
 			search({ top: true }),
 			// AFTER vimExt so vim's keymap wins in normal mode (its `/` search keeps

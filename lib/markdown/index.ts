@@ -1,5 +1,6 @@
 export { countWords } from "./count-words";
 export { deriveTitleFromMarkdown, deriveTitleFromMdast } from "./derive-title";
+export { markdownFromHtml } from "./from-html";
 export {
 	composeFrontmatter,
 	type DocumentMeta,

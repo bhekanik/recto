@@ -4,6 +4,7 @@ import {
 	defaultValueCtx,
 	Editor,
 	editorViewCtx,
+	editorViewOptionsCtx,
 	parserCtx,
 	rootCtx,
 } from "@milkdown/core";
@@ -48,6 +49,7 @@ import {
 	composeFrontmatter,
 	type DocumentMeta,
 	EMPTY_META,
+	markdownFromHtml,
 	normalizeMarkdown,
 	splitFrontmatter,
 } from "@/lib/markdown";
@@ -149,6 +151,8 @@ type InnerProps = {
 	typewriter?: boolean;
 	focusDim?: boolean;
 	focusDimScope?: FocusScope;
+	/** Smart paste — convert pasted rich HTML into canonical Markdown (plan 007). */
+	smartPaste?: boolean;
 };
 
 const MilkdownEditorInner = forwardRef<MilkdownEditorHandle, InnerProps>(
@@ -160,6 +164,7 @@ const MilkdownEditorInner = forwardRef<MilkdownEditorHandle, InnerProps>(
 			typewriter = false,
 			focusDim = false,
 			focusDimScope = "sentence",
+			smartPaste = true,
 		},
 		ref,
 	) {
@@ -180,6 +185,9 @@ const MilkdownEditorInner = forwardRef<MilkdownEditorHandle, InnerProps>(
 		const typewriterRef = useRef(typewriter);
 		const focusDimRef = useRef(focusDim);
 		const focusScopeRef = useRef<FocusScope>(focusDimScope);
+		// handlePaste reads the live setting via a ref so toggling smart-paste never
+		// rebuilds the ProseMirror editor.
+		const smartPasteRef = useRef(smartPaste);
 
 		onChangeRef.current = onChange;
 		bridgeSessionRef.current = bridgeSession;
@@ -187,6 +195,7 @@ const MilkdownEditorInner = forwardRef<MilkdownEditorHandle, InnerProps>(
 		typewriterRef.current = typewriter;
 		focusDimRef.current = focusDim;
 		focusScopeRef.current = focusDimScope;
+		smartPasteRef.current = smartPaste;
 
 		useEditor((root) => {
 			rootRef.current = root;
@@ -195,6 +204,36 @@ const MilkdownEditorInner = forwardRef<MilkdownEditorHandle, InnerProps>(
 					ctx.set(rootCtx, root);
 					ctx.set(defaultValueCtx, "");
 					parserRef.current = ctx.get(parserCtx);
+					// Smart paste: re-enter pasted rich HTML through the canonical
+					// HTML→Markdown converter, then the Milkdown parser — NOT
+					// ProseMirror's own clipboard DOM parser. That keeps the lossless
+					// canonical invariant. Off (or no text/html) returns false and
+					// Milkdown's default commonmark/gfm clipboard parse runs instead.
+					// editorViewOptionsCtx takes Partial<Omit<DirectEditorProps,
+					// "state">>, so handlePaste sits at the top level (it is an
+					// EditorProps hook), not under an `editorProps` key.
+					ctx.set(editorViewOptionsCtx, {
+						handlePaste: (view, event) => {
+							if (!smartPasteRef.current) return false;
+							// Plan 008 will branch here on image/file clipboard items
+							// before this text/html path.
+							const html = event.clipboardData?.getData("text/html");
+							if (!html) return false; // no rich content — default paste
+							const md = markdownFromHtml(html);
+							if (!md.trim()) return false;
+							const parser = parserRef.current;
+							if (!parser) return false;
+							const doc = parser(md);
+							if (!doc) return false;
+							// Insert the parsed slice at the current selection. This is a
+							// normal user edit (no programmaticRef / BRIDGE_META), so the
+							// markdownUpdated listener forwards it to sync automatically.
+							const { from, to } = view.state.selection;
+							const tr = view.state.tr.replaceWith(from, to, doc.content);
+							view.dispatch(tr);
+							return true;
+						},
+					});
 					ctx.set(rectoSlash.key, {
 						view: (view) =>
 							new SlashMenuView(view, (entry) => {
@@ -478,6 +517,8 @@ type MilkdownEditorProps = {
 	typewriter?: boolean;
 	focusDim?: boolean;
 	focusDimScope?: FocusScope;
+	/** Smart paste — convert pasted rich HTML into canonical Markdown (plan 007). */
+	smartPaste?: boolean;
 };
 
 export const MilkdownEditor = forwardRef<
@@ -492,6 +533,7 @@ export const MilkdownEditor = forwardRef<
 		typewriter,
 		focusDim,
 		focusDimScope,
+		smartPaste,
 	},
 	ref,
 ) {
@@ -506,6 +548,7 @@ export const MilkdownEditor = forwardRef<
 					typewriter={typewriter}
 					focusDim={focusDim}
 					focusDimScope={focusDimScope}
+					smartPaste={smartPaste}
 				/>
 			</div>
 		</MilkdownProvider>

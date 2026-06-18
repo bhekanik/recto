@@ -554,6 +554,9 @@ function StudioWorkspace() {
 				case "toggle-spellcheck":
 					settings.toggleSpellcheck();
 					return;
+				case "toggle-smart-paste":
+					settings.toggleSmartPaste();
+					return;
 				case "toggle-toolbar":
 					settings.toggleTopToolbar();
 					return;

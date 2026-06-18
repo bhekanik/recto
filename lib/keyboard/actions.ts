@@ -47,6 +47,7 @@ export type ActionId =
 	| "zoom-out"
 	| "zoom-reset"
 	| "toggle-spellcheck"
+	| "toggle-smart-paste"
 	| "toggle-toolbar"
 	| "toggle-typewriter"
 	| "toggle-focus-dim"
@@ -280,6 +281,13 @@ export const ACTIONS: ActionDef[] = [
 		label: "Toggle spellcheck",
 		section: "View",
 		aliases: ["spelling", "squiggles"],
+		shortcut: { mac: "", other: "" },
+	},
+	{
+		id: "toggle-smart-paste",
+		label: "Toggle smart paste (HTML → Markdown)",
+		section: "View",
+		aliases: ["paste", "clean paste", "word", "google docs"],
 		shortcut: { mac: "", other: "" },
 	},
 	{

@@ -62,6 +62,7 @@ export function PaneEditor({
 	const { actions, registry } = useWorkspace();
 	const {
 		spellcheck,
+		smartPaste,
 		typewriter,
 		focusDim,
 		focusDimScope,
@@ -537,6 +538,7 @@ export function PaneEditor({
 								typewriter={typewriterEffective}
 								focusDim={focusDim}
 								focusDimScope={focusDimScope}
+								smartPaste={smartPaste}
 								className="milkdown"
 							/>
 						</div>
@@ -549,6 +551,7 @@ export function PaneEditor({
 							onChange={handleEditorChange}
 							onVimModeChange={setVimSubMode}
 							spellcheck={spellcheck}
+							smartPaste={smartPaste}
 							typewriter={typewriterEffective}
 							focusDim={focusDim}
 							focusDimScope={focusDimScope}
