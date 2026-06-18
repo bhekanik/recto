@@ -24,6 +24,7 @@ larger and phased; ship the craft features first.
 | 008 | Newsletter authoring layer (subject/preview text, email preview, image storage) | P2 | L | — | DONE |
 | 009 | AI reversible assist — undo-tree transforms, critique panel, RAG over own drafts | P3 | L | — | DONE |
 | 010 | Review collaboration — share a draft, comments + branch suggestions, accept/reject | P2 | L | 001 | TODO (spike-first; AI disabled on shared docs) |
+| 011 | AI as a reviewer — structured feedback becomes real anchored comments + tracked-change suggestions | P2 | M | 010 | TODO (hard-depends on 010's comment/anchor/branch primitives) |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | REJECTED (one-line rationale)
 

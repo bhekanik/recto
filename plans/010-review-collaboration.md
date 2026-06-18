@@ -37,6 +37,16 @@ Recto is single-user today: there is no sharing, no ACL, no second writer. The m
 
 Implementation hook (wire this in Phase A, once "is this document shared?" is knowable): the existing AI enablement gate — the global `aiEnabled` setting plus the AI entry points (the selection-toolbar AI button + the AI section in `components/command-palette.tsx`, summoned via `lib/ai/summon.ts` / `lib/ai/use-ai-transform.ts` and wired in `components/studio-shell.tsx`) — must additionally treat AI as OFF when the active document either (a) has any active `documentShares` row (owner side) or (b) was opened as a shared-with-me doc (reviewer side). Hide/disable the AI affordances and short-circuit the routes for such documents. Add this as a STOP-checked done criterion in Phase A: "with a shared document active, the AI transform/critique entry points are not offered and the routes are not reachable from the UI." A future setting could let an owner opt a specific shared doc back into AI, but default OFF.
 
+## Cross-cutting rule: comment + suggestion creation is programmatic (one path for humans and AI)
+
+The comment-creation and reviewer-branch-suggestion paths built in this plan MUST be callable programmatically, not only from the human review UI — because **plan 011 (AI as a reviewer) reuses them verbatim**: the AI returns structured, anchored feedback and the SAME `comments.create` mutation + reviewer-append / suggestion-branch path create its comments and tracked changes. Design requirements to honor here so 011 needs no rework:
+
+- **(a) No UI-only coupling.** Comment creation and reviewer-branch append are plain Convex mutations / pure utils that take their inputs as arguments; the human UI is just one caller.
+- **(b) Author/origin is a parameter, not hardcoded to the calling Clerk user.** Support a synthetic **AI reviewer identity** — e.g. `authorName: "AI · <model>"`, a stable synthetic author id, and branch `origin: "ai:review:<model>"` — so AI comments and suggestion branches render in, and accept/reject through, the exact same review surface as human ones. (Owner-only mutations still verify the *caller* is the owner; the *attributed author* is separate.)
+- **(c) Anchoring is reused verbatim.** The quote + prefix/suffix locator (`lib/review/anchor.ts`) must work identically whether the anchor came from a human selection or an AI-supplied exact quote.
+
+This is distinct from the no-AI-on-shared-docs rule above and does not conflict with it: the AI reviewer is the **owner running AI on their OWN (un-shared) document**; the no-AI-on-shared rule governs docs shared *out* to human reviewers.
+
 ## Current state
 
 ### The undo-tree DAG and where suggestions will live (reused, not redesigned)
