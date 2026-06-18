@@ -20,7 +20,9 @@ export type AppShortcutAction =
 	| { type: "copy-markdown" }
 	| { type: "export" }
 	| { type: "toggle-status" }
-	| { type: "toggle-focus" };
+	| { type: "toggle-focus" }
+	| { type: "toggle-typewriter" }
+	| { type: "toggle-focus-dim" };
 
 const isMac =
 	typeof navigator !== "undefined" &&
@@ -178,6 +180,18 @@ export function createAppShortcutHandler(
 			event.preventDefault();
 			event.stopPropagation();
 			onAction({ type: "toggle-focus" });
+			return;
+		}
+		if (matchCtrlShift(event, "t")) {
+			event.preventDefault();
+			event.stopPropagation();
+			onAction({ type: "toggle-typewriter" });
+			return;
+		}
+		if (matchCtrlShift(event, "d")) {
+			event.preventDefault();
+			event.stopPropagation();
+			onAction({ type: "toggle-focus-dim" });
 			return;
 		}
 

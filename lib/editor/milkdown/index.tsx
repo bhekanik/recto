@@ -24,16 +24,23 @@ import {
 	wrapInOrderedListCommand,
 } from "@milkdown/preset-commonmark";
 import { gfm, toggleStrikethroughCommand } from "@milkdown/preset-gfm";
-import { TextSelection } from "@milkdown/prose/state";
+import {
+	Plugin,
+	PluginKey,
+	type EditorState as PMEditorState,
+	TextSelection,
+} from "@milkdown/prose/state";
+import { Decoration, DecorationSet } from "@milkdown/prose/view";
 import { Milkdown, MilkdownProvider, useEditor } from "@milkdown/react";
 import type { Parser } from "@milkdown/transformer";
-import { callCommand, getMarkdown, replaceAll } from "@milkdown/utils";
+import { $prose, callCommand, getMarkdown, replaceAll } from "@milkdown/utils";
 import type { EditorView as PMEditorView } from "prosemirror-view";
-import { forwardRef, useImperativeHandle, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 
 import type { BridgeSession } from "@/lib/bridge/coordinator";
 
 import { BRIDGE_META } from "@/lib/bridge/protocol";
+import { activeFocusRange, type FocusScope } from "@/lib/editor/focus-range";
 import type { FormatCommand } from "@/lib/editor/format";
 import type { EditorHandle } from "@/lib/editor/handle";
 import {
@@ -58,14 +65,100 @@ export type MilkdownEditorHandle = EditorHandle & {
 const rectoSlash = slashFactory("RECTO_SLASH");
 const rectoSelectionTooltip = tooltipFactory("RECTO_SELECTION");
 
+const focusPluginKey = new PluginKey("recto-focus");
+
+/**
+ * Active-range decoration for rich mode. ProseMirror positions are NOT plain-text
+ * offsets, so we compute the range within the single textblock containing the
+ * caret: the block's text feeds {@link activeFocusRange}, and the resulting
+ * text-relative `[from, to)` maps back to document positions by adding the block
+ * content's start position. This keeps sentence ranges accurate inside a block
+ * (and paragraph scope = the whole block) without a fragile doc-wide text map.
+ */
+function activeRichRange(
+	state: PMEditorState,
+	scope: FocusScope,
+): { from: number; to: number } | null {
+	const { $head } = state.selection;
+	// The textblock (paragraph/heading/etc.) the caret sits in; depth 0 = doc.
+	const depth = $head.depth;
+	if (depth === 0) return null;
+	const block = $head.parent;
+	if (!block.isTextblock) return null;
+	const blockText = block.textContent;
+	if (blockText.trim().length === 0) return null;
+	// Content start position of the block (just inside its opening token).
+	const blockContentStart = $head.start(depth);
+	const caretInBlock = $head.parentOffset;
+	// Within one textblock there are no blank lines, so paragraph scope = the whole
+	// block; sentence scope segments the block text.
+	const range = activeFocusRange(blockText, caretInBlock, scope);
+	if (!range) return null;
+	return {
+		from: blockContentStart + range.from,
+		to: blockContentStart + range.to,
+	};
+}
+
+/** Find the nearest vertically-scrollable ancestor of `el` (the editor host). */
+function nearestScroller(el: HTMLElement | null): HTMLElement | null {
+	let node = el?.parentElement ?? null;
+	while (node) {
+		const style = window.getComputedStyle(node);
+		const oy = style.overflowY;
+		if (
+			(oy === "auto" || oy === "scroll" || oy === "overlay") &&
+			node.scrollHeight > node.clientHeight
+		) {
+			return node;
+		}
+		node = node.parentElement;
+	}
+	return null;
+}
+
+/**
+ * Center the caret line in its scroll container (typewriter scrolling). Suppressed
+ * by the caller when the selection is non-empty (the iA caveat — centering while
+ * dragging a selection janks). Uses a DOM scroll, not a PM transaction.
+ */
+function centerCaret(view: PMEditorView): void {
+	const head = view.state.selection.head;
+	const scroller = nearestScroller(view.dom as HTMLElement);
+	if (!scroller) return;
+	let coords: { top: number; bottom: number };
+	try {
+		coords = view.coordsAtPos(head);
+	} catch {
+		return;
+	}
+	const caretMidY = (coords.top + coords.bottom) / 2;
+	const rect = scroller.getBoundingClientRect();
+	const viewportMidY = rect.top + rect.height / 2;
+	scroller.scrollTop += caretMidY - viewportMidY;
+}
+
 type InnerProps = {
 	onChange?: () => void;
 	bridgeSession?: BridgeSession | null;
 	onMeta?: (meta: DocumentMeta) => void;
+	typewriter?: boolean;
+	focusDim?: boolean;
+	focusDimScope?: FocusScope;
 };
 
 const MilkdownEditorInner = forwardRef<MilkdownEditorHandle, InnerProps>(
-	function MilkdownEditorInner({ onChange, bridgeSession, onMeta }, ref) {
+	function MilkdownEditorInner(
+		{
+			onChange,
+			bridgeSession,
+			onMeta,
+			typewriter = false,
+			focusDim = false,
+			focusDimScope = "sentence",
+		},
+		ref,
+	) {
 		const editorRef = useRef<Editor | null>(null);
 		const rootRef = useRef<HTMLElement | null>(null);
 		const onChangeRef = useRef(onChange);
@@ -78,10 +171,18 @@ const MilkdownEditorInner = forwardRef<MilkdownEditorHandle, InnerProps>(
 		const metaRef = useRef<DocumentMeta>({ ...EMPTY_META });
 		const extraRef = useRef<Record<string, unknown>>({});
 		const onMetaRef = useRef(onMeta);
+		// The focus plugin is long-lived; it reads current settings through refs so
+		// toggling typewriter/dim never rebuilds the ProseMirror editor.
+		const typewriterRef = useRef(typewriter);
+		const focusDimRef = useRef(focusDim);
+		const focusScopeRef = useRef<FocusScope>(focusDimScope);
 
 		onChangeRef.current = onChange;
 		bridgeSessionRef.current = bridgeSession;
 		onMetaRef.current = onMeta;
+		typewriterRef.current = typewriter;
+		focusDimRef.current = focusDim;
+		focusScopeRef.current = focusDimScope;
 
 		useEditor((root) => {
 			rootRef.current = root;
@@ -110,6 +211,46 @@ const MilkdownEditorInner = forwardRef<MilkdownEditorHandle, InnerProps>(
 				.use(rectoSlash)
 				.use(rectoSelectionTooltip)
 				.use(listener)
+				.use(
+					// Focus mode: dim-decoration + typewriter centering. One long-lived
+					// plugin reads live settings via refs (Decision: no editor rebuild).
+					$prose(
+						() =>
+							new Plugin({
+								key: focusPluginKey,
+								props: {
+									attributes: (): { [name: string]: string } =>
+										focusDimRef.current ? { class: "recto-focus-dim" } : {},
+									decorations: (state) => {
+										if (!focusDimRef.current) return DecorationSet.empty;
+										const range = activeRichRange(state, focusScopeRef.current);
+										if (!range || range.to <= range.from) {
+											return DecorationSet.empty;
+										}
+										return DecorationSet.create(state.doc, [
+											Decoration.inline(range.from, range.to, {
+												class: "recto-focus-active",
+											}),
+										]);
+									},
+								},
+								view: () => ({
+									update: (v, prev) => {
+										if (!typewriterRef.current) return;
+										const sel = v.state.selection;
+										// iA caveat: never recenter while a selection is being made.
+										if (!sel.empty) return;
+										const moved =
+											!prev.selection.eq(sel) || !prev.doc.eq(v.state.doc);
+										if (!moved) return;
+										// Defer: scrolling synchronously inside update() can race
+										// ProseMirror's own DOM write; rAF lets layout settle.
+										requestAnimationFrame(() => centerCaret(v));
+									},
+								}),
+							}),
+					),
+				)
 				.config((ctx) => {
 					ctx.get(listenerCtx).markdownUpdated((_ctx, md, prevMd) => {
 						if (programmaticRef.current) return;
@@ -129,6 +270,22 @@ const MilkdownEditorInner = forwardRef<MilkdownEditorHandle, InnerProps>(
 
 			return editor;
 		}, []);
+
+		// Toggling focus settings doesn't itself dispatch a transaction, so the dim
+		// decoration would only update on the next edit/caret move. Poke the view with
+		// a no-op transaction so the new state applies immediately.
+		// biome-ignore lint/correctness/useExhaustiveDependencies: editorRef is a stable ref; we intentionally re-poke only on focus-setting changes
+		useEffect(() => {
+			const editor = editorRef.current;
+			if (!editor) return;
+			try {
+				const view = editor.ctx.get(editorViewCtx);
+				view.dispatch(view.state.tr.setMeta(focusPluginKey, true));
+				if (typewriter) requestAnimationFrame(() => centerCaret(view));
+			} catch {
+				// editor still mounting — the plugin reads live refs on its first render
+			}
+		}, [typewriter, focusDim, focusDimScope]);
 
 		useImperativeHandle(ref, () => ({
 			seed(markdown: string, opts?: { programmatic?: boolean }) {
@@ -300,12 +457,26 @@ type MilkdownEditorProps = {
 	className?: string;
 	bridgeSession?: BridgeSession | null;
 	onMeta?: (meta: DocumentMeta) => void;
+	typewriter?: boolean;
+	focusDim?: boolean;
+	focusDimScope?: FocusScope;
 };
 
 export const MilkdownEditor = forwardRef<
 	MilkdownEditorHandle,
 	MilkdownEditorProps
->(function MilkdownEditor({ onChange, className, bridgeSession, onMeta }, ref) {
+>(function MilkdownEditor(
+	{
+		onChange,
+		className,
+		bridgeSession,
+		onMeta,
+		typewriter,
+		focusDim,
+		focusDimScope,
+	},
+	ref,
+) {
 	return (
 		<MilkdownProvider>
 			<div className={className}>
@@ -314,6 +485,9 @@ export const MilkdownEditor = forwardRef<
 					onChange={onChange}
 					bridgeSession={bridgeSession}
 					onMeta={onMeta}
+					typewriter={typewriter}
+					focusDim={focusDim}
+					focusDimScope={focusDimScope}
 				/>
 			</div>
 		</MilkdownProvider>

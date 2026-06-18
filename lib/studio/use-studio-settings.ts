@@ -2,7 +2,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import type { FocusScope } from "@/lib/editor/focus-range";
 import type { GoalKind } from "@/lib/stats/streak";
+
+export type { FocusScope };
 
 /** The writing-body typeface — the chrome is always sans. */
 export type ReadingFont = "sans" | "serif";
@@ -63,6 +66,12 @@ export type StudioSettings = {
 	goalStyle: GoalStyle;
 	/** Which goal the status-bar widget tracks: document or daily (A/B toggle 2). */
 	goalScope: GoalScope;
+	/** Typewriter scrolling — keep the caret line vertically centered (plan 003). */
+	typewriter: boolean;
+	/** Focus dimming — fade everything but the active sentence/paragraph. */
+	focusDim: boolean;
+	/** Granularity of the focus-dim highlight (A/B toggle). */
+	focusDimScope: FocusScope;
 };
 
 export const READING_SCALE_MIN = 0.8;
@@ -82,6 +91,10 @@ const DEFAULTS: StudioSettings = {
 	dailyGoalTarget: 0,
 	goalStyle: "ring",
 	goalScope: "document",
+	// Focus mode is opt-in — off by default so the studio looks unchanged on first run.
+	typewriter: false,
+	focusDim: false,
+	focusDimScope: "sentence",
 };
 
 const STORAGE_KEY = "recto:studio-settings";
@@ -136,6 +149,16 @@ function loadSettings(): StudioSettings {
 					: DEFAULTS.dailyGoalTarget,
 			goalStyle: parsed.goalStyle === "bar" ? "bar" : "ring",
 			goalScope: parsed.goalScope === "daily" ? "daily" : "document",
+			typewriter:
+				typeof parsed.typewriter === "boolean"
+					? parsed.typewriter
+					: DEFAULTS.typewriter,
+			focusDim:
+				typeof parsed.focusDim === "boolean"
+					? parsed.focusDim
+					: DEFAULTS.focusDim,
+			focusDimScope:
+				parsed.focusDimScope === "paragraph" ? "paragraph" : "sentence",
 		};
 	} catch {
 		return DEFAULTS;
@@ -163,6 +186,10 @@ export type StudioSettingsApi = StudioSettings & {
 	toggleGoalStyle: () => void;
 	setGoalScope: (scope: GoalScope) => void;
 	toggleGoalScope: () => void;
+	toggleTypewriter: () => void;
+	toggleFocusDim: () => void;
+	setFocusDimScope: (scope: FocusScope) => void;
+	cycleFocusDimScope: () => void;
 };
 
 /**
@@ -287,6 +314,25 @@ export function useStudioSettings(): StudioSettingsApi {
 		}));
 	}, []);
 
+	const toggleTypewriter = useCallback(() => {
+		setSettings((s) => ({ ...s, typewriter: !s.typewriter }));
+	}, []);
+
+	const toggleFocusDim = useCallback(() => {
+		setSettings((s) => ({ ...s, focusDim: !s.focusDim }));
+	}, []);
+
+	const setFocusDimScope = useCallback((focusDimScope: FocusScope) => {
+		setSettings((s) => ({ ...s, focusDimScope }));
+	}, []);
+
+	const cycleFocusDimScope = useCallback(() => {
+		setSettings((s) => ({
+			...s,
+			focusDimScope: s.focusDimScope === "sentence" ? "paragraph" : "sentence",
+		}));
+	}, []);
+
 	return {
 		...settings,
 		setTheme,
@@ -309,5 +355,9 @@ export function useStudioSettings(): StudioSettingsApi {
 		toggleGoalStyle,
 		setGoalScope,
 		toggleGoalScope,
+		toggleTypewriter,
+		toggleFocusDim,
+		setFocusDimScope,
+		cycleFocusDimScope,
 	};
 }

@@ -22,6 +22,7 @@ import { PreviewPane } from "@/lib/editor/preview";
 import { type DocumentMeta, splitFrontmatter } from "@/lib/markdown";
 import type { CaretPosition, Mode, VimSubMode } from "@/lib/modes/types";
 import { useStudioSettingsContext } from "@/lib/studio/settings-context";
+import { useIsMobile } from "@/lib/studio/use-is-mobile";
 import { cn } from "@/lib/utils";
 import type { PaneLeaf } from "@/lib/workspace/types";
 import {
@@ -57,7 +58,12 @@ export function PaneEditor({
 	onClose,
 }: PaneEditorProps) {
 	const { actions, registry } = useWorkspace();
-	const { spellcheck } = useStudioSettingsContext();
+	const { spellcheck, typewriter, focusDim, focusDimScope } =
+		useStudioSettingsContext();
+	// Typewriter fights the mobile soft keyboard (which manages the viewport
+	// itself), so disable centering on phones; dimming stays on for all viewports.
+	const isMobile = useIsMobile();
+	const typewriterEffective = typewriter && !isMobile;
 	const richRef = useRef<MilkdownEditorHandle>(null);
 	const cmRef = useRef<CodeMirrorEditorHandle>(null);
 	const [vimSubMode, setVimSubMode] = useState<VimSubMode>("normal");
@@ -466,6 +472,9 @@ export function PaneEditor({
 								bridgeSession={bridgeSession}
 								onChange={sync?.handleEditorChange}
 								onMeta={handleEditorMeta}
+								typewriter={typewriterEffective}
+								focusDim={focusDim}
+								focusDimScope={focusDimScope}
 								className="milkdown"
 							/>
 						</div>
@@ -478,6 +487,9 @@ export function PaneEditor({
 							onChange={sync?.handleEditorChange}
 							onVimModeChange={setVimSubMode}
 							spellcheck={spellcheck}
+							typewriter={typewriterEffective}
+							focusDim={focusDim}
+							focusDimScope={focusDimScope}
 							className={`codemirror ${surfaceClass} font-[family-name:var(--font-mono)] text-[length:var(--text-body)]`}
 						/>
 					</div>

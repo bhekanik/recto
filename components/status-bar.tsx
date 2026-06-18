@@ -1,9 +1,11 @@
 "use client";
 
 import {
+	AlignVerticalJustifyCenter,
 	Eye,
 	FileCode,
 	Flame,
+	Highlighter,
 	Keyboard,
 	Minus,
 	Palette,
@@ -22,6 +24,7 @@ import {
 } from "@/lib/modes/types";
 import type { GoalKind, GoalProgress } from "@/lib/stats/streak";
 import {
+	type FocusScope,
 	type GoalScope,
 	type GoalStyle,
 	type ReadingFont,
@@ -56,6 +59,13 @@ type StatusBarProps = {
 	canZoomOut: boolean;
 	spellcheck: boolean;
 	onToggleSpellcheck: () => void;
+	// Focus mode (plan 003) — typewriter scroll + sentence/paragraph dimming.
+	typewriter: boolean;
+	onToggleTypewriter: () => void;
+	focusDim: boolean;
+	onToggleFocusDim: () => void;
+	focusDimScope: FocusScope;
+	onCycleDimScope: () => void;
 	zen: boolean;
 	onToggleZen: () => void;
 	// Word goals / session / streak (plan 002) — display-only, never nags.
@@ -245,6 +255,12 @@ export function StatusBar({
 	canZoomOut,
 	spellcheck,
 	onToggleSpellcheck,
+	typewriter,
+	onToggleTypewriter,
+	focusDim,
+	onToggleFocusDim,
+	focusDimScope,
+	onCycleDimScope,
 	zen,
 	onToggleZen,
 	goalStyle,
@@ -363,6 +379,41 @@ export function StatusBar({
 					>
 						<SpellCheck aria-hidden className="size-[15px]" />
 					</button>
+
+					<span aria-hidden className="h-3.5 w-px bg-[var(--color-line)]" />
+
+					{/* Focus mode — typewriter scroll + sentence/paragraph dimming. */}
+					<button
+						type="button"
+						className={cn(iconBtn, typewriter && "text-[var(--color-accent)]")}
+						onClick={onToggleTypewriter}
+						aria-pressed={typewriter}
+						title={`Typewriter scrolling: ${typewriter ? "On" : "Off"}`}
+						aria-label="Toggle typewriter scrolling"
+					>
+						<AlignVerticalJustifyCenter aria-hidden className="size-[15px]" />
+					</button>
+					<button
+						type="button"
+						className={cn(iconBtn, focusDim && "text-[var(--color-accent)]")}
+						onClick={onToggleFocusDim}
+						aria-pressed={focusDim}
+						title={`Focus dimming: ${focusDim ? "On" : "Off"}`}
+						aria-label="Toggle focus dimming"
+					>
+						<Highlighter aria-hidden className="size-[15px]" />
+					</button>
+					{focusDim && (
+						<button
+							type="button"
+							onClick={onCycleDimScope}
+							title={`Focus scope: ${focusDimScope === "sentence" ? "Sentence" : "Paragraph"} — click to switch`}
+							aria-label="Cycle focus dim scope"
+							className="flex h-6 items-center rounded-[var(--radius-sm)] px-2 text-[length:var(--text-ui-sm)] capitalize text-[var(--color-ink-tertiary)] transition-colors duration-[var(--motion-instant)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-ink-secondary)]"
+						>
+							{focusDimScope}
+						</button>
+					)}
 
 					{/* Session words + writing streak — quiet, no animation, no nag. */}
 					{(sessionWords > 0 || streakDays > 0) && (

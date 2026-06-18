@@ -7,11 +7,19 @@ import {
 	type Extension,
 	Transaction,
 } from "@codemirror/state";
-import { drawSelection, EditorView } from "@codemirror/view";
+import {
+	Decoration,
+	type DecorationSet,
+	drawSelection,
+	EditorView,
+	ViewPlugin,
+	type ViewUpdate,
+} from "@codemirror/view";
 import { getCM, Vim, vim } from "@replit/codemirror-vim";
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import type { BridgeSession } from "@/lib/bridge/coordinator";
 import { bridgeOrigin } from "@/lib/bridge/protocol";
+import { activeFocusRange, type FocusScope } from "@/lib/editor/focus-range";
 import type { FormatCommand } from "@/lib/editor/format";
 import type { EditorHandle } from "@/lib/editor/handle";
 import { normalizeMarkdown } from "@/lib/markdown";
@@ -31,10 +39,85 @@ type CodeMirrorEditorProps = {
 	bridgeSession?: BridgeSession | null;
 	/** Native browser spellcheck. CM force-sets false, so we override explicitly. */
 	spellcheck?: boolean;
+	/** Typewriter scrolling — keep the caret line vertically centered (plan 003). */
+	typewriter?: boolean;
+	/** Focus dimming — fade everything but the active sentence/paragraph. */
+	focusDim?: boolean;
+	/** Granularity of the focus-dim highlight. */
+	focusDimScope?: FocusScope;
 };
 
 function spellcheckAttrs(enabled: boolean): Extension {
 	return EditorView.contentAttributes.of({ spellcheck: String(enabled) });
+}
+
+/** Decoration marking the active sentence/paragraph so CSS can keep it bright. */
+const focusActiveMark = Decoration.mark({ class: "recto-focus-active" });
+
+/**
+ * Build the focus-mode extension for CodeMirror: a dim-decoration ViewPlugin
+ * (recomputes the active range on doc/selection change) plus a typewriter
+ * ViewPlugin (centers the caret on caret moves, suppressed during a non-empty
+ * selection per the iA caveat). When `focusDim` is on the content gets the
+ * `recto-focus-dim` class so the container dims and only the active mark stays
+ * primary.
+ */
+function buildFocusExtension(
+	typewriter: boolean,
+	focusDim: boolean,
+	scope: FocusScope,
+): Extension {
+	const computeDeco = (view: EditorView): DecorationSet => {
+		if (!focusDim) return Decoration.none;
+		const range = activeFocusRange(
+			view.state.doc.toString(),
+			view.state.selection.main.head,
+			scope,
+		);
+		if (!range || range.to <= range.from) return Decoration.none;
+		return Decoration.set([focusActiveMark.range(range.from, range.to)]);
+	};
+
+	const dimPlugin = ViewPlugin.fromClass(
+		class {
+			deco: DecorationSet;
+			constructor(view: EditorView) {
+				this.deco = computeDeco(view);
+			}
+			update(u: ViewUpdate) {
+				if (u.docChanged || u.selectionSet) {
+					this.deco = computeDeco(u.view);
+				}
+			}
+		},
+		{ decorations: (v) => v.deco },
+	);
+
+	const typewriterPlugin = ViewPlugin.fromClass(
+		class {
+			update(u: ViewUpdate) {
+				if (!typewriter) return;
+				if (!(u.docChanged || u.selectionSet)) return;
+				const sel = u.view.state.selection.main;
+				// iA caveat: never recenter while a selection is being made/extended.
+				if (!sel.empty) return;
+				const head = sel.head;
+				// Dispatching a scroll effect synchronously inside update() throws
+				// ("calls get during an update") — defer to the next frame.
+				requestAnimationFrame(() => {
+					u.view.dispatch({
+						effects: EditorView.scrollIntoView(head, { y: "center" }),
+					});
+				});
+			}
+		},
+	);
+
+	const containerClass = EditorView.editorAttributes.of({
+		class: focusDim ? "recto-focus-dim" : "",
+	});
+
+	return [dimPlugin, typewriterPlugin, containerClass];
 }
 
 function mapVimMode(mode: string): VimSubMode {
@@ -210,6 +293,9 @@ export const CodeMirrorEditor = forwardRef<
 		className,
 		bridgeSession,
 		spellcheck = true,
+		typewriter = false,
+		focusDim = false,
+		focusDimScope = "sentence",
 	},
 	ref,
 ) {
@@ -221,10 +307,17 @@ export const CodeMirrorEditor = forwardRef<
 	const programmaticRef = useRef(false);
 	const vimCompartmentRef = useRef(new Compartment());
 	const spellcheckCompartmentRef = useRef(new Compartment());
+	const focusCompartmentRef = useRef(new Compartment());
 	const vimEnabledRef = useRef(vimEnabled);
 	vimEnabledRef.current = vimEnabled;
 	const spellcheckRef = useRef(spellcheck);
 	spellcheckRef.current = spellcheck;
+	const typewriterRef = useRef(typewriter);
+	typewriterRef.current = typewriter;
+	const focusDimRef = useRef(focusDim);
+	focusDimRef.current = focusDim;
+	const focusScopeRef = useRef<FocusScope>(focusDimScope);
+	focusScopeRef.current = focusDimScope;
 
 	onChangeRef.current = onChange;
 	onVimModeChangeRef.current = onVimModeChange;
@@ -255,6 +348,13 @@ export const CodeMirrorEditor = forwardRef<
 			vimExt,
 			spellcheckCompartmentRef.current.of(
 				spellcheckAttrs(spellcheckRef.current),
+			),
+			focusCompartmentRef.current.of(
+				buildFocusExtension(
+					typewriterRef.current,
+					focusDimRef.current,
+					focusScopeRef.current,
+				),
 			),
 			drawSelection(),
 			markdown(),
@@ -302,6 +402,27 @@ export const CodeMirrorEditor = forwardRef<
 			),
 		});
 	}, [spellcheck]);
+
+	useEffect(() => {
+		const view = viewRef.current;
+		if (!view) return;
+		view.dispatch({
+			effects: focusCompartmentRef.current.reconfigure(
+				buildFocusExtension(typewriter, focusDim, focusDimScope),
+			),
+		});
+		// Reconfiguring rebuilds the plugins but doesn't re-fire their update(); when
+		// typewriter is freshly on, center the current caret right away.
+		if (typewriter && view.state.selection.main.empty) {
+			requestAnimationFrame(() => {
+				view.dispatch({
+					effects: EditorView.scrollIntoView(view.state.selection.main.head, {
+						y: "center",
+					}),
+				});
+			});
+		}
+	}, [typewriter, focusDim, focusDimScope]);
 
 	useImperativeHandle(ref, () => ({
 		seed(markdownText: string, opts?: { programmatic?: boolean }) {

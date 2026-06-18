@@ -435,6 +435,15 @@ function StudioWorkspace() {
 				case "toggle-toolbar":
 					settings.toggleTopToolbar();
 					return;
+				case "toggle-typewriter":
+					settings.toggleTypewriter();
+					return;
+				case "toggle-focus-dim":
+					settings.toggleFocusDim();
+					return;
+				case "cycle-dim-scope":
+					settings.cycleFocusDimScope();
+					return;
 				case "set-goal":
 					setGoalConfigOpen(true);
 					return;
@@ -539,6 +548,14 @@ function StudioWorkspace() {
 					return;
 				case "toggle-focus":
 					setZen((v) => !v);
+					return;
+				case "toggle-typewriter":
+					// Route through dispatchRef so the keydown listener isn't re-subscribed
+					// on every settings change (settings stays out of this effect's deps).
+					dispatchRef.current("toggle-typewriter");
+					return;
+				case "toggle-focus-dim":
+					dispatchRef.current("toggle-focus-dim");
 					return;
 			}
 		});
@@ -710,6 +727,21 @@ function StudioWorkspace() {
 							spellcheck={settings.spellcheck}
 							onToggleSpellcheck={() => {
 								settings.toggleSpellcheck();
+								dispatchFocusEditor();
+							}}
+							typewriter={settings.typewriter}
+							onToggleTypewriter={() => {
+								settings.toggleTypewriter();
+								dispatchFocusEditor();
+							}}
+							focusDim={settings.focusDim}
+							onToggleFocusDim={() => {
+								settings.toggleFocusDim();
+								dispatchFocusEditor();
+							}}
+							focusDimScope={settings.focusDimScope}
+							onCycleDimScope={() => {
+								settings.cycleFocusDimScope();
 								dispatchFocusEditor();
 							}}
 							zen={zen}

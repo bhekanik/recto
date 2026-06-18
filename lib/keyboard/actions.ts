@@ -44,6 +44,9 @@ export type ActionId =
 	| "zoom-reset"
 	| "toggle-spellcheck"
 	| "toggle-toolbar"
+	| "toggle-typewriter"
+	| "toggle-focus-dim"
+	| "cycle-dim-scope"
 	| "set-goal"
 	| "toggle-goal-style"
 	| "toggle-goal-scope"
@@ -259,6 +262,27 @@ export const ACTIONS: ActionDef[] = [
 		label: "Toggle formatting toolbar",
 		section: "View",
 		aliases: ["top toolbar", "format bar"],
+		shortcut: { mac: "", other: "" },
+	},
+	{
+		id: "toggle-typewriter",
+		label: "Toggle typewriter scrolling",
+		section: "View",
+		aliases: ["typewriter", "center line", "scroll", "focus"],
+		shortcut: { mac: "Ctrl+⇧+T", other: "Ctrl+Shift+T" },
+	},
+	{
+		id: "toggle-focus-dim",
+		label: "Toggle focus dimming",
+		section: "View",
+		aliases: ["dim", "focus text", "highlight current", "spotlight"],
+		shortcut: { mac: "Ctrl+⇧+D", other: "Ctrl+Shift+D" },
+	},
+	{
+		id: "cycle-dim-scope",
+		label: "Focus scope: sentence / paragraph",
+		section: "View",
+		aliases: ["sentence", "paragraph", "scope", "dim scope"],
 		shortcut: { mac: "", other: "" },
 	},
 	{

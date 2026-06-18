@@ -653,6 +653,29 @@
 	color: inherit !important;
 }
 
+/* Focus dimming (plan 003) — when on, the editable surface fades to tertiary ink
+   and only the active sentence/paragraph (decorated .recto-focus-active) stays at
+   primary. A single colour transition on the container gives the smooth fade for
+   free; preview mode is read-only and intentionally excluded.
+   CM: editorAttributes puts .recto-focus-dim on .cm-editor → dim .cm-content.
+   PM: the plugin's props.attributes puts .recto-focus-dim on .ProseMirror itself. */
+.recto-focus-dim .cm-content,
+.ProseMirror.recto-focus-dim {
+	color: var(--color-ink-tertiary);
+	transition: color var(--motion-base) var(--ease-out);
+}
+.recto-focus-dim .cm-content .recto-focus-active,
+.ProseMirror.recto-focus-dim .recto-focus-active,
+.ProseMirror.recto-focus-dim .recto-focus-active * {
+	color: var(--color-ink-primary);
+}
+@media (prefers-reduced-motion: reduce) {
+	.recto-focus-dim .cm-content,
+	.ProseMirror.recto-focus-dim {
+		transition: none;
+	}
+}
+
 .milkdown-slash-menu {
 	z-index: 50;
 }
