@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import type { GoalKind } from "@/lib/stats/streak";
+
 /** The writing-body typeface — the chrome is always sans. */
 export type ReadingFont = "sans" | "serif";
 
@@ -12,6 +14,19 @@ export type Theme = "twilight" | "aurora" | "dawn" | "moonlit";
 export type DiffGranularity = "word" | "line";
 /** How the history compare diff is laid out. */
 export type DiffLayout = "inline" | "side-by-side";
+
+/** Goal widget shape in the status bar (A/B toggle 1). */
+export type GoalStyle = "ring" | "bar";
+/** Which goal the status-bar widget tracks (A/B toggle 2). */
+export type GoalScope = "document" | "daily";
+
+const GOAL_KINDS: GoalKind[] = ["at-least", "about", "at-most"];
+
+/** Clamp a goal target to a non-negative integer (0 = no goal). */
+function clampGoalTarget(value: number): number {
+	if (!Number.isFinite(value)) return 0;
+	return Math.max(0, Math.round(value));
+}
 
 /** Ordered for the cycle control + command palette; first is the default. */
 export const THEMES: { id: Theme; label: string; hint: string }[] = [
@@ -38,6 +53,16 @@ export type StudioSettings = {
 	diffGranularity: DiffGranularity;
 	/** Layout of the history compare diff. */
 	diffLayout: DiffLayout;
+	/** Per-document word goal target (0 = no goal). Per-device preference. */
+	wordGoalTarget: number;
+	/** Direction of the word goal (at-least / about / at-most). */
+	wordGoalKind: GoalKind;
+	/** Optional daily word goal target (0 = no daily goal). Per-device preference. */
+	dailyGoalTarget: number;
+	/** Goal widget display: ring or bar (A/B toggle 1). */
+	goalStyle: GoalStyle;
+	/** Which goal the status-bar widget tracks: document or daily (A/B toggle 2). */
+	goalScope: GoalScope;
 };
 
 export const READING_SCALE_MIN = 0.8;
@@ -52,6 +77,11 @@ const DEFAULTS: StudioSettings = {
 	topToolbar: true,
 	diffGranularity: "word",
 	diffLayout: "inline",
+	wordGoalTarget: 0,
+	wordGoalKind: "at-least",
+	dailyGoalTarget: 0,
+	goalStyle: "ring",
+	goalScope: "document",
 };
 
 const STORAGE_KEY = "recto:studio-settings";
@@ -92,6 +122,20 @@ function loadSettings(): StudioSettings {
 			diffGranularity: parsed.diffGranularity === "line" ? "line" : "word",
 			diffLayout:
 				parsed.diffLayout === "side-by-side" ? "side-by-side" : "inline",
+			wordGoalTarget:
+				typeof parsed.wordGoalTarget === "number"
+					? clampGoalTarget(parsed.wordGoalTarget)
+					: DEFAULTS.wordGoalTarget,
+			wordGoalKind:
+				parsed.wordGoalKind && GOAL_KINDS.includes(parsed.wordGoalKind)
+					? parsed.wordGoalKind
+					: DEFAULTS.wordGoalKind,
+			dailyGoalTarget:
+				typeof parsed.dailyGoalTarget === "number"
+					? clampGoalTarget(parsed.dailyGoalTarget)
+					: DEFAULTS.dailyGoalTarget,
+			goalStyle: parsed.goalStyle === "bar" ? "bar" : "ring",
+			goalScope: parsed.goalScope === "daily" ? "daily" : "document",
 		};
 	} catch {
 		return DEFAULTS;
@@ -112,6 +156,13 @@ export type StudioSettingsApi = StudioSettings & {
 	toggleDiffGranularity: () => void;
 	setDiffLayout: (l: DiffLayout) => void;
 	toggleDiffLayout: () => void;
+	setWordGoalTarget: (target: number) => void;
+	setWordGoalKind: (kind: GoalKind) => void;
+	setDailyGoalTarget: (target: number) => void;
+	setGoalStyle: (style: GoalStyle) => void;
+	toggleGoalStyle: () => void;
+	setGoalScope: (scope: GoalScope) => void;
+	toggleGoalScope: () => void;
 };
 
 /**
@@ -202,6 +253,40 @@ export function useStudioSettings(): StudioSettingsApi {
 		}));
 	}, []);
 
+	const setWordGoalTarget = useCallback((target: number) => {
+		setSettings((s) => ({ ...s, wordGoalTarget: clampGoalTarget(target) }));
+	}, []);
+
+	const setWordGoalKind = useCallback((wordGoalKind: GoalKind) => {
+		setSettings((s) => ({ ...s, wordGoalKind }));
+	}, []);
+
+	const setDailyGoalTarget = useCallback((target: number) => {
+		setSettings((s) => ({ ...s, dailyGoalTarget: clampGoalTarget(target) }));
+	}, []);
+
+	const setGoalStyle = useCallback((goalStyle: GoalStyle) => {
+		setSettings((s) => ({ ...s, goalStyle }));
+	}, []);
+
+	const toggleGoalStyle = useCallback(() => {
+		setSettings((s) => ({
+			...s,
+			goalStyle: s.goalStyle === "ring" ? "bar" : "ring",
+		}));
+	}, []);
+
+	const setGoalScope = useCallback((goalScope: GoalScope) => {
+		setSettings((s) => ({ ...s, goalScope }));
+	}, []);
+
+	const toggleGoalScope = useCallback(() => {
+		setSettings((s) => ({
+			...s,
+			goalScope: s.goalScope === "document" ? "daily" : "document",
+		}));
+	}, []);
+
 	return {
 		...settings,
 		setTheme,
@@ -217,5 +302,12 @@ export function useStudioSettings(): StudioSettingsApi {
 		toggleDiffGranularity,
 		setDiffLayout,
 		toggleDiffLayout,
+		setWordGoalTarget,
+		setWordGoalKind,
+		setDailyGoalTarget,
+		setGoalStyle,
+		toggleGoalStyle,
+		setGoalScope,
+		toggleGoalScope,
 	};
 }

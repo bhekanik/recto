@@ -15,6 +15,7 @@ import type * as history from "../history.js";
 import type * as retention from "../retention.js";
 import type * as versions from "../versions.js";
 import type * as workspaces from "../workspaces.js";
+import type * as writingStats from "../writingStats.js";
 
 import type {
   ApiFromModules,
@@ -30,6 +31,7 @@ declare const fullApi: ApiFromModules<{
   retention: typeof retention;
   versions: typeof versions;
   workspaces: typeof workspaces;
+  writingStats: typeof writingStats;
 }>;
 
 /**

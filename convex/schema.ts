@@ -49,4 +49,15 @@ export default defineSchema({
 		kind: v.union(v.literal("auto"), v.literal("manual")),
 		createdAt: v.number(),
 	}).index("by_document", ["documentId"]),
+
+	// Per-user daily writing aggregates (local-date keyed) — powers the streak and
+	// the optional daily goal. Single-user; scoped by userId. (plan 002)
+	writingStats: defineTable({
+		userId: v.string(),
+		date: v.string(), // local calendar date "YYYY-MM-DD", computed client-side
+		words: v.number(), // max words-written observed for this day (monotonic; see writingStats.record)
+		updatedAt: v.number(),
+	})
+		.index("by_user", ["userId"])
+		.index("by_user_date", ["userId", "date"]),
 });

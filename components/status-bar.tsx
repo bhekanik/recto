@@ -3,6 +3,7 @@
 import {
 	Eye,
 	FileCode,
+	Flame,
 	Keyboard,
 	Minus,
 	Palette,
@@ -12,13 +13,17 @@ import {
 	Type,
 } from "lucide-react";
 
+import { GoalPopover } from "@/components/goal-popover";
 import {
 	MODE_RING,
 	type Mode,
 	modeToLabel,
 	type VimSubMode,
 } from "@/lib/modes/types";
+import type { GoalKind, GoalProgress } from "@/lib/stats/streak";
 import {
+	type GoalScope,
+	type GoalStyle,
 	type ReadingFont,
 	THEMES,
 	type Theme,
@@ -53,6 +58,24 @@ type StatusBarProps = {
 	onToggleSpellcheck: () => void;
 	zen: boolean;
 	onToggleZen: () => void;
+	// Word goals / session / streak (plan 002) — display-only, never nags.
+	goalStyle: GoalStyle;
+	goalProgress: GoalProgress;
+	goalTarget: number; // 0 = hide the widget
+	goalLabel: string;
+	sessionWords: number;
+	streakDays: number;
+	goalConfigOpen: boolean;
+	onGoalConfigOpenChange: (open: boolean) => void;
+	wordGoalTarget: number;
+	onWordGoalTargetChange: (target: number) => void;
+	dailyGoalTarget: number;
+	onDailyGoalTargetChange: (target: number) => void;
+	wordGoalKind: GoalKind;
+	onWordGoalKindChange: (kind: GoalKind) => void;
+	goalScope: GoalScope;
+	onGoalScopeChange: (scope: GoalScope) => void;
+	onGoalStyleChange: (style: GoalStyle) => void;
 };
 
 function formatWordCount(count: number): string {
@@ -144,6 +167,67 @@ function ModeSwitcher({
 	);
 }
 
+// Inline progress indicator — a ~14px ring or a thin bar — driven by the goal
+// ratio. Custom SVG is lighter than a charting lib for one ring (plan-justified).
+// Coloured with existing OKLCH tokens only; success tint when the goal is met.
+function GoalIndicator({
+	style,
+	progress,
+}: {
+	style: GoalStyle;
+	progress: GoalProgress;
+}) {
+	const fill = progress.met ? "var(--color-success)" : "var(--color-accent)";
+
+	if (style === "bar") {
+		return (
+			<span
+				aria-hidden
+				className="block h-[5px] w-10 overflow-hidden rounded-full bg-[var(--color-line)]"
+			>
+				<span
+					className="block h-full rounded-full transition-[width] duration-[var(--motion-base)]"
+					style={{
+						width: `${Math.round(progress.ratio * 100)}%`,
+						backgroundColor: fill,
+					}}
+				/>
+			</span>
+		);
+	}
+
+	// Ring: a 14px circle, r=5, circumference ≈ 31.42; dashoffset shows progress.
+	const r = 5;
+	const circumference = 2 * Math.PI * r;
+	const offset = circumference * (1 - progress.ratio);
+	return (
+		<svg aria-hidden role="img" width="14" height="14" viewBox="0 0 14 14">
+			<title>Goal progress</title>
+			<circle
+				cx="7"
+				cy="7"
+				r={r}
+				fill="none"
+				stroke="var(--color-line)"
+				strokeWidth="2"
+			/>
+			<circle
+				cx="7"
+				cy="7"
+				r={r}
+				fill="none"
+				stroke={fill}
+				strokeWidth="2"
+				strokeLinecap="round"
+				strokeDasharray={circumference}
+				strokeDashoffset={offset}
+				transform="rotate(-90 7 7)"
+				style={{ transition: "stroke-dashoffset var(--motion-base)" }}
+			/>
+		</svg>
+	);
+}
+
 export function StatusBar({
 	wordCount,
 	syncStatus,
@@ -163,6 +247,23 @@ export function StatusBar({
 	onToggleSpellcheck,
 	zen,
 	onToggleZen,
+	goalStyle,
+	goalProgress,
+	goalTarget,
+	goalLabel,
+	sessionWords,
+	streakDays,
+	goalConfigOpen,
+	onGoalConfigOpenChange,
+	wordGoalTarget,
+	onWordGoalTargetChange,
+	dailyGoalTarget,
+	onDailyGoalTargetChange,
+	wordGoalKind,
+	onWordGoalKindChange,
+	goalScope,
+	onGoalScopeChange,
+	onGoalStyleChange,
 }: StatusBarProps) {
 	const zoomPct = Math.round(readingScale * 100);
 	const themeLabel = THEMES.find((t) => t.id === theme)?.label ?? theme;
@@ -262,7 +363,68 @@ export function StatusBar({
 					>
 						<SpellCheck aria-hidden className="size-[15px]" />
 					</button>
+
+					{/* Session words + writing streak — quiet, no animation, no nag. */}
+					{(sessionWords > 0 || streakDays > 0) && (
+						<>
+							<span aria-hidden className="h-3.5 w-px bg-[var(--color-line)]" />
+							<span className="flex items-center gap-[var(--space-2)] tabular-nums text-[var(--color-ink-tertiary)]">
+								{sessionWords > 0 && (
+									<span
+										title={`${sessionWords.toLocaleString()} words written this session`}
+									>
+										+{sessionWords.toLocaleString()}
+									</span>
+								)}
+								{streakDays > 0 && (
+									<span
+										className="flex items-center gap-1"
+										title={`${streakDays}-day writing streak`}
+									>
+										<Flame
+											aria-hidden
+											className="size-[14px] text-[var(--color-accent)]"
+										/>
+										{streakDays}
+									</span>
+								)}
+							</span>
+						</>
+					)}
 				</div>
+
+				{/* Goal widget — the ring/bar shows only when a goal is set. When no
+				    goal exists, no permanent control is shown (§6); the popover is
+				    still reachable from the command palette, and a transient "Set
+				    goal" trigger is mounted only while that popover is open so it can
+				    anchor. */}
+				{(goalTarget > 0 || goalConfigOpen) && (
+					<>
+						<span aria-hidden className="h-3.5 w-px bg-[var(--color-line)]" />
+						<GoalPopover
+							open={goalConfigOpen}
+							onOpenChange={onGoalConfigOpenChange}
+							triggerLabel={goalLabel}
+							triggerClassName="flex h-6 items-center gap-1.5 rounded-[var(--radius-sm)] px-1.5 text-[length:var(--text-ui-sm)] text-[var(--color-ink-tertiary)] transition-colors duration-[var(--motion-instant)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-ink-secondary)]"
+							wordGoalTarget={wordGoalTarget}
+							onWordGoalTargetChange={onWordGoalTargetChange}
+							dailyGoalTarget={dailyGoalTarget}
+							onDailyGoalTargetChange={onDailyGoalTargetChange}
+							wordGoalKind={wordGoalKind}
+							onWordGoalKindChange={onWordGoalKindChange}
+							goalScope={goalScope}
+							onGoalScopeChange={onGoalScopeChange}
+							goalStyle={goalStyle}
+							onGoalStyleChange={onGoalStyleChange}
+						>
+							{goalTarget > 0 ? (
+								<GoalIndicator style={goalStyle} progress={goalProgress} />
+							) : (
+								"Set goal"
+							)}
+						</GoalPopover>
+					</>
+				)}
 
 				<span aria-hidden className="h-3.5 w-px bg-[var(--color-line)]" />
 

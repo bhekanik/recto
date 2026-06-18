@@ -4,7 +4,8 @@ import { useClerk } from "@clerk/nextjs";
 import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import { Command as CommandIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useDebouncedCallback } from "use-debounce";
 import { CommandPalette } from "@/components/command-palette";
 import { DocumentSwitcher } from "@/components/document-switcher";
 import { EmptyState } from "@/components/empty-state";
@@ -34,6 +35,7 @@ import {
 	dispatchModeSwitch,
 	resolveModeAction,
 } from "@/lib/keyboard/app-shortcuts";
+import { currentStreak, goalProgress, localDateKey } from "@/lib/stats/streak";
 import { StudioSettingsProvider } from "@/lib/studio/settings-context";
 import { useIsMobile } from "@/lib/studio/use-is-mobile";
 import {
@@ -181,6 +183,85 @@ function StudioWorkspace() {
 	const activeSync = activeDocId ? getDocumentSync(activeDocId) : null;
 	const activeTitle =
 		documents?.find((d) => d._id === activeDocId)?.title ?? "Untitled";
+	const activeWordCount = activeSync?.wordCount ?? 0;
+
+	// --- Word goals, session stats, and the cross-device streak (plan 002) ---
+	const [goalConfigOpen, setGoalConfigOpen] = useState(false);
+
+	// Per-document session baseline: the word count first observed this mount.
+	// A new mount = a new session; switching docs keeps each doc's own baseline.
+	const sessionBaselineRef = useRef<Map<Id<"documents">, number>>(new Map());
+	if (
+		activeDocId &&
+		activeSync &&
+		!sessionBaselineRef.current.has(activeDocId)
+	) {
+		sessionBaselineRef.current.set(activeDocId, activeWordCount);
+	}
+	const sessionBaseline = activeDocId
+		? (sessionBaselineRef.current.get(activeDocId) ?? activeWordCount)
+		: activeWordCount;
+	const sessionWords = Math.max(activeWordCount - sessionBaseline, 0);
+
+	// Cross-device daily totals (the streak source of truth lives in Convex).
+	const dailyStats = useQuery(api.writingStats.list, {});
+	const today = localDateKey();
+	const streakDays = dailyStats ? currentStreak(dailyStats, today) : 0;
+	const persistedTodayWords =
+		dailyStats?.find((s) => s.date === today)?.words ?? 0;
+	// "Today's words" for the daily goal = the day's high-water mark, plus the
+	// live document count if it's currently higher (single active doc is typical).
+	const dailyWords = Math.max(persistedTodayWords, activeWordCount);
+
+	// Goal progress for whichever scope the (switchable) setting selects.
+	const goalWords =
+		settings.goalScope === "daily" ? dailyWords : activeWordCount;
+	const goalTarget =
+		settings.goalScope === "daily"
+			? settings.dailyGoalTarget
+			: settings.wordGoalTarget;
+	const goalProgressValue = useMemo(
+		() => goalProgress(goalWords, goalTarget, settings.wordGoalKind),
+		[goalWords, goalTarget, settings.wordGoalKind],
+	);
+	const goalLabel =
+		goalTarget > 0
+			? `${settings.goalScope === "daily" ? "Daily goal" : "Goal"}: ${goalWords.toLocaleString()} / ${goalTarget.toLocaleString()} words`
+			: "Set word goal";
+
+	// Low-frequency daily-total flush — coarse on purpose. Streaks need only
+	// day-granularity, so a ~30s debounce keeps stats writes off the typing hot
+	// path; the mutation is monotonic, so redundant/late flushes are harmless.
+	const recordStats = useMutation(api.writingStats.record);
+	const dailyWordsRef = useRef(dailyWords);
+	dailyWordsRef.current = dailyWords;
+	const flushDailyTotal = useDebouncedCallback((words: number) => {
+		if (words <= 0) return;
+		void recordStats({ date: localDateKey(), words });
+	}, 30_000);
+
+	// Re-arm the debounce whenever the day's word count changes (not per save).
+	useEffect(() => {
+		flushDailyTotal(dailyWords);
+	}, [dailyWords, flushDailyTotal]);
+
+	// Flush once on unmount / tab close so the day's last words are recorded.
+	useEffect(() => {
+		const flushNow = () => {
+			flushDailyTotal.cancel();
+			if (dailyWordsRef.current > 0) {
+				void recordStats({
+					date: localDateKey(),
+					words: dailyWordsRef.current,
+				});
+			}
+		};
+		window.addEventListener("beforeunload", flushNow);
+		return () => {
+			window.removeEventListener("beforeunload", flushNow);
+			flushNow();
+		};
+	}, [flushDailyTotal, recordStats]);
 
 	const activeHistory = useDocumentHistoryFor(activeDocId);
 	const activeHistoryRef = useRef(activeHistory);
@@ -353,6 +434,15 @@ function StudioWorkspace() {
 					return;
 				case "toggle-toolbar":
 					settings.toggleTopToolbar();
+					return;
+				case "set-goal":
+					setGoalConfigOpen(true);
+					return;
+				case "toggle-goal-style":
+					settings.toggleGoalStyle();
+					return;
+				case "toggle-goal-scope":
+					settings.toggleGoalScope();
 					return;
 				case "theme-twilight":
 					settings.setTheme("twilight");
@@ -627,6 +717,23 @@ function StudioWorkspace() {
 								setZen((v) => !v);
 								dispatchFocusEditor();
 							}}
+							goalStyle={settings.goalStyle}
+							goalProgress={goalProgressValue}
+							goalTarget={goalTarget}
+							goalLabel={goalLabel}
+							sessionWords={sessionWords}
+							streakDays={streakDays}
+							goalConfigOpen={goalConfigOpen}
+							onGoalConfigOpenChange={setGoalConfigOpen}
+							wordGoalTarget={settings.wordGoalTarget}
+							onWordGoalTargetChange={settings.setWordGoalTarget}
+							dailyGoalTarget={settings.dailyGoalTarget}
+							onDailyGoalTargetChange={settings.setDailyGoalTarget}
+							wordGoalKind={settings.wordGoalKind}
+							onWordGoalKindChange={settings.setWordGoalKind}
+							goalScope={settings.goalScope}
+							onGoalScopeChange={settings.setGoalScope}
+							onGoalStyleChange={settings.setGoalStyle}
 						/>
 					</div>
 				)}

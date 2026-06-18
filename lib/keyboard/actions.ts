@@ -44,6 +44,9 @@ export type ActionId =
 	| "zoom-reset"
 	| "toggle-spellcheck"
 	| "toggle-toolbar"
+	| "set-goal"
+	| "toggle-goal-style"
+	| "toggle-goal-scope"
 	| "theme-twilight"
 	| "theme-aurora"
 	| "theme-dawn"
@@ -256,6 +259,27 @@ export const ACTIONS: ActionDef[] = [
 		label: "Toggle formatting toolbar",
 		section: "View",
 		aliases: ["top toolbar", "format bar"],
+		shortcut: { mac: "", other: "" },
+	},
+	{
+		id: "set-goal",
+		label: "Set word goal…",
+		section: "View",
+		aliases: ["target", "goal", "words", "ulysses", "scrivener", "streak"],
+		shortcut: { mac: "", other: "" },
+	},
+	{
+		id: "toggle-goal-style",
+		label: "Toggle goal display (ring / bar)",
+		section: "View",
+		aliases: ["ring", "bar", "goal style", "progress"],
+		shortcut: { mac: "", other: "" },
+	},
+	{
+		id: "toggle-goal-scope",
+		label: "Toggle goal scope (document / daily)",
+		section: "View",
+		aliases: ["daily goal", "document goal", "goal scope"],
 		shortcut: { mac: "", other: "" },
 	},
 	{
