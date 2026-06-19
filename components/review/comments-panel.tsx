@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { timeFmt } from "@/lib/format";
 import type { CommentAnchor } from "@/lib/review/anchor";
 
 type CommentRow = {
@@ -41,13 +42,6 @@ type CommentsPanelProps = {
 	onJumpToComment: (anchor: CommentAnchor) => void;
 	onClose: () => void;
 };
-
-const timeFmt = new Intl.DateTimeFormat(undefined, {
-	month: "short",
-	day: "numeric",
-	hour: "numeric",
-	minute: "2-digit",
-});
 
 /**
  * Comments side panel (plan 010, Phase B). Modeled on outline-panel.tsx /

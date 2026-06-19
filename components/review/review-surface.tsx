@@ -11,6 +11,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { timeFmt } from "@/lib/format";
 import { diffRuns } from "@/lib/history/diff";
 import { useStudioSettingsContext } from "@/lib/studio/settings-context";
 
@@ -30,13 +31,6 @@ type ReviewSurfaceProps = {
 	open: boolean;
 	onClose: () => void;
 };
-
-const timeFmt = new Intl.DateTimeFormat(undefined, {
-	month: "short",
-	day: "numeric",
-	hour: "numeric",
-	minute: "2-digit",
-});
 
 /**
  * Owner review surface (plan 010 Phase C). Modeled on history-panel.tsx chrome
