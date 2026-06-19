@@ -24,6 +24,7 @@ import { bridgeOrigin } from "@/lib/bridge/protocol";
 import { activeFocusRange, type FocusScope } from "@/lib/editor/focus-range";
 import type { FormatCommand } from "@/lib/editor/format";
 import type { EditorHandle } from "@/lib/editor/handle";
+import { HISTORY_REDO_EVENT, HISTORY_UNDO_EVENT } from "@/lib/events";
 import type { LintIssue } from "@/lib/lint";
 import { markdownFromHtml, normalizeMarkdown } from "@/lib/markdown";
 import { exportCaretFromCm, importCaretToCm } from "@/lib/modes/caret";
@@ -307,10 +308,10 @@ function ensureVimHistoryRemap(): void {
 	try {
 		const api = Vim as unknown as VimApi;
 		api.defineAction("rectoHistoryUndo", () => {
-			window.dispatchEvent(new CustomEvent("recto:history-undo"));
+			window.dispatchEvent(new CustomEvent(HISTORY_UNDO_EVENT));
 		});
 		api.defineAction("rectoHistoryRedo", () => {
-			window.dispatchEvent(new CustomEvent("recto:history-redo"));
+			window.dispatchEvent(new CustomEvent(HISTORY_REDO_EVENT));
 		});
 		api.mapCommand(
 			"u",

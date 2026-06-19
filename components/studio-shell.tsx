@@ -41,6 +41,11 @@ import { useAiTransform } from "@/lib/ai/use-ai-transform";
 import { useRag } from "@/lib/ai/use-rag";
 import { dispatchOpenSearch } from "@/lib/editor/codemirror";
 import {
+	HISTORY_REDO_EVENT,
+	HISTORY_UNDO_EVENT,
+	LINT_COUNT_EVENT,
+} from "@/lib/events";
+import {
 	copyAsMarkdown,
 	copyAsRichText,
 	type ExportSource,
@@ -140,9 +145,9 @@ function StudioWorkspace() {
 		const onCount = (event: CustomEvent<{ count: number }>) => {
 			setLintCount(event.detail.count);
 		};
-		window.addEventListener("recto:lint-count", onCount as EventListener);
+		window.addEventListener(LINT_COUNT_EVENT, onCount as EventListener);
 		return () =>
-			window.removeEventListener("recto:lint-count", onCount as EventListener);
+			window.removeEventListener(LINT_COUNT_EVENT, onCount as EventListener);
 	}, []);
 
 	// Zen mode: hide all chrome but the canvas; reveal on mouse move, re-hide on
@@ -716,11 +721,11 @@ function StudioWorkspace() {
 	useEffect(() => {
 		const onUndo = () => activeHistoryRef.current?.undo();
 		const onRedo = () => activeHistoryRef.current?.redo();
-		window.addEventListener("recto:history-undo", onUndo);
-		window.addEventListener("recto:history-redo", onRedo);
+		window.addEventListener(HISTORY_UNDO_EVENT, onUndo);
+		window.addEventListener(HISTORY_REDO_EVENT, onRedo);
 		return () => {
-			window.removeEventListener("recto:history-undo", onUndo);
-			window.removeEventListener("recto:history-redo", onRedo);
+			window.removeEventListener(HISTORY_UNDO_EVENT, onUndo);
+			window.removeEventListener(HISTORY_REDO_EVENT, onRedo);
 		};
 	}, []);
 

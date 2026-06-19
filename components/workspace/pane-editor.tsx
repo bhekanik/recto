@@ -22,6 +22,12 @@ import {
 	type MilkdownEditorHandle,
 } from "@/lib/editor/milkdown";
 import { PreviewPane } from "@/lib/editor/preview";
+import {
+	FOCUS_EDITOR_EVENT,
+	FOCUS_PANE_EVENT,
+	LINT_COUNT_EVENT,
+	SWITCH_MODE_EVENT,
+} from "@/lib/events";
 import { useProseLint } from "@/lib/lint/use-prose-lint";
 import {
 	type DocumentMeta,
@@ -191,7 +197,7 @@ export function PaneEditor({
 	useEffect(() => {
 		if (!isActive) return;
 		window.dispatchEvent(
-			new CustomEvent("recto:lint-count", {
+			new CustomEvent(LINT_COUNT_EVENT, {
 				detail: { count: lint ? lintCount : 0 },
 			}),
 		);
@@ -459,13 +465,10 @@ export function PaneEditor({
 		const onModeShortcut = (event: CustomEvent<{ mode: Mode }>) => {
 			switchMode(event.detail.mode);
 		};
-		window.addEventListener(
-			"recto:switch-mode",
-			onModeShortcut as EventListener,
-		);
+		window.addEventListener(SWITCH_MODE_EVENT, onModeShortcut as EventListener);
 		return () =>
 			window.removeEventListener(
-				"recto:switch-mode",
+				SWITCH_MODE_EVENT,
 				onModeShortcut as EventListener,
 			);
 	}, [isActive, switchMode]);
@@ -511,9 +514,8 @@ export function PaneEditor({
 			handle.focus();
 			requestAnimationFrame(() => handle.focus());
 		};
-		window.addEventListener("recto:focus-editor", onFocusEditor);
-		return () =>
-			window.removeEventListener("recto:focus-editor", onFocusEditor);
+		window.addEventListener(FOCUS_EDITOR_EVENT, onFocusEditor);
+		return () => window.removeEventListener(FOCUS_EDITOR_EVENT, onFocusEditor);
 	}, [isActive, leaf.mode]);
 
 	// Keyboard pane navigation moves editor focus into the now-active pane.
@@ -528,10 +530,10 @@ export function PaneEditor({
 						: cmRef.current;
 			handle?.focus();
 		};
-		window.addEventListener("recto:focus-pane", onFocusPane as EventListener);
+		window.addEventListener(FOCUS_PANE_EVENT, onFocusPane as EventListener);
 		return () =>
 			window.removeEventListener(
-				"recto:focus-pane",
+				FOCUS_PANE_EVENT,
 				onFocusPane as EventListener,
 			);
 	}, [leaf.paneId, leaf.mode]);

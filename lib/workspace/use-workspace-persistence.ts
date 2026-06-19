@@ -13,6 +13,7 @@ import { useDebouncedCallback } from "use-debounce";
 
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { FOCUS_PANE_EVENT } from "@/lib/events";
 import type { Mode } from "@/lib/modes/types";
 import { createDefaultWorkspace } from "./defaults";
 import {
@@ -43,7 +44,7 @@ function emitFocusPane(paneId: string): void {
 	if (typeof window === "undefined") return;
 	requestAnimationFrame(() => {
 		window.dispatchEvent(
-			new CustomEvent("recto:focus-pane", { detail: { paneId } }),
+			new CustomEvent(FOCUS_PANE_EVENT, { detail: { paneId } }),
 		);
 	});
 }

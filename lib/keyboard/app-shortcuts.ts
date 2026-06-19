@@ -1,3 +1,4 @@
+import { FOCUS_EDITOR_EVENT, SWITCH_MODE_EVENT } from "@/lib/events";
 import type { Mode } from "@/lib/modes/types";
 import { MODE_RING, nextMode, prevMode } from "@/lib/modes/types";
 
@@ -405,7 +406,7 @@ export function resolveModeAction(
 /** Dispatch mode switch to active pane editors. */
 export function dispatchModeSwitch(mode: Mode): void {
 	window.dispatchEvent(
-		new CustomEvent("recto:switch-mode", { detail: { mode } }),
+		new CustomEvent(SWITCH_MODE_EVENT, { detail: { mode } }),
 	);
 }
 
@@ -414,5 +415,5 @@ export function dispatchModeSwitch(mode: Mode): void {
  * so chrome interactions (toolbar, zoom, mode, overlays) hand focus back here.
  */
 export function dispatchFocusEditor(): void {
-	window.dispatchEvent(new CustomEvent("recto:focus-editor"));
+	window.dispatchEvent(new CustomEvent(FOCUS_EDITOR_EVENT));
 }
