@@ -5,7 +5,7 @@ import {
 	parseReview,
 	type ReviewRequestBody,
 } from "@/lib/ai/review";
-import { openRouter, requireUser } from "@/lib/ai/server";
+import { guardAiRoute } from "@/lib/ai/route-guard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,27 +19,13 @@ export const dynamic = "force-dynamic";
  * stays server-side. Mirrors the critique route's shape.
  */
 export async function POST(req: Request): Promise<Response> {
-	const userId = await requireUser();
-	if (!userId) {
-		return new Response("Unauthorized", { status: 401 });
-	}
-
-	let body: ReviewRequestBody;
-	try {
-		body = (await req.json()) as ReviewRequestBody;
-	} catch {
-		return new Response("Invalid JSON", { status: 400 });
-	}
-	if (!body || typeof body.text !== "string" || body.text.trim().length === 0) {
-		return new Response("Missing text", { status: 400 });
-	}
-
-	let client: ReturnType<typeof openRouter>;
-	try {
-		client = openRouter();
-	} catch {
-		return new Response("AI provider not configured", { status: 503 });
-	}
+	const guarded = await guardAiRoute<ReviewRequestBody>(req, (body) =>
+		!body || typeof body.text !== "string" || body.text.trim().length === 0
+			? "Missing text"
+			: null,
+	);
+	if (guarded instanceof Response) return guarded;
+	const { client, body } = guarded;
 
 	try {
 		const params: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming & {

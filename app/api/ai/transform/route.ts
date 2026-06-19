@@ -1,6 +1,6 @@
 import type OpenAI from "openai";
 import { AI_CHAT_MODEL, AI_TRANSFORM_MAX_TOKENS } from "@/lib/ai/config";
-import { openRouter, requireUser } from "@/lib/ai/server";
+import { guardAiRoute } from "@/lib/ai/route-guard";
 import {
 	buildTransformMessages,
 	type TransformRequestBody,
@@ -17,32 +17,16 @@ export const dynamic = "force-dynamic";
  * edit is reversible by construction (reject = undo). The key stays server-side.
  */
 export async function POST(req: Request): Promise<Response> {
-	const userId = await requireUser();
-	if (!userId) {
-		return new Response("Unauthorized", { status: 401 });
-	}
-
-	let body: TransformRequestBody;
-	try {
-		body = (await req.json()) as TransformRequestBody;
-	} catch {
-		return new Response("Invalid JSON", { status: 400 });
-	}
-	if (
+	const guarded = await guardAiRoute<TransformRequestBody>(req, (body) =>
 		!body ||
 		typeof body.instruction !== "string" ||
 		typeof body.selection !== "string" ||
 		body.selection.length === 0
-	) {
-		return new Response("Missing instruction or selection", { status: 400 });
-	}
-
-	let client: ReturnType<typeof openRouter>;
-	try {
-		client = openRouter();
-	} catch {
-		return new Response("AI provider not configured", { status: 503 });
-	}
+			? "Missing instruction or selection"
+			: null,
+	);
+	if (guarded instanceof Response) return guarded;
+	const { client, body } = guarded;
 
 	const messages = buildTransformMessages(body);
 	const encoder = new TextEncoder();
