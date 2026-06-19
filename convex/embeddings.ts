@@ -262,6 +262,15 @@ export const searchByVector = action({
 		if (!identity) throw new Error("Unauthenticated");
 		const userId = identity.subject;
 
+		// The query vector must match the index dimension (the generation path
+		// already enforces AI_EMBEDDING_DIM); reject a wrong-dim vector rather than
+		// let ctx.vectorSearch reject it opaquely.
+		if (args.vector.length !== AI_EMBEDDING_DIM) {
+			throw new Error(
+				`Query vector has dim ${args.vector.length}, expected ${AI_EMBEDDING_DIM}`,
+			);
+		}
+
 		const results = await ctx.vectorSearch("docChunks", "by_embedding", {
 			vector: args.vector,
 			limit: VECTOR_RESULTS,
