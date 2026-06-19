@@ -33,6 +33,7 @@ import {
 	commentHighlightExtension,
 	setCommentHighlights,
 } from "@/lib/review/comment-decorations-cm";
+import { dispatchOpenComment } from "@/lib/review/summon";
 import { lintExtension, setLintIssues } from "./lint-extension";
 
 export type CodeMirrorEditorHandle = EditorHandle & {
@@ -462,6 +463,19 @@ export const CodeMirrorEditor = forwardRef<
 						view.state.selection.main.head;
 					insertUploadedImage(viewRef, uploader, file, pos);
 					return true;
+				},
+				// Clicking a comment highlight opens that comment in the panel
+				// (editor→panel, the reverse of jumpToComment). Comment marks render
+				// with a [data-comment-id] attribute, so we resolve the nearest such
+				// ancestor of the click target and dispatch a window event. Returning
+				// false lets CM place the caret / select normally — a non-highlight
+				// click resolves nothing and is a plain no-op.
+				mousedown(event) {
+					const target = event.target as HTMLElement | null;
+					const el = target?.closest?.("[data-comment-id]");
+					const commentId = el?.getAttribute("data-comment-id");
+					if (commentId) dispatchOpenComment(commentId);
+					return false;
 				},
 			}),
 			lintExtension(),

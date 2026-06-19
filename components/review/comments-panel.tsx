@@ -31,6 +31,10 @@ type CommentsPanelProps = {
 	isOwner: boolean;
 	/** A selection captured for a new comment, or null (then show a hint). */
 	draft: CommentDraft | null;
+	/** A comment to scroll into view + flash (its editor highlight was clicked). */
+	focusedCommentId: string | null;
+	/** Clear the focused comment (after the flash plays). */
+	onClearFocusedComment: () => void;
 	/** Clear the captured draft (after submit/cancel). */
 	onClearDraft: () => void;
 	/** Scroll the editor to a comment's anchor. */
@@ -58,6 +62,8 @@ export function CommentsPanel({
 	open,
 	isOwner,
 	draft,
+	focusedCommentId,
+	onClearFocusedComment,
 	onClearDraft,
 	onJumpToComment,
 	onClose,
@@ -79,6 +85,9 @@ export function CommentsPanel({
 
 	const restoreFocusRef = useRef<HTMLElement | null>(null);
 	const draftRef = useRef<HTMLTextAreaElement | null>(null);
+	// Per-comment DOM nodes, so a clicked highlight can scroll its panel row into
+	// view and flash it.
+	const commentNodesRef = useRef(new Map<string, HTMLLIElement>());
 
 	useEffect(() => {
 		if (open) {
@@ -108,6 +117,25 @@ export function CommentsPanel({
 			requestAnimationFrame(() => draftRef.current?.focus());
 		}
 	}, [open, draft]);
+
+	// A highlight was clicked (editor→panel): scroll that comment's row into view and
+	// flash it briefly. `comments` is a dependency so a click that arrives before the
+	// list has loaded still resolves once the row mounts. The flash class is removed
+	// after the animation, and the focused id is cleared so re-clicking the same
+	// comment re-triggers the flash.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: comments retriggers the lookup once rows mount; onClearFocusedComment is a stable setter
+	useEffect(() => {
+		if (!open || !focusedCommentId) return;
+		const node = commentNodesRef.current.get(focusedCommentId);
+		if (!node) return;
+		node.scrollIntoView({ block: "center", behavior: "smooth" });
+		node.classList.add("recto-comment-flash");
+		const timer = window.setTimeout(() => {
+			node.classList.remove("recto-comment-flash");
+			onClearFocusedComment();
+		}, 1200);
+		return () => window.clearTimeout(timer);
+	}, [open, focusedCommentId, comments]);
 
 	// Group into top-level threads + their replies, oldest first (list is sorted).
 	const threads = useMemo(() => {
@@ -266,6 +294,10 @@ export function CommentsPanel({
 							{threads.map(({ root, replies }) => (
 								<li
 									key={root._id}
+									ref={(node) => {
+										if (node) commentNodesRef.current.set(root._id, node);
+										else commentNodesRef.current.delete(root._id);
+									}}
 									className="rounded-[var(--radius-md)] border border-[var(--color-line)] bg-[var(--color-bg-app)] p-[var(--space-2)]"
 								>
 									<CommentItem

@@ -783,6 +783,28 @@
 	border-bottom-style: dotted;
 }
 
+/* Transient flash on a comment row in the panel when its editor highlight is
+   clicked — a brief wash + accent ring that fades, so the eye lands on the right
+   thread. The class is added on click and removed after the animation. */
+.recto-comment-flash {
+	animation: recto-comment-flash 1.2s var(--ease-out) both;
+}
+@keyframes recto-comment-flash {
+	0% {
+		background-color: var(--color-comment-wash-strong);
+		box-shadow: 0 0 0 2px var(--color-comment);
+	}
+	100% {
+		background-color: var(--color-bg-app);
+		box-shadow: 0 0 0 2px transparent;
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.recto-comment-flash {
+		animation-duration: 0.01ms;
+	}
+}
+
 .milkdown-slash-menu {
 	z-index: 50;
 }

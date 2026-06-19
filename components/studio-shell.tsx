@@ -69,6 +69,7 @@ import {
 	ADD_COMMENT_SUMMON_EVENT,
 	dispatchSetComments,
 	setCommentingEnabledMirror,
+	subscribeOpenComment,
 } from "@/lib/review/summon";
 import { currentStreak, goalProgress, localDateKey } from "@/lib/stats/streak";
 import { StudioSettingsProvider } from "@/lib/studio/settings-context";
@@ -267,6 +268,9 @@ function StudioWorkspace() {
 			Boolean(activeShareState.role));
 	const [commentsOpen, setCommentsOpen] = useState(false);
 	const [commentDraft, setCommentDraft] = useState<CommentDraft | null>(null);
+	// A comment to scroll into view + flash in the panel, set when its editor
+	// highlight is clicked (editor→panel). The panel clears it after the flash.
+	const [focusedCommentId, setFocusedCommentId] = useState<string | null>(null);
 
 	// Owner review surface (plan 010 Phase C). The owner of the active doc sees
 	// open reviewer suggestion branches; a subtle header indicator appears when
@@ -523,6 +527,18 @@ function StudioWorkspace() {
 		window.addEventListener(ADD_COMMENT_SUMMON_EVENT, onSummon);
 		return () => window.removeEventListener(ADD_COMMENT_SUMMON_EVENT, onSummon);
 	}, [summonAddComment]);
+
+	// Clicking a comment highlight in either editor (editor→panel) opens the panel
+	// and focuses that comment so the panel can scroll + flash it. Gated on
+	// canComment so a non-commenter's click is a harmless no-op (the panel is
+	// only rendered when canComment anyway).
+	useEffect(() => {
+		if (!canComment) return;
+		return subscribeOpenComment((commentId) => {
+			setCommentsOpen(true);
+			setFocusedCommentId(commentId);
+		});
+	}, [canComment]);
 
 	const aiTransform = useAiTransform({
 		getController: () => activeHistoryRef.current,
@@ -1468,6 +1484,8 @@ function StudioWorkspace() {
 						open={commentsOpen}
 						isOwner={activeDocIsOwned}
 						draft={commentDraft}
+						focusedCommentId={focusedCommentId}
+						onClearFocusedComment={() => setFocusedCommentId(null)}
 						onClearDraft={() => setCommentDraft(null)}
 						onJumpToComment={(anchor) => {
 							jumpToComment(anchor);
@@ -1475,6 +1493,7 @@ function StudioWorkspace() {
 						onClose={() => {
 							setCommentsOpen(false);
 							setCommentDraft(null);
+							setFocusedCommentId(null);
 							dispatchFocusEditor();
 						}}
 					/>

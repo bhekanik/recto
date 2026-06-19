@@ -12,6 +12,39 @@ import type { CommentMark } from "@/lib/review/comment-decorations-pm";
 export const ADD_COMMENT_SUMMON_EVENT = "recto:add-comment";
 
 /**
+ * Window event fired when a comment highlight is clicked in either editor surface
+ * (rich ProseMirror decoration or raw/vim CodeMirror mark). The studio-shell listens,
+ * opens the comments panel, and focuses that comment — the editor→panel direction,
+ * mirroring the panel→editor `jumpToComment`. The editors dispatch this from a DOM
+ * click handler that resolves the nearest `[data-comment-id]` ancestor; they never
+ * import the panel, keeping the surfaces decoupled.
+ */
+export const OPEN_COMMENT_EVENT = "recto:open-comment";
+
+export type OpenCommentDetail = { commentId: string };
+
+/** Ask the studio-shell to open the comments panel and focus a specific comment. */
+export function dispatchOpenComment(commentId: string): void {
+	window.dispatchEvent(
+		new CustomEvent<OpenCommentDetail>(OPEN_COMMENT_EVENT, {
+			detail: { commentId },
+		}),
+	);
+}
+
+/** Subscribe to comment-highlight clicks. Returns an unsubscribe function. */
+export function subscribeOpenComment(
+	handler: (commentId: string) => void,
+): () => void {
+	const listener = (event: Event) => {
+		const detail = (event as CustomEvent<OpenCommentDetail>).detail;
+		if (detail?.commentId) handler(detail.commentId);
+	};
+	window.addEventListener(OPEN_COMMENT_EVENT, listener);
+	return () => window.removeEventListener(OPEN_COMMENT_EVENT, listener);
+}
+
+/**
  * Window event carrying located comment highlights for the active pane's editors.
  * studio-shell owns the comment query + anchoring; the active PaneEditor listens and
  * pushes the marks into its mounted CodeMirror / Milkdown handles (the same shape as

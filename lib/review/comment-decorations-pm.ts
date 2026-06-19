@@ -1,6 +1,7 @@
 import type { Node as PMNode } from "@milkdown/prose/model";
 import { Plugin, PluginKey } from "@milkdown/prose/state";
 import { Decoration, DecorationSet } from "@milkdown/prose/view";
+import { dispatchOpenComment } from "@/lib/review/summon";
 
 /**
  * A comment to highlight in the rich (ProseMirror) surface, located by SEARCHING
@@ -132,6 +133,18 @@ export function commentPlugin(): Plugin<DecorationSet> {
 		props: {
 			decorations(state) {
 				return commentPluginKey.getState(state);
+			},
+			// Clicking a highlight opens that comment in the panel (editor→panel, the
+			// reverse of jumpToComment). We resolve the nearest [data-comment-id]
+			// ancestor of the click target and dispatch a window event; returning false
+			// lets ProseMirror place the caret / handle selection as normal, so editing
+			// is never blocked. A non-highlight click resolves nothing and is a no-op.
+			handleClick(_view, _pos, event) {
+				const target = event.target as HTMLElement | null;
+				const el = target?.closest?.("[data-comment-id]");
+				const commentId = el?.getAttribute("data-comment-id");
+				if (commentId) dispatchOpenComment(commentId);
+				return false;
 			},
 		},
 	});
