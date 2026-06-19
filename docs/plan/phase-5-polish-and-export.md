@@ -214,6 +214,8 @@ If, during the registry audit (A1), an action needs a UI-only field (section tag
 
 All boxes must be checked, demonstrated by an automated test or a recorded manual check, in addition to the global Definition of Done in [`./README.md`](./README.md).
 
+> **Status: superseded by [`./README.md`](./README.md).** That phase map marks Phase 5 ✅ Done (Phases 0–5 complete, runtime-verified, with typecheck/biome/test/build green). The unchecked boxes below are the original execution checklist, kept for historical reference; treat the README status as authoritative.
+
 **Command palette**
 - [ ] `Cmd/Ctrl+K` opens the palette; `Esc` closes it and restores focus to the previously active pane.
 - [ ] The palette fuzzy-searches over **all actions and all documents** from one query box (e.g. `prev`, `prview`, `pv` all surface "Switch to Preview"; a document title surfaces that document).

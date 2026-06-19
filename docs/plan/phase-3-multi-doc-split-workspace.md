@@ -215,6 +215,8 @@ Mutations / queries added (illustrative names; match the codebase's established 
 
 A reviewer should be able to check each box. The phase is done only when **all** pass (plus the global Definition of Done in [`./README.md`](./README.md)).
 
+> **Status: superseded by [`./README.md`](./README.md).** That phase map marks Phase 3 ✅ Done (Phases 0–5 complete, runtime-verified, with typecheck/biome/test/build green). The unchecked boxes below are the original execution checklist, kept for historical reference; treat the README status as authoritative.
+
 **Document management**
 
 - [ ] `documents.list` shows all of the user's documents newest-edited-first; creating, renaming, and deleting reflect immediately (optimistic for list UI only, never the edited `markdown`).
