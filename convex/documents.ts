@@ -8,6 +8,16 @@ type MutationCtx = GenericMutationCtx<
 	import("./_generated/dataModel").DataModel
 >;
 
+/**
+ * Max stored markdown/snapshot length, guarding the Convex ~1 MiB per-value
+ * ceiling (blueprint 03 §5). Book-length manuscripts are an explicit non-goal;
+ * fail loudly rather than let Convex reject the whole mutation opaquely. Shared
+ * by documents.updateMarkdown and review.ts (suggester/AI branch writes).
+ */
+export const MAX_MARKDOWN_LENGTH = 950_000;
+export const MARKDOWN_TOO_LARGE_MESSAGE =
+	"Document exceeds the ~1 MiB size limit; split it into multiple documents.";
+
 /** Resolve the authenticated Clerk user id (JWT subject) or throw. */
 export async function requireUserId(
 	ctx: QueryCtx | MutationCtx,
@@ -168,6 +178,14 @@ export const updateCurrentNodeId = mutation({
 	},
 	handler: async (ctx, args) => {
 		const doc = await requireOwnedDocument(ctx, args.documentId);
+		// Same ~1 MiB guard as updateMarkdown — the materialized markdown is stored
+		// on the documents row here too. (Node-existence of currentNodeId is NOT
+		// checked: the client appends the node fire-and-forget and writes this
+		// pointer on a debounce, so a strict check would race a legitimate write.)
+		if (args.markdown.length > MAX_MARKDOWN_LENGTH) {
+			throw new Error(MARKDOWN_TOO_LARGE_MESSAGE);
+		}
+
 		if (args.updatedAt < doc.updatedAt) {
 			return { applied: false, currentNodeId: doc.currentNodeId };
 		}
@@ -212,10 +230,8 @@ export const updateMarkdown = mutation({
 		// Guard the Convex ~1 MiB per-value ceiling (blueprint 03 §5). Book-length
 		// manuscripts are an explicit non-goal; fail loudly rather than let Convex
 		// reject the whole mutation opaquely. The editor keeps the text locally.
-		if (args.markdown.length > 950_000) {
-			throw new Error(
-				"Document exceeds the ~1 MiB size limit; split it into multiple documents.",
-			);
+		if (args.markdown.length > MAX_MARKDOWN_LENGTH) {
+			throw new Error(MARKDOWN_TOO_LARGE_MESSAGE);
 		}
 
 		if (doc.updatedAt !== args.expectedUpdatedAt) {
