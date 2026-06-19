@@ -425,9 +425,10 @@ describe("plan 010 PHASE A — sharing / ACL", () => {
 		const t = convexTest(schema, modules);
 		const owner = t.withIdentity(OWNER);
 		const reviewer = t.withIdentity(REVIEWER);
-		const { documentId } = await owner.mutation(api.documents.create, {
-			title: "Shared draft",
-		});
+		const { documentId, rootNodeId } = await owner.mutation(
+			api.documents.create,
+			{ title: "Shared draft" },
+		);
 
 		// Email-only invite (granteeUserId still unset).
 		await owner.mutation(api.review.addShare, {
@@ -446,10 +447,12 @@ describe("plan 010 PHASE A — sharing / ACL", () => {
 		expect(emailOnly[0]?.ownerUserId).toBe(OWNER.subject);
 
 		// A mutation resolves granteeUserId; the doc still appears (user-resolved).
+		// Parent must be a real node now (suggester-patch validation) — fork off the
+		// doc's root (snapshot ""), so the from/to=0 patch is in-bounds.
 		await reviewer.mutation(api.review.reviewerAppend, {
 			documentId,
 			nodeId: crypto.randomUUID(),
-			parentNodeId: "missing-base", // materialize isn't exercised here
+			parentNodeId: rootNodeId,
 			patch: fullReplacePatch("", "a suggestion"),
 			selection: null,
 			createdAt: 9000,
