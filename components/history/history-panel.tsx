@@ -4,6 +4,10 @@ import { useMutation, useQuery } from "convex/react";
 import { GitBranch, History, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import {
+	DiffRunsBody,
+	DiffRunsToggle,
+} from "@/components/review/diff-runs-view";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { diffRuns, nodeLabel } from "@/lib/history/diff";
@@ -414,83 +418,14 @@ export function HistoryPanel({
 
 				{compareDiff ? (
 					<div className="flex max-h-[40%] shrink-0 flex-col border-t border-[var(--color-line)] bg-[var(--color-bg-app)]">
-						<div className="flex shrink-0 items-center gap-[var(--space-2)] px-[var(--space-3)] py-1.5 text-[0.6875rem] text-[var(--color-ink-tertiary)]">
-							<button
-								type="button"
-								onClick={toggleDiffGranularity}
-								className="transition-colors hover:text-[var(--color-ink-primary)]"
-							>
-								{diffGranularity === "word" ? "Word" : "Line"} diff
-							</button>
-							<span aria-hidden>·</span>
-							<button
-								type="button"
-								onClick={toggleDiffLayout}
-								className="transition-colors hover:text-[var(--color-ink-primary)]"
-							>
-								{diffLayout === "inline" ? "Inline" : "Side by side"}
-							</button>
-						</div>
+						<DiffRunsToggle
+							granularity={diffGranularity}
+							layout={diffLayout}
+							onToggleGranularity={toggleDiffGranularity}
+							onToggleLayout={toggleDiffLayout}
+						/>
 						<div className="min-h-0 flex-1 overflow-y-auto px-[var(--space-3)] py-[var(--space-2)] font-[family-name:var(--font-mono)] text-[0.75rem] leading-relaxed">
-							{diffLayout === "inline" ? (
-								<p className="whitespace-pre-wrap">
-									{compareDiff.map((run, i) => (
-										<span
-											// biome-ignore lint/suspicious/noArrayIndexKey: diff is positional
-											key={i}
-											className={cn(
-												run.type === "add" &&
-													"bg-[oklch(0.8_0.09_150/0.12)] text-[var(--color-success)]",
-												run.type === "del" &&
-													"bg-[oklch(0.7_0.14_25/0.12)] text-[var(--color-danger)] line-through",
-												run.type === "same" &&
-													"text-[var(--color-ink-tertiary)]",
-											)}
-										>
-											{run.text}
-										</span>
-									))}
-								</p>
-							) : (
-								<div className="grid grid-cols-2 gap-[var(--space-3)]">
-									<div className="whitespace-pre-wrap">
-										{compareDiff
-											.filter((r) => r.type !== "add")
-											.map((run, i) => (
-												<span
-													// biome-ignore lint/suspicious/noArrayIndexKey: diff is positional
-													key={i}
-													className={cn(
-														run.type === "del" &&
-															"bg-[oklch(0.7_0.14_25/0.12)] text-[var(--color-danger)]",
-														run.type === "same" &&
-															"text-[var(--color-ink-tertiary)]",
-													)}
-												>
-													{run.text}
-												</span>
-											))}
-									</div>
-									<div className="whitespace-pre-wrap">
-										{compareDiff
-											.filter((r) => r.type !== "del")
-											.map((run, i) => (
-												<span
-													// biome-ignore lint/suspicious/noArrayIndexKey: diff is positional
-													key={i}
-													className={cn(
-														run.type === "add" &&
-															"bg-[oklch(0.8_0.09_150/0.12)] text-[var(--color-success)]",
-														run.type === "same" &&
-															"text-[var(--color-ink-tertiary)]",
-													)}
-												>
-													{run.text}
-												</span>
-											))}
-									</div>
-								</div>
-							)}
+							<DiffRunsBody runs={compareDiff} layout={diffLayout} />
 						</div>
 					</div>
 				) : preview != null ? (

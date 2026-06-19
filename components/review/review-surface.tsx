@@ -4,12 +4,15 @@ import { useMutation, useQuery } from "convex/react";
 import { Check, GitBranch, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import {
+	DiffRunsBody,
+	DiffRunsToggle,
+} from "@/components/review/diff-runs-view";
 import { Button } from "@/components/ui/button";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { diffRuns } from "@/lib/history/diff";
 import { useStudioSettingsContext } from "@/lib/studio/settings-context";
-import { cn } from "@/lib/utils";
 
 type ReviewBranchRow = {
 	_id: Id<"reviewBranches">;
@@ -260,84 +263,20 @@ function BranchDiff({
 
 	return (
 		<div className="border-t border-[var(--color-line)]">
-			<div className="flex shrink-0 items-center gap-[var(--space-2)] px-[var(--space-3)] py-1.5 text-[0.6875rem] text-[var(--color-ink-tertiary)]">
-				<button
-					type="button"
-					onClick={onToggleGranularity}
-					className="transition-colors hover:text-[var(--color-ink-primary)]"
-				>
-					{granularity === "word" ? "Word" : "Line"} diff
-				</button>
-				<span aria-hidden>·</span>
-				<button
-					type="button"
-					onClick={onToggleLayout}
-					className="transition-colors hover:text-[var(--color-ink-primary)]"
-				>
-					{layout === "inline" ? "Inline" : "Side by side"}
-				</button>
-			</div>
+			<DiffRunsToggle
+				granularity={granularity}
+				layout={layout}
+				onToggleGranularity={onToggleGranularity}
+				onToggleLayout={onToggleLayout}
+			/>
 
 			<div className="max-h-[40vh] overflow-y-auto px-[var(--space-3)] py-[var(--space-2)] font-[family-name:var(--font-mono)] text-[0.75rem] leading-relaxed">
 				{runs === null ? (
 					<p className="text-[var(--color-ink-tertiary)]">Loading diff…</p>
 				) : runs.length === 0 ? (
 					<p className="text-[var(--color-ink-tertiary)]">No changes.</p>
-				) : layout === "inline" ? (
-					<p className="whitespace-pre-wrap">
-						{runs.map((run, i) => (
-							<span
-								// biome-ignore lint/suspicious/noArrayIndexKey: diff is positional
-								key={i}
-								className={cn(
-									run.type === "add" &&
-										"bg-[oklch(0.8_0.09_150/0.12)] text-[var(--color-success)]",
-									run.type === "del" &&
-										"bg-[oklch(0.7_0.14_25/0.12)] text-[var(--color-danger)] line-through",
-									run.type === "same" && "text-[var(--color-ink-tertiary)]",
-								)}
-							>
-								{run.text}
-							</span>
-						))}
-					</p>
 				) : (
-					<div className="grid grid-cols-2 gap-[var(--space-3)]">
-						<div className="whitespace-pre-wrap">
-							{runs
-								.filter((r) => r.type !== "add")
-								.map((run, i) => (
-									<span
-										// biome-ignore lint/suspicious/noArrayIndexKey: diff is positional
-										key={i}
-										className={cn(
-											run.type === "del" &&
-												"bg-[oklch(0.7_0.14_25/0.12)] text-[var(--color-danger)]",
-											run.type === "same" && "text-[var(--color-ink-tertiary)]",
-										)}
-									>
-										{run.text}
-									</span>
-								))}
-						</div>
-						<div className="whitespace-pre-wrap">
-							{runs
-								.filter((r) => r.type !== "del")
-								.map((run, i) => (
-									<span
-										// biome-ignore lint/suspicious/noArrayIndexKey: diff is positional
-										key={i}
-										className={cn(
-											run.type === "add" &&
-												"bg-[oklch(0.8_0.09_150/0.12)] text-[var(--color-success)]",
-											run.type === "same" && "text-[var(--color-ink-tertiary)]",
-										)}
-									>
-										{run.text}
-									</span>
-								))}
-						</div>
-					</div>
+					<DiffRunsBody runs={runs} layout={layout} />
 				)}
 			</div>
 
