@@ -285,7 +285,13 @@ export function useDocumentSync({
 			return;
 		}
 
-		if (editorRef.isFocused()) {
+		// Don't re-seed (clobber local text) while the writer is focused OR while
+		// there are unsaved local edits not yet flushed to the server. `isFocused()`
+		// alone is insufficient: briefly clicking a panel/header blurs the editor, so
+		// a remote write landing in that window would otherwise overwrite the typed-
+		// but-unflushed text. `pendingMarkdownRef` is null only after a successful
+		// flush, so it's the precise "no unsaved local edits" signal.
+		if (editorRef.isFocused() || pendingMarkdownRef.current !== null) {
 			// Keep local edits; adopt server version for the next save attempt.
 			expectedUpdatedAtRef.current = serverUpdatedAt;
 			lastHandledServerUpdatedAtRef.current = serverUpdatedAt;
