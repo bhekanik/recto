@@ -2,7 +2,6 @@ import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
 import { requireOwnedDocument } from "./documents";
-import { materialize, type ServerNode } from "./history";
 
 const selectionValidator = v.union(
 	v.object({ anchor: v.number(), head: v.number() }),
@@ -19,15 +18,6 @@ function toClientNode(row: Doc<"docNodes">) {
 		selection: row.selection,
 		origin: row.origin,
 		createdAt: row.createdAt,
-	};
-}
-
-function toServerNode(row: Doc<"docNodes">): ServerNode {
-	return {
-		nodeId: row.nodeId,
-		parentNodeId: row.parentNodeId,
-		patch: row.patch,
-		snapshot: row.snapshot,
 	};
 }
 
@@ -89,20 +79,6 @@ export const listSince = query({
 		const filtered =
 			since !== undefined ? rows.filter((r) => r.createdAt > since) : rows;
 		return filtered.map(toClientNode);
-	},
-});
-
-/** Server-side materialization of one historical state (nearest-snapshot replay). */
-export const getSnapshotAt = query({
-	args: { documentId: v.id("documents"), nodeId: v.string() },
-	handler: async (ctx, args) => {
-		await requireOwnedDocument(ctx, args.documentId);
-		const rows = await ctx.db
-			.query("docNodes")
-			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
-			.collect();
-		const markdown = materialize(args.nodeId, rows.map(toServerNode));
-		return { nodeId: args.nodeId, markdown };
 	},
 });
 

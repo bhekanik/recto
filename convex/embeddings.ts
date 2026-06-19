@@ -7,9 +7,8 @@ import {
 	internalMutation,
 	internalQuery,
 	mutation,
-	query,
 } from "./_generated/server";
-import { requireOwnedDocument, requireUserId } from "./documents";
+import { requireOwnedDocument } from "./documents";
 
 /**
  * RAG over the writer's own drafts via Convex vector search (plan 009, Phase C).
@@ -192,29 +191,6 @@ export const replaceChunks = mutation({
 	},
 });
 
-/** Documents whose currentNodeId differs from their stored embeddedNodeId. */
-export const staleDocuments = query({
-	args: {},
-	handler: async (ctx) => {
-		const userId = await requireUserId(ctx);
-		const docs = await ctx.db
-			.query("documents")
-			.withIndex("by_user", (q) => q.eq("userId", userId))
-			.collect();
-		const out: { documentId: Id<"documents">; currentNodeId: string }[] = [];
-		for (const doc of docs) {
-			const first = await ctx.db
-				.query("docChunks")
-				.withIndex("by_document", (q) => q.eq("documentId", doc._id))
-				.first();
-			if (!first || first.embeddedNodeId !== doc.currentNodeId) {
-				out.push({ documentId: doc._id, currentNodeId: doc.currentNodeId });
-			}
-		}
-		return out;
-	},
-});
-
 /** Internal: load chunk rows by id for an action (actions have no ctx.db). */
 export const chunkRowsByIds = internalQuery({
 	args: { ids: v.array(v.id("docChunks")) },
@@ -302,9 +278,8 @@ export const searchByVector = action({
 });
 
 /**
- * Internal: list stale documents for the cron (action context). Mirrors
- * `staleDocuments` but scoped across all users since the cron has no caller
- * identity.
+ * Internal: list stale documents for the cron (action context). Scoped across
+ * all users since the cron has no caller identity.
  */
 export const allStaleDocuments = internalQuery({
 	args: {},
@@ -442,19 +417,5 @@ export const reindexSweep = internalAction({
 		}
 
 		return { scanned: stale.length, embedded };
-	},
-});
-
-/** Client-callable: clear a document's chunks (used by "Re-index" before re-embed if needed). */
-export const clearChunks = mutation({
-	args: { documentId: v.id("documents") },
-	handler: async (ctx, args) => {
-		await requireOwnedDocument(ctx, args.documentId);
-		const rows = await ctx.db
-			.query("docChunks")
-			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
-			.collect();
-		for (const row of rows) await ctx.db.delete(row._id);
-		return { cleared: rows.length };
 	},
 });
