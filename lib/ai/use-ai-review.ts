@@ -145,9 +145,15 @@ export function useAiReview(args: {
 			setState("error");
 			setError((err as Error).message || "AI request failed");
 			return;
-		} finally {
-			if (abortRef.current === ac) abortRef.current = null;
 		}
+		// NOTE: do NOT clear abortRef here. The write batch below (addComment loop +
+		// aiSuggestBranch) is the part that actually mutates Convex, so reset()/a
+		// re-run must still be able to abort THIS run mid-write. abortRef is cleared
+		// only when the whole run finishes (or is superseded) — see below.
+
+		// If reset()/a newer run() aborted this controller during the fetch, bail
+		// before writing anything (idempotency: an aborted run must not write).
+		if (ac.signal.aborted) return;
 
 		// Resolve + create each comment against the CURRENT live markdown — it may
 		// have shifted since the request was sent.
@@ -156,6 +162,10 @@ export function useAiReview(args: {
 		let placed = 0;
 		let dropped = 0;
 		for (const comment of comments) {
+			// Re-check before EACH write: closing+reopening the panel (reset) or a
+			// fresh run() supersedes this loop — bail so run #1 and run #2 can't both
+			// write and produce duplicate AI comments.
+			if (ac.signal.aborted) return;
 			const anchor = anchorForItem(currentMarkdown, comment);
 			const range = locateAnchor(currentMarkdown, anchor);
 			if (!range) {
@@ -201,6 +211,9 @@ export function useAiReview(args: {
 
 		let branchId: Id<"reviewBranches"> | null = null;
 		if (editsPlaced > 0) {
+			// Superseded after the comment loop but before the branch write — bail so a
+			// stale run doesn't churn a duplicate suggestion branch.
+			if (ac.signal.aborted) return;
 			try {
 				const res = await aiSuggestBranch({ documentId, branchMarkdown });
 				branchId = res.branchId;
@@ -209,6 +222,11 @@ export function useAiReview(args: {
 				// surface the comment counts and treat the edits as dropped.
 			}
 		}
+
+		// A run superseded during the final writes must not stomp the newer run's UI.
+		if (ac.signal.aborted) return;
+		// This run owns the result — release its controller so reset() goes idle.
+		if (abortRef.current === ac) abortRef.current = null;
 
 		setSummary({
 			commentsPlaced: placed,
