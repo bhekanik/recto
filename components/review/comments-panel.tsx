@@ -82,6 +82,13 @@ export function CommentsPanel({
 	const [replyTo, setReplyTo] = useState<Id<"comments"> | null>(null);
 	const [replyBody, setReplyBody] = useState("");
 	const [pending, setPending] = useState(false);
+	// Synchronous in-flight guard for comment/reply submits. A state flag (`pending`)
+	// flips only after React commits, so ⌘/Ctrl+Enter + a fast click (or a double
+	// click) could both pass the check and fire addComment twice → a duplicate
+	// comment (addComment has no idempotency key). This ref is set at call entry,
+	// before any await, so the second caller bails immediately. `pending` stays for
+	// the disabled-button UX.
+	const submittingRef = useRef(false);
 
 	const restoreFocusRef = useRef<HTMLElement | null>(null);
 	const draftRef = useRef<HTMLTextAreaElement | null>(null);
@@ -165,12 +172,15 @@ export function CommentsPanel({
 		if (!draft) return;
 		const body = draftBody.trim();
 		if (!body) return;
+		if (submittingRef.current) return; // a submit is already in flight
+		submittingRef.current = true;
 		setPending(true);
 		try {
 			await addComment({ documentId, anchor: draft.anchor, body });
 			setDraftBody("");
 			onClearDraft();
 		} finally {
+			submittingRef.current = false;
 			setPending(false);
 		}
 	}, [addComment, documentId, draft, draftBody, onClearDraft]);
@@ -179,6 +189,8 @@ export function CommentsPanel({
 		async (parentId: Id<"comments">, anchor: CommentAnchor) => {
 			const body = replyBody.trim();
 			if (!body) return;
+			if (submittingRef.current) return; // a submit is already in flight
+			submittingRef.current = true;
 			setPending(true);
 			try {
 				await addComment({
@@ -190,6 +202,7 @@ export function CommentsPanel({
 				setReplyBody("");
 				setReplyTo(null);
 			} finally {
+				submittingRef.current = false;
 				setPending(false);
 			}
 		},
