@@ -2,8 +2,13 @@ import type { GenericMutationCtx, GenericQueryCtx } from "convex/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
-import { requireOwnedDocument, requireUserId } from "./documents";
-import { materialize, type ServerNode } from "./history";
+import {
+	MARKDOWN_TOO_LARGE_MESSAGE,
+	MAX_MARKDOWN_LENGTH,
+	requireOwnedDocument,
+	requireUserId,
+} from "./documents";
+import { materialize, parsePatch, type ServerNode } from "./history";
 
 type QueryCtx = GenericQueryCtx<import("./_generated/dataModel").DataModel>;
 type MutationCtx = GenericMutationCtx<
@@ -365,6 +370,42 @@ export const reviewerAppend = mutation({
 			)
 			.unique();
 		if (!existing) {
+			// A suggester writes client-supplied node data into the OWNER's docNodes
+			// table — validate it before it can corrupt the owner's tree or DoS the
+			// owner's review surface on materialize (security hardening).
+
+			// (a) parentNodeId must reference an existing node IN THIS document.
+			const parent = await ctx.db
+				.query("docNodes")
+				.withIndex("by_document_node", (q) =>
+					q.eq("documentId", args.documentId).eq("nodeId", args.parentNodeId),
+				)
+				.unique();
+			if (!parent) throw new Error("Parent node not found");
+
+			// (c) Bound patch + snapshot length (same cap as documents.updateMarkdown).
+			if (args.patch.length > MAX_MARKDOWN_LENGTH) {
+				throw new Error(MARKDOWN_TOO_LARGE_MESSAGE);
+			}
+			if (
+				args.snapshot !== undefined &&
+				args.snapshot.length > MAX_MARKDOWN_LENGTH
+			) {
+				throw new Error(MARKDOWN_TOO_LARGE_MESSAGE);
+			}
+
+			// (b) Patch must be well-formed: parse-safe JSON with integer from/to within
+			// the parent's materialized markdown bounds and a string insert. Keep
+			// applyPatch strict — reject here so a bad patch never lands in the table.
+			const rows = await ctx.db
+				.query("docNodes")
+				.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+				.collect();
+			const parentMarkdown = materialize(parent.nodeId, rows.map(toServerNode));
+			if (parsePatch(args.patch, parentMarkdown.length) === null) {
+				throw new Error("Malformed patch");
+			}
+
 			await ctx.db.insert("docNodes", {
 				documentId: args.documentId,
 				nodeId: args.nodeId,
@@ -445,6 +486,12 @@ export const aiSuggestBranch = mutation({
 	},
 	handler: async (ctx, args) => {
 		const doc = await requireOwnedDocument(ctx, args.documentId);
+
+		// Bound the AI branch head like documents.updateMarkdown — it is written to
+		// docNodes.snapshot and guards the same Convex ~1 MiB per-value ceiling.
+		if (args.branchMarkdown.length > MAX_MARKDOWN_LENGTH) {
+			throw new Error(MARKDOWN_TOO_LARGE_MESSAGE);
+		}
 
 		const rows = await ctx.db
 			.query("docNodes")
