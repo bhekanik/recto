@@ -24,7 +24,13 @@ export class BridgeSession {
 	private pmView: PMEditorView | null = null;
 	private milkdownParser: Parser | null = null;
 
-	private scheduleRichToRawFn = throttleTrailing(() => {
+	private scheduleRichToRawFn = throttleTrailing((version: number) => {
+		// Mirror the raw→rich stale check: if a later RAW edit bumped the version
+		// after this rich edit was scheduled, this rich→raw apply is superseded —
+		// dropping it stops a stale rich snapshot from clobbering the newer raw text
+		// in the complementary pane (the version, not the live mdast, encodes edit
+		// ordering; raw→rich will apply the winning text).
+		if (this.bridge.isStale(version)) return;
 		if (!this.cmView) return;
 		propagateRichToRaw(this.cmView, this.mdast, this.bridge);
 	}, BRIDGE_THROTTLE_MS);
@@ -79,9 +85,11 @@ export class BridgeSession {
 
 	handleRichUpdate(markdown: string): void {
 		if (!this.bridge.shouldPropagate(false)) return;
-		this.bridge.bumpVersion();
+		const version = this.bridge.bumpVersion();
 		this.mdast = parseMarkdown(normalizeMarkdown(markdown));
-		this.scheduleRichToRawFn();
+		// Capture this edit's version so a later raw edit can supersede a still-queued
+		// rich→raw apply (symmetry with handleRawUpdate / scheduleRawToRichFn).
+		this.scheduleRichToRawFn(version);
 	}
 
 	handleRawUpdate(text: string, isProgrammatic: boolean): void {

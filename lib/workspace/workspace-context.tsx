@@ -492,7 +492,15 @@ export function useBridgeSession(
 		if (!session) {
 			session = new BridgeSession(markdown);
 			registry.setBridge(documentId, session);
-		} else {
+		} else if (!session.isActive()) {
+			// Race guard: only re-seed the bridge's in-memory mdast from the reactive
+			// server markdown while the bridge is INACTIVE (a single pane / panes still
+			// mounting — its mdast bus isn't driving a live cross-pane sync yet, so a
+			// refresh is harmless and keeps it current for the next pane). Once the
+			// bridge is ACTIVE (rich+raw both connected), the editors own live state and
+			// every debounced-autosave echo would otherwise overwrite a just-typed mdast
+			// here — reverting the complementary pane. Live deltas flow through
+			// handleRichUpdate/handleRawUpdate (version/isApplying-guarded) instead.
 			session.setMarkdown(markdown);
 		}
 	}, [documentId, markdown, registry]);
