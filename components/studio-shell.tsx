@@ -1509,8 +1509,10 @@ function StudioWorkspace() {
 								setAiReviewOpen(false);
 								// Surface the AI feedback where human feedback lives: the
 								// comments panel for comments (Phase A), and the review surface
-								// for branches (Phase B). Open the comments panel here.
+								// for the AI suggestion branch (Phase B). The review surface
+								// (owner-only) sits on top; the comments panel underneath.
 								setCommentsOpen(true);
+								if (activeDocId && activeDocIsOwned) setReviewOpen(true);
 							}}
 						/>
 						<RelatedPassagesPanel

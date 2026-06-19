@@ -96,23 +96,36 @@ export function AiReviewPanel({ open, review, onClose, onOpenReview }: Props) {
 					)}
 					{state === "done" && summary && (
 						<div className="flex flex-col gap-[var(--space-3)] px-[var(--space-1)] py-[var(--space-2)]">
-							{summary.commentsTotal === 0 ? (
+							{summary.commentsTotal === 0 && summary.editsTotal === 0 ? (
 								<p className="text-[length:var(--text-ui-sm)] leading-[var(--leading-ui)] text-[var(--color-ink-tertiary)]">
-									No comments — looks solid.
+									No notes — looks solid.
 								</p>
 							) : (
 								<>
 									<p className="text-[length:var(--text-ui-sm)] leading-[var(--leading-ui)] text-[var(--color-ink-secondary)]">
 										Placed {summary.commentsPlaced} of {summary.commentsTotal}{" "}
-										comments.
+										comment{summary.commentsTotal === 1 ? "" : "s"}
+										{summary.editsTotal > 0 && (
+											<>
+												{" "}
+												and {summary.editsPlaced} of {summary.editsTotal} edit
+												{summary.editsTotal === 1 ? "" : "s"} in a review branch
+											</>
+										)}
+										.
 									</p>
-									{summary.commentsDropped > 0 && (
+									{(summary.commentsDropped > 0 ||
+										summary.editsDropped > 0) && (
 										<p className="text-[length:var(--text-ui-sm)] leading-[var(--leading-ui)] text-[var(--color-ink-tertiary)]">
-											{summary.commentsDropped} couldn't be anchored and were
+											{summary.commentsDropped + summary.editsDropped} couldn't
+											be anchored and {""}
+											{summary.commentsDropped + summary.editsDropped === 1
+												? "was"
+												: "were"}{" "}
 											skipped.
 										</p>
 									)}
-									{summary.commentsPlaced > 0 && (
+									{(summary.commentsPlaced > 0 || summary.editsPlaced > 0) && (
 										<button
 											type="button"
 											onClick={onOpenReview}
@@ -127,8 +140,8 @@ export function AiReviewPanel({ open, review, onClose, onOpenReview }: Props) {
 					)}
 				</div>
 				<footer className="shrink-0 border-t border-[var(--color-line)] px-[var(--space-4)] py-[var(--space-2)] text-[0.6875rem] text-[var(--color-ink-tertiary)]">
-					AI comments appear in the comments panel — review them like a human
-					reviewer's.
+					AI comments appear in the comments panel; AI edits land on a review
+					branch — review them like a human reviewer's.
 				</footer>
 			</aside>
 		</div>

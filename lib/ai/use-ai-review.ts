@@ -13,10 +13,11 @@ import {
 import {
 	AI_REVIEWER_AUTHOR_ID,
 	AI_REVIEWER_AUTHOR_NAME,
-	type AiReviewComment,
 	type AiReviewResult,
+	type AiReviewSuggestion,
 	parseReview,
 } from "./review";
+import { applyEdits } from "./review-apply";
 
 export type AiReviewState = "idle" | "loading" | "done" | "error";
 
@@ -24,44 +25,58 @@ export type AiReviewSummary = {
 	commentsPlaced: number;
 	commentsTotal: number;
 	commentsDropped: number;
+	editsPlaced: number;
+	editsTotal: number;
+	editsDropped: number;
+	branchId: Id<"reviewBranches"> | null;
 };
 
+/** The AI fields shared by comments and suggestions that drive anchoring. */
+type AnchoredItem = { quote: string; prefix?: string; suffix?: string };
+
 /**
- * Build a canonical {@link CommentAnchor} for an AI comment against the CURRENT
- * live markdown. Preferred: locate the verbatim `quote` and call plan 010's
- * `createAnchor` at that offset so prefix/suffix/offsetHint are computed by 010's
- * own util (keeps the stored anchor shape identical to a human comment's).
+ * Build a canonical {@link CommentAnchor} for an AI comment/suggestion against the
+ * CURRENT live markdown. Preferred: locate the verbatim `quote` and call plan
+ * 010's `createAnchor` at that offset so prefix/suffix/offsetHint are computed by
+ * 010's own util (keeps the stored anchor shape identical to a human comment's).
  * Fallback: construct the anchor directly from the AI fields when the quote isn't
  * found inline (`locateAnchor` then decides whether it's placeable / drops it).
  */
-function anchorForComment(
-	markdown: string,
-	comment: AiReviewComment,
-): CommentAnchor {
-	const idx = markdown.indexOf(comment.quote);
+function anchorForItem(markdown: string, item: AnchoredItem): CommentAnchor {
+	const idx = markdown.indexOf(item.quote);
 	if (idx >= 0) {
-		return createAnchor(markdown, idx, idx + comment.quote.length);
+		return createAnchor(markdown, idx, idx + item.quote.length);
 	}
 	return {
-		quote: comment.quote,
-		prefix: comment.prefix ?? "",
-		suffix: comment.suffix ?? "",
+		quote: item.quote,
+		prefix: item.prefix ?? "",
+		suffix: item.suffix ?? "",
 		offsetHint: 0,
 	};
 }
 
 /**
- * Client orchestration for the AI reviewer (plan 011, Phase A — comments path).
- * POSTs the live canonical markdown to /api/ai/review, parses the structured
- * `{ comments, suggestions }`, then for EACH comment resolves its quote against
- * the CURRENT live markdown via plan 010's `locateAnchor` and — if located —
- * creates a real anchored comment through 010's `addComment` mutation, attributed
- * to the synthetic AI reviewer via the owner-only author override. Unlocatable
- * comments are DROPPED and COUNTED (never mis-anchored). Suggestions are parsed
- * but ignored in Phase A (Phase B builds the AI suggestion branch).
+ * Client orchestration for the AI reviewer (plan 011).
  *
- * The authenticated caller stays the document owner; only the *attributed* author
- * is the synthetic AI reviewer (addComment honors `author` only for the owner).
+ * POSTs the live canonical markdown to /api/ai/review and parses the structured
+ * `{ comments, suggestions }`, then:
+ *  - COMMENTS (Phase A): for each comment resolves its quote against the CURRENT
+ *    live markdown via plan 010's `locateAnchor` and — if located — creates a real
+ *    anchored comment through 010's `addComment` mutation, attributed to the
+ *    synthetic AI reviewer via the owner-only author override.
+ *  - SUGGESTIONS (Phase B): merges the surviving `quote→replacement` edits into the
+ *    full markdown via `applyEdits` (pure; drops unlocatable + overlapping edits),
+ *    then — if any applied — pushes the merged markdown onto an AI suggestion
+ *    BRANCH via `aiSuggestBranch`. The owner reviews that branch's word-level diff
+ *    and accepts/rejects it in plan 010's review surface, exactly like a human
+ *    reviewer's branch.
+ *
+ * Unlocatable comments + unlocatable/overlapping edits are DROPPED and COUNTED
+ * (never mis-anchored / mis-applied). The authenticated caller stays the document
+ * owner; only the *attributed* author/origin is the synthetic AI reviewer. The
+ * suggestion path NEVER touches the owner's `documents` row — `aiSuggestBranch` is
+ * append-only (isolation invariant) and the owner's live doc only changes on
+ * Accept. (This hook never calls `commitProgrammatic` / document autosave.)
  */
 export function useAiReview(args: {
 	documentId: Id<"documents"> | null;
@@ -69,6 +84,7 @@ export function useAiReview(args: {
 }) {
 	const { documentId, getDocMarkdown } = args;
 	const addComment = useMutation(api.review.addComment);
+	const aiSuggestBranch = useMutation(api.review.aiSuggestBranch);
 
 	const [state, setState] = useState<AiReviewState>("idle");
 	const [summary, setSummary] = useState<AiReviewSummary | null>(null);
@@ -140,7 +156,7 @@ export function useAiReview(args: {
 		let placed = 0;
 		let dropped = 0;
 		for (const comment of comments) {
-			const anchor = anchorForComment(currentMarkdown, comment);
+			const anchor = anchorForItem(currentMarkdown, comment);
 			const range = locateAnchor(currentMarkdown, anchor);
 			if (!range) {
 				dropped++;
@@ -167,13 +183,44 @@ export function useAiReview(args: {
 			}
 		}
 
+		// Suggestions → AI suggestion branch (Phase B). Merge the surviving
+		// `quote→replacement` edits into the full markdown (applyEdits drops
+		// unlocatable + overlapping edits), then — if any applied — push the merged
+		// markdown onto an AI branch off the owner's current node. This never writes
+		// the owner's documents row: aiSuggestBranch is append-only.
+		const suggestions = result.suggestions;
+		const edits = suggestions.map((s: AiReviewSuggestion) => ({
+			anchor: anchorForItem(currentMarkdown, s),
+			replacement: s.replacement,
+		}));
+		const {
+			markdown: branchMarkdown,
+			applied: editsPlaced,
+			dropped: editsDropped,
+		} = applyEdits(currentMarkdown, edits);
+
+		let branchId: Id<"reviewBranches"> | null = null;
+		if (editsPlaced > 0) {
+			try {
+				const res = await aiSuggestBranch({ documentId, branchMarkdown });
+				branchId = res.branchId;
+			} catch {
+				// A failed branch write shouldn't sink the comments that already landed —
+				// surface the comment counts and treat the edits as dropped.
+			}
+		}
+
 		setSummary({
 			commentsPlaced: placed,
 			commentsTotal: comments.length,
 			commentsDropped: dropped,
+			editsPlaced: branchId ? editsPlaced : 0,
+			editsTotal: suggestions.length,
+			editsDropped: branchId ? editsDropped : editsDropped + editsPlaced,
+			branchId,
 		});
 		setState("done");
-	}, [documentId, getDocMarkdown, addComment]);
+	}, [documentId, getDocMarkdown, addComment, aiSuggestBranch]);
 
 	return { state, summary, error, run, reset };
 }

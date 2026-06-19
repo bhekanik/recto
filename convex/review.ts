@@ -15,6 +15,19 @@ const selectionValidator = v.union(
 	v.null(),
 );
 
+/**
+ * Synthetic attribution for AI-authored review feedback (plan 011). MUST stay in
+ * sync with `lib/ai/review.ts` (`AI_REVIEWER_AUTHOR_ID` / `AI_CHAT_MODEL`) —
+ * Convex function modules can't import from `lib/` (the bundle is self-contained),
+ * so these are duplicated literals, not imports. The AI branch's `reviewerUserId`
+ * is this synthetic id (there is no Clerk user for the AI), and its nodes carry an
+ * `ai:review:<model>` origin so `listOpenBranches` can label + count them.
+ */
+const AI_REVIEWER_AUTHOR_ID = "ai-reviewer";
+const AI_REVIEW_MODEL = "z-ai/glm-5.2";
+/** Origin prefix on AI branch nodes — mirrors `aiReviewOrigin()` in lib/ai/review.ts. */
+const AI_REVIEW_ORIGIN_PREFIX = "ai:review:";
+
 /** Role rank for access comparisons. Owner outranks all grantees. */
 const ROLE_RANK = { commenter: 1, suggester: 2, owner: 3 } as const;
 type AccessRole = keyof typeof ROLE_RANK;
@@ -33,6 +46,23 @@ function toServerNode(row: Doc<"docNodes">): ServerNode {
 function roughWordCount(markdown: string): number {
 	const trimmed = markdown.trim();
 	return trimmed ? trimmed.split(/\s+/).length : 0;
+}
+
+/**
+ * Prettify a model id's last path segment into a short display label —
+ * `"z-ai/glm-5.2"` → `"GLM 5.2"`. Duplicated from `modelLabel` in lib/ai/review.ts
+ * (Convex modules can't import from lib/), kept identical so the AI reviewer's name
+ * matches between the review surface and the AI review panel.
+ */
+function aiModelLabel(model: string): string {
+	const last = model.split("/").pop() ?? model;
+	return last
+		.replace(/[-_]+/g, " ")
+		.trim()
+		.split(" ")
+		.filter(Boolean)
+		.map((token) => (/^[a-z]+$/i.test(token) ? token.toUpperCase() : token))
+		.join(" ");
 }
 
 /**
@@ -385,6 +415,94 @@ export const reviewerAppend = mutation({
 });
 
 /**
+ * Owner-callable AI suggestion branch (plan 011, Phase B). The OWNER runs the AI
+ * reviewer on their OWN un-shared document; the AI's surviving `quote→replacement`
+ * edits have already been merged client-side (lib/ai/review-apply.ts) into the
+ * full `branchMarkdown`. This creates/replaces the AI review branch:
+ *
+ *   - Append ONE immutable docNode parented at the document's CURRENT node, with a
+ *     patch current→`branchMarkdown` + `snapshot: branchMarkdown` (one-hop
+ *     materialization, mirroring versions.restore / acceptBranch's additive shape)
+ *     and origin `ai:review:<model>`.
+ *   - Upsert a `reviewBranches` row with `reviewerUserId = AI_REVIEWER_AUTHOR_ID`,
+ *     `baseNodeId = current`, `headNodeId = new node`, `status:"open"`.
+ *
+ * ISOLATION INVARIANT (same as reviewerAppend / the SPIKE): it NEVER patches the
+ * `documents` row — the owner's live markdown / currentNodeId only change on
+ * Accept (acceptBranch). One AI branch per document for v1: any prior OPEN AI
+ * branch is marked "rejected" before the new one opens (keeps the surface to a
+ * single, latest AI suggestion set; old nodes are pruned by retention).
+ *
+ * Authorized via `requireOwnedDocument` — NOT the suggester-gated reviewerAppend.
+ * The caller is the authenticated owner; the *attributed* branch reviewer is the
+ * synthetic AI id (there is no Clerk user for the AI).
+ */
+export const aiSuggestBranch = mutation({
+	args: {
+		documentId: v.id("documents"),
+		/** The full AI-edited markdown that becomes the branch head. */
+		branchMarkdown: v.string(),
+	},
+	handler: async (ctx, args) => {
+		const doc = await requireOwnedDocument(ctx, args.documentId);
+
+		const rows = await ctx.db
+			.query("docNodes")
+			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+			.collect();
+		const nodes = rows.map(toServerNode);
+		const currentMarkdown = materialize(doc.currentNodeId, nodes);
+
+		const now = Date.now();
+
+		// One AI branch per document for v1 — close any prior OPEN AI branch so the
+		// review surface shows only the latest AI suggestion set.
+		const priorOpen = await ctx.db
+			.query("reviewBranches")
+			.withIndex("by_document_reviewer", (q) =>
+				q
+					.eq("documentId", args.documentId)
+					.eq("reviewerUserId", AI_REVIEWER_AUTHOR_ID),
+			)
+			.filter((q) => q.eq(q.field("status"), "open"))
+			.collect();
+		for (const branch of priorOpen) {
+			await ctx.db.patch(branch._id, { status: "rejected", updatedAt: now });
+		}
+
+		// Append the AI branch head off the owner's CURRENT node — append-only, never
+		// touches the documents row (the isolation boundary).
+		const newNodeId = crypto.randomUUID();
+		await ctx.db.insert("docNodes", {
+			documentId: args.documentId,
+			nodeId: newNodeId,
+			parentNodeId: doc.currentNodeId,
+			patch: JSON.stringify({
+				from: 0,
+				to: currentMarkdown.length,
+				insert: args.branchMarkdown,
+			}),
+			snapshot: args.branchMarkdown,
+			selection: null,
+			origin: `${AI_REVIEW_ORIGIN_PREFIX}${AI_REVIEW_MODEL}`,
+			createdAt: now,
+		});
+
+		const branchId = await ctx.db.insert("reviewBranches", {
+			documentId: args.documentId,
+			reviewerUserId: AI_REVIEWER_AUTHOR_ID,
+			baseNodeId: doc.currentNodeId,
+			headNodeId: newNodeId,
+			status: "open",
+			createdAt: now,
+			updatedAt: now,
+		});
+
+		return { branchId, nodeId: newNodeId };
+	},
+});
+
+/**
  * SPIKE: owner-only. Materialize the branch head and the owner's current node so
  * the review surface can word-diff them (branch-head vs. live-current).
  */
@@ -554,26 +672,38 @@ export const listOpenBranches = query({
 			.collect();
 		if (branches.length === 0) return [];
 
-		// Count this document's nodes per reviewer (origin `review:<userId>`) so the
-		// surface can show "N edits" without materializing each branch up front.
+		// Count this document's nodes per reviewer so the surface can show "N edits"
+		// without materializing each branch up front. Human nodes carry origin
+		// `review:<userId>`; AI nodes carry `ai:review:<model>` and are counted under
+		// the synthetic AI reviewer id (plan 011).
 		const nodes = await ctx.db
 			.query("docNodes")
 			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
 			.collect();
 		const countByReviewer = new Map<string, number>();
+		let aiNodeCount = 0;
 		for (const node of nodes) {
-			if (node.origin.startsWith("review:")) {
+			if (node.origin.startsWith(AI_REVIEW_ORIGIN_PREFIX)) {
+				aiNodeCount++;
+			} else if (node.origin.startsWith("review:")) {
 				const reviewer = node.origin.slice("review:".length);
 				countByReviewer.set(reviewer, (countByReviewer.get(reviewer) ?? 0) + 1);
 			}
 		}
+		countByReviewer.set(AI_REVIEWER_AUTHOR_ID, aiNodeCount);
 
-		// Resolve a friendly reviewer name from the share's invited email.
+		// Resolve a friendly reviewer name from the share's invited email. The
+		// synthetic AI reviewer has no Clerk user / share, so map its id to the AI
+		// display name (mirrors AI_REVIEWER_AUTHOR_NAME in lib/ai/review.ts).
 		const shares = await ctx.db
 			.query("documentShares")
 			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
 			.collect();
 		const nameByUser = new Map<string, string>();
+		nameByUser.set(
+			AI_REVIEWER_AUTHOR_ID,
+			`AI · ${aiModelLabel(AI_REVIEW_MODEL)}`,
+		);
 		for (const share of shares) {
 			if (share.granteeUserId) {
 				nameByUser.set(share.granteeUserId, share.granteeEmail);
