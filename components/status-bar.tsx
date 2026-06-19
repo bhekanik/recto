@@ -18,12 +18,7 @@ import {
 
 import { GoalPopover } from "@/components/goal-popover";
 import { formatReadingTime } from "@/lib/markdown";
-import {
-	MODE_RING,
-	type Mode,
-	modeToLabel,
-	type VimSubMode,
-} from "@/lib/modes/types";
+import { MODE_RING, type Mode, modeToLabel } from "@/lib/modes/types";
 import type { GoalKind, GoalProgress } from "@/lib/stats/streak";
 import {
 	type FocusScope,
@@ -48,7 +43,6 @@ type StatusBarProps = {
 	readingMinutes: number;
 	syncStatus: SyncStatus;
 	mode: Mode;
-	vimSubMode?: VimSubMode;
 	onModeChange: (mode: Mode) => void;
 	theme: Theme;
 	onCycleTheme: () => void;
