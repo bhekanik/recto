@@ -31,6 +31,19 @@ export const create = mutation({
 	},
 	handler: async (ctx, args) => {
 		await requireOwnedDocument(ctx, args.documentId);
+
+		// Tag must point at a node that exists in THIS document — a phantom nodeId
+		// would later break restore() (materialize throws "Unknown node"). Safe to
+		// check: the client tags currentNodeId on a long debounce / a navigated
+		// (existing) node, so the appending write has long since landed.
+		const node = await ctx.db
+			.query("docNodes")
+			.withIndex("by_document_node", (q) =>
+				q.eq("documentId", args.documentId).eq("nodeId", args.nodeId),
+			)
+			.unique();
+		if (!node) throw new Error("Node not found");
+
 		const versionId = await ctx.db.insert("versions", {
 			documentId: args.documentId,
 			nodeId: args.nodeId,
