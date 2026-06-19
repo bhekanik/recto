@@ -424,7 +424,7 @@ function StudioWorkspace() {
 		for (const c of comments) {
 			// Only top-level comments carry a highlight (replies share the thread).
 			if (c.threadParentId) continue;
-			const anchor = c.anchor as CommentAnchor;
+			const anchor = c.anchor;
 			const range = locateAnchor(markdown, anchor);
 			if (!range) continue; // orphaned — no highlight
 			cm.push({
