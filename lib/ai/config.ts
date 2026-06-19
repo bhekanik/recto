@@ -27,6 +27,13 @@ export const AI_TRANSFORM_MAX_TOKENS = 1024;
 export const AI_CRITIQUE_MAX_TOKENS = 1500;
 
 /**
+ * Cap output for the AI review pass — a structured list of anchored comments +
+ * edits, not an essay. Larger than critique because each item carries a verbatim
+ * quote + body (plan 011).
+ */
+export const AI_REVIEW_MAX_TOKENS = 4000;
+
+/**
  * Embedding model + dimension for Phase C RAG. The `vectorIndex.dimensions` in
  * `convex/schema.ts` MUST equal `AI_EMBEDDING_DIM` exactly — changing the model
  * means a new index + a full re-embed. Verified on OpenRouter

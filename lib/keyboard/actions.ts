@@ -257,9 +257,17 @@ export const ACTIONS: ActionDef[] = [
 	},
 	{
 		id: "ai-critique",
-		label: "Editorial critique…",
+		label: "AI review (comments)…",
 		section: "AI",
-		aliases: ["feedback", "review", "critique", "notes", "ai"],
+		aliases: [
+			"review",
+			"feedback",
+			"ai review",
+			"comments",
+			"critique",
+			"notes",
+			"ai",
+		],
 		shortcut: { mac: "Ctrl+⇧+J", other: "Ctrl+Shift+J" },
 	},
 	{

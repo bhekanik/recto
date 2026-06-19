@@ -6,11 +6,11 @@ import { Command as CommandIcon, GitBranch } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDebouncedCallback } from "use-debounce";
+import { AiReviewPanel } from "@/components/ai/ai-review-panel";
 import {
 	AiTransformPopover,
 	type AiTransformRequest,
 } from "@/components/ai/ai-transform-popover";
-import { CritiquePanel } from "@/components/ai/critique-panel";
 import { RelatedPassagesPanel } from "@/components/ai/related-passages-panel";
 import { CommandPalette } from "@/components/command-palette";
 import { DocumentSwitcher } from "@/components/document-switcher";
@@ -36,6 +36,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import type { TransformRange } from "@/lib/ai/apply-transform";
 import { AI_TRANSFORM_SUMMON_EVENT, setAiEnabledMirror } from "@/lib/ai/summon";
+import { useAiReview } from "@/lib/ai/use-ai-review";
 import { useAiTransform } from "@/lib/ai/use-ai-transform";
 import { useRag } from "@/lib/ai/use-rag";
 import { dispatchOpenSearch } from "@/lib/editor/codemirror";
@@ -532,7 +533,14 @@ function StudioWorkspace() {
 		open: boolean;
 		selection: { text: string; range: TransformRange } | null;
 	}>({ open: false, selection: null });
-	const [critiqueOpen, setCritiqueOpen] = useState(false);
+	// AI reviewer (plan 011): on the owner's own un-shared doc, the AI leaves real
+	// anchored comments through plan 010's primitives (it runs as the owner over
+	// their own doc; the no-AI-on-shared gate below keeps it off shared docs).
+	const aiReview = useAiReview({
+		documentId: activeDocId,
+		getDocMarkdown: getActiveMarkdown,
+	});
+	const [aiReviewOpen, setAiReviewOpen] = useState(false);
 	const [relatedOpen, setRelatedOpen] = useState(false);
 
 	const { reindexDocument } = useRag();
@@ -917,7 +925,10 @@ function StudioWorkspace() {
 					if (effectiveAiEnabled) summonAiTransform();
 					return;
 				case "ai-critique":
-					if (effectiveAiEnabled) setCritiqueOpen(true);
+					// `effectiveAiEnabled` already folds in the 010 no-AI-on-shared gate
+					// (settings.aiEnabled && !activeDocShared), so AI review only runs on
+					// the owner's own un-shared doc — never on a shared/shared-with-me doc.
+					if (effectiveAiEnabled) setAiReviewOpen(true);
 					return;
 				case "ai-related":
 					if (effectiveAiEnabled) setRelatedOpen(true);
@@ -1487,12 +1498,19 @@ function StudioWorkspace() {
 							onReject={aiTransform.reject}
 							onCancel={aiTransform.cancel}
 						/>
-						<CritiquePanel
-							open={critiqueOpen}
-							getText={getActiveMarkdown}
+						<AiReviewPanel
+							open={aiReviewOpen}
+							review={aiReview}
 							onClose={() => {
-								setCritiqueOpen(false);
+								setAiReviewOpen(false);
 								dispatchFocusEditor();
+							}}
+							onOpenReview={() => {
+								setAiReviewOpen(false);
+								// Surface the AI feedback where human feedback lives: the
+								// comments panel for comments (Phase A), and the review surface
+								// for branches (Phase B). Open the comments panel here.
+								setCommentsOpen(true);
 							}}
 						/>
 						<RelatedPassagesPanel
