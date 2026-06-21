@@ -84,6 +84,7 @@ import {
 	READING_SCALE_MIN,
 	useStudioSettings,
 } from "@/lib/studio/use-studio-settings";
+import { useZenMode } from "@/lib/studio/use-zen-mode";
 import { cn } from "@/lib/utils";
 import { findLeaf } from "@/lib/workspace/queries";
 import {
@@ -151,85 +152,9 @@ function StudioWorkspace() {
 	}, []);
 
 	// Zen mode: hide all chrome but the canvas; reveal on mouse move, re-hide on
-	// idle (and stay revealed while the pointer is over the chrome).
-	const [zen, setZen] = useState(false);
-	const [chromeRevealed, setChromeRevealed] = useState(false);
-	const overChromeRef = useRef(false);
-	const revealTimerRef = useRef<number | null>(null);
-
-	const clearRevealTimer = useCallback(() => {
-		if (revealTimerRef.current !== null) {
-			window.clearTimeout(revealTimerRef.current);
-			revealTimerRef.current = null;
-		}
-	}, []);
-
-	const scheduleHide = useCallback(() => {
-		clearRevealTimer();
-		revealTimerRef.current = window.setTimeout(() => {
-			if (!overChromeRef.current) setChromeRevealed(false);
-		}, 2200);
-	}, [clearRevealTimer]);
-
-	useEffect(() => {
-		if (!zen) {
-			setChromeRevealed(false);
-			clearRevealTimer();
-			return;
-		}
-		const onMove = () => {
-			setChromeRevealed(true);
-			scheduleHide();
-		};
-		window.addEventListener("mousemove", onMove);
-		// Touch has no mousemove — reveal the chrome (and its exit control) on tap.
-		window.addEventListener("touchstart", onMove, { passive: true });
-		// Reveal briefly on entering zen so the exit control is discoverable.
-		setChromeRevealed(true);
-		scheduleHide();
-		return () => {
-			window.removeEventListener("mousemove", onMove);
-			window.removeEventListener("touchstart", onMove);
-			clearRevealTimer();
-		};
-	}, [zen, scheduleHide, clearRevealTimer]);
-
-	const chromeHoverProps = zen
-		? {
-				onMouseEnter: () => {
-					overChromeRef.current = true;
-					clearRevealTimer();
-					setChromeRevealed(true);
-				},
-				onMouseLeave: () => {
-					overChromeRef.current = false;
-					scheduleHide();
-				},
-			}
-		: {};
-
-	// Zen takes the page fullscreen too. Requested from a user gesture (toggle /
-	// shortcut), so the browser allows it; failures degrade to plain zen.
-	useEffect(() => {
-		if (typeof document === "undefined") return;
-		if (zen) {
-			if (!document.fullscreenElement) {
-				document.documentElement.requestFullscreen?.().catch(() => {});
-			}
-		} else if (document.fullscreenElement) {
-			document.exitFullscreen?.().catch(() => {});
-		}
-	}, [zen]);
-
-	// Leaving fullscreen by Esc / F11 should also leave zen.
-	useEffect(() => {
-		const onFullscreenChange = () => {
-			if (!document.fullscreenElement) setZen(false);
-		};
-		document.addEventListener("fullscreenchange", onFullscreenChange);
-		return () =>
-			document.removeEventListener("fullscreenchange", onFullscreenChange);
-	}, []);
+	// idle (and stay revealed while the pointer is over the chrome). Also takes
+	// the page fullscreen; leaving fullscreen leaves zen.
+	const { zen, setZen, chromeRevealed, chromeHoverProps } = useZenMode();
 
 	const activeLeaf = workspace ? getActiveLeaf(workspace) : null;
 	const activeMode = activeLeaf?.mode ?? "rich";
@@ -1058,6 +983,7 @@ function StudioWorkspace() {
 			activeDocIsOwned,
 			canComment,
 			summonAddComment,
+			setZen,
 		],
 	);
 
@@ -1177,6 +1103,7 @@ function StudioWorkspace() {
 		handleCheckpoint,
 		setDocumentSwitcherOpen,
 		workspace,
+		setZen,
 	]);
 
 	if (loading || !workspace) {
