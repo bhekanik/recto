@@ -28,6 +28,91 @@ export function diffRuns(
 }
 
 /**
+ * One reviewable HUNK of a branch diff: a maximal group of consecutive non-`same`
+ * runs (add/del), addressable by its stable `index` (the position of the hunk in
+ * left-to-right order). `runIndices` are the positions of this hunk's runs in the
+ * flat {@link DiffRun} array, so the renderer can mark exactly those runs selected.
+ *
+ * The grouping is DETERMINISTIC from the runs — the same (current, branch,
+ * granularity) inputs always yield the same hunks. The server (convex/history.ts
+ * `groupHunks`) computes the IDENTICAL grouping over runs from the SAME `diff`
+ * package, so a hunk `index` the owner picks in the UI maps to the same hunk the
+ * partial-accept mutation reconstructs (the contract that makes per-hunk accept
+ * server-authoritative — the client never sends markdown, only hunk indices).
+ */
+export type DiffHunk = { index: number; runIndices: number[] };
+
+/**
+ * Group a flat run list into reviewable hunks: each maximal span of consecutive
+ * non-`same` runs becomes one hunk. `same` runs are the unchanged context between
+ * hunks and belong to no hunk. Pure; the ordering is the natural left-to-right run
+ * order, so `index` is stable across client + server for identical inputs.
+ */
+export function groupHunks(runs: DiffRun[]): DiffHunk[] {
+	const hunks: DiffHunk[] = [];
+	let current: number[] | null = null;
+	for (let i = 0; i < runs.length; i++) {
+		const run = runs[i];
+		if (!run) continue;
+		if (run.type === "same") {
+			if (current) {
+				hunks.push({ index: hunks.length, runIndices: current });
+				current = null;
+			}
+			continue;
+		}
+		if (!current) current = [];
+		current.push(i);
+	}
+	if (current) hunks.push({ index: hunks.length, runIndices: current });
+	return hunks;
+}
+
+/**
+ * Reconstruct the partial-merge markdown when only `acceptedHunks` (by hunk index)
+ * of the `current → branch` diff are accepted. Walks the runs left-to-right: `same`
+ * text is always emitted; an accepted hunk emits its `add` side (the branch's
+ * proposed text), a rejected hunk emits its `del` side (the current text, i.e. the
+ * change is discarded). Pure — mirrored byte-for-byte by convex/history.ts so the
+ * UI preview matches what the server writes.
+ */
+export function applyAcceptedHunks(
+	runs: DiffRun[],
+	acceptedHunks: Iterable<number>,
+): string {
+	const accepted = new Set(acceptedHunks);
+	const hunks = groupHunks(runs);
+	const acceptedRunIndices = new Set<number>();
+	for (const hunk of hunks) {
+		if (accepted.has(hunk.index)) {
+			for (const ri of hunk.runIndices) acceptedRunIndices.add(ri);
+		}
+	}
+
+	let out = "";
+	for (let i = 0; i < runs.length; i++) {
+		const run = runs[i];
+		if (!run) continue;
+		if (run.type === "same") {
+			out += run.text;
+			continue;
+		}
+		const inAcceptedHunk = acceptedRunIndices.has(i);
+		// Accepted hunk → take the branch (add) side; rejected hunk → keep current
+		// (del) side. A run that belongs to no accepted hunk contributes its del text
+		// (and accepted add runs contribute their add text).
+		if (inAcceptedHunk) {
+			if (run.type === "add") out += run.text;
+			// accepted del runs are dropped (the deletion is applied)
+		} else {
+			if (run.type === "del") out += run.text;
+			// rejected add runs are dropped (the addition is discarded)
+		}
+	}
+	return out;
+}
+
+/**
  * A minimal LCS line diff of two canonical-Markdown strings (blueprint 08 §5 —
  * compare diffs the source, not rendered HTML). Read-only.
  */

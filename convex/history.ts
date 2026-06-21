@@ -4,6 +4,8 @@
  * imports. Mirrors lib/history/{patch,materialize}.ts — both are pure.
  */
 
+import { diffWordsWithSpace, diffLines as jsDiffLines } from "diff";
+
 export type ServerNode = {
 	nodeId: string;
 	parentNodeId: string | null;
@@ -84,4 +86,104 @@ export function materialize(targetNodeId: string, nodes: ServerNode[]): string {
 		if (node) markdown = applyPatch(markdown, node.patch);
 	}
 	return markdown;
+}
+
+// ---------------------------------------------------------------------------
+// Per-hunk diff partitioning (plan: per-hunk accept/reject)
+//
+// MUST stay in sync with lib/history/diff.ts (`DiffRun` / `groupHunks` /
+// `applyAcceptedHunks`). Convex modules can't import from lib/ (the bundle is
+// self-contained), so the run computation + grouping is duplicated here. Both
+// sides diff with the SAME `diff` package over the SAME (current, branch,
+// granularity) inputs, so the hunk `index` the owner picks in the UI maps to the
+// same hunk the server reconstructs — this is the contract that lets per-hunk
+// accept be SERVER-AUTHORITATIVE (the client sends hunk indices, never markdown).
+// ---------------------------------------------------------------------------
+
+/** One inline diff run (mirrors lib/history/diff.ts `DiffRun`). */
+export type DiffRun = { type: "add" | "del" | "same"; text: string };
+
+/** Diff granularity the owner chose in the review surface. */
+export type DiffGranularity = "word" | "line";
+
+/**
+ * Token/line diff of `a → b` (mirrors lib/history/diff.ts `diffRuns`). "word" uses
+ * `diffWordsWithSpace` (whitespace-preserving, prose-friendly); "line" uses
+ * `diffLines`. Pure.
+ */
+export function diffRuns(
+	a: string,
+	b: string,
+	granularity: DiffGranularity = "word",
+): DiffRun[] {
+	const changes =
+		granularity === "word" ? diffWordsWithSpace(a, b) : jsDiffLines(a, b);
+	return changes.map((c) => ({
+		type: c.added ? "add" : c.removed ? "del" : "same",
+		text: c.value,
+	}));
+}
+
+/** A reviewable hunk: its stable left-to-right `index` + the run positions it spans. */
+export type DiffHunk = { index: number; runIndices: number[] };
+
+/**
+ * Group runs into hunks — each maximal span of consecutive non-`same` runs is one
+ * hunk. Mirrors lib/history/diff.ts `groupHunks` exactly. Pure.
+ */
+export function groupHunks(runs: DiffRun[]): DiffHunk[] {
+	const hunks: DiffHunk[] = [];
+	let current: number[] | null = null;
+	for (let i = 0; i < runs.length; i++) {
+		const run = runs[i];
+		if (!run) continue;
+		if (run.type === "same") {
+			if (current) {
+				hunks.push({ index: hunks.length, runIndices: current });
+				current = null;
+			}
+			continue;
+		}
+		if (!current) current = [];
+		current.push(i);
+	}
+	if (current) hunks.push({ index: hunks.length, runIndices: current });
+	return hunks;
+}
+
+/**
+ * Reconstruct the partial-merge markdown when only `acceptedHunks` (by hunk index)
+ * of the `current → branch` diff are accepted. Accepted hunks emit their `add`
+ * (branch) side; rejected hunks emit their `del` (current) side. Mirrors
+ * lib/history/diff.ts `applyAcceptedHunks` byte-for-byte. Pure.
+ */
+export function applyAcceptedHunks(
+	runs: DiffRun[],
+	acceptedHunks: Iterable<number>,
+): string {
+	const accepted = new Set(acceptedHunks);
+	const hunks = groupHunks(runs);
+	const acceptedRunIndices = new Set<number>();
+	for (const hunk of hunks) {
+		if (accepted.has(hunk.index)) {
+			for (const ri of hunk.runIndices) acceptedRunIndices.add(ri);
+		}
+	}
+
+	let out = "";
+	for (let i = 0; i < runs.length; i++) {
+		const run = runs[i];
+		if (!run) continue;
+		if (run.type === "same") {
+			out += run.text;
+			continue;
+		}
+		const inAcceptedHunk = acceptedRunIndices.has(i);
+		if (inAcceptedHunk) {
+			if (run.type === "add") out += run.text;
+		} else {
+			if (run.type === "del") out += run.text;
+		}
+	}
+	return out;
 }

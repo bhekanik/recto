@@ -8,7 +8,15 @@ import {
 	requireOwnedDocument,
 	requireUserId,
 } from "./documents";
-import { materialize, parsePatch, type ServerNode } from "./history";
+import {
+	applyAcceptedHunks,
+	type DiffGranularity,
+	diffRuns,
+	groupHunks,
+	materialize,
+	parsePatch,
+	type ServerNode,
+} from "./history";
 
 type QueryCtx = GenericQueryCtx<import("./_generated/dataModel").DataModel>;
 type MutationCtx = GenericMutationCtx<
@@ -631,6 +639,141 @@ export const acceptBranch = mutation({
 
 		await ctx.db.patch(branch._id, { status: "accepted", updatedAt: now });
 		return { newNodeId, markdown };
+	},
+});
+
+const diffGranularityValidator = v.union(v.literal("word"), v.literal("line"));
+
+/**
+ * Owner-only PARTIAL ACCEPT — accept a SUBSET of a branch's diff hunks.
+ *
+ * Same additive-merge-forward shape as {@link acceptBranch}, but instead of taking
+ * the branch head verbatim it reconstructs a partial-merge markdown: it recomputes
+ * the `current → branch-head` word/line diff SERVER-SIDE (the SAME `diff` package
+ * the review surface renders with) and applies ONLY the hunks in `acceptedHunks`
+ * (by stable hunk index). Accepted hunks take the branch's proposed text; every
+ * other hunk keeps the owner's current text (the change is discarded). The result
+ * is appended as a NEW node parented at the owner's CURRENT tip (preserving any
+ * concurrent owner edits) and the documents row is advanced — identical isolation
+ * + additive-history guarantees to acceptBranch.
+ *
+ * SERVER-AUTHORITATIVE: the client sends only hunk INDICES (+ the granularity it
+ * displayed), never markdown — the server is the sole writer of merged text into
+ * the owner's doc, so a malicious/buggy client can't splice arbitrary content.
+ *
+ * RESOLUTION SEMANTICS (documented design choice): a partial accept RESOLVES the
+ * whole branch — accepted hunks merge forward, every un-accepted hunk is discarded,
+ * and the branch is marked `accepted` (it leaves the review surface). This mirrors
+ * the existing one-shot accept/reject lifecycle and avoids a "branch stays half
+ * open against a moved target" state that would need continuous re-diffing. To
+ * apply more of a reviewer's edits later, re-share / re-run the reviewer.
+ *
+ * Per-edit AI suggestions (Phase B) ride this for free: each AI `quote→replacement`
+ * lands at a distinct location, so the branch diff surfaces each as its own hunk —
+ * the owner accepts/rejects each AI edit independently via `acceptedHunks`.
+ *
+ * Edge case: an empty `acceptedHunks` (reject everything) is a valid no-merge that
+ * still resolves the branch — equivalent to rejectBranch but recorded as accepted-
+ * of-nothing. The reconstructed markdown then equals the owner's current text and
+ * the documents row is left untouched (no spurious new node / version churn).
+ */
+export const acceptHunks = mutation({
+	args: {
+		documentId: v.id("documents"),
+		branchId: v.id("reviewBranches"),
+		granularity: diffGranularityValidator,
+		/** Stable hunk indices to accept (see history.groupHunks). */
+		acceptedHunks: v.array(v.number()),
+	},
+	handler: async (ctx, args) => {
+		const doc = await requireOwnedDocument(ctx, args.documentId);
+		const branch = await ctx.db.get(args.branchId);
+		if (!branch || branch.documentId !== args.documentId) {
+			throw new Error("Branch not found");
+		}
+
+		const rows = await ctx.db
+			.query("docNodes")
+			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+			.collect();
+		const nodes = rows.map(toServerNode);
+
+		const branchMarkdown = materialize(branch.headNodeId, nodes);
+		const parentNodeId = doc.currentNodeId;
+		const parentMarkdown = materialize(parentNodeId, nodes);
+
+		// Recompute the diff the owner reviewed (current → branch) at the same
+		// granularity, then merge ONLY the accepted hunks. Server is the sole author
+		// of the merged text (data safety) — the client supplied no markdown.
+		const granularity: DiffGranularity = args.granularity;
+		const runs = diffRuns(parentMarkdown, branchMarkdown, granularity);
+		const hunks = groupHunks(runs);
+		const hunkCount = hunks.length;
+
+		// Reject silently-stale selections: an index out of range means the client's
+		// diff drifted from the server's (a concurrent owner edit re-shaped the diff).
+		// Fail closed rather than apply the wrong hunk.
+		for (const idx of args.acceptedHunks) {
+			if (!Number.isInteger(idx) || idx < 0 || idx >= hunkCount) {
+				throw new Error(
+					"Stale hunk selection — reopen the diff and try again.",
+				);
+			}
+		}
+
+		const merged = applyAcceptedHunks(runs, args.acceptedHunks);
+
+		// Same ~1 MiB cap as every other write into the owner's doc.
+		if (merged.length > MAX_MARKDOWN_LENGTH) {
+			throw new Error(MARKDOWN_TOO_LARGE_MESSAGE);
+		}
+
+		const now = Date.now();
+
+		// Nothing actually merged (rejected everything, or the accepted hunks net to
+		// the current text) → don't churn a new node; just resolve the branch. This
+		// keeps the documents row + history untouched, mirroring rejectBranch's
+		// no-op-on-data guarantee.
+		if (merged === parentMarkdown) {
+			await ctx.db.patch(branch._id, { status: "accepted", updatedAt: now });
+			return {
+				newNodeId: null,
+				markdown: parentMarkdown,
+				acceptedCount: args.acceptedHunks.length,
+				hunkCount,
+			};
+		}
+
+		const newNodeId = crypto.randomUUID();
+		await ctx.db.insert("docNodes", {
+			documentId: args.documentId,
+			nodeId: newNodeId,
+			parentNodeId,
+			patch: JSON.stringify({
+				from: 0,
+				to: parentMarkdown.length,
+				insert: merged,
+			}),
+			snapshot: merged,
+			selection: null,
+			origin: "review-accept",
+			createdAt: now,
+		});
+
+		await ctx.db.patch(args.documentId, {
+			currentNodeId: newNodeId,
+			markdown: merged,
+			wordCount: roughWordCount(merged),
+			updatedAt: now,
+		});
+
+		await ctx.db.patch(branch._id, { status: "accepted", updatedAt: now });
+		return {
+			newNodeId,
+			markdown: merged,
+			acceptedCount: args.acceptedHunks.length,
+			hunkCount,
+		};
 	},
 });
 

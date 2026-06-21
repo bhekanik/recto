@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { type DiffRun, diffLines, diffRuns } from "./diff";
+import {
+	applyAcceptedHunks,
+	type DiffRun,
+	diffLines,
+	diffRuns,
+	groupHunks,
+} from "./diff";
 
 const rebuildOld = (runs: DiffRun[]) =>
 	runs
@@ -104,6 +110,97 @@ describe("diffRuns reconstruction invariant (load-bearing for side-by-side)", ()
 			expect(rebuildOld(runs)).toBe(a);
 			expect(rebuildNew(runs)).toBe(b);
 		}
+	});
+});
+
+describe("groupHunks (per-hunk accept/reject)", () => {
+	it("groups each maximal run of non-same runs into one indexed hunk", () => {
+		const a = "the quick brown fox jumps";
+		const b = "the slow brown fox leaps";
+		const runs = diffRuns(a, b, "word");
+		const hunks = groupHunks(runs);
+		// Two changed regions ("quick"→"slow", "jumps"→"leaps") separated by the
+		// unchanged " brown fox " context → exactly two hunks, indexed 0 and 1.
+		expect(hunks).toHaveLength(2);
+		expect(hunks.map((h) => h.index)).toEqual([0, 1]);
+		// Every run index in a hunk must be a non-same run.
+		for (const hunk of hunks) {
+			for (const ri of hunk.runIndices) {
+				expect(runs[ri]?.type).not.toBe("same");
+			}
+		}
+	});
+
+	it("returns no hunks for identical inputs", () => {
+		expect(groupHunks(diffRuns("same", "same", "word"))).toEqual([]);
+	});
+
+	it("a del+add at one location is a single hunk (one edit, one control)", () => {
+		const runs = diffRuns("the quick fox", "the slow fox", "word");
+		const hunks = groupHunks(runs);
+		expect(hunks).toHaveLength(1);
+		// The single hunk spans both the deletion and the insertion.
+		expect(hunks[0]?.runIndices.length).toBeGreaterThanOrEqual(1);
+	});
+});
+
+describe("applyAcceptedHunks (partial merge reconstruction)", () => {
+	const a = "the quick brown fox jumps";
+	const b = "the slow brown fox leaps";
+
+	it("accepting every hunk reproduces the full branch (b)", () => {
+		const runs = diffRuns(a, b, "word");
+		const all = groupHunks(runs).map((h) => h.index);
+		expect(applyAcceptedHunks(runs, all)).toBe(b);
+	});
+
+	it("accepting no hunk reproduces the current text (a)", () => {
+		const runs = diffRuns(a, b, "word");
+		expect(applyAcceptedHunks(runs, [])).toBe(a);
+	});
+
+	it("accepting only the first hunk applies that change and discards the rest", () => {
+		const runs = diffRuns(a, b, "word");
+		// Hunk 0 = "quick"→"slow"; hunk 1 = "jumps"→"leaps". Accept only hunk 0.
+		expect(applyAcceptedHunks(runs, [0])).toBe("the slow brown fox jumps");
+	});
+
+	it("accepting only the second hunk applies that change and discards the rest", () => {
+		const runs = diffRuns(a, b, "word");
+		expect(applyAcceptedHunks(runs, [1])).toBe("the quick brown fox leaps");
+	});
+
+	it("is a faithful partition: per-hunk accepts are independent and composable", () => {
+		const runs = diffRuns(a, b, "word");
+		const hunks = groupHunks(runs);
+		// Accepting {0,1} === accepting all === b; the empty set === a; each single
+		// hunk lands its own change — proving each AI edit / reviewer change is
+		// independently acceptable (Feature B rides on this partition).
+		expect(applyAcceptedHunks(runs, [0, 1])).toBe(b);
+		expect(
+			applyAcceptedHunks(
+				runs,
+				hunks.map((h) => h.index),
+			),
+		).toBe(b);
+	});
+
+	it("handles a pure insertion hunk (empty → branch adds text)", () => {
+		const a2 = "alpha gamma";
+		const b2 = "alpha beta gamma";
+		const runs = diffRuns(a2, b2, "word");
+		const all = groupHunks(runs).map((h) => h.index);
+		expect(applyAcceptedHunks(runs, all)).toBe(b2);
+		expect(applyAcceptedHunks(runs, [])).toBe(a2);
+	});
+
+	it("handles a pure deletion hunk (branch removes text)", () => {
+		const a2 = "alpha beta gamma";
+		const b2 = "alpha gamma";
+		const runs = diffRuns(a2, b2, "word");
+		const all = groupHunks(runs).map((h) => h.index);
+		expect(applyAcceptedHunks(runs, all)).toBe(b2);
+		expect(applyAcceptedHunks(runs, [])).toBe(a2);
 	});
 });
 
