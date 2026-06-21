@@ -1,4 +1,4 @@
-import { recreateTransform } from "@manuscripts/prosemirror-recreate-steps";
+import { recreateTransform } from "@fellow/prosemirror-recreate-transform";
 import type { Node as PMNode } from "prosemirror-model";
 import type { EditorView as PMEditorView } from "prosemirror-view";
 
@@ -25,7 +25,10 @@ export function propagateRawToRich(
 		return;
 	}
 
-	const tr = recreateTransform(curDoc, nextDoc, true, false);
+	const tr = recreateTransform(curDoc, nextDoc, {
+		complexSteps: true,
+		wordDiffs: false,
+	});
 	const live = state.tr;
 
 	for (const step of tr.steps) {

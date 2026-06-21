@@ -1,7 +1,7 @@
 import { markdown } from "@codemirror/lang-markdown";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { recreateTransform } from "@manuscripts/prosemirror-recreate-steps";
+import { recreateTransform } from "@fellow/prosemirror-recreate-transform";
 import { Schema } from "prosemirror-model";
 import { EditorState as PMEditorState, TextSelection } from "prosemirror-state";
 import { EditorView as PMEditorView } from "prosemirror-view";
@@ -203,9 +203,13 @@ describe("propagation latency (blueprint 05 §6, ADR-15)", () => {
 	});
 });
 
-describe("recreateTransform package pin (ADR-15)", () => {
+describe("recreateTransform package pin (ADR-15, @fellow/prosemirror-recreate-transform)", () => {
 	it("produces steps between two docs", () => {
-		const tr = recreateTransform(pmDoc("abc"), pmDoc("axxc"), true, false);
+		const tr = recreateTransform(pmDoc("abc"), pmDoc("axxc"), {
+			complexSteps: true,
+			wordDiffs: false,
+		});
 		expect(tr.steps.length).toBeGreaterThan(0);
+		expect(tr.doc.textContent).toBe("axxc");
 	});
 });

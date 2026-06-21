@@ -35,7 +35,7 @@
 		"@codemirror/search": "^6.7.0",
 		"@codemirror/state": "^6.6.0",
 		"@codemirror/view": "^6.43.0",
-		"@manuscripts/prosemirror-recreate-steps": "^0.1.4",
+		"@fellow/prosemirror-recreate-transform": "^1.2.3",
 		"@milkdown/core": "^7.21.2",
 		"@milkdown/ctx": "^7.21.2",
 		"@milkdown/kit": "^7.21.2",
