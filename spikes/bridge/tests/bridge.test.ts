@@ -1,7 +1,7 @@
 import { markdown } from "@codemirror/lang-markdown";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { recreateTransform } from "@manuscripts/prosemirror-recreate-steps";
+import { recreateTransform } from "@fellow/prosemirror-recreate-transform";
 import { Schema } from "prosemirror-model";
 import { EditorState as PMEditorState, TextSelection } from "prosemirror-state";
 import { EditorView as PMEditorView } from "prosemirror-view";
@@ -175,10 +175,13 @@ describe("propagation latency", () => {
 });
 
 describe("recreateTransform package", () => {
-	it("produces steps between two docs (@manuscripts/prosemirror-recreate-steps@0.1.4)", () => {
+	it("produces steps between two docs (@fellow/prosemirror-recreate-transform)", () => {
 		const a = pmDoc("abc");
 		const b = pmDoc("axxc");
-		const tr = recreateTransform(a, b, true, false);
+		const tr = recreateTransform(a, b, {
+			complexSteps: true,
+			wordDiffs: false,
+		});
 		expect(tr.steps.length).toBeGreaterThan(0);
 	});
 });
