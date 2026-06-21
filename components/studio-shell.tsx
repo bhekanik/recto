@@ -4,8 +4,7 @@ import { useClerk } from "@clerk/nextjs";
 import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import { Command as CommandIcon, GitBranch } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useDebouncedCallback } from "use-debounce";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AiReviewPanel } from "@/components/ai/ai-review-panel";
 import { AiTransformPopover } from "@/components/ai/ai-transform-popover";
 import { RelatedPassagesPanel } from "@/components/ai/related-passages-panel";
@@ -49,13 +48,11 @@ import {
 	resolveModeAction,
 } from "@/lib/keyboard/app-shortcuts";
 import { readingTimeMinutes } from "@/lib/markdown";
-import { caretAtOffset } from "@/lib/modes/caret";
-import { extractOutline } from "@/lib/outline/extract";
-import { scrollRootToHeadingIndex } from "@/lib/outline/scroll-to-heading";
 import { StudioSettingsProvider } from "@/lib/studio/settings-context";
 import { useAiFeatures } from "@/lib/studio/use-ai-features";
 import { useCommentHighlights } from "@/lib/studio/use-comment-highlights";
 import { useIsMobile } from "@/lib/studio/use-is-mobile";
+import { useOutline } from "@/lib/studio/use-outline";
 import {
 	READING_SCALE_MAX,
 	READING_SCALE_MIN,
@@ -320,79 +317,14 @@ function StudioWorkspace() {
 	}, [activeDocId, workspace, registry, activeSync, activeTitle]);
 
 	// --- Document outline (plan 005) ---
-	// Read from the live handle (falling back to the synced markdown), matching
-	// getExportSource. Recompute is debounced (D3) so typing stays off the parse
-	// hot path; the panel and palette re-read whenever they open.
-	const [outlineMarkdown, setOutlineMarkdown] = useState("");
-	const refreshOutlineMarkdown = useCallback(() => {
-		if (!activeDocId || !workspace) {
-			setOutlineMarkdown("");
-			return;
-		}
-		const handle = registry.getPrimaryHandle(
-			activeDocId,
-			workspace.activePaneId,
-		);
-		const markdown =
-			handle?.getCanonicalMarkdown() ?? activeSync?.markdown ?? "";
-		setOutlineMarkdown(markdown);
-	}, [activeDocId, workspace, registry, activeSync]);
-
-	// The arg is the change signal only — the refresh always re-reads the live
-	// handle (the synced markdown can lag the live editor by a frame).
-	const debouncedRefreshOutline = useDebouncedCallback((_signal: string) => {
-		refreshOutlineMarkdown();
-	}, 250);
-
-	// Re-arm the debounced refresh whenever the synced markdown changes.
-	const syncedMarkdown = activeSync?.markdown ?? "";
-	useEffect(() => {
-		debouncedRefreshOutline(syncedMarkdown);
-	}, [syncedMarkdown, debouncedRefreshOutline]);
-
-	// Refresh immediately when the panel or the headings palette opens, so the
-	// list is current the moment it's shown (the debounce can lag a recent edit).
-	const outlinePanelOpen = settings.outlineOpen;
-	const headingsPaletteOpen = commandOpen && commandScope === "headings";
-	useEffect(() => {
-		if (outlinePanelOpen || headingsPaletteOpen) refreshOutlineMarkdown();
-	}, [outlinePanelOpen, headingsPaletteOpen, refreshOutlineMarkdown]);
-
-	const outline = useMemo(
-		() => extractOutline(outlineMarkdown),
-		[outlineMarkdown],
-	);
-	const outlineRef = useRef(outline);
-	outlineRef.current = outline;
-
-	const jumpToHeading = useCallback(
-		(index: number) => {
-			if (!activeDocId || !workspace) return;
-			const handle = registry.getPrimaryHandle(
-				activeDocId,
-				workspace.activePaneId,
-			);
-			// Scroll (works in rich/preview via rendered <hN> elements under the root).
-			let root = handle?.getRootElement() ?? null;
-			// Preview mode registers no handle — reach the active pane's preview DOM (D1a).
-			if (!root) {
-				root =
-					document.querySelector<HTMLElement>(
-						`[data-pane-id="${workspace.activePaneId}"] .recto-preview`,
-					) ?? document.querySelector<HTMLElement>(".recto-preview");
-			}
-			scrollRootToHeadingIndex(root, index);
-			// Best-effort caret: offset-exact for CodeMirror (raw/vim), a bonus for
-			// Milkdown where the offset space differs. Focusing scrolls CM to the caret.
-			const h = outlineRef.current[index];
-			if (handle && h) {
-				const md = handle.getCanonicalMarkdown();
-				handle.importCaret(caretAtOffset(h.offset, md.length));
-				handle.focus();
-			}
-		},
-		[activeDocId, workspace, registry],
-	);
+	const { outline, jumpToHeading } = useOutline({
+		activeDocId,
+		workspace,
+		registry,
+		syncedMarkdown: activeSync?.markdown ?? "",
+		outlinePanelOpen: settings.outlineOpen,
+		headingsPaletteOpen: commandOpen && commandScope === "headings",
+	});
 
 	// Find & replace lives in the CodeMirror-backed lenses (raw/vim). Rich does a
 	// lossless, instant switch to raw and opens the panel there; preview falls
