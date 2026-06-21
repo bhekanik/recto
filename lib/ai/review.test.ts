@@ -4,19 +4,24 @@ import {
 	AI_REVIEWER_AUTHOR_NAME,
 	aiReviewOrigin,
 	buildReviewMessages,
+	CREATE_COMMENT_TOOL,
 	modelLabel,
+	parseCommentArgs,
 	parseReview,
+	parseSuggestionArgs,
+	REVIEW_TOOLS,
 	resolveComments,
+	SUGGEST_EDIT_TOOL,
 } from "./review";
 
-describe("buildReviewMessages (plan 011)", () => {
-	it("starts with a system message demanding a JSON object with comments + suggestions", () => {
+describe("buildReviewMessages (plan 011, tool-calling)", () => {
+	it("starts with a system message instructing the model to call the review tools", () => {
 		const msgs = buildReviewMessages({ text: "Some draft." });
 		expect(msgs[0]?.role).toBe("system");
 		const sys = msgs[0]?.content ?? "";
-		expect(sys).toMatch(/JSON/);
-		expect(sys).toMatch(/comments/);
-		expect(sys).toMatch(/suggestions/);
+		expect(sys).toMatch(/tool/i);
+		expect(sys).toMatch(/create_comment/);
+		expect(sys).toMatch(/suggest_edit/);
 	});
 
 	it("instructs the model to copy the quote verbatim", () => {
@@ -31,6 +36,77 @@ describe("buildReviewMessages (plan 011)", () => {
 		expect(msgs.find((m) => m.role === "user")?.content).toBe(
 			"The whole draft.",
 		);
+	});
+});
+
+describe("REVIEW_TOOLS schema (plan 011, tool-calling)", () => {
+	it("defines exactly the create_comment and suggest_edit function tools", () => {
+		const names = REVIEW_TOOLS.map((t) => t.function.name);
+		expect(names).toEqual([CREATE_COMMENT_TOOL, SUGGEST_EDIT_TOOL]);
+		expect(REVIEW_TOOLS.every((t) => t.type === "function")).toBe(true);
+	});
+
+	it("requires quote+body for create_comment and quote+replacement for suggest_edit", () => {
+		const comment = REVIEW_TOOLS.find(
+			(t) => t.function.name === CREATE_COMMENT_TOOL,
+		);
+		const edit = REVIEW_TOOLS.find(
+			(t) => t.function.name === SUGGEST_EDIT_TOOL,
+		);
+		expect(comment?.function.parameters?.required).toEqual(["quote", "body"]);
+		expect(edit?.function.parameters?.required).toEqual([
+			"quote",
+			"replacement",
+		]);
+	});
+});
+
+describe("parseCommentArgs / parseSuggestionArgs (plan 011, tool-calling)", () => {
+	it("parses a well-formed JSON args string into a comment", () => {
+		const args = JSON.stringify({
+			quote: "q",
+			body: "b",
+			category: "Clarity",
+			prefix: "p",
+			suffix: "s",
+		});
+		expect(parseCommentArgs(args)).toEqual({
+			quote: "q",
+			body: "b",
+			category: "Clarity",
+			prefix: "p",
+			suffix: "s",
+		});
+	});
+
+	it("parses a well-formed JSON args string into a suggestion", () => {
+		const args = JSON.stringify({
+			quote: "q",
+			replacement: "r",
+			rationale: "why",
+		});
+		expect(parseSuggestionArgs(args)).toEqual({
+			quote: "q",
+			replacement: "r",
+			rationale: "why",
+		});
+	});
+
+	it("returns null for invalid JSON", () => {
+		expect(parseCommentArgs("{ not json")).toBeNull();
+		expect(parseSuggestionArgs("")).toBeNull();
+	});
+
+	it("returns null when required fields are missing or non-string", () => {
+		expect(parseCommentArgs(JSON.stringify({ quote: "q" }))).toBeNull();
+		expect(
+			parseCommentArgs(JSON.stringify({ quote: 1, body: "b" })),
+		).toBeNull();
+		expect(parseSuggestionArgs(JSON.stringify({ quote: "q" }))).toBeNull();
+	});
+
+	it("returns null when args is a JSON array, not an object", () => {
+		expect(parseCommentArgs("[1,2,3]")).toBeNull();
 	});
 });
 
