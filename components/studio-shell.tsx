@@ -4,7 +4,7 @@ import { useClerk } from "@clerk/nextjs";
 import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import { Command as CommandIcon, GitBranch } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AiReviewPanel } from "@/components/ai/ai-review-panel";
 import { AiTransformPopover } from "@/components/ai/ai-transform-popover";
 import { RelatedPassagesPanel } from "@/components/ai/related-passages-panel";
@@ -33,13 +33,7 @@ import {
 	HISTORY_UNDO_EVENT,
 	LINT_COUNT_EVENT,
 } from "@/lib/events";
-import {
-	copyAsMarkdown,
-	copyAsRichText,
-	type ExportSource,
-	exportHtmlFile,
-	exportMarkdownFile,
-} from "@/lib/export";
+import type { ExportSource } from "@/lib/export";
 import type { ActionId } from "@/lib/keyboard/actions";
 import {
 	createAppShortcutHandler,
@@ -48,6 +42,7 @@ import {
 	resolveModeAction,
 } from "@/lib/keyboard/app-shortcuts";
 import { readingTimeMinutes } from "@/lib/markdown";
+import { createActionMap } from "@/lib/studio/action-map";
 import { StudioSettingsProvider } from "@/lib/studio/settings-context";
 import { useAiFeatures } from "@/lib/studio/use-ai-features";
 import { useCommentHighlights } from "@/lib/studio/use-comment-highlights";
@@ -345,225 +340,84 @@ function StudioWorkspace() {
 		dispatchOpenSearch();
 	}, [workspace]);
 
-	// The single action dispatcher — both the chord handler and the command
-	// palette route into this (blueprint 13 §7.3.4: one implementation, two surfaces).
-	const dispatch = useCallback(
-		(id: ActionId) => {
-			switch (id) {
-				case "new-document":
-					void handleCreate();
-					return;
-				case "mode-rich":
-					dispatchModeSwitch("rich");
-					return;
-				case "mode-raw":
-					dispatchModeSwitch("raw");
-					return;
-				case "mode-vim":
-					dispatchModeSwitch("vim");
-					return;
-				case "mode-preview":
-					dispatchModeSwitch("preview");
-					return;
-				case "cycle-next": {
+	// The single application action registry (blueprint 13 §7.3.4): one
+	// `Record<ActionId, () => void>` that both surfaces call directly — the command
+	// palette / menu and the capture-phase keyboard handler.
+	const actionMap = useMemo(
+		() =>
+			createActionMap({
+				settings,
+				actions,
+				isMobile,
+				getActiveMode: () => {
 					const leaf = workspace
 						? findLeaf(workspace.paneTree, workspace.activePaneId)
 						: null;
-					dispatchModeSwitch(resolveModeAction(leaf?.mode ?? "rich", "next"));
-					return;
-				}
-				case "cycle-prev": {
-					const leaf = workspace
-						? findLeaf(workspace.paneTree, workspace.activePaneId)
-						: null;
-					dispatchModeSwitch(resolveModeAction(leaf?.mode ?? "rich", "prev"));
-					return;
-				}
-				case "split-v":
-					// Splits are hidden on mobile (only the active pane renders), so
-					// creating one would silently mutate an invisible tree.
-					if (isMobile) return;
-					actions.splitActivePane("vertical");
-					return;
-				case "split-h":
-					if (isMobile) return;
-					actions.splitActivePane("horizontal");
-					return;
-				case "close-pane":
-					actions.closeActivePane();
-					return;
-				case "focus-next":
-					actions.focusNextPane();
-					return;
-				case "focus-prev":
-					actions.focusPrevPane();
-					return;
-				case "go-to-heading":
-					setCommandScope("headings");
-					setCommandOpen(true);
-					return;
-				case "toggle-outline":
-					settings.toggleOutline();
-					return;
-				case "checkpoint":
-					handleCheckpoint();
-					return;
-				case "undo-tree":
-					setHistoryPanel({ open: true, view: "tree" });
-					return;
-				case "version-history":
-					setHistoryPanel({ open: true, view: "versions" });
-					return;
-				case "undo":
-					activeHistoryRef.current?.undo();
-					return;
-				case "redo":
-					activeHistoryRef.current?.redo();
-					return;
-				case "manage-sharing":
-					if (activeDocId && activeDocIsOwned) setShareDialogOpen(true);
-					return;
-				case "review-surface":
-					if (activeDocId && activeDocIsOwned) setReviewOpen(true);
-					return;
-				case "toggle-comments":
-					if (canComment) setCommentsOpen((v) => !v);
-					return;
-				case "add-comment":
-					if (canComment) summonAddComment();
-					return;
-				case "toggle-ai":
-					settings.toggleAiEnabled();
-					return;
-				case "ai-transform":
-					if (effectiveAiEnabled) summonAiTransform();
-					return;
-				case "ai-critique":
-					// `effectiveAiEnabled` already folds in the 010 no-AI-on-shared gate
-					// (settings.aiEnabled && !activeDocShared), so AI review only runs on
-					// the owner's own un-shared doc — never on a shared/shared-with-me doc.
-					if (effectiveAiEnabled) setAiReviewOpen(true);
-					return;
-				case "ai-related":
-					if (effectiveAiEnabled) setRelatedOpen(true);
-					return;
-				case "ai-reindex":
-					if (effectiveAiEnabled) void handleReindex();
-					return;
-				case "copy-rich": {
-					const source = getExportSource();
-					if (source) void copyAsRichText(source);
-					return;
-				}
-				case "copy-markdown": {
-					const source = getExportSource();
-					if (source) void copyAsMarkdown(source);
-					return;
-				}
-				case "export-md": {
-					const source = getExportSource();
-					if (source) exportMarkdownFile(source);
-					return;
-				}
-				case "export-html": {
-					const source = getExportSource();
-					if (source) exportHtmlFile(source);
-					return;
-				}
-				case "find-replace":
-					openFindReplace();
-					return;
-				case "toggle-status":
-					setStatusVisible((v) => !v);
-					return;
-				case "toggle-focus":
-					setZen((v) => !v);
-					return;
-				case "toggle-font":
-					settings.toggleReadingFont();
-					return;
-				case "zoom-in":
-					settings.zoomIn();
-					return;
-				case "zoom-out":
-					settings.zoomOut();
-					return;
-				case "zoom-reset":
-					settings.zoomReset();
-					return;
-				case "toggle-spellcheck":
-					settings.toggleSpellcheck();
-					return;
-				case "toggle-smart-paste":
-					settings.toggleSmartPaste();
-					return;
-				case "toggle-toolbar":
-					settings.toggleTopToolbar();
-					return;
-				case "toggle-typewriter":
-					settings.toggleTypewriter();
-					return;
-				case "toggle-focus-dim":
-					settings.toggleFocusDim();
-					return;
-				case "cycle-dim-scope":
-					settings.cycleFocusDimScope();
-					return;
-				case "toggle-email-preview":
-					settings.togglePreviewVariant();
-					return;
-				case "set-goal":
-					setGoalConfigOpen(true);
-					return;
-				case "toggle-goal-style":
-					settings.toggleGoalStyle();
-					return;
-				case "toggle-goal-scope":
-					settings.toggleGoalScope();
-					return;
-				case "theme-twilight":
-					settings.setTheme("twilight");
-					return;
-				case "theme-aurora":
-					settings.setTheme("aurora");
-					return;
-				case "theme-dawn":
-					settings.setTheme("dawn");
-					return;
-				case "theme-moonlit":
-					settings.setTheme("moonlit");
-					return;
-			}
-		},
+					return leaf?.mode ?? "rich";
+				},
+				getController: () => activeHistoryRef.current,
+				handleCreate,
+				handleCheckpoint,
+				handleReindex,
+				getExportSource,
+				openFindReplace,
+				summonAiTransform,
+				summonAddComment,
+				effectiveAiEnabled,
+				activeDocId,
+				activeDocIsOwned,
+				canComment,
+				setCommandScope,
+				setCommandOpen,
+				setHistoryPanel,
+				setShareDialogOpen,
+				setReviewOpen,
+				setCommentsOpen,
+				setAiReviewOpen,
+				setRelatedOpen,
+				setStatusVisible,
+				setZen,
+				setGoalConfigOpen,
+			}),
 		[
 			actions,
 			handleCreate,
 			handleCheckpoint,
+			handleReindex,
 			getExportSource,
 			openFindReplace,
 			workspace,
 			settings,
 			isMobile,
 			summonAiTransform,
-			handleReindex,
+			summonAddComment,
 			effectiveAiEnabled,
 			activeDocId,
 			activeDocIsOwned,
 			canComment,
-			summonAddComment,
-			setZen,
 			setCommentsOpen,
+			setZen,
 			setAiReviewOpen,
 			setRelatedOpen,
 		],
 	);
 
-	const dispatchRef = useRef(dispatch);
-	dispatchRef.current = dispatch;
+	const runAction = useCallback((id: ActionId) => actionMap[id](), [actionMap]);
+
+	const dispatchRef = useRef(runAction);
+	dispatchRef.current = runAction;
 
 	useEffect(() => {
 		if (!workspace) return;
 
+		// The keyboard handler routes every action with an `ActionId` equivalent into
+		// the SAME action map (via the stable dispatchRef), so there is one
+		// implementation per action. The handful of cases below have no `ActionId`
+		// (palette / switcher open, spatial focus) or are parameterized by the chord
+		// (mode switch/cycle, split direction — note: the chord split is intentionally
+		// NOT mobile-gated, unlike the palette's `split-v`/`split-h`), so the handler
+		// performs those directly. Routing through dispatchRef also keeps this effect's
+		// deps minimal so the listener isn't re-subscribed on state changes.
 		const handler = createAppShortcutHandler(
 			(action) => {
 				switch (action.type) {
@@ -575,7 +429,7 @@ function StudioWorkspace() {
 						setDocumentSwitcherOpen(true);
 						return;
 					case "new-document":
-						void handleCreate();
+						dispatchRef.current("new-document");
 						return;
 					case "switch-mode":
 						dispatchModeSwitch(action.mode);
@@ -590,29 +444,30 @@ function StudioWorkspace() {
 						actions.splitActivePane(action.direction);
 						return;
 					case "close-pane":
-						actions.closeActivePane();
+						dispatchRef.current("close-pane");
 						return;
 					case "focus-pane":
-						if (action.direction === "next") actions.focusNextPane();
-						else actions.focusPrevPane();
+						dispatchRef.current(
+							action.direction === "next" ? "focus-next" : "focus-prev",
+						);
 						return;
 					case "focus-spatial":
 						actions.focusDirection(action.direction);
 						return;
 					case "undo":
-						activeHistoryRef.current?.undo();
+						dispatchRef.current("undo");
 						return;
 					case "redo":
-						activeHistoryRef.current?.redo();
+						dispatchRef.current("redo");
 						return;
 					case "checkpoint":
-						handleCheckpoint();
+						dispatchRef.current("checkpoint");
 						return;
 					case "open-undo-tree":
-						setHistoryPanel({ open: true, view: "tree" });
+						dispatchRef.current("undo-tree");
 						return;
 					case "open-version-history":
-						setHistoryPanel({ open: true, view: "versions" });
+						dispatchRef.current("version-history");
 						return;
 					case "copy-rich":
 						dispatchRef.current("copy-rich");
@@ -625,29 +480,24 @@ function StudioWorkspace() {
 						setCommandOpen(true);
 						return;
 					case "toggle-status":
-						setStatusVisible((v) => !v);
+						dispatchRef.current("toggle-status");
 						return;
 					case "toggle-focus":
-						setZen((v) => !v);
+						dispatchRef.current("toggle-focus");
 						return;
 					case "toggle-typewriter":
-						// Route through dispatchRef so the keydown listener isn't re-subscribed
-						// on every settings change (settings stays out of this effect's deps).
 						dispatchRef.current("toggle-typewriter");
 						return;
 					case "toggle-focus-dim":
 						dispatchRef.current("toggle-focus-dim");
 						return;
 					case "open-go-to-heading":
-						setCommandScope("headings");
-						setCommandOpen(true);
+						dispatchRef.current("go-to-heading");
 						return;
 					case "toggle-outline":
-						// Route through dispatchRef so this effect's deps stay free of settings.
 						dispatchRef.current("toggle-outline");
 						return;
 					case "find-replace":
-						// Route through dispatchRef (stable) so this effect isn't re-subscribed.
 						dispatchRef.current("find-replace");
 						return;
 					case "ai-transform":
@@ -668,14 +518,7 @@ function StudioWorkspace() {
 		// intercepted before the browser's default (print) regardless of focus.
 		window.addEventListener("keydown", handler, true);
 		return () => window.removeEventListener("keydown", handler, true);
-	}, [
-		actions,
-		handleCreate,
-		handleCheckpoint,
-		setDocumentSwitcherOpen,
-		workspace,
-		setZen,
-	]);
+	}, [actions, setDocumentSwitcherOpen, workspace]);
 
 	if (loading || !workspace) {
 		return (
