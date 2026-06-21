@@ -5,6 +5,7 @@ import { Check, GitBranch, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
+	DiffHunksBody,
 	DiffRunsBody,
 	DiffRunsToggle,
 } from "@/components/review/diff-runs-view";
@@ -12,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { timeFmt } from "@/lib/format";
-import { diffRuns } from "@/lib/history/diff";
+import { diffRuns, groupHunks } from "@/lib/history/diff";
 import { useStudioSettingsContext } from "@/lib/studio/settings-context";
 
 type ReviewBranchRow = {
@@ -53,6 +54,7 @@ export function ReviewSurface({
 		open ? { documentId } : "skip",
 	) as ReviewBranchRow[] | undefined;
 	const acceptBranch = useMutation(api.review.acceptBranch);
+	const acceptHunks = useMutation(api.review.acceptHunks);
 	const rejectBranch = useMutation(api.review.rejectBranch);
 
 	const {
@@ -126,6 +128,27 @@ export function ReviewSurface({
 			}
 		},
 		[rejectBranch, documentId],
+	);
+
+	const handleAcceptHunks = useCallback(
+		async (
+			branchId: Id<"reviewBranches">,
+			granularity: "word" | "line",
+			acceptedHunks: number[],
+		) => {
+			setPending(true);
+			try {
+				await acceptHunks({
+					documentId,
+					branchId,
+					granularity,
+					acceptedHunks,
+				});
+			} finally {
+				setPending(false);
+			}
+		},
+		[acceptHunks, documentId],
 	);
 
 	if (!open) return null;
@@ -210,6 +233,9 @@ export function ReviewSurface({
 											pending={pending}
 											onAccept={() => void handleAccept(branch._id)}
 											onReject={() => void handleReject(branch._id)}
+											onAcceptHunks={(g, hunks) =>
+												void handleAcceptHunks(branch._id, g, hunks)
+											}
 										/>
 									)}
 								</li>
@@ -232,6 +258,10 @@ type BranchDiffProps = {
 	pending: boolean;
 	onAccept: () => void;
 	onReject: () => void;
+	onAcceptHunks: (
+		granularity: "word" | "line",
+		acceptedHunks: number[],
+	) => void;
 };
 
 function BranchDiff({
@@ -244,6 +274,7 @@ function BranchDiff({
 	pending,
 	onAccept,
 	onReject,
+	onAcceptHunks,
 }: BranchDiffProps) {
 	const diff = useQuery(api.review.getBranchDiff, { documentId, branchId });
 
@@ -255,33 +286,160 @@ function BranchDiff({
 		return diffRuns(diff.currentMarkdown, diff.branchMarkdown, granularity);
 	}, [diff, granularity]);
 
+	const hunks = useMemo(() => (runs ? groupHunks(runs) : []), [runs]);
+	const hunkCount = hunks.length;
+
+	// Per-hunk review mode. When on, each change is individually accept/reject-able
+	// (DiffHunksBody) and the primary button calls acceptHunks with the selection.
+	// When off, the original whole-branch Accept (acceptBranch) / Reject path is
+	// used verbatim — back-compat. The selection seeds to "all accepted" so turning
+	// the mode on then hitting Accept matches the whole-branch result.
+	const [perHunk, setPerHunk] = useState(false);
+	const [accepted, setAccepted] = useState<Set<number>>(new Set());
+
+	// Re-seed the selection (all accepted) whenever the hunk set changes. `hunks` is
+	// memoized on `runs` (→ `diff` + `granularity`), so its reference only changes
+	// when the branch loads, the diff updates, or the granularity flips — exactly
+	// when stale hunk indices must be dropped and the selection reset.
+	useEffect(() => {
+		setAccepted(new Set(hunks.map((h) => h.index)));
+	}, [hunks]);
+
+	const toggleHunk = useCallback((index: number) => {
+		setAccepted((prev) => {
+			const next = new Set(prev);
+			if (next.has(index)) next.delete(index);
+			else next.add(index);
+			return next;
+		});
+	}, []);
+
+	const acceptedCount = accepted.size;
+	const allAccepted = hunkCount > 0 && acceptedCount === hunkCount;
+
+	const handlePrimaryAccept = useCallback(() => {
+		if (!perHunk || allAccepted) {
+			// Whole-branch path (back-compat) — verbatim acceptBranch.
+			onAccept();
+			return;
+		}
+		onAcceptHunks(
+			granularity,
+			[...accepted].sort((a, b) => a - b),
+		);
+	}, [perHunk, allAccepted, onAccept, onAcceptHunks, granularity, accepted]);
+
 	return (
 		<div className="border-t border-[var(--color-line)]">
-			<DiffRunsToggle
-				granularity={granularity}
-				layout={layout}
-				onToggleGranularity={onToggleGranularity}
-				onToggleLayout={onToggleLayout}
-			/>
+			<div className="flex shrink-0 items-center gap-[var(--space-2)] px-[var(--space-3)] py-1.5 text-[0.6875rem] text-[var(--color-ink-tertiary)]">
+				<DiffRunsToggleInline
+					granularity={granularity}
+					layout={layout}
+					perHunk={perHunk}
+					onToggleGranularity={onToggleGranularity}
+					onToggleLayout={onToggleLayout}
+				/>
+				{hunkCount > 1 && (
+					<>
+						<span aria-hidden>·</span>
+						<button
+							type="button"
+							onClick={() => setPerHunk((v) => !v)}
+							aria-pressed={perHunk}
+							className="transition-colors hover:text-[var(--color-ink-primary)]"
+						>
+							{perHunk ? "Reviewing each change" : "Review each change"}
+						</button>
+					</>
+				)}
+			</div>
 
 			<div className="max-h-[40vh] overflow-y-auto px-[var(--space-3)] py-[var(--space-2)] font-[family-name:var(--font-mono)] text-[0.75rem] leading-relaxed">
 				{runs === null ? (
 					<p className="text-[var(--color-ink-tertiary)]">Loading diff…</p>
 				) : runs.length === 0 ? (
 					<p className="text-[var(--color-ink-tertiary)]">No changes.</p>
+				) : perHunk ? (
+					<DiffHunksBody
+						runs={runs}
+						accepted={accepted}
+						onToggleHunk={toggleHunk}
+					/>
 				) : (
 					<DiffRunsBody runs={runs} layout={layout} />
 				)}
 			</div>
 
 			<div className="flex shrink-0 items-center justify-end gap-[var(--space-2)] border-t border-[var(--color-line)] px-[var(--space-3)] py-[var(--space-2)]">
+				{perHunk && hunkCount > 1 && (
+					<span className="mr-auto text-[0.6875rem] text-[var(--color-ink-tertiary)]">
+						{acceptedCount} of {hunkCount} accepted
+					</span>
+				)}
 				<Button variant="ghost" size="sm" disabled={pending} onClick={onReject}>
 					<X aria-hidden className="size-3.5" /> Reject
 				</Button>
-				<Button size="sm" disabled={pending} onClick={onAccept}>
-					<Check aria-hidden className="size-3.5" /> Accept
+				<Button
+					size="sm"
+					disabled={pending}
+					onClick={handlePrimaryAccept}
+					title={
+						perHunk && !allAccepted
+							? "Merge the accepted changes; discard the rest"
+							: "Accept all changes"
+					}
+				>
+					<Check aria-hidden className="size-3.5" />{" "}
+					{perHunk && !allAccepted ? `Accept ${acceptedCount}` : "Accept all"}
 				</Button>
 			</div>
 		</div>
+	);
+}
+
+type DiffRunsToggleInlineProps = {
+	granularity: "word" | "line";
+	layout: "inline" | "side-by-side";
+	perHunk: boolean;
+	onToggleGranularity: () => void;
+	onToggleLayout: () => void;
+};
+
+/**
+ * The granularity/layout toggles, flattened so they can sit beside the
+ * "Review each change" toggle in one row. Mirrors {@link DiffRunsToggle}'s
+ * buttons; the layout toggle is hidden in per-hunk mode (the interactive renderer
+ * is inline-only — side-by-side reorders runs into columns, which breaks per-hunk
+ * controls).
+ */
+function DiffRunsToggleInline({
+	granularity,
+	layout,
+	perHunk,
+	onToggleGranularity,
+	onToggleLayout,
+}: DiffRunsToggleInlineProps) {
+	return (
+		<>
+			<button
+				type="button"
+				onClick={onToggleGranularity}
+				className="transition-colors hover:text-[var(--color-ink-primary)]"
+			>
+				{granularity === "word" ? "Word" : "Line"} diff
+			</button>
+			{!perHunk && (
+				<>
+					<span aria-hidden>·</span>
+					<button
+						type="button"
+						onClick={onToggleLayout}
+						className="transition-colors hover:text-[var(--color-ink-primary)]"
+					>
+						{layout === "inline" ? "Inline" : "Side by side"}
+					</button>
+				</>
+			)}
+		</>
 	);
 }
