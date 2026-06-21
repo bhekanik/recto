@@ -1,16 +1,24 @@
 /**
- * Pure builders + parser for the AI review pass (plan 011, Phase A). The model
- * acts like a human reviewer: it returns structured output naming the EXACT text
- * each comment/edit attaches to, and we anchor + create real comments through
- * plan 010's primitives (see lib/ai/use-ai-review.ts). Kept separate from the
- * legacy critique builder (lib/ai/transform-request.ts) so the new schema/prompt
- * don't bloat that file.
+ * Pure builders + tool schemas + arg validators for the AI review pass
+ * (plan 011). The model acts like a human reviewer: instead of returning one
+ * structured JSON blob, it CALLS TOOLS — `create_comment` and `suggest_edit` —
+ * naming the EXACT text each comment/edit attaches to. The server runs a
+ * tool-calling loop (see lib/ai/review-loop.ts) that collects every well-formed
+ * tool call into the SAME `{ comments, suggestions }` result the route has always
+ * returned, so the client (lib/ai/use-ai-review.ts) and plan 010's
+ * anchor/branch primitives are unchanged.
  *
- * The parser tolerance mirrors `parseCritique` exactly: strip a ```json fence,
- * slice the first `{`…last `}`, JSON.parse in a try/catch, validate each item's
- * field types, drop malformed items, never throw.
+ * Tool-call arguments are validated with the same field rules the legacy parser
+ * used (`parseComment`/`parseSuggestion`): required `quote` + `body`/
+ * `replacement` must be non-empty strings, optional fields kept only if string,
+ * malformed calls dropped, never throw.
+ *
+ * `parseReview` (the legacy single-blob parser) is KEPT as a fallback: if the
+ * model ever returns plain content with no tool calls, the loop parses that
+ * content with `parseReview` so we degrade gracefully instead of returning empty.
  */
 
+import type OpenAI from "openai";
 import { type CommentAnchor, locateAnchor } from "@/lib/review/anchor";
 import { AI_CHAT_MODEL } from "./config";
 import type { ChatMessage } from "./transform-request";
@@ -84,21 +92,17 @@ export function aiReviewOrigin(): string {
 }
 
 const REVIEW_SYSTEM = [
-	"You are a sharp, kind developmental editor leaving feedback on a draft like a",
-	"human reviewer would — pointing at the exact words, not vague impressions.",
+	"You are a sharp, kind developmental editor reviewing a draft like a human",
+	"reviewer would — pointing at the exact words, not vague impressions.",
 	"",
-	"Return ONLY a single JSON object with exactly these two keys:",
-	'  "comments": an array of comment items',
-	'  "suggestions": an array of edit items',
+	"Leave your feedback by CALLING TOOLS, not by writing prose:",
+	"- Call `create_comment` to leave a comment on a span — what is weak, unclear,",
+	"  or dragging, and why.",
+	"- Call `suggest_edit` to propose a concrete replacement for a span.",
+	"You may call these tools as many times as you need, across multiple turns.",
+	"Make one tool call per distinct piece of feedback.",
 	"",
-	"A comment item is an object:",
-	'  { "quote": string, "prefix"?: string, "suffix"?: string,',
-	'    "category"?: string, "body": string }',
-	"A suggestion item is an object:",
-	'  { "quote": string, "prefix"?: string, "suffix"?: string,',
-	'    "replacement": string, "rationale"?: string }',
-	"",
-	"RULES for the load-bearing `quote` field (read carefully):",
+	"RULES for the load-bearing `quote` argument (read carefully):",
 	"- `quote` MUST be an EXACT, VERBATIM substring copied character-for-character",
 	"  from the text provided below. Do NOT paraphrase, normalize, summarize, fix",
 	"  typos, add or strip Markdown, or use an ellipsis. If `quote` is not an exact",
@@ -106,14 +110,12 @@ const REVIEW_SYSTEM = [
 	"- Keep each `quote` reasonably short — a sentence or phrase, not paragraphs.",
 	"- Include `prefix`/`suffix` (up to ~40 characters of the text immediately",
 	"  before/after the quote, also copied verbatim) when the quote is short or",
-	"  might appear more than once, so the comment anchors to the right occurrence.",
+	"  might appear more than once, so the feedback anchors to the right occurrence.",
 	"",
-	"`comments` should point at something specific — what is weak, unclear, or",
-	"dragging, and why. `suggestions` propose a concrete `replacement` for the",
-	"quoted span. `category`/`rationale` are optional; `body`/`replacement` are",
-	"required for their item to count.",
-	"",
-	"Output ONLY the raw JSON object. No prose, no explanation, no code fence.",
+	"`body` (for comments) and `replacement` (for edits) are required. `category`/",
+	"`rationale` are optional. When you have left all your feedback, reply with a",
+	"brief plain-text summary and STOP calling tools. If the draft needs no changes,",
+	"call no tools and say so.",
 ].join("\n");
 
 /** Build the review chat messages from a section/document. */
@@ -124,12 +126,92 @@ export function buildReviewMessages(body: ReviewRequestBody): ChatMessage[] {
 	];
 }
 
+/** Tool names the model calls; also used to route tool-call args in the loop. */
+export const CREATE_COMMENT_TOOL = "create_comment";
+export const SUGGEST_EDIT_TOOL = "suggest_edit";
+
+/** Shared JSON-schema fragment for the verbatim anchor fields. */
+const ANCHOR_PROPERTIES = {
+	quote: {
+		type: "string",
+		description:
+			"EXACT verbatim substring of the provided text this attaches to, copied character-for-character.",
+	},
+	prefix: {
+		type: "string",
+		description:
+			"Up to ~40 characters of the text immediately BEFORE the quote (verbatim); disambiguates repeated quotes.",
+	},
+	suffix: {
+		type: "string",
+		description:
+			"Up to ~40 characters of the text immediately AFTER the quote (verbatim).",
+	},
+} as const;
+
+/**
+ * The two tools exposed to the model, in OpenAI/OpenRouter `tools` format. Their
+ * argument fields mirror {@link AiReviewComment} / {@link AiReviewSuggestion}
+ * exactly so the collected tool calls map straight onto the existing
+ * `{ comments, suggestions }` result with no extra reshaping.
+ */
+export const REVIEW_TOOLS: OpenAI.Chat.Completions.ChatCompletionFunctionTool[] =
+	[
+		{
+			type: "function",
+			function: {
+				name: CREATE_COMMENT_TOOL,
+				description:
+					"Leave a comment anchored to a verbatim span of the draft (does not change the text).",
+				parameters: {
+					type: "object",
+					properties: {
+						...ANCHOR_PROPERTIES,
+						category: {
+							type: "string",
+							description:
+								"Short label, e.g. Clarity, Pacing, Structure, Tone, Argument.",
+						},
+						body: { type: "string", description: "The comment text." },
+					},
+					required: ["quote", "body"],
+					additionalProperties: false,
+				},
+			},
+		},
+		{
+			type: "function",
+			function: {
+				name: SUGGEST_EDIT_TOOL,
+				description:
+					"Propose replacing a verbatim span of the draft with new text (a tracked-change suggestion).",
+				parameters: {
+					type: "object",
+					properties: {
+						...ANCHOR_PROPERTIES,
+						replacement: {
+							type: "string",
+							description: "The proposed replacement text for the quoted span.",
+						},
+						rationale: {
+							type: "string",
+							description: "Why this edit improves the draft.",
+						},
+					},
+					required: ["quote", "replacement"],
+					additionalProperties: false,
+				},
+			},
+		},
+	];
+
 /** A non-empty string, or undefined if the value isn't a usable string. */
 function optionalString(value: unknown): string | undefined {
 	return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-function parseComment(item: unknown): AiReviewComment | null {
+/** Validate a parsed object as a comment; null if a required field is bad. */
+export function parseComment(item: unknown): AiReviewComment | null {
 	if (!item || typeof item !== "object") return null;
 	const quote = (item as { quote?: unknown }).quote;
 	const body = (item as { body?: unknown }).body;
@@ -145,7 +227,8 @@ function parseComment(item: unknown): AiReviewComment | null {
 	return comment;
 }
 
-function parseSuggestion(item: unknown): AiReviewSuggestion | null {
+/** Validate a parsed object as a suggestion; null if a required field is bad. */
+export function parseSuggestion(item: unknown): AiReviewSuggestion | null {
 	if (!item || typeof item !== "object") return null;
 	const quote = (item as { quote?: unknown }).quote;
 	const replacement = (item as { replacement?: unknown }).replacement;
@@ -162,6 +245,47 @@ function parseSuggestion(item: unknown): AiReviewSuggestion | null {
 }
 
 const EMPTY_RESULT: AiReviewResult = { comments: [], suggestions: [] };
+
+/**
+ * Parse a tool call's `arguments` (a JSON string per the OpenAI/OpenRouter wire
+ * format) into a plain object, or null if it isn't parseable JSON / isn't an
+ * object. Defensive: never throws on malformed model output.
+ */
+function parseToolArgs(rawArgs: string): Record<string, unknown> | null {
+	if (typeof rawArgs !== "string" || rawArgs.length === 0) return null;
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(rawArgs);
+	} catch {
+		return null;
+	}
+	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+		return null;
+	}
+	return parsed as Record<string, unknown>;
+}
+
+/**
+ * Validate a `create_comment` tool call's raw `arguments` string into an
+ * {@link AiReviewComment}, or null if malformed (bad JSON, missing/non-string
+ * `quote` or `body`). Reuses {@link parseComment}'s field rules.
+ */
+export function parseCommentArgs(rawArgs: string): AiReviewComment | null {
+	const obj = parseToolArgs(rawArgs);
+	return obj ? parseComment(obj) : null;
+}
+
+/**
+ * Validate a `suggest_edit` tool call's raw `arguments` string into an
+ * {@link AiReviewSuggestion}, or null if malformed (bad JSON, missing/non-string
+ * `quote` or `replacement`). Reuses {@link parseSuggestion}'s field rules.
+ */
+export function parseSuggestionArgs(
+	rawArgs: string,
+): AiReviewSuggestion | null {
+	const obj = parseToolArgs(rawArgs);
+	return obj ? parseSuggestion(obj) : null;
+}
 
 /**
  * Parse the model's review reply into `{ comments, suggestions }`, tolerating

@@ -34,6 +34,14 @@ export const AI_CRITIQUE_MAX_TOKENS = 1500;
 export const AI_REVIEW_MAX_TOKENS = 4000;
 
 /**
+ * Hard cap on the number of LLM round-trips in the tool-calling review loop. The
+ * model emits `create_comment` / `suggest_edit` tool calls across one or more
+ * turns; we feed each result back and loop until it stops calling tools OR this
+ * cap is hit. Bounds cost/runtime if the model never terminates on its own.
+ */
+export const AI_REVIEW_MAX_ITERATIONS = 8;
+
+/**
  * Embedding model + dimension for Phase C RAG. The `vectorIndex.dimensions` in
  * `convex/schema.ts` MUST equal `AI_EMBEDDING_DIM` exactly — changing the model
  * means a new index + a full re-embed. Verified on OpenRouter
