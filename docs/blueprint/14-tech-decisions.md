@@ -613,7 +613,7 @@ Measured spike parameters:
 | Parameter | Value |
 |-----------|-------|
 | Throttle window | **50 ms** (trailing + leading; swept 30–60 ms — 50 ms felt seamless in harness) |
-| `recreateTransform` package | **`@manuscripts/prosemirror-recreate-steps@0.1.4`** (unscoped `prosemirror-recreate-steps` is unpublished on npm; API identical) |
+| `recreateTransform` package | **`@fellow/prosemirror-recreate-transform@1.2.3`** (current). Phase 0 originally pinned `@manuscripts/prosemirror-recreate-steps@0.1.4` — see migration note below; the `recreateTransform(startDoc, endDoc, opts)` API is identical across both. |
 | Rich→raw p50 latency | **< 16 ms** (stringify + prefix/suffix diff + one CM transaction) |
 | Raw→rich p50 latency | **< 16 ms** (reparse + `recreateTransform` + one PM transaction) |
 | Steady-state no-op | **`next === prev` / `curDoc.eq(nextDoc)` short-circuits fire** — zero transactions when converged |
@@ -633,6 +633,10 @@ Frozen `CANONICAL_STRINGIFY`, minimal text diff (rich→raw), and `recreateTrans
 
 - Phase 2–3 build the full live bridge from [`05-lossless-bridge.md`](./05-lossless-bridge.md) using these pinned versions.
 - Spike harness lives in `spikes/bridge/` (quarantined throwaway); production code lands in Phase 2.
+
+### Migration note — `recreateTransform` package (2026-06)
+
+The original Phase 0 pin, `@manuscripts/prosemirror-recreate-steps@0.1.4`, has been **migrated to `@fellow/prosemirror-recreate-transform@1.2.3`**. The `@manuscripts` package descends from the original `prosemirror-recreate-steps`, which has been unmaintained since 2019; `@fellow` is the healthiest available fork of that lineage. It is itself dormant, but it is the best-maintained option and was parity-verified against the spike behaviour (the `recreateTransform(startDoc, endDoc, opts)` API is byte-for-byte compatible — same options `complexSteps` / `wordDiffs` / `simplifyDiffs`, same step output). The decision to ship the live bridge stands; only the underlying package changed. Current import sites: `lib/bridge/raw-to-rich.ts`, `spikes/bridge/src/bridge/raw-to-rich.ts`.
 
 ### References
 
