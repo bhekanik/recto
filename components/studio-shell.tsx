@@ -133,6 +133,11 @@ function StudioWorkspace() {
 	// lens without re-subscribing the keydown listener on every mode switch.
 	const activeModeRef = useRef(activeMode);
 	activeModeRef.current = activeMode;
+	// Live mirror of the mobile breakpoint for the (stable) shortcut handler, so the
+	// split chord can mobile-gate exactly like the palette without re-subscribing the
+	// keydown listener every time the viewport crosses the breakpoint.
+	const isMobileRef = useRef(isMobile);
+	isMobileRef.current = isMobile;
 	const activeDocId = activeLeaf?.documentId ?? null;
 	const activeSync = activeDocId ? getDocumentSync(activeDocId) : null;
 	const activeTitle =
@@ -414,8 +419,8 @@ function StudioWorkspace() {
 		// the SAME action map (via the stable dispatchRef), so there is one
 		// implementation per action. The handful of cases below have no `ActionId`
 		// (palette / switcher open, spatial focus) or are parameterized by the chord
-		// (mode switch/cycle, split direction — note: the chord split is intentionally
-		// NOT mobile-gated, unlike the palette's `split-v`/`split-h`), so the handler
+		// (mode switch/cycle, split direction — the chord split is mobile-gated via
+		// `isMobileRef` to match the palette's `split-v`/`split-h`), so the handler
 		// performs those directly. Routing through dispatchRef also keeps this effect's
 		// deps minimal so the listener isn't re-subscribed on state changes.
 		const handler = createAppShortcutHandler(
@@ -441,6 +446,10 @@ function StudioWorkspace() {
 						return;
 					}
 					case "split-pane":
+						// Mobile renders only the active pane, so a split would silently
+						// mutate an invisible tree — gate it exactly like the palette's
+						// `split-v`/`split-h` (lib/studio/action-map.ts).
+						if (isMobileRef.current) return;
 						actions.splitActivePane(action.direction);
 						return;
 					case "close-pane":
