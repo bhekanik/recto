@@ -25,13 +25,13 @@ larger and phased; ship the craft features first.
 | 009 | AI reversible assist — undo-tree transforms, critique panel, RAG over own drafts | P3 | L | — | DONE |
 | 010 | Review collaboration — share a draft, comments + branch suggestions, accept/reject | P2 | L | 001 | DONE (spike→A→B→C; reviewer isolation proven; AI disabled on shared docs) |
 | 011 | AI as a reviewer — structured feedback becomes real anchored comments + tracked-change suggestions | P2 | M | 010 | DONE (A: comments, B: suggestion branch; GLM verbatim quotes verified live) |
-| 012 | CI gate — typecheck/lint/test/build on push | P1 | S | — | TODO |
-| 013 | Delete-cascade GC — docChunks cascade + orphan image-blob sweep | P1 | M | — | TODO |
+| 012 | CI gate — typecheck/lint/test/build on push | P1 | S | — | DONE (2026-07-05; operator follow-ups: optional CLERK_PUBLISHABLE_KEY_CI secret, branch protection after first green run) |
+| 013 | Delete-cascade GC — docChunks cascade + orphan image-blob sweep | P1 | M | — | DONE (2026-07-05; live dev smoke by orchestrator — see notes) |
 | 014 | Retention × review-branch integrity — protect open branches, GC closed rows | P1 | M | 013 (crons.ts overlap) | TODO |
-| 015 | Prod AI env verification + re-embed sweep observability | P1 | S | — | TODO |
+| 015 | Prod AI env verification + re-embed sweep observability | P1 | S | — | DONE (2026-07-05; prod has both env keys — verified by name) |
 | 016 | Server-side enforcement of no-AI-on-shared-docs | P2 | S–M | — | TODO |
-| 017 | Feedback surfaces — version-save error toasts; alerts → toasts | P2 | S | — | TODO |
-| 018 | Surface hidden settings — AI transform mode + lint category palette actions | P2 | S | — | TODO |
+| 017 | Feedback surfaces — version-save error toasts; alerts → toasts | P2 | S | — | DONE (2026-07-05; 4 additional background `.catch(() => {})` swallows in use-document-history.ts discovered, deliberately left — see direction options) |
+| 018 | Surface hidden settings — AI transform mode + lint category palette actions | P2 | S | — | DONE (2026-07-05; lint toggles live in View section; transform-mode row reachable only while AI is on) |
 | 019 | Docs reconciliation — model id, per-hunk, critique residue, schema, banners | P2 | S | — | TODO |
 | 020 | `.docx` export via remark-docx (supersedes html-to-docx ADR pin) | P3 | M | 012 (soft) | TODO |
 | 021 | E2E smoke harness (Playwright + Clerk testing) + record pending manual smoke pass | P2 | L | 012 | TODO |
