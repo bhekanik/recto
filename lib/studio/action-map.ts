@@ -5,6 +5,7 @@ import type { ExportSource } from "@/lib/export";
 import {
 	copyAsMarkdown,
 	copyAsRichText,
+	exportDocxFile,
 	exportHtmlFile,
 	exportMarkdownFile,
 } from "@/lib/export";
@@ -171,6 +172,10 @@ export function createActionMap(
 		"export-html": () => {
 			const source = getExportSource();
 			if (source) exportHtmlFile(source);
+		},
+		"export-docx": () => {
+			const source = getExportSource();
+			if (source) void exportDocxFile(source);
 		},
 		"find-replace": () => openFindReplace(),
 		"toggle-status": () => setStatusVisible((v) => !v),

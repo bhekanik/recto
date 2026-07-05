@@ -4,6 +4,11 @@ export {
 	type ExportSource,
 } from "./clipboard";
 export {
+	DOCX_MIME_TYPE,
+	exportDocxFile,
+	generateDocxBlob,
+} from "./docx";
+export {
 	type EmailInboxModel,
 	emailInboxModel,
 	generateEmailHtml,

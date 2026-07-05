@@ -51,6 +51,7 @@ export type ActionId =
 	| "copy-markdown"
 	| "export-md"
 	| "export-html"
+	| "export-docx"
 	| "find-replace"
 	| "toggle-status"
 	| "toggle-focus"
@@ -329,6 +330,13 @@ export const ACTIONS: ActionDef[] = [
 		label: "Export as rich text (.html)",
 		section: "Copy/Export",
 		aliases: ["download html"],
+		shortcut: { mac: "Ctrl+⇧+E", other: "Ctrl+Shift+E" },
+	},
+	{
+		id: "export-docx",
+		label: "Export as Word (.docx)",
+		section: "Copy/Export",
+		aliases: ["download docx", "word"],
 		shortcut: { mac: "Ctrl+⇧+E", other: "Ctrl+Shift+E" },
 	},
 	{
