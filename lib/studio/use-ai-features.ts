@@ -13,6 +13,7 @@ import type { HistoryController } from "@/lib/history/use-document-history";
 import { caretAtOffset } from "@/lib/modes/caret";
 import type { Mode } from "@/lib/modes/types";
 import type { AiTransformMode } from "@/lib/studio/use-studio-settings";
+import { toast } from "@/lib/ui/toast";
 import type { DocumentModelRegistry } from "@/lib/workspace/document-registry";
 import type { WorkspaceState } from "@/lib/workspace/types";
 
@@ -106,8 +107,9 @@ export function useAiFeatures({
 		if (!effectiveAiEnabled) return;
 		const mode = activeMode;
 		if (mode === "preview") {
-			window.alert(
+			toast(
 				"AI transform needs an editable selection. Switch to Rich, Raw, or Vim, select text, and try again.",
+				"info",
 			);
 			return;
 		}
@@ -124,7 +126,7 @@ export function useAiFeatures({
 			// transaction at commit time), so carry a placeholder range.
 			const text = handle.getSelectedMarkdown?.() ?? null;
 			if (!text) {
-				window.alert("Select some text first, then summon the AI transform.");
+				toast("Select some text first, then summon the AI transform.", "info");
 				return;
 			}
 			aiTransform.reset();
@@ -139,7 +141,7 @@ export function useAiFeatures({
 		const from = Math.min(caret.anchor, caret.head);
 		const to = Math.max(caret.anchor, caret.head);
 		if (from === to) {
-			window.alert("Select some text first, then summon the AI transform.");
+			toast("Select some text first, then summon the AI transform.", "info");
 			return;
 		}
 		const doc = handle.getCanonicalMarkdown();
@@ -205,9 +207,9 @@ export function useAiFeatures({
 				currentNodeId,
 				markdown,
 			});
-			window.alert(`Indexed ${count} passage${count === 1 ? "" : "s"}.`);
+			toast(`Indexed ${count} passage${count === 1 ? "" : "s"}.`, "success");
 		} catch (err) {
-			window.alert(`Re-index failed: ${(err as Error).message}`);
+			toast(`Re-index failed: ${(err as Error).message}`, "error");
 		}
 	}, [
 		effectiveAiEnabled,

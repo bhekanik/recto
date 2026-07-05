@@ -22,6 +22,7 @@ import {
 	setCommentingEnabledMirror,
 	subscribeOpenComment,
 } from "@/lib/review/summon";
+import { toast } from "@/lib/ui/toast";
 import type { DocumentModelRegistry } from "@/lib/workspace/document-registry";
 import type { WorkspaceState } from "@/lib/workspace/types";
 
@@ -159,8 +160,9 @@ export function useCommentHighlights({
 		const mode = activeMode;
 		if (mode === "preview") {
 			setCommentsOpen(true);
-			window.alert(
+			toast(
 				"To anchor a comment, select text in Rich, Raw, or Vim. (Switch lens, select, then add a comment.)",
+				"info",
 			);
 			return;
 		}
@@ -196,7 +198,7 @@ export function useCommentHighlights({
 
 		if (!anchor?.quote.trim()) {
 			setCommentsOpen(true);
-			window.alert("Select some text first, then add a comment.");
+			toast("Select some text first, then add a comment.", "info");
 			return;
 		}
 		setCommentDraft({ anchor });

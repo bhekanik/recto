@@ -7,6 +7,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import type { EditorHandle } from "@/lib/editor/handle";
 import { countWords } from "@/lib/markdown";
+import { toast } from "@/lib/ui/toast";
 
 import { type GroupCommit, GroupingController } from "./grouping";
 import {
@@ -292,7 +293,9 @@ export function useDocumentHistory(args: {
 				markdown,
 				wordCount: countWords(markdown),
 				updatedAt: Date.now(),
-			}).catch(() => {});
+			}).catch(() => {
+				toast("Couldn't sync undo position", "error");
+			});
 		},
 		[documentId, nodesById, updatePointer],
 	);
@@ -322,9 +325,9 @@ export function useDocumentHistory(args: {
 			const id = currentNodeIdRef.current;
 			if (!id) return;
 			controllerRef.current?.flush();
-			await createVersion({ documentId, nodeId: id, label, kind }).catch(
-				() => {},
-			);
+			await createVersion({ documentId, nodeId: id, label, kind }).catch(() => {
+				toast("Couldn't save version — it may not be synced", "error");
+			});
 		},
 		[createVersion, documentId],
 	);
