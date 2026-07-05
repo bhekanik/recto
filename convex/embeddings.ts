@@ -7,8 +7,8 @@ import {
 	internalMutation,
 	internalQuery,
 	mutation,
-	query,
 	type QueryCtx,
+	query,
 } from "./_generated/server";
 import { requireOwnedDocument, requireUserId } from "./documents";
 

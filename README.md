@@ -55,6 +55,20 @@ runs the build in [`vercel.json`](./vercel.json), which on production builds run
 Every push to `main` and every PR also runs the CI gate — `typecheck` + `biome` +
 `test` + `build` — via GitHub Actions ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)).
 
+### Production env (Convex deployment)
+
+The Convex **production deployment** has its own env, distinct from the Vercel
+project env. These must be set there via `bunx convex env set <NAME> <value> --prod`:
+
+- `OPENROUTER_API_KEY` — the daily re-embed sweep (`convex/crons.ts` →
+  `embeddings.reindexSweep`) embeds directly from Convex; without it the sweep
+  skips silently and "related passages" go stale
+- `CLERK_JWT_ISSUER_DOMAIN` — Convex-side JWT verification (`convex/auth.config.ts`)
+
+Check presence with `bunx convex env list --prod` (verified 2026-07-05: both set).
+The `embeddings.embeddingHealth` query reports the stale-doc count if the sweep
+ever degrades.
+
 ## Phase 0 spikes
 
 Throwaway spikes in [`spikes/`](./spikes/) — still runnable:
