@@ -62,7 +62,7 @@ A phase is done only when **all** of these hold:
 | Risk | Phase | Mitigation | Fallback |
 |------|-------|------------|----------|
 | Live two-mode sync is janky (cursor jumps, feedback loops) | 0, 3 | Spike first; MDAST bus; origin-guard; throttle; diff-based updates | **Phase 0 resolved (ADR-15): bridge confirmed** — §12 fallback not needed. Same-pane degrades to switch-on-mode only if regressions appear in Phase 2+ |
-| Cloud undo-tree storage growth / merge bugs | 0, 4 | Append-only immutable nodes; union-merge; delta encoding; periodic snapshots; retention policy | **Phase 0 resolved (ADR-16): undo-tree confirmed** — retention fallback deferred; monitor in Phase 4 |
+| Cloud undo-tree storage growth / merge bugs | 0, 4 | Append-only immutable nodes; union-merge; delta encoding; periodic snapshots; retention policy | **Phase 0 resolved (ADR-16): undo-tree confirmed** — retention sweep shipped (`convex/retention.ts`, cron-scheduled in `convex/crons.ts`); only the depth-cap fallback remains deferred, pending a real-world growth signal |
 | Footnotes / tables don't round-trip | 2 | remark-native AST; explicit serialize rules; property-test corpus | Narrow the dialect (documented), never silently drop |
 | Convex ~1 MiB per-document ceiling | 1, 4 | Markdown string is small for articles; history in separate rows | Per-section splitting (only if book-length becomes a need) |
 | Same doc edited on two devices within debounce window | 1, 3 | Local-owns-live; version-history safety net; stale-version guard | Accept rare last-write-wins; restore from version history |

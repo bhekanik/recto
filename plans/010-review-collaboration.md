@@ -497,6 +497,8 @@ PURE, no Convex. Cases:
 
 **Out of scope (Phase C)**: per-hunk accept/reject (deferred — see Maintenance notes). Real-time co-editing/presence. Reviewer seeing other reviewers' branches. Notifications.
 
+> **Update 2026-07-05:** per-hunk accept/reject shipped after this plan (commits `00f9e96`, `3a5119d`; `convex/review.ts → acceptHunks`, `lib/review/accept-hunks.test.ts`, UI in `components/review/diff-runs-view.tsx`). The deferral above is historical.
+
 ### Phase C key design decisions (committed — do not redesign)
 
 - **Suggestions are branch-based, reusing the undo tree** — a reviewer's edits are `docNodes` on a branch off the owner's `currentNodeId` at open time (`baseNodeId`), origin `review:<reviewerUserId>`. They never advance `documents.currentNodeId` or write `documents.markdown`.
@@ -560,7 +562,7 @@ Stop and report (do not improvise) if:
 
 For the human/agent who owns this after it lands:
 
-- **Per-hunk accept/reject is deliberately deferred.** v1 accepts/rejects a whole branch. To add per-hunk: the review surface already has `diffRuns` runs; map each add/del run back to a markdown range and synthesize a partial merged markdown, then feed that to an accept variant. The branch-based model supports it (you'd append a node materializing the partial merge), but it's significant UI + range-mapping work.
+- **Per-hunk accept/reject is deliberately deferred.** v1 accepts/rejects a whole branch. To add per-hunk: the review surface already has `diffRuns` runs; map each add/del run back to a markdown range and synthesize a partial merged markdown, then feed that to an accept variant. The branch-based model supports it (you'd append a node materializing the partial merge), but it's significant UI + range-mapping work. **Update 2026-07-05:** shipped in `00f9e96`/`3a5119d` — this deferral note is historical.
 - **Revoking a share does NOT remove existing reviewer branches/comments** (intentional — the owner may still want to review/accept work done before revocation). If a "purge on revoke" is ever wanted, add it to `shares.revoke` explicitly.
 - **Rejected branches are pruned by the 30-day retention window, not immediately.** They're hidden from the UI via `status:"rejected"`. If immediate pruning is wanted, extend `convex/retention.ts` to treat `status:"rejected"` branch subtrees as eligible regardless of recency (careful: don't orphan snapshots a survivor depends on — the existing `sweep` keeps ancestor chains).
 - **Accept merges from the owner's CURRENT tip, not the branch's base.** If the owner edited after the reviewer opened their branch, those edits are preserved and the accept fork-forwards over them. The diff shown is branch-head vs. live-current, so the owner sees exactly what will change.

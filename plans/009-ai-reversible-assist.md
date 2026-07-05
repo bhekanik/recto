@@ -335,6 +335,14 @@ verified `userId` into the mutations it calls.
 
 ## Decisions (made — with justification)
 
+> **Superseded by the shipped design (2026-07-05):** the provider/transport rows
+> below ("Where the Claude call lives", streaming) describe the pre-pivot
+> Convex-action + `ANTHROPIC_API_KEY` architecture. What shipped is OpenRouter
+> (OpenAI-compatible) through Clerk-guarded Next App Router routes with SSE
+> streaming, key `OPENROUTER_API_KEY` in the Next server env (plus Convex env for
+> the cron re-embed sweep) — see `plans/README.md` §"Still worth knowing"
+> (009 — provider/transport). Kept as-written for the historical record.
+
 | Decision | Choice | Why |
 |---|---|---|
 | Where the Claude call lives | **Convex `action`** (not a Next.js route handler) | The API key already lives in Convex env (`ANTHROPIC_API_KEY`, set via `npx convex env set`); actions run server-side with that env; actions integrate with Convex auth + can call mutations to append nodes in the same trust boundary; no separate Next.js secret plumbing. A route handler would duplicate auth + secret access and sit outside the reactive write path. |
@@ -346,6 +354,11 @@ verified `userId` into the mutations it calls.
 | When to re-embed (Phase C) | **Scheduled action (cron), modeled on `convex/crons.ts`**, plus an opt-in manual "re-index" command. NOT on every keystroke. | Embedding is an external paid call; debounced/scheduled keeps cost bounded and avoids fighting sync. |
 
 ## Commands you will need
+
+> **Superseded by the shipped design (2026-07-05):** the `ANTHROPIC_API_KEY` /
+> `@anthropic-ai/sdk` rows below were never shipped; the live key is
+> `OPENROUTER_API_KEY` (Next env for the routes, Convex env for the cron
+> re-embed sweep) — see `plans/README.md` §"Still worth knowing".
 
 | Purpose | Command | Expected on success |
 |---|---|---|
@@ -485,6 +498,11 @@ use, the streaming API surface, and whether httpAction streaming is the
 recommended path. Do NOT proceed on guessed model names.
 
 ### Spike Step 1: add the SDK + set the key
+
+> **Superseded by the shipped design (2026-07-05):** this spike predates the
+> OpenRouter pivot — no `@anthropic-ai/sdk` and no `ANTHROPIC_API_KEY` exist in
+> the shipped app; the transport is OpenRouter via Next routes with
+> `OPENROUTER_API_KEY` — see `plans/README.md` §"Still worth knowing".
 
 ```
 bun add @anthropic-ai/sdk

@@ -2,7 +2,7 @@
 
 > Part of the Recto blueprint. Canonical contract lives in [`README.md`](./README.md) §7; this file is the full expansion. If anything here contradicts the README, the README wins.
 
-This document specifies the **Convex data model** in full: the four tables, their exact field names and validators, their indexes, the query/mutation function surface, the append-only delta-encoded history strategy, the platform limits we design within, the retention/pruning policy, and the access patterns that keep reads cheap. It is self-contained — you should be able to implement the entire `convex/schema.ts` and the function modules from this file alone.
+This document specifies the **Convex data model** for the v1 core: the four v1 tables, their exact field names and validators, their indexes, the query/mutation function surface, the append-only delta-encoded history strategy, the platform limits we design within, the retention/pruning policy, and the access patterns that keep reads cheap. It is self-contained for that core — the four v1 tables and their function modules can be implemented from this file alone. Post-v1 plans later added five more tables to `convex/schema.ts`; those are specified in their owning plan docs, not here (see §1.1).
 
 Sibling references:
 - [`02-architecture.md`](./02-architecture.md) — where these tables sit in the canonical-model spine and the client/server split.
@@ -17,9 +17,9 @@ Authoritative external references:
 
 ---
 
-## 1. Overview — four tables and how they relate
+## 1. Overview — the four v1 tables and how they relate
 
-Recto persists exactly four application tables plus the Better-Auth-managed `users` table (D12). The canonical document at rest is a **Markdown string** (D1); everything else exists to support history, tagging, and "resume where I left off."
+Recto's v1 core is four application tables plus the Better-Auth-managed `users` table (D12); post-v1 plans added five more (§1.1). The canonical document at rest is a **Markdown string** (D1); everything else exists to support history, tagging, and "resume where I left off."
 
 | Table | Purpose | Cardinality |
 |-------|---------|-------------|
@@ -45,6 +45,20 @@ Key invariants:
 - `versions.nodeId` is likewise a `docNodes.nodeId` string, scoped to the same `documentId`.
 - `docNodes.parentNodeId` is a `docNodes.nodeId` string or `null` (the root). The DAG is per-document; there are no cross-document edges.
 - `workspaces.openDocumentIds` are real `Id<"documents">[]`.
+
+### 1.1 Post-v1 tables (specified in their owning plan docs, not here)
+
+The shipped `convex/schema.ts` carries five additional application tables added
+by later plans. This blueprint deliberately does not restate their specs — the
+owning plan is the contract:
+
+| Table | Purpose (one line) | Owning plan |
+|-------|--------------------|-------------|
+| `writingStats` | Per-user, per-day writing activity for goals/streaks. | [`plans/002-writing-goals-and-streaks.md`](../../plans/002-writing-goals-and-streaks.md) |
+| `docChunks` | Paragraph-window embeddings for RAG over own drafts (vector index). | [`plans/009-ai-reversible-assist.md`](../../plans/009-ai-reversible-assist.md) (Phase C) |
+| `documentShares` | Per-document share grants (commenter/suggester roles). | [`plans/010-review-collaboration.md`](../../plans/010-review-collaboration.md) |
+| `reviewBranches` | Index over reviewer suggestion branches in the undo DAG (status drives accept/reject). | [`plans/010-review-collaboration.md`](../../plans/010-review-collaboration.md) |
+| `comments` | Anchored review comments (human and AI reviewers). | [`plans/010-review-collaboration.md`](../../plans/010-review-collaboration.md) |
 
 ---
 

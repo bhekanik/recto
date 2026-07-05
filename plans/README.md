@@ -23,8 +23,8 @@ larger and phased; ship the craft features first.
 | 007 | Smart paste — Word/web → clean canonical Markdown | P2 | M | — | DONE |
 | 008 | Newsletter authoring layer (subject/preview text, email preview, image storage) | P2 | L | — | DONE |
 | 009 | AI reversible assist — undo-tree transforms, critique panel, RAG over own drafts | P3 | L | — | DONE |
-| 010 | Review collaboration — share a draft, comments + branch suggestions, accept/reject | P2 | L | 001 | DONE (spike→A→B→C; reviewer isolation proven; AI disabled on shared docs) |
-| 011 | AI as a reviewer — structured feedback becomes real anchored comments + tracked-change suggestions | P2 | M | 010 | DONE (A: comments, B: suggestion branch; GLM verbatim quotes verified live) |
+| 010 | Review collaboration — share a draft, comments + branch suggestions, accept/reject | P2 | L | 001 | DONE (spike→A→B→C; reviewer isolation proven; AI disabled on shared docs; per-hunk accept/reject shipped post-plan in `00f9e96`/`3a5119d`) |
+| 011 | AI as a reviewer — structured feedback becomes real anchored comments + tracked-change suggestions | P2 | M | 010 | DONE (A: comments, B: suggestion branch; GLM verbatim quotes verified live; individual AI edits acceptable via per-hunk accept) |
 | 012 | CI gate — typecheck/lint/test/build on push | P1 | S | — | DONE (2026-07-05; operator follow-ups: optional CLERK_PUBLISHABLE_KEY_CI secret, branch protection after first green run) |
 | 013 | Delete-cascade GC — docChunks cascade + orphan image-blob sweep | P1 | M | — | DONE (2026-07-05; live dev smoke by orchestrator — see notes) |
 | 014 | Retention × review-branch integrity — protect open branches, GC closed rows | P1 | M | 013 (crons.ts overlap) | TODO |
@@ -83,7 +83,7 @@ All nine plans implemented and committed to `main` (not pushed), one commit per 
 - **006 — preview-lens ⌘F: FIXED.** Native browser find now works in the read-only preview lens; ⌘F is only intercepted for editable lenses.
 
 **Still worth knowing:**
-- **009 — provider/transport.** OpenRouter (OpenAI-compatible) through Clerk-guarded Next App Router routes (`app/api/ai/{transform,critique,embed}`) with SSE streaming. Model ids are configurable constants in `lib/ai/config.ts` (default chat `anthropic/claude-sonnet-4.6`, embeddings `openai/text-embedding-3-small`, 1536 dims). `aiEnabled` defaults OFF.
+- **009 — provider/transport.** OpenRouter (OpenAI-compatible) through Clerk-guarded Next App Router routes (`app/api/ai/{transform,critique,embed}`) with SSE streaming. Model ids are configurable constants in `lib/ai/config.ts` (default chat `z-ai/glm-5.2`, embeddings `openai/text-embedding-3-small`, 1536 dims). `aiEnabled` defaults OFF.
 - **Runtime checks pending.** Gates are static (types/lint/tests/build) plus live OpenRouter smoke calls (chat, embeddings, and the cron sweep). The interactive behaviors (focus-mode scroll feel, AI accept/reject in the live app, image upload round-trip, email preview rendering) should still get a manual smoke pass in the running app.
 
 ## Recommended sequence (by leverage)

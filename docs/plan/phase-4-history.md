@@ -204,6 +204,8 @@ versions: defineTable({
 
 A checked box must be demonstrable by an automated test or a recorded manual check. The global Definition of Done in [`./README.md`](./README.md) also applies.
 
+> **Status: superseded by [`./README.md`](./README.md).** That phase map marks Phase 4 ✅ Done (Phases 0–5 complete, runtime-verified, with typecheck/biome/test/build green). The unchecked boxes below are the original execution checklist, kept for historical reference; treat the README status as authoritative.
+
 **Undo tree:**
 
 - [ ] Make a sequence of edits; **undo** walks back to prior states; **redo** walks forward; the restored caret matches each node's `selection`.
