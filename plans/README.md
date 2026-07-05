@@ -25,8 +25,52 @@ larger and phased; ship the craft features first.
 | 009 | AI reversible assist — undo-tree transforms, critique panel, RAG over own drafts | P3 | L | — | DONE |
 | 010 | Review collaboration — share a draft, comments + branch suggestions, accept/reject | P2 | L | 001 | DONE (spike→A→B→C; reviewer isolation proven; AI disabled on shared docs) |
 | 011 | AI as a reviewer — structured feedback becomes real anchored comments + tracked-change suggestions | P2 | M | 010 | DONE (A: comments, B: suggestion branch; GLM verbatim quotes verified live) |
+| 012 | CI gate — typecheck/lint/test/build on push | P1 | S | — | TODO |
+| 013 | Delete-cascade GC — docChunks cascade + orphan image-blob sweep | P1 | M | — | TODO |
+| 014 | Retention × review-branch integrity — protect open branches, GC closed rows | P1 | M | 013 (crons.ts overlap) | TODO |
+| 015 | Prod AI env verification + re-embed sweep observability | P1 | S | — | TODO |
+| 016 | Server-side enforcement of no-AI-on-shared-docs | P2 | S–M | — | TODO |
+| 017 | Feedback surfaces — version-save error toasts; alerts → toasts | P2 | S | — | TODO |
+| 018 | Surface hidden settings — AI transform mode + lint category palette actions | P2 | S | — | TODO |
+| 019 | Docs reconciliation — model id, per-hunk, critique residue, schema, banners | P2 | S | — | TODO |
+| 020 | `.docx` export via remark-docx (supersedes html-to-docx ADR pin) | P3 | M | 012 (soft) | TODO |
+| 021 | E2E smoke harness (Playwright + Clerk testing) + record pending manual smoke pass | P2 | L | 012 | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | REJECTED (one-line rationale)
+
+## Batch 2 — outstanding-work audit (2026-07-05)
+
+Plans 012–021 came from a full TODO/stub/deferred-item audit at commit `e8058fe`
+(three parallel codebase sweeps + web research, every finding re-verified against
+the code). Recommended execution order: **012 → 013 → 014 → 015 → 016 → 017 →
+018 → 019 → 020 → 021** (012 first — it is the verification baseline; 013 before
+014 — both edit `convex/crons.ts`/retention surface; the rest are independent).
+
+Key audit outcomes that did NOT become plans:
+
+- **Per-hunk accept/reject** — plans 010/011 call it deferred, but it SHIPPED
+  (`00f9e96`, `3a5119d`, `lib/review/accept-hunks.test.ts`). Plan 019 fixes the docs.
+- **AI-critique cleanup** — plan 011's owed cleanup already happened
+  (`critique-panel.tsx` + critique route deleted); only a dead constant + stale
+  comments remain (plan 019).
+- **Undo-tree depth-cap retention fallback** — the sweep itself is live
+  (`convex/retention.ts` + cron); the depth-cap stays deliberately unbuilt,
+  monitor-only (ADR-16).
+- **Dialect O2/O3** (autolink form, reference-link preservation) — provisional
+  by design; revisit only on real-world diff noise.
+
+## Direction options awaiting selection (no plan written — say the word)
+
+- **Selection-scoped copy/export** (blueprint 11 §1.1 deferral) — per-lens
+  selection→MDAST adapter feeding the existing export pipeline. M, design/spike first.
+- **AI authorship/provenance** (plan 009 §deferred) — track AI-touched spans via
+  the node `origin` field; provenance view. L.
+- **Structured frontmatter metadata panel** (dialect O1, open) — read/write
+  individual YAML keys without reformatting untouched ones. M; losslessness-sensitive.
+- **Replace `window.prompt` sites with inline inputs** (version label, link URL)
+  — follow-on from plan 017, needs a small input affordance. S–M.
+- **Owner opt-in to re-enable AI on a specific shared doc** (plan 010 note) —
+  single enforcement point exists after plan 016. S.
 
 ## Post-implementation notes (2026-06-18)
 
