@@ -7,8 +7,10 @@ import {
 	internalMutation,
 	internalQuery,
 	mutation,
+	query,
+	type QueryCtx,
 } from "./_generated/server";
-import { requireOwnedDocument } from "./documents";
+import { requireOwnedDocument, requireUserId } from "./documents";
 
 /**
  * RAG over the writer's own drafts via Convex vector search (plan 009, Phase C).
@@ -278,32 +280,63 @@ export const searchByVector = action({
 });
 
 /**
+ * Scan for stale documents (currentNodeId ≠ stored embeddedNodeId). Scoped
+ * across all users since the sweep is deployment-wide. Shared by the cron's
+ * `allStaleDocuments` and the `embeddingHealth` query.
+ */
+async function findStaleDocuments(ctx: QueryCtx): Promise<
+	{
+		documentId: Id<"documents">;
+		currentNodeId: string;
+		markdown: string;
+	}[]
+> {
+	const docs = await ctx.db.query("documents").collect();
+	const out: {
+		documentId: Id<"documents">;
+		currentNodeId: string;
+		markdown: string;
+	}[] = [];
+	for (const doc of docs) {
+		const first = await ctx.db
+			.query("docChunks")
+			.withIndex("by_document", (q) => q.eq("documentId", doc._id))
+			.first();
+		if (!first || first.embeddedNodeId !== doc.currentNodeId) {
+			out.push({
+				documentId: doc._id,
+				currentNodeId: doc.currentNodeId,
+				markdown: doc.markdown,
+			});
+		}
+	}
+	return out;
+}
+
+/**
  * Internal: list stale documents for the cron (action context). Scoped across
  * all users since the cron has no caller identity.
  */
 export const allStaleDocuments = internalQuery({
 	args: {},
-	handler: async (ctx) => {
-		const docs = await ctx.db.query("documents").collect();
-		const out: {
-			documentId: Id<"documents">;
-			currentNodeId: string;
-			markdown: string;
-		}[] = [];
-		for (const doc of docs) {
-			const first = await ctx.db
-				.query("docChunks")
-				.withIndex("by_document", (q) => q.eq("documentId", doc._id))
-				.first();
-			if (!first || first.embeddedNodeId !== doc.currentNodeId) {
-				out.push({
-					documentId: doc._id,
-					currentNodeId: doc.currentNodeId,
-					markdown: doc.markdown,
-				});
-			}
-		}
-		return out;
+	handler: async (ctx) => findStaleDocuments(ctx),
+});
+
+/**
+ * Health signal for the re-embed pipeline (plan 015). Reports how many
+ * documents are stale (edited since last embed). A staleCount that only ever
+ * grows across daily sweeps means the sweep is degraded — most likely
+ * `OPENROUTER_API_KEY` missing from the Convex deployment env (the sweep
+ * deliberately skips without throwing in that case; see `reindexSweep`).
+ * Auth-gated: any signed-in user may read the count (it's a scalar ops signal,
+ * no document content). A future status-bar indicator can consume this.
+ */
+export const embeddingHealth = query({
+	args: {},
+	handler: async (ctx): Promise<{ staleCount: number }> => {
+		await requireUserId(ctx);
+		const stale = await findStaleDocuments(ctx);
+		return { staleCount: stale.length };
 	},
 });
 
