@@ -20,12 +20,12 @@ const USER = { subject: "user-1", email: "user@example.com" };
 /** Must match AI_EMBEDDING_DIM / the docChunks vectorIndex (1536). */
 const DIM = 1536;
 
-function docRow(currentNodeId: string) {
+function docRow(currentNodeId: string, markdown = "Some words.") {
 	return {
 		userId: USER.subject,
 		title: "Draft",
-		markdown: "Some words.",
-		wordCount: 2,
+		markdown,
+		wordCount: markdown.trim() === "" ? 0 : 2,
 		currentNodeId,
 		createdAt: 1,
 		updatedAt: 1,
@@ -88,5 +88,36 @@ describe("plan 015 — embeddingHealth query", () => {
 			.withIdentity(USER)
 			.query(api.embeddings.embeddingHealth, {});
 		expect(health).toEqual({ staleCount: 2 });
+	});
+
+	it("does not count an empty document with no chunks as stale", async () => {
+		const t = convexTest(schema, modules);
+
+		// Empty markdown chunks to nothing and there are no rows to purge — a
+		// permanently-uncounted doc, NOT a permanently-stale one (the sweep can
+		// never persist an embeddedNodeId without chunk rows).
+		await t.run(async (ctx) => {
+			await ctx.db.insert("documents", docRow("node-empty", ""));
+		});
+
+		const health = await t
+			.withIdentity(USER)
+			.query(api.embeddings.embeddingHealth, {});
+		expect(health).toEqual({ staleCount: 0 });
+	});
+
+	it("counts a document with real markdown and no chunks as stale", async () => {
+		const t = convexTest(schema, modules);
+
+		// Regression guard: the zero-chunk skip must not swallow never-embedded
+		// docs that DO have embeddable content.
+		await t.run(async (ctx) => {
+			await ctx.db.insert("documents", docRow("node-never-embedded"));
+		});
+
+		const health = await t
+			.withIdentity(USER)
+			.query(api.embeddings.embeddingHealth, {});
+		expect(health).toEqual({ staleCount: 1 });
 	});
 });

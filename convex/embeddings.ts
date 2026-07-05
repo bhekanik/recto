@@ -15,18 +15,21 @@ import { requireOwnedDocument, requireUserId } from "./documents";
 /**
  * RAG over the writer's own drafts via Convex vector search (plan 009, Phase C).
  *
- * Embedding GENERATION lives in the Next route `app/api/ai/embed` because the
- * provider key (`OPENROUTER_API_KEY`) is in the Next server env per the provider
- * override — NOT in Convex env. So the *client* orchestrates re-indexing:
+ * Embedding GENERATION happens in two places; the provider key
+ * (`OPENROUTER_API_KEY`) lives in BOTH server envs — the Next server env and
+ * the Convex deployment env (see app/api/ai/embed/route.ts). Either way the
+ * key stays server-side.
+ *
+ * On-demand path: the *client* orchestrates re-indexing:
  *   1. read the doc markdown + chunk it (lib/ai/chunk.ts),
- *   2. POST the chunk texts to /api/ai/embed → vectors,
+ *   2. POST the chunk texts to /api/ai/embed → vectors (Next server env key),
  *   3. call `embeddings.replaceChunks` (mutation) to persist them.
  * Query-time search mirrors that: the client embeds the query text via the Next
  * route, then calls `embeddings.searchByVector` (action) with the vector.
  *
- * The scheduled cron path (`reindexSweep`) now generates embeddings directly from
+ * The scheduled cron path (`reindexSweep`) generates embeddings directly from
  * inside the Convex action via a `fetch` to OpenRouter, using the
- * `OPENROUTER_API_KEY` that lives in the Convex deployment env. It mirrors the
+ * `OPENROUTER_API_KEY` in the Convex deployment env. It mirrors the
  * request/response shape of the Next route.
  */
 
@@ -283,6 +286,13 @@ export const searchByVector = action({
  * Scan for stale documents (currentNodeId ≠ stored embeddedNodeId). Scoped
  * across all users since the sweep is deployment-wide. Shared by the cron's
  * `allStaleDocuments` and the `embeddingHealth` query.
+ *
+ * A document with NO chunk rows whose markdown chunks to nothing (e.g. empty)
+ * is NOT stale: there is nothing to embed, and with zero rows there is nowhere
+ * to persist an embeddedNodeId, so counting it would keep staleCount
+ * permanently >= 1 and make the sweep "re-embed" it daily forever. A doc WITH
+ * rows but zero-chunk markdown stays stale so the sweep can purge the
+ * lingering rows (see reindexSweep's zero-chunk guard).
  */
 async function findStaleDocuments(ctx: QueryCtx): Promise<
 	{
@@ -302,13 +312,16 @@ async function findStaleDocuments(ctx: QueryCtx): Promise<
 			.query("docChunks")
 			.withIndex("by_document", (q) => q.eq("documentId", doc._id))
 			.first();
-		if (!first || first.embeddedNodeId !== doc.currentNodeId) {
-			out.push({
-				documentId: doc._id,
-				currentNodeId: doc.currentNodeId,
-				markdown: doc.markdown,
-			});
+		if (first) {
+			if (first.embeddedNodeId === doc.currentNodeId) continue; // fresh
+		} else if (chunkMarkdown(doc.markdown).length === 0) {
+			continue; // nothing to embed, no rows to purge — not stale
 		}
+		out.push({
+			documentId: doc._id,
+			currentNodeId: doc.currentNodeId,
+			markdown: doc.markdown,
+		});
 	}
 	return out;
 }
@@ -408,14 +421,17 @@ export const reindexSweep = internalAction({
 			try {
 				const chunks = chunkMarkdown(doc.markdown).slice(0, CHUNK_LIMIT);
 				if (chunks.length === 0) {
-					// No content to embed — still advance the pointer so an empty doc
-					// isn't rescanned every sweep.
+					// Guard, reachable only for a doc that HAS lingering chunk rows but
+					// whose markdown now chunks to nothing — i.e. it was emptied and the
+					// client-side purge (lib/ai/use-rag.ts) never ran. findStaleDocuments
+					// excludes zero-chunk docs with no rows, so this can't loop: purge
+					// the rows here and the next scan skips the doc. Nothing is embedded,
+					// so the counter is untouched.
 					await ctx.runMutation(internal.embeddings.replaceChunksInternal, {
 						documentId: doc.documentId,
 						embeddedNodeId: doc.currentNodeId,
 						chunks: [],
 					});
-					embedded++;
 					continue;
 				}
 
