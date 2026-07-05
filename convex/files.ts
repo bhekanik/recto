@@ -38,15 +38,23 @@ const ORPHAN_GRACE_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Orphaned-blob GC sweep (plan 013), run daily by cron. A stored file is
- * referenced iff its storage id appears as a substring of some reachable
- * markdown — servable URLs embed the id (`.../api/storage/<storageId>`).
- * Reachable markdown lives in TWO places: `documents.markdown` (live text) and
- * `docNodes` rows (snapshots + patch inserts — history that restore can
- * resurrect, so a history-only reference still counts). Patches are plain JSON
- * `{from,to,insert}` strings, so the substring check sees them.
+ * referenced iff the last path segment of its SERVED URL appears as a substring
+ * of some reachable markdown. The served URL embeds a storage UUID distinct
+ * from the `_storage` document id (verified live 2026-07-05: doc id
+ * `kg2...yj43` served as `.../api/storage/43175506-...`), which is why the
+ * check resolves each candidate via `ctx.storage.getUrl` instead of matching
+ * `_id` — an `_id` substring check never matches what the client actually
+ * inserts (lib/editor/image-upload.ts inserts the served URL). The raw `_id`
+ * is still checked as belt-and-braces for any markdown that ever embedded a
+ * raw id. Reachable markdown lives in TWO places: `documents.markdown` (live
+ * text) and `docNodes` rows (snapshots + patch inserts — history that restore
+ * can resurrect, so a history-only reference still counts). Patches are plain
+ * JSON `{from,to,insert}` strings, so the substring check sees them.
  *
  * Deletes every file that is (a) unreferenced AND (b) older than the grace
- * window. `graceMs` is overridable for tests only — never weaken the default.
+ * window. Files whose URL cannot be resolved are SKIPPED (conservative — never
+ * delete what you can't resolve). `graceMs` is overridable for tests only —
+ * never weaken the default.
  */
 export const orphanSweep = internalMutation({
 	args: { graceMs: v.optional(v.number()) },
@@ -67,8 +75,16 @@ export const orphanSweep = internalMutation({
 		let deleted = 0;
 		for (const file of files) {
 			if (file._creationTime >= cutoff) continue; // within grace window
+			// Resolve the served URL only past the grace cutoff (getUrl per file is
+			// the expensive part; the grace window filters most candidates).
+			const url = await ctx.storage.getUrl(file._id);
+			if (url === null) continue; // unresolvable — skip, never delete blind
+			const segment = new URL(url).pathname.split("/").pop();
 			const id: string = file._id;
-			if (!texts.some((text) => text.includes(id))) {
+			const referenced = texts.some(
+				(text) => (!!segment && text.includes(segment)) || text.includes(id),
+			);
+			if (!referenced) {
 				await ctx.storage.delete(file._id);
 				deleted += 1;
 			}

@@ -18,9 +18,15 @@ const modules: Record<string, () => Promise<unknown>> = {
 
 const OWNER = { subject: "owner-user", email: "owner@example.com" };
 
-/** Servable-URL shape the client inserts into markdown (id embedded in URL). */
-function imageMarkdown(storageId: string): string {
-	return `![pic](https://test.convex.cloud/api/storage/${storageId})`;
+/**
+ * Markdown image reference around the REAL served URL (from ctx.storage.getUrl)
+ * — the exact string the client inserts (lib/editor/image-upload.ts). Never
+ * hand-build the URL from the doc id: in production the served URL embeds a
+ * storage UUID distinct from the `_storage` document id, and the sweep resolves
+ * URLs via the same getUrl API this exercises.
+ */
+function imageMarkdown(url: string): string {
+	return `![pic](${url})`;
 }
 
 /** Let Date.now() advance past stored files' _creationTime (real timers). */
@@ -82,7 +88,9 @@ describe("plan 013 — document delete GC", () => {
 			ctx.storage.store(new Blob(["image-bytes"])),
 		);
 		await t.run(async (ctx) => {
-			await ctx.db.patch(documentId, { markdown: imageMarkdown(storageId) });
+			const url = await ctx.storage.getUrl(storageId);
+			if (!url) throw new Error("expected a servable URL for stored blob");
+			await ctx.db.patch(documentId, { markdown: imageMarkdown(url) });
 		});
 
 		await ageFiles();
@@ -110,12 +118,16 @@ describe("plan 013 — document delete GC", () => {
 			ctx.storage.store(new Blob(["patch-referenced"])),
 		);
 		await t.run(async (ctx) => {
+			const snapshotUrl = await ctx.storage.getUrl(snapshotRefId);
+			const patchUrl = await ctx.storage.getUrl(patchRefId);
+			if (!snapshotUrl || !patchUrl)
+				throw new Error("expected servable URLs for stored blobs");
 			await ctx.db.insert("docNodes", {
 				documentId,
 				nodeId: "node-snapshot",
 				parentNodeId: null,
 				patch: JSON.stringify({ from: 0, to: 0, insert: "" }),
-				snapshot: imageMarkdown(snapshotRefId),
+				snapshot: imageMarkdown(snapshotUrl),
 				selection: null,
 				origin: "test",
 				createdAt: Date.now(),
@@ -127,7 +139,7 @@ describe("plan 013 — document delete GC", () => {
 				patch: JSON.stringify({
 					from: 0,
 					to: 0,
-					insert: imageMarkdown(patchRefId),
+					insert: imageMarkdown(patchUrl),
 				}),
 				selection: null,
 				origin: "test",
