@@ -778,8 +778,10 @@ export const acceptHunks = mutation({
 });
 
 /**
- * SPIKE: owner-only REJECT — status flag only, NO node deletion. The abandoned
- * branch subtree is pruned later by the retention cron (plan 010).
+ * SPIKE: owner-only REJECT — status flag only, NO node deletion. The retention
+ * cron (convex/retention.ts, plan 014) finishes the job once the branch has
+ * been closed past the 30-day window: the abandoned branch nodes are pruned and
+ * this `reviewBranches` row is GC'd.
  */
 export const rejectBranch = mutation({
 	args: {
