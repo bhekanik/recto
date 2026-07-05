@@ -16,6 +16,8 @@ function makeDeps(overrides: Partial<ActionMapDeps> = {}): ActionMapDeps {
 		settings: {
 			toggleOutline: vi.fn(),
 			toggleAiEnabled: vi.fn(),
+			toggleAiTransformMode: vi.fn(),
+			toggleLintCategory: vi.fn(),
 			toggleReadingFont: vi.fn(),
 			zoomIn: vi.fn(),
 			zoomOut: vi.fn(),
@@ -109,6 +111,26 @@ describe("createActionMap", () => {
 
 		map["set-goal"]();
 		expect(deps.setGoalConfigOpen).toHaveBeenCalledWith(true);
+	});
+
+	it("settings-toggle actions route to the settings hook (plan 018)", () => {
+		const deps = makeDeps();
+		const map = createActionMap(deps);
+
+		map["toggle-transform-mode"]();
+		expect(deps.settings.toggleAiTransformMode).toHaveBeenCalledTimes(1);
+
+		map["toggle-lint-passive"]();
+		expect(deps.settings.toggleLintCategory).toHaveBeenCalledWith("passive");
+		map["toggle-lint-readability"]();
+		expect(deps.settings.toggleLintCategory).toHaveBeenCalledWith(
+			"readability",
+		);
+		map["toggle-lint-adverb"]();
+		expect(deps.settings.toggleLintCategory).toHaveBeenCalledWith("adverb");
+		map["toggle-lint-weasel"]();
+		expect(deps.settings.toggleLintCategory).toHaveBeenCalledWith("weasel");
+		expect(deps.settings.toggleLintCategory).toHaveBeenCalledTimes(4);
 	});
 
 	it("history actions go through the live controller and panel", () => {

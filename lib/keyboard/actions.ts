@@ -46,6 +46,7 @@ export type ActionId =
 	| "ai-related"
 	| "ai-reindex"
 	| "toggle-ai"
+	| "toggle-transform-mode"
 	| "copy-rich"
 	| "copy-markdown"
 	| "export-md"
@@ -58,6 +59,10 @@ export type ActionId =
 	| "zoom-out"
 	| "zoom-reset"
 	| "toggle-spellcheck"
+	| "toggle-lint-passive"
+	| "toggle-lint-readability"
+	| "toggle-lint-adverb"
+	| "toggle-lint-weasel"
 	| "toggle-smart-paste"
 	| "toggle-toolbar"
 	| "toggle-typewriter"
@@ -292,6 +297,13 @@ export const ACTIONS: ActionDef[] = [
 		shortcut: { mac: "", other: "" },
 	},
 	{
+		id: "toggle-transform-mode",
+		label: "Toggle AI transform mode (pending/replace)",
+		section: "AI",
+		aliases: ["transform mode", "pending", "replace", "confirm", "ai"],
+		shortcut: { mac: "", other: "" },
+	},
+	{
 		id: "copy-rich",
 		label: "Copy as rich text",
 		section: "Copy/Export",
@@ -372,6 +384,34 @@ export const ACTIONS: ActionDef[] = [
 		label: "Toggle spellcheck",
 		section: "View",
 		aliases: ["spelling", "squiggles"],
+		shortcut: { mac: "", other: "" },
+	},
+	{
+		id: "toggle-lint-passive",
+		label: "Lint: toggle passive voice",
+		section: "View",
+		aliases: ["passive", "lint", "prose"],
+		shortcut: { mac: "", other: "" },
+	},
+	{
+		id: "toggle-lint-readability",
+		label: "Lint: toggle readability",
+		section: "View",
+		aliases: ["readability", "hard to read", "lint", "prose"],
+		shortcut: { mac: "", other: "" },
+	},
+	{
+		id: "toggle-lint-adverb",
+		label: "Lint: toggle adverbs",
+		section: "View",
+		aliases: ["adverb", "lint", "prose"],
+		shortcut: { mac: "", other: "" },
+	},
+	{
+		id: "toggle-lint-weasel",
+		label: "Lint: toggle weasel words",
+		section: "View",
+		aliases: ["weasel", "lint", "prose"],
 		shortcut: { mac: "", other: "" },
 	},
 	{

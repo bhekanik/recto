@@ -140,6 +140,7 @@ export function createActionMap(
 			if (canComment) summonAddComment();
 		},
 		"toggle-ai": () => settings.toggleAiEnabled(),
+		"toggle-transform-mode": () => settings.toggleAiTransformMode(),
 		"ai-transform": () => {
 			if (effectiveAiEnabled) summonAiTransform();
 		},
@@ -179,6 +180,10 @@ export function createActionMap(
 		"zoom-out": () => settings.zoomOut(),
 		"zoom-reset": () => settings.zoomReset(),
 		"toggle-spellcheck": () => settings.toggleSpellcheck(),
+		"toggle-lint-passive": () => settings.toggleLintCategory("passive"),
+		"toggle-lint-readability": () => settings.toggleLintCategory("readability"),
+		"toggle-lint-adverb": () => settings.toggleLintCategory("adverb"),
+		"toggle-lint-weasel": () => settings.toggleLintCategory("weasel"),
 		"toggle-smart-paste": () => settings.toggleSmartPaste(),
 		"toggle-toolbar": () => settings.toggleTopToolbar(),
 		"toggle-typewriter": () => settings.toggleTypewriter(),
