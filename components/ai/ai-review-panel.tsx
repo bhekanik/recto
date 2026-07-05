@@ -19,8 +19,8 @@ type Props = {
  * critique panel: instead of a passive list of notes, the AI reviewer creates
  * real anchored comments through plan 010's primitives, and this panel just
  * reports the placement summary and points the owner at the review/comments
- * surface where the feedback lives. Chrome modeled on critique-panel.tsx (fixed
- * inset-y right aside, recto-panel, scrim, Escape-to-close, focus restore).
+ * surface where the feedback lives. Chrome: fixed inset-y right aside,
+ * recto-panel, scrim, Escape-to-close, focus restore.
  */
 export function AiReviewPanel({ open, review, onClose, onOpenReview }: Props) {
 	const { state, summary, error, run, reset } = review;

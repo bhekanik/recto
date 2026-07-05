@@ -298,7 +298,7 @@ export function parseSuggestionArgs(
  * Parse the model's review reply into `{ comments, suggestions }`, tolerating
  * fenced JSON or stray prose around the object. Returns empty arrays if nothing
  * parseable is found (the panel then shows a "no notes" state rather than
- * throwing). Pure. Modeled on `parseCritique`.
+ * throwing). Pure.
  */
 export function parseReview(raw: string): AiReviewResult {
 	const text = raw.trim();

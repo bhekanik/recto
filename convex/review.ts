@@ -346,11 +346,11 @@ export const documentShareState = query({
 });
 
 /**
- * SPIKE: reviewer suggestion append. APPEND-ONLY, access-gated at "suggester".
+ * Reviewer suggestion append. APPEND-ONLY, access-gated at "suggester".
  * Inserts an immutable docNode (idempotent on (documentId, nodeId), origin
  * `review:<reviewerUserId>`) and opens-or-advances the caller's reviewBranches
  * row. NEVER patches the documents row — this is the isolation boundary that
- * keeps the owner's markdown / currentNodeId untouched (plan 010 SPIKE #4).
+ * keeps the owner's markdown / currentNodeId untouched (plan 010).
  */
 export const reviewerAppend = mutation({
 	args: {
@@ -476,7 +476,7 @@ export const reviewerAppend = mutation({
  *   - Upsert a `reviewBranches` row with `reviewerUserId = AI_REVIEWER_AUTHOR_ID`,
  *     `baseNodeId = current`, `headNodeId = new node`, `status:"open"`.
  *
- * ISOLATION INVARIANT (same as reviewerAppend / the SPIKE): it NEVER patches the
+ * ISOLATION INVARIANT (same as reviewerAppend): it NEVER patches the
  * `documents` row — the owner's live markdown / currentNodeId only change on
  * Accept (acceptBranch). One AI branch per document for v1: any prior OPEN AI
  * branch is marked "rejected" before the new one opens (keeps the surface to a
@@ -558,7 +558,7 @@ export const aiSuggestBranch = mutation({
 });
 
 /**
- * SPIKE: owner-only. Materialize the branch head and the owner's current node so
+ * Owner-only. Materialize the branch head and the owner's current node so
  * the review surface can word-diff them (branch-head vs. live-current).
  */
 export const getBranchDiff = query({
@@ -586,7 +586,7 @@ export const getBranchDiff = query({
 });
 
 /**
- * SPIKE: owner-only ACCEPT — additive merge forward, mirroring versions.restore.
+ * Owner-only ACCEPT — additive merge forward, mirroring versions.restore.
  * Materialize the branch head, append a NEW node parented at the owner's CURRENT
  * tip (so concurrent owner edits are preserved), write that markdown, advance
  * currentNodeId. Old history is untouched. Marks the branch "accepted".
@@ -778,7 +778,7 @@ export const acceptHunks = mutation({
 });
 
 /**
- * SPIKE: owner-only REJECT — status flag only, NO node deletion. The retention
+ * Owner-only REJECT — status flag only, NO node deletion. The retention
  * cron (convex/retention.ts, plan 014) finishes the job once the branch has
  * been closed past the 30-day window: the abandoned branch nodes are pruned and
  * this `reviewBranches` row is GC'd.

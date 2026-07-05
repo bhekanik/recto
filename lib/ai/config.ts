@@ -12,7 +12,7 @@
 export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 
 /**
- * Chat model for transforms + critique. GLM 5.2 on OpenRouter (user-selected,
+ * Chat model for transforms + AI review. GLM 5.2 on OpenRouter (user-selected,
  * verified end-to-end). It is a reasoning model, so the route handlers pass the
  * OpenRouter `reasoning: { enabled: false }` extension to keep short edits snappy
  * and stop reasoning tokens from starving the output budget. Keep token caps
@@ -23,13 +23,10 @@ export const AI_CHAT_MODEL = "z-ai/glm-5.2";
 /** Cap output for selection transforms — they rewrite a span, not a document. */
 export const AI_TRANSFORM_MAX_TOKENS = 1024;
 
-/** Cap output for the critique pass — a short structured list, not an essay. */
-export const AI_CRITIQUE_MAX_TOKENS = 1500;
-
 /**
  * Cap output for the AI review pass — a structured list of anchored comments +
- * edits, not an essay. Larger than critique because each item carries a verbatim
- * quote + body (plan 011).
+ * edits, not an essay. Larger than the transform cap because each item carries a
+ * verbatim quote + body (plan 011).
  */
 export const AI_REVIEW_MAX_TOKENS = 4000;
 
