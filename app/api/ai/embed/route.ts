@@ -9,10 +9,17 @@ type EmbedBody = { inputs: string[] };
 
 /**
  * Embedding generation for RAG (plan 009, Phase C). Takes a batch of chunk texts
- * and returns their vectors. Lives in Next (not Convex) because the embedding key
- * (`OPENROUTER_API_KEY`) is in the Next server env per the provider override. The
- * client orchestrates re-indexing: embed here, then write chunks to Convex via a
- * normal mutation. The key stays server-side.
+ * and returns their vectors. This is the on-demand client path: embed here, then
+ * write chunks to Convex via a normal mutation. The embedding key
+ * (`OPENROUTER_API_KEY`) lives in BOTH server envs — the Next server env (this
+ * route) and the Convex deployment env (the daily `reindexSweep` cron in
+ * convex/embeddings.ts embeds directly from Convex). Either way the key stays
+ * server-side.
+ *
+ * Not folded into `guardAiRoute` (lib/ai/route-guard.ts): this route returns an
+ * empty-success response for empty inputs BEFORE constructing the OpenRouter
+ * client, whereas the guard constructs the client first — unifying would turn
+ * that 200 into a 503 when the key is missing.
  */
 export async function POST(req: Request): Promise<Response> {
 	const userId = await requireUser();
