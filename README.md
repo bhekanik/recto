@@ -52,6 +52,8 @@ Hosted on Vercel (team **Planetary Escape**), Convex production, Clerk auth.
 runs the build in [`vercel.json`](./vercel.json), which on production builds runs
 `convex deploy` (via `CONVEX_DEPLOY_KEY`) and then `next build`. Production env vars
 (Convex URL, Clerk keys, deploy key) live in the Vercel project settings.
+Every push to `main` and every PR also runs the CI gate — `typecheck` + `biome` +
+`test` + `build` — via GitHub Actions ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)).
 
 ## Phase 0 spikes
 
