@@ -119,10 +119,11 @@ export const create = mutation({
 
 /**
  * Delete a document and cascade-delete everything keyed by_document: history
- * (docNodes + versions) plus the review collaboration rows (documentShares +
- * reviewBranches + comments, plan 010). Each lives in separate rows indexed
- * by_document, deleted in batches to respect the per-transaction write ceiling
- * (blueprint 03 §5).
+ * (docNodes + versions), the review collaboration rows (documentShares +
+ * reviewBranches + comments, plan 010), and the RAG embedding chunks
+ * (docChunks, plan 013 — otherwise deleted-document text keeps surfacing in
+ * vector search). Each lives in separate rows indexed by_document, deleted in
+ * batches to respect the per-transaction write ceiling (blueprint 03 §5).
  */
 export const remove = mutation({
 	args: { documentId: v.id("documents") },
@@ -158,6 +159,12 @@ export const remove = mutation({
 			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
 			.collect();
 		for (const comment of comments) await ctx.db.delete(comment._id);
+
+		const chunks = await ctx.db
+			.query("docChunks")
+			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+			.collect();
+		for (const chunk of chunks) await ctx.db.delete(chunk._id);
 
 		await ctx.db.delete(args.documentId);
 	},

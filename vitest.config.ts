@@ -9,7 +9,7 @@ export default defineConfig({
 	},
 	test: {
 		environment: "happy-dom",
-		include: ["spikes/**/*.test.ts", "lib/**/*.test.ts"],
+		include: ["spikes/**/*.test.ts", "lib/**/*.test.ts", "convex/**/*.test.ts"],
 		exclude: ["**/*.bun.test.ts"],
 		testTimeout: 30_000,
 		server: {
