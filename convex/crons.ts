@@ -20,4 +20,15 @@ crons.daily(
 	internal.embeddings.reindexSweep,
 );
 
+// Daily orphaned-blob GC (plan 013). Deletes stored files no longer referenced
+// by any document markdown or docNodes history, after a 24h grace window (see
+// convex/files.ts → orphanSweep). Runs after the 08:00 retention sweep so
+// freshly-pruned docNodes don't hold references.
+crons.daily(
+	"orphaned image blob sweep",
+	{ hourUTC: 10, minuteUTC: 0 },
+	internal.files.orphanSweep,
+	{},
+);
+
 export default crons;

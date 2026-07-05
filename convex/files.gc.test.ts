@@ -1,6 +1,6 @@
 import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import schema from "./schema";
 
 // Explicit module map for convex-test (mirrors lib/review/access.test.ts).
@@ -17,6 +17,16 @@ const modules: Record<string, () => Promise<unknown>> = {
 };
 
 const OWNER = { subject: "owner-user", email: "owner@example.com" };
+
+/** Servable-URL shape the client inserts into markdown (id embedded in URL). */
+function imageMarkdown(storageId: string): string {
+	return `![pic](https://test.convex.cloud/api/storage/${storageId})`;
+}
+
+/** Let Date.now() advance past stored files' _creationTime (real timers). */
+function ageFiles(): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, 5));
+}
 
 describe("plan 013 — document delete GC", () => {
 	it("documents.remove cascades docChunks", async () => {
@@ -59,5 +69,115 @@ describe("plan 013 — document delete GC", () => {
 				.collect(),
 		);
 		expect(remaining).toHaveLength(0);
+	});
+
+	it("orphanSweep keeps a blob referenced in live document markdown", async () => {
+		const t = convexTest(schema, modules);
+		const owner = t.withIdentity(OWNER);
+
+		const { documentId } = await owner.mutation(api.documents.create, {
+			title: "With image",
+		});
+		const storageId = await t.run(async (ctx) =>
+			ctx.storage.store(new Blob(["image-bytes"])),
+		);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(documentId, { markdown: imageMarkdown(storageId) });
+		});
+
+		await ageFiles();
+		const result = await t.mutation(internal.files.orphanSweep, {
+			graceMs: 0,
+		});
+
+		expect(result).toEqual({ scanned: 1, deleted: 0 });
+		const file = await t.run(async (ctx) => ctx.db.system.get(storageId));
+		expect(file).not.toBeNull();
+	});
+
+	it("orphanSweep keeps blobs referenced only in docNodes history (snapshot or patch)", async () => {
+		const t = convexTest(schema, modules);
+		const owner = t.withIdentity(OWNER);
+
+		// Live markdown stays "" — references exist only in history rows.
+		const { documentId } = await owner.mutation(api.documents.create, {
+			title: "History only",
+		});
+		const snapshotRefId = await t.run(async (ctx) =>
+			ctx.storage.store(new Blob(["snapshot-referenced"])),
+		);
+		const patchRefId = await t.run(async (ctx) =>
+			ctx.storage.store(new Blob(["patch-referenced"])),
+		);
+		await t.run(async (ctx) => {
+			await ctx.db.insert("docNodes", {
+				documentId,
+				nodeId: "node-snapshot",
+				parentNodeId: null,
+				patch: JSON.stringify({ from: 0, to: 0, insert: "" }),
+				snapshot: imageMarkdown(snapshotRefId),
+				selection: null,
+				origin: "test",
+				createdAt: Date.now(),
+			});
+			await ctx.db.insert("docNodes", {
+				documentId,
+				nodeId: "node-patch",
+				parentNodeId: "node-snapshot",
+				patch: JSON.stringify({
+					from: 0,
+					to: 0,
+					insert: imageMarkdown(patchRefId),
+				}),
+				selection: null,
+				origin: "test",
+				createdAt: Date.now(),
+			});
+		});
+
+		await ageFiles();
+		const result = await t.mutation(internal.files.orphanSweep, {
+			graceMs: 0,
+		});
+
+		expect(result).toEqual({ scanned: 2, deleted: 0 });
+		const kept = await t.run(async (ctx) => [
+			await ctx.db.system.get(snapshotRefId),
+			await ctx.db.system.get(patchRefId),
+		]);
+		expect(kept[0]).not.toBeNull();
+		expect(kept[1]).not.toBeNull();
+	});
+
+	it("orphanSweep deletes an unreferenced blob older than the grace window", async () => {
+		const t = convexTest(schema, modules);
+
+		const storageId = await t.run(async (ctx) =>
+			ctx.storage.store(new Blob(["orphan"])),
+		);
+
+		await ageFiles();
+		const result = await t.mutation(internal.files.orphanSweep, {
+			graceMs: 0,
+		});
+
+		expect(result).toEqual({ scanned: 1, deleted: 1 });
+		const file = await t.run(async (ctx) => ctx.db.system.get(storageId));
+		expect(file).toBeNull();
+	});
+
+	it("orphanSweep keeps an unreferenced blob still within the grace window", async () => {
+		const t = convexTest(schema, modules);
+
+		const storageId = await t.run(async (ctx) =>
+			ctx.storage.store(new Blob(["fresh-orphan"])),
+		);
+
+		// Default 24h grace window — freshly stored file must survive.
+		const result = await t.mutation(internal.files.orphanSweep, {});
+
+		expect(result).toEqual({ scanned: 1, deleted: 0 });
+		const file = await t.run(async (ctx) => ctx.db.system.get(storageId));
+		expect(file).not.toBeNull();
 	});
 });
