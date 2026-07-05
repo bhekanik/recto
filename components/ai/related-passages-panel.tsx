@@ -54,8 +54,8 @@ export function RelatedPassagesPanel({
 		setError(null);
 		try {
 			const results = await findRelated({
+				documentId: activeDocumentId,
 				queryText: text,
-				excludeDocumentId: activeDocumentId ?? undefined,
 				signal: ac.signal,
 			});
 			if (ac.signal.aborted) return;

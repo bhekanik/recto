@@ -25,6 +25,9 @@ import type { ChatMessage } from "./transform-request";
 
 /** Wire shape the review route accepts from the client. */
 export type ReviewRequestBody = {
+	/** The document being reviewed (always the active doc) — gates the
+	 * no-AI-on-shared-documents rule server-side (plan 016). */
+	documentId: string;
 	/** The section or whole-document Markdown to review. */
 	text: string;
 };
@@ -118,8 +121,12 @@ const REVIEW_SYSTEM = [
 	"call no tools and say so.",
 ].join("\n");
 
-/** Build the review chat messages from a section/document. */
-export function buildReviewMessages(body: ReviewRequestBody): ChatMessage[] {
+/** Build the review chat messages from a section/document. Takes only the
+ * prompt field — `documentId` is a routing/gating concern the prompt never
+ * sees. */
+export function buildReviewMessages(
+	body: Pick<ReviewRequestBody, "text">,
+): ChatMessage[] {
 	return [
 		{ role: "system", content: REVIEW_SYSTEM },
 		{ role: "user", content: body.text },

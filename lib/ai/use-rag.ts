@@ -8,15 +8,18 @@ import type { Id } from "@/convex/_generated/dataModel";
 import type { RelatedPassage } from "@/convex/embeddings";
 import { chunk } from "./chunk";
 
-/** Embed a batch of texts via the Next route (key stays server-side). */
+/** Embed a batch of texts via the Next route (key stays server-side).
+ * `documentId` names the ACTIVE document the texts come from, so the route can
+ * enforce the no-AI-on-shared-documents rule (plan 016). */
 async function embedTexts(
+	documentId: Id<"documents">,
 	inputs: string[],
 	signal?: AbortSignal,
 ): Promise<number[][]> {
 	const res = await fetch("/api/ai/embed", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ inputs }),
+		body: JSON.stringify({ documentId, inputs }),
 		signal,
 	});
 	if (!res.ok) {
@@ -58,6 +61,7 @@ export function useRag() {
 				return 0;
 			}
 			const embeddings = await embedTexts(
+				input.documentId,
 				chunks.map((c) => c.text),
 				input.signal,
 			);
@@ -79,20 +83,27 @@ export function useRag() {
 		[replaceChunks],
 	);
 
-	/** Find related passages to a query text, excluding the current document. */
+	/** Find related passages to a query text, excluding the current document.
+	 * `documentId` is the ACTIVE document the query text comes from: it gates
+	 * the embed route (plan 016) and is excluded from the results. */
 	const findRelated = useCallback(
 		async (input: {
+			documentId: Id<"documents"> | null;
 			queryText: string;
-			excludeDocumentId?: Id<"documents">;
 			signal?: AbortSignal;
 		}): Promise<RelatedPassage[]> => {
 			const trimmed = input.queryText.trim();
 			if (!trimmed) return [];
-			const [vector] = await embedTexts([trimmed.slice(0, 4000)], input.signal);
+			if (!input.documentId) throw new Error("No active document");
+			const [vector] = await embedTexts(
+				input.documentId,
+				[trimmed.slice(0, 4000)],
+				input.signal,
+			);
 			if (!vector) return [];
 			return await searchByVector({
 				vector,
-				excludeDocumentId: input.excludeDocumentId,
+				excludeDocumentId: input.documentId,
 			});
 		},
 		[searchByVector],

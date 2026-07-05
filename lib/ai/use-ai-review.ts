@@ -124,7 +124,7 @@ export function useAiReview(args: {
 			const res = await fetch("/api/ai/review", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ text }),
+				body: JSON.stringify({ documentId, text }),
 				signal: ac.signal,
 			});
 			if (!res.ok) {

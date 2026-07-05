@@ -2,6 +2,7 @@
 
 import { useCallback, useRef, useState } from "react";
 
+import type { Id } from "@/convex/_generated/dataModel";
 import type { HistoryController } from "@/lib/history/use-document-history";
 import type { AiTransformMode } from "@/lib/studio/use-studio-settings";
 import { applyTransform, type TransformRange } from "./apply-transform";
@@ -34,11 +35,14 @@ const INITIAL: AiTransformState = {
  * Cancellation aborts the fetch and commits nothing.
  */
 export function useAiTransform(args: {
+	/** The active document — sent to the route so the server can enforce the
+	 * no-AI-on-shared-documents rule (plan 016). */
+	documentId: Id<"documents"> | null;
 	getController: () => HistoryController | null;
 	getDocMarkdown: () => string;
 	mode: AiTransformMode;
 }) {
-	const { getController, getDocMarkdown, mode } = args;
+	const { documentId, getController, getDocMarkdown, mode } = args;
 	const [state, setState] = useState<AiTransformState>(INITIAL);
 	const abortRef = useRef<AbortController | null>(null);
 	// The pre-AI nodeId, so reject can return precisely there.
@@ -75,7 +79,7 @@ export function useAiTransform(args: {
 			richReplace?: (aiText: string) => string | null;
 		}) => {
 			const controller = getController();
-			if (!controller) {
+			if (!controller || !documentId) {
 				setState({ ...INITIAL, status: "error", error: "No active document" });
 				return;
 			}
@@ -96,6 +100,7 @@ export function useAiTransform(args: {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
 					body: JSON.stringify({
+						documentId,
 						instruction: input.instruction,
 						selection: input.selection,
 					}),
@@ -200,7 +205,7 @@ export function useAiTransform(args: {
 				});
 			}
 		},
-		[getController, getDocMarkdown, mode],
+		[documentId, getController, getDocMarkdown, mode],
 	);
 
 	/** Keep the AI node (no-op — it's already the tip). */

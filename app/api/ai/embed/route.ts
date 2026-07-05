@@ -1,11 +1,17 @@
 import { AI_EMBEDDING_DIM } from "@/lib/ai/config";
 import { buildEmbedRequest } from "@/lib/ai/embed-request";
+import { rejectIfDocumentShared } from "@/lib/ai/route-guard";
 import { openRouter, requireUser } from "@/lib/ai/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type EmbedBody = { inputs: string[] };
+type EmbedBody = {
+	/** The ACTIVE document the texts belong to (re-index) or whose text is the
+	 * query (related passages) — gates the no-AI-on-shared rule (plan 016). */
+	documentId: string;
+	inputs: string[];
+};
 
 /**
  * Embedding generation for RAG (plan 009, Phase C). Takes a batch of chunk texts
@@ -19,7 +25,10 @@ type EmbedBody = { inputs: string[] };
  * Not folded into `guardAiRoute` (lib/ai/route-guard.ts): this route returns an
  * empty-success response for empty inputs BEFORE constructing the OpenRouter
  * client, whereas the guard constructs the client first — unifying would turn
- * that 200 into a 503 when the key is missing.
+ * that 200 into a 503 when the key is missing. The no-AI-on-shared-documents
+ * check (plan 016) is shared with the guard via `rejectIfDocumentShared` and
+ * runs right after body validation — a shared doc gets 403 even for empty
+ * inputs, and the empty-inputs 200 still precedes client construction.
  */
 export async function POST(req: Request): Promise<Response> {
 	const userId = await requireUser();
@@ -35,6 +44,13 @@ export async function POST(req: Request): Promise<Response> {
 	}
 	if (!body || !Array.isArray(body.inputs)) {
 		return new Response("Missing inputs", { status: 400 });
+	}
+	if (typeof body.documentId !== "string" || body.documentId.length === 0) {
+		return new Response("Missing documentId", { status: 400 });
+	}
+	const rejected = await rejectIfDocumentShared(body.documentId);
+	if (rejected) {
+		return rejected;
 	}
 
 	const request = buildEmbedRequest(body.inputs);

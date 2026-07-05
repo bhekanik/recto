@@ -8,6 +8,9 @@ export type ChatMessage = { role: "system" | "user"; content: string };
 
 /** Wire shape the transform route accepts from the client. */
 export type TransformRequestBody = {
+	/** The document being transformed (always the active doc) — gates the
+	 * no-AI-on-shared-documents rule server-side (plan 016). */
+	documentId: string;
 	/** The instruction (preset prompt or free text). */
 	instruction: string;
 	/** The exact selected Markdown span to rewrite. */
@@ -22,9 +25,11 @@ const TRANSFORM_SYSTEM =
 	"Markdown you weren't given. Preserve the user's voice and any Markdown " +
 	"formatting present in the span unless the instruction says otherwise.";
 
-/** Build the transform chat messages from an instruction + selected span. */
+/** Build the transform chat messages from an instruction + selected span.
+ * Takes only the prompt fields — `documentId` is a routing/gating concern the
+ * prompt never sees. */
 export function buildTransformMessages(
-	body: TransformRequestBody,
+	body: Pick<TransformRequestBody, "instruction" | "selection">,
 ): ChatMessage[] {
 	return [
 		{ role: "system", content: TRANSFORM_SYSTEM },

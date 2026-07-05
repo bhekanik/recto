@@ -79,6 +79,7 @@ export function useAiFeatures({
 	}, [effectiveAiEnabled]);
 
 	const aiTransform = useAiTransform({
+		documentId: activeDocId,
 		getController,
 		getDocMarkdown: getActiveMarkdown,
 		mode: aiTransformMode,
