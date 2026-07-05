@@ -78,8 +78,6 @@ describe("generateDocxBlob", () => {
 			`Target="${new URL("/storage/diagram.png", origin).href}"`,
 		);
 		// Root-relative links resolve against the app origin (pitfall 2.1.4).
-		expect(relsXml).toContain(
-			`Target="${new URL("/doc/abc", origin).href}"`,
-		);
+		expect(relsXml).toContain(`Target="${new URL("/doc/abc", origin).href}"`);
 	});
 });
