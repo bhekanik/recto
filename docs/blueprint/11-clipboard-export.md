@@ -331,21 +331,19 @@ The full keymap and palette wiring, including any direct shortcuts, are owned by
 | **Browser-first generator** | No maintained, browser-targeted RTF generator that consumes MDAST/HTML cleanly | We'd hand-roll an RTF serializer — a custom implementation where a standard path (`.html`) already exists |
 | **Encoding** | RTF is fundamentally **8-bit**; non-ASCII characters require `\uNNNN` escape sequences | Our strings are UTF-16; every emoji, smart quote, accented or non-Latin character needs escaping logic — bug-prone for the multilingual prose this tool is built to write |
 | **Escaping** | Literal `{`, `}`, and `\` must be backslash-escaped throughout | Another layer of error-prone serialization with no library to lean on |
-| **Coverage** | What RTF gives (a portable rich document for word processors) | **`.html` already covers it**, opens cleanly in Word/Pages/Docs/LibreOffice, and is generated with zero custom code from the canonical tree (§5/§6). Optional `.docx` (§10) would cover the remainder |
+| **Coverage** | What RTF gives (a portable rich document for word processors) | **`.html` already covers it**, opens cleanly in Word/Pages/Docs/LibreOffice, and is generated with zero custom code from the canonical tree (§5/§6). `.docx` (§10) covers the remainder |
 
-This aligns with the project rule to **prefer battle-tested libraries and language features over custom implementations**: there is no battle-tested browser RTF path, while `.html` is a one-pipeline, zero-translation export we already maintain. `.html` (now) and optional `.docx` (later) cover every realistic destination RTF would. See [`14-tech-decisions.md`](./14-tech-decisions.md) for the decision record.
+This aligns with the project rule to **prefer battle-tested libraries and language features over custom implementations**: there is no battle-tested browser RTF path, while `.html` is a one-pipeline, zero-translation export we already maintain. `.html` and `.docx` (§10) cover every realistic destination RTF would. See [`14-tech-decisions.md`](./14-tech-decisions.md) for the decision record.
 
 ---
 
-## 10. Optional future: `.docx`
+## 10. `.docx` export — shipped (2026-07-05, plan 020)
 
-A native `.docx` export is a **plausible future addition, explicitly out of scope for v1.**
+Native `.docx` export **shipped** via [`remark-docx`](https://www.npmjs.com/package/remark-docx) in `lib/export/docx.ts` (`export-docx` action). It compiles the **canonical MDAST directly to WordprocessingML** — real Word footnotes, alignment-aware GFM tables, checkbox task lists — with no HTML round-trip. Frontmatter is stripped from the body (metadata, not content — same rule as §6); `---` renders as a horizontal rule; root-relative link URLs are absolutized (same pitfall as §6); the module is **dynamically imported** so `remark-docx`/`docx` stay out of the main bundle.
 
-If/when added, use [`html-to-docx`](https://www.npmjs.com/package/html-to-docx) — it consumes the HTML we already generate (§6) and produces a real Word document part.
+> **Superseded pin (2026-07-05):** this section previously pinned the future `.docx` path to `html-to-docx` over the §6 HTML. That pin is superseded: the original `html-to-docx` has been unmaintained since 2023-03, and no HTML-input converter (including the maintained `@turbodocx/html-to-docx` fork) can produce real Word footnotes — HTML carries no footnote semantics, so they degrade to superscript links. `remark-docx` compiles the canonical MDAST directly instead. The old warning against `html-docx-js` (its `altChunk` wrapping opens empty in Google Docs/LibreOffice/Word-for-Mac) remains historically correct and equally moot.
 
-> **Do not use `html-docx-js`.** Its approach wraps HTML in an `altChunk` (an "alternative format import part"), which relies on the consuming application to convert the embedded HTML at open time. **Google Docs, LibreOffice, and Word-for-Mac do not honor `altChunk`**, so the document opens empty or as raw markup in exactly the apps a Mac-based, Docs-using writer cares about. `html-to-docx` builds genuine WordprocessingML instead, which all of them read.
-
-For v1, `.html` is the rich export. `.docx` is a noted, deferred enhancement; it requires no change to the canonical model or the §6 pipeline when added.
+**Known v1 limitation — images.** `remark-docx` only embeds images via a fetch-based plugin that silently drops any image that fails to load (e.g. CORS on storage URLs). Instead of embedding, v1 rewrites each image to a **hyperlink carrying the alt text and the absolute image URL**, so the pointer survives into Word. If embedding becomes a need, fetch blobs via the existing authed session and pass an image resolver to the processor. Code blocks render as plain-text paragraphs (remark-docx default without its syntax-highlight plugin).
 
 ---
 
@@ -362,4 +360,5 @@ For v1, `.html` is the rich export. `.docx` is a noted, deferred enhancement; it
 - MDN — `Clipboard.write()`: <https://developer.mozilla.org/en-US/docs/Web/API/Clipboard/write>
 - MDN — `ClipboardItem`: <https://developer.mozilla.org/en-US/docs/Web/API/ClipboardItem>
 - web.dev — Unblocking clipboard access (async Clipboard API): <https://web.dev/articles/async-clipboard>
-- npm — `html-to-docx` (future `.docx`): <https://www.npmjs.com/package/html-to-docx>
+- npm — `remark-docx` (`.docx` export, §10): <https://www.npmjs.com/package/remark-docx>
+- npm — `html-to-docx` (superseded `.docx` pin — historical, see §10): <https://www.npmjs.com/package/html-to-docx>

@@ -505,7 +505,7 @@ Tailwind v4 + shadcn + OKLCH is the user's established convention (consistent wi
 
 ## ADR-13 — Rich-text export is `.html`; `.rtf` is skipped; `.docx` is optional and later
 
-**Status:** Accepted. Detailed in [`11-clipboard-export.md`](./11-clipboard-export.md).
+**Status:** Accepted; **amended 2026-07-05** (plan 020). `.docx` shipped via `remark-docx`, and the `html-to-docx` pin below is **superseded**: the original package has been unmaintained since 2023-03, and an HTML-input converter cannot produce real Word footnotes (HTML carries no footnote semantics), whereas `remark-docx` compiles the canonical MDAST directly. The `.rtf` rejection is permanent and unchanged. Detailed in [`11-clipboard-export.md`](./11-clipboard-export.md) §10.
 
 ### Context
 
@@ -513,14 +513,14 @@ Recto exports documents. Markdown export (`.md`) is trivial — it is the canoni
 
 ### Decision
 
-Rich export is **`.html`** (rendered from the canonical MDAST via `remark-rehype` + `rehype-sanitize`, the same pipeline as Preview). **`.rtf` is skipped.** **`.docx` is optional and later**, via `html-to-docx` if/when it is wanted ([`11-clipboard-export.md`](./11-clipboard-export.md)).
+Rich export is **`.html`** (rendered from the canonical MDAST via `remark-rehype` + `rehype-sanitize`, the same pipeline as Preview). **`.rtf` is skipped.** **`.docx` is optional and later**, via `html-to-docx` if/when it is wanted ([`11-clipboard-export.md`](./11-clipboard-export.md)). *(The `html-to-docx` path was superseded when `.docx` shipped — see the 2026-07-05 amendment in Status.)*
 
 ### Alternatives rejected
 
 - **`.rtf` export.** **Rejected** on two concrete grounds:
   1. There is **no maintained browser-side RTF generator** worth depending on; RTF generation in the browser means hand-rolling or adopting an unmaintained library — neither acceptable per "do it right."
   2. **UTF-16 ↔ 8-bit escaping pain.** RTF's encoding model (control words, `\uN` escapes, code-page handling) makes correct Unicode emission from JS strings (UTF-16) fiddly and error-prone — a poor cost/benefit for a format whose audience HTML already serves.
-- **`.docx` now.** **Rejected for v1** — not skipped, just deferred. `html-to-docx` can convert our exported HTML to `.docx` later with low marginal effort, so there is no reason to build it before it is needed.
+- **`.docx` now.** **Rejected for v1** — not skipped, just deferred. At the time this assumed `html-to-docx` could convert our exported HTML to `.docx` later with low marginal effort. *(Historical: when `.docx` shipped in plan 020, `remark-docx` replaced that assumption — see Status.)*
 
 ### Rationale
 
@@ -529,12 +529,13 @@ Rich export is **`.html`** (rendered from the canonical MDAST via `remark-rehype
 ### Consequences
 
 - Export menu offers `.md` (canonical string) and `.html` (Preview pipeline) in v1 ([`11-clipboard-export.md`](./11-clipboard-export.md)).
-- A future `.docx` is an additive feature layered on the existing HTML export via `html-to-docx`; no architecture change required.
+- A future `.docx` is an additive feature layered on the existing HTML export via `html-to-docx`; no architecture change required. *(Held up: `.docx` landed additively in plan 020 with no architecture change — though from the MDAST via `remark-docx`, not from the HTML.)*
 - No RTF code or dependency enters the tree.
 
 ### References
 
-- [https://www.npmjs.com/package/html-to-docx](https://www.npmjs.com/package/html-to-docx) — `html-to-docx`; the path for optional, later `.docx` from exported HTML.
+- [https://www.npmjs.com/package/remark-docx](https://www.npmjs.com/package/remark-docx) — `remark-docx`; the shipped `.docx` path (2026-07-05 amendment).
+- [https://www.npmjs.com/package/html-to-docx](https://www.npmjs.com/package/html-to-docx) — `html-to-docx`; the originally pinned (now superseded) path for `.docx` from exported HTML.
 - Sibling files: [`11-clipboard-export.md`](./11-clipboard-export.md), [`06-markdown-dialect.md`](./06-markdown-dialect.md), [`12-design-system.md`](./12-design-system.md); plan: [`../plan/phase-5-polish-and-export.md`](../plan/phase-5-polish-and-export.md).
 
 ---
