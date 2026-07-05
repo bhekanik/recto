@@ -27,13 +27,13 @@ larger and phased; ship the craft features first.
 | 011 | AI as a reviewer — structured feedback becomes real anchored comments + tracked-change suggestions | P2 | M | 010 | DONE (A: comments, B: suggestion branch; GLM verbatim quotes verified live; individual AI edits acceptable via per-hunk accept) |
 | 012 | CI gate — typecheck/lint/test/build on push | P1 | S | — | DONE (2026-07-05; operator follow-ups: optional CLERK_PUBLISHABLE_KEY_CI secret, branch protection after first green run) |
 | 013 | Delete-cascade GC — docChunks cascade + orphan image-blob sweep | P1 | M | — | DONE (2026-07-05; live dev smoke by orchestrator — see notes) |
-| 014 | Retention × review-branch integrity — protect open branches, GC closed rows | P1 | M | 013 (crons.ts overlap) | TODO |
+| 014 | Retention × review-branch integrity — protect open branches, GC closed rows | P1 | M | 013 (crons.ts overlap) | DONE (2026-07-06; sweep now returns `{ pruned, prunedBranchRows }`; open-branch protection adversarially tested) |
 | 015 | Prod AI env verification + re-embed sweep observability | P1 | S | — | DONE (2026-07-05; prod has both env keys — verified by name) |
-| 016 | Server-side enforcement of no-AI-on-shared-docs | P2 | S–M | — | TODO |
+| 016 | Server-side enforcement of no-AI-on-shared-docs | P2 | S–M | — | DONE (2026-07-06; fail-closed 403/404/502 via `rejectIfDocumentShared`; first server-side authed Convex `fetchQuery`; live 403 proof folded into plan 021) |
 | 017 | Feedback surfaces — version-save error toasts; alerts → toasts | P2 | S | — | DONE (2026-07-05; 4 additional background `.catch(() => {})` swallows in use-document-history.ts discovered, deliberately left — see direction options) |
 | 018 | Surface hidden settings — AI transform mode + lint category palette actions | P2 | S | — | DONE (2026-07-05; lint toggles live in View section; transform-mode row reachable only while AI is on) |
-| 019 | Docs reconciliation — model id, per-hunk, critique residue, schema, banners | P2 | S | — | TODO |
-| 020 | `.docx` export via remark-docx (supersedes html-to-docx ADR pin) | P3 | M | 012 (soft) | TODO |
+| 019 | Docs reconciliation — model id, per-hunk, critique residue, schema, banners | P2 | S | — | DONE (2026-07-06) |
+| 020 | `.docx` export via remark-docx (supersedes html-to-docx ADR pin) | P3 | M | 012 (soft) | DONE (2026-07-06; images export as alt-text hyperlinks; operator fidelity pass in Word/Docs/LibreOffice still recommended — fixture .docx in session scratchpad) |
 | 021 | E2E smoke harness (Playwright + Clerk testing) + record pending manual smoke pass | P2 | L | 012 | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | REJECTED (one-line rationale)
@@ -83,7 +83,7 @@ All nine plans implemented and committed to `main` (not pushed), one commit per 
 - **006 — preview-lens ⌘F: FIXED.** Native browser find now works in the read-only preview lens; ⌘F is only intercepted for editable lenses.
 
 **Still worth knowing:**
-- **009 — provider/transport.** OpenRouter (OpenAI-compatible) through Clerk-guarded Next App Router routes (`app/api/ai/{transform,critique,embed}`) with SSE streaming. Model ids are configurable constants in `lib/ai/config.ts` (default chat `z-ai/glm-5.2`, embeddings `openai/text-embedding-3-small`, 1536 dims). `aiEnabled` defaults OFF.
+- **009 — provider/transport.** OpenRouter (OpenAI-compatible) through Clerk-guarded Next App Router routes (`app/api/ai/{transform,review,embed}`) with SSE streaming. Model ids are configurable constants in `lib/ai/config.ts` (default chat `z-ai/glm-5.2`, embeddings `openai/text-embedding-3-small`, 1536 dims). `aiEnabled` defaults OFF.
 - **Runtime checks pending.** Gates are static (types/lint/tests/build) plus live OpenRouter smoke calls (chat, embeddings, and the cron sweep). The interactive behaviors (focus-mode scroll feel, AI accept/reject in the live app, image upload round-trip, email preview rendering) should still get a manual smoke pass in the running app.
 
 ## Recommended sequence (by leverage)
