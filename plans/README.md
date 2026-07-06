@@ -34,7 +34,8 @@ larger and phased; ship the craft features first.
 | 018 | Surface hidden settings — AI transform mode + lint category palette actions | P2 | S | — | DONE (2026-07-05; lint toggles live in View section; transform-mode row reachable only while AI is on) |
 | 019 | Docs reconciliation — model id, per-hunk, critique residue, schema, banners | P2 | S | — | DONE (2026-07-06) |
 | 020 | `.docx` export via remark-docx (supersedes html-to-docx ADR pin) | P3 | M | 012 (soft) | DONE (2026-07-06; images export as alt-text hyperlinks; operator fidelity pass in Word/Docs/LibreOffice still recommended — fixture .docx in session scratchpad) |
-| 021 | E2E smoke harness (Playwright + Clerk testing) + record pending manual smoke pass | P2 | L | 012 | TODO |
+| 021 | E2E smoke harness (Playwright + Clerk testing) + record pending manual smoke pass | P2 | L | 012 | DONE (2026-07-06; harness + 5 specs, 4 green + AI-undo self-skip; 4 pending smoke flows recorded; found the bug behind plan 022) |
+| 022 | Fix undo-after-AI-accept pointer race (editor blanks, empty markdown syncs up) | P1 | M | 021 | TODO (found by 021's harness — data-loss bug) |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | REJECTED (one-line rationale)
 
@@ -58,6 +59,24 @@ Key audit outcomes that did NOT become plans:
   monitor-only (ADR-16).
 - **Dialect O2/O3** (autolink form, reference-link preservation) — provisional
   by design; revisit only on real-world diff noise.
+
+## Found by the plan-021 e2e harness (2026-07-06) — worth a look
+
+- **Undo-after-AI-accept data loss** → now **plan 022** (P1). Server undo tree is
+  correct; the client pointer can go stale and a single Undo blanks the editor +
+  syncs `""` up.
+- **Pre-hydration keystrokes dropped** — text typed before the history controller
+  hydrates isn't recorded as undo nodes (`recordChange` no-ops while the ref is
+  null). Folded into plan 022's scope as a cheap-if-safe secondary fix.
+- **Fresh-doc input clobbered by async server seed** — typing in the first ~1s of
+  a new document can be overwritten by the seed (harness works around it). UX
+  papercut, unplanned.
+- **CodeMirror ships only `searchKeymap`** — Home/End and similar are native
+  no-ops in the raw/vim lenses; confirm this is intended (it may be, given the
+  Vim layer) before treating as a bug.
+- **Main checkout `.env.local` has a dead `OPENROUTER_API_KEY`** — it returned 401
+  from OpenRouter during the e2e run; the dev *deployment* env key is valid.
+  Refresh the local file when convenient (ops, not code).
 
 ## Direction options awaiting selection (no plan written — say the word)
 
