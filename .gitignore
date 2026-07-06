@@ -28,6 +28,11 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 .cache
 *.tsbuildinfo
 
+# Playwright (plan 021) — session state + run artifacts, never committed
+e2e/.auth
+test-results
+playwright-report
+
 # IntelliJ based IDEs
 .idea
 

@@ -11,11 +11,14 @@
 		"biome": "biome check .",
 		"test": "vitest run && bun test spikes/undo-tree/tests/convex.bun.test.ts",
 		"test:watch": "vitest",
+		"test:e2e": "playwright test",
 		"convex:dev": "convex dev",
 		"convex:configure": "convex dev --configure new --team bhekani-khumalo --project recto --dev-deployment cloud --once",
 		"convex:codegen": "convex codegen"
 	},
 	"devDependencies": {
+		"@clerk/testing": "^2.1.7",
+		"@playwright/test": "^1.61.1",
 		"@types/bun": "latest",
 		"@types/js-yaml": "^4.0.9",
 		"@types/node": "^25.9.2",
