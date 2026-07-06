@@ -23,3 +23,52 @@ jobs:
           NEXT_PUBLIC_CONVEX_SITE_URL: https://placeholder.convex.site
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY_CI }}
           NEXT_PUBLIC_CLERK_SIGN_IN_URL: /login
+
+  # Browser smoke suite (plan 021). Non-blocking (continue-on-error) for the
+  # first iteration — flip it to blocking once it has been stable ~2 weeks.
+  #
+  # Required repo secrets (NAMES only — values are the operator's to set; use
+  # dev-instance/test keys only, never production):
+  #   CLERK_PUBLISHABLE_KEY_CI   pk_test_… (shared with the build step above)
+  #   CLERK_SECRET_KEY_CI        sk_test_… dev-instance secret key
+  #                              (@clerk/testing mints Testing Tokens with it,
+  #                              and e2e/global-setup.ts creates/signs in the
+  #                              dedicated e2e user)
+  #   CONVEX_DEPLOY_KEY_CI       a dev deploy key so `convex dev` (inside
+  #                              `bun run dev`, Playwright's webServer) can
+  #                              authenticate headlessly and push functions
+  #   CONVEX_URL_CI              https://<deployment>.convex.cloud
+  #   CONVEX_SITE_URL_CI         https://<deployment>.convex.site
+  #   OPENROUTER_API_KEY_CI      optional — without it the AI accept/reject
+  #                              spec self-skips (documented skip)
+  #
+  # CAUTION: the deployment CONVEX_DEPLOY_KEY_CI points at is NOT isolated
+  # per-run. Specs write real rows there (scoped to the dedicated e2e user,
+  # titles prefixed "e2e-", deleted by the tests on success). Point it at a
+  # dedicated CI dev deployment — not at a personal dev deployment and never
+  # at prod.
+  e2e:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - run: bunx playwright install --with-deps chromium
+      - run: bun run test:e2e
+        env:
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY_CI }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY_CI }}
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY_CI }}
+          NEXT_PUBLIC_CONVEX_URL: ${{ secrets.CONVEX_URL_CI }}
+          NEXT_PUBLIC_CONVEX_SITE_URL: ${{ secrets.CONVEX_SITE_URL_CI }}
+          NEXT_PUBLIC_CLERK_SIGN_IN_URL: /login
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY_CI }}
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-traces
+          path: test-results/
+          retention-days: 7
