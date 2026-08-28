@@ -267,6 +267,38 @@ public actor RectoStore {
     }
   }
 
+  /// Re-key a document's root node.
+  ///
+  /// `documents.create` mints its own root nodeId server-side, so a document
+  /// created offline has a root the server has never heard of. Every child patch
+  /// applies to the root's snapshot, which is empty on both sides, so swapping
+  /// the id is safe — but only as one transaction: a half-applied rewrite leaves
+  /// orphaned nodes whose parent does not exist.
+  public func replaceRoot(documentLocalId: String, oldRootNodeId: String, newRootNodeId: String)
+    throws
+  {
+    try writer.write { db in
+      try db.execute(
+        sql: """
+          UPDATE doc_nodes SET parentNodeId = ?
+          WHERE documentLocalId = ? AND parentNodeId = ?
+          """,
+        arguments: [newRootNodeId, documentLocalId, oldRootNodeId])
+      try db.execute(
+        sql: """
+          UPDATE documents SET localHeadNodeId = ?, remoteHeadNodeId = ?
+          WHERE localId = ? AND localHeadNodeId = ?
+          """,
+        arguments: [newRootNodeId, newRootNodeId, documentLocalId, oldRootNodeId])
+      try db.execute(
+        sql: "DELETE FROM doc_nodes WHERE documentLocalId = ? AND nodeId = ?",
+        arguments: [documentLocalId, oldRootNodeId])
+      try db.execute(
+        sql: "UPDATE outbox SET baseHeadNodeId = ? WHERE documentLocalId = ? AND baseHeadNodeId = ?",
+        arguments: [newRootNodeId, documentLocalId, oldRootNodeId])
+    }
+  }
+
   // MARK: - Materialization
 
   /// Markdown at a node, using (and filling) the per-node cache.

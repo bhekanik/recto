@@ -1,0 +1,184 @@
+import Foundation
+import RectoHistory
+import RectoStore
+
+/// Convex function names, in `module:function` form.
+public enum ConvexFunction {
+  public static let documentsList = "documents:list"
+  public static let documentsGet = "documents:get"
+  public static let documentsCreate = "documents:create"
+  public static let documentsCommitEdit = "documents:commitEdit"
+  public static let documentsUpdateCurrentNodeId = "documents:updateCurrentNodeId"
+  public static let documentsUpdateMarkdown = "documents:updateMarkdown"
+  public static let documentsRename = "documents:rename"
+  public static let documentsRemove = "documents:remove"
+  public static let docNodesListSince = "docNodes:listSince"
+  public static let writingStatsRecord = "writingStats:record"
+  public static let writingStatsList = "writingStats:list"
+}
+
+/// A row from `documents.list` (metadata only — the body arrives with the nodes).
+public struct RemoteDocumentSummary: Decodable, Sendable, Equatable {
+  public let id: String
+  public let title: String
+  public let wordCount: Double
+  public let updatedAt: Double
+
+  private enum CodingKeys: String, CodingKey {
+    case id = "_id"
+    case title, wordCount, updatedAt
+  }
+
+  public init(id: String, title: String, wordCount: Double, updatedAt: Double) {
+    self.id = id
+    self.title = title
+    self.wordCount = wordCount
+    self.updatedAt = updatedAt
+  }
+}
+
+/// `documents.get`.
+public struct RemoteDocument: Decodable, Sendable, Equatable {
+  public let id: String
+  public let title: String
+  public let markdown: String
+  public let wordCount: Double
+  public let currentNodeId: String
+  public let createdAt: Double
+  public let updatedAt: Double
+
+  private enum CodingKeys: String, CodingKey {
+    case id = "_id"
+    case title, markdown, wordCount, currentNodeId, createdAt, updatedAt
+  }
+
+  public init(
+    id: String, title: String, markdown: String, wordCount: Double, currentNodeId: String,
+    createdAt: Double, updatedAt: Double
+  ) {
+    self.id = id
+    self.title = title
+    self.markdown = markdown
+    self.wordCount = wordCount
+    self.currentNodeId = currentNodeId
+    self.createdAt = createdAt
+    self.updatedAt = updatedAt
+  }
+}
+
+/// A row from `docNodes.listSince`.
+public struct RemoteNode: Decodable, Sendable, Equatable {
+  public struct Selection: Decodable, Sendable, Equatable {
+    public let anchor: Double
+    public let head: Double
+
+    public init(anchor: Double, head: Double) {
+      self.anchor = anchor
+      self.head = head
+    }
+  }
+
+  public let nodeId: String
+  public let parentNodeId: String?
+  public let patch: String
+  public let snapshot: String?
+  public let selection: Selection?
+  public let origin: String
+  public let createdAt: Double
+
+  public init(
+    nodeId: String, parentNodeId: String?, patch: String, snapshot: String?,
+    selection: Selection?, origin: String, createdAt: Double
+  ) {
+    self.nodeId = nodeId
+    self.parentNodeId = parentNodeId
+    self.patch = patch
+    self.snapshot = snapshot
+    self.selection = selection
+    self.origin = origin
+    self.createdAt = createdAt
+  }
+
+  public func record(documentLocalId: String) -> DocNodeRecord {
+    DocNodeRecord(
+      documentLocalId: documentLocalId,
+      nodeId: nodeId,
+      parentNodeId: parentNodeId,
+      patch: patch,
+      snapshot: snapshot,
+      selection: selection.map { NodeSelection(anchor: Int($0.anchor), head: Int($0.head)) },
+      origin: origin,
+      createdAt: createdAt,
+      synced: true)
+  }
+}
+
+/// `documents.commitEdit` returns one of two shapes; Convex has no discriminated
+/// union on the wire, so both are optional and `committed` selects between them.
+public struct CommitEditResponse: Decodable, Sendable, Equatable {
+  public let committed: Bool
+  public let headNodeId: String?
+  public let updatedAt: Double?
+  public let diverged: Bool?
+  public let remoteHeadNodeId: String?
+
+  public init(
+    committed: Bool, headNodeId: String?, updatedAt: Double?, diverged: Bool?,
+    remoteHeadNodeId: String?
+  ) {
+    self.committed = committed
+    self.headNodeId = headNodeId
+    self.updatedAt = updatedAt
+    self.diverged = diverged
+    self.remoteHeadNodeId = remoteHeadNodeId
+  }
+
+  public var outcome: CommitOutcome {
+    if committed, let headNodeId {
+      return .committed(headNodeId: headNodeId, updatedAt: updatedAt ?? 0)
+    }
+    return .diverged(remoteHeadNodeId: remoteHeadNodeId ?? "")
+  }
+}
+
+public enum CommitOutcome: Sendable, Equatable {
+  case committed(headNodeId: String, updatedAt: Double)
+  case diverged(remoteHeadNodeId: String)
+}
+
+public struct CreateDocumentResponse: Decodable, Sendable, Equatable {
+  public let documentId: String
+  public let rootNodeId: String
+
+  public init(documentId: String, rootNodeId: String) {
+    self.documentId = documentId
+    self.rootNodeId = rootNodeId
+  }
+}
+
+public struct UpdateCurrentNodeResponse: Decodable, Sendable, Equatable {
+  public let applied: Bool
+  public let currentNodeId: String
+  public let updatedAt: Double?
+
+  public init(applied: Bool, currentNodeId: String, updatedAt: Double?) {
+    self.applied = applied
+    self.currentNodeId = currentNodeId
+    self.updatedAt = updatedAt
+  }
+}
+
+public struct UpdateMarkdownResponse: Decodable, Sendable, Equatable {
+  public let updatedAt: Double
+  public let stale: Bool
+
+  public init(updatedAt: Double, stale: Bool) {
+    self.updatedAt = updatedAt
+    self.stale = stale
+  }
+}
+
+public struct RemoteWritingStat: Decodable, Sendable, Equatable {
+  public let date: String
+  public let words: Double
+}
