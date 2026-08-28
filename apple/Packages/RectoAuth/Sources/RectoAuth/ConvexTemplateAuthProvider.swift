@@ -64,17 +64,10 @@ public actor ConvexAuthCoordinator {
 
   init() {}
 
-  /// Run `body` after any auth call already in flight has finished.
-  public func perform(_ body: @escaping @Sendable () async -> Void) async {
-    await perform { () -> Bool in
-      await body()
-      return true
-    }
-  }
-
-  /// The same, for a call whose answer the caller needs. Recording a login as
-  /// successful without looking at its result is how one transient failure used
-  /// to become a permanently unauthenticated client.
+  /// Run `body` after any auth call already in flight has finished, and hand
+  /// back its answer. Recording a login as successful without looking at its
+  /// result is how one transient failure became a permanently unauthenticated
+  /// client.
   @discardableResult
   public func perform<T: Sendable>(_ body: @escaping @Sendable () async -> T) async -> T {
     let previous = inFlight

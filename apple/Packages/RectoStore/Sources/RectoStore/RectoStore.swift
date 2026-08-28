@@ -53,9 +53,7 @@ public enum QueueBlockReason: String, Sendable, CaseIterable {
     }
   }
 
-  public static var provisionalReasons: [String] {
-    allCases.filter(\.isProvisional).map(\.rawValue)
-  }
+  public static var provisional: [QueueBlockReason] { allCases.filter(\.isProvisional) }
 }
 
 /// The local SQLite mirror (plan 023 §4.2).
@@ -168,7 +166,7 @@ public actor RectoStore {
   /// A provisional barrier belongs to the reconciliation that follows the job
   /// which wrote it; a crash in between leaves one with no owner, and nothing
   /// else ever looks at a blocked document. `start()` sweeps them.
-  public func documentsBlocked(byReasons reasons: [String]) throws -> [String] {
+  public func documentsBlocked(byReasons reasons: [QueueBlockReason]) throws -> [String] {
     guard !reasons.isEmpty else { return [] }
     return try writer.read { db in
       let placeholders = databaseQuestionMarks(count: reasons.count)
@@ -179,7 +177,7 @@ public actor RectoStore {
           WHERE queueBlockedReason IN (\(placeholders)) AND deletedAt IS NULL
           ORDER BY updatedAt
           """,
-        arguments: StatementArguments(reasons))
+        arguments: StatementArguments(reasons.map(\.rawValue)))
     }
   }
 
@@ -1330,7 +1328,7 @@ public actor RectoStore {
   /// Forces `reclaimSpace()` to fail. There is no portable way to make SQLite
   /// refuse a `VACUUM` on demand, and the property under test is precisely that
   /// a post-commit failure is not reported as a failed transition.
-  var maintenanceFailureForTesting: (any Error)?
+  private var maintenanceFailureForTesting: (any Error)?
 
   func setMaintenanceFailureForTesting(_ error: (any Error)?) {
     maintenanceFailureForTesting = error

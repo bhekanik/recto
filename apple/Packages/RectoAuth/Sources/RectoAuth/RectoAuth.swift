@@ -469,10 +469,6 @@ public final class RectoAuth {
     await publishSignedIn(nextUserId)
   }
 
-  /// Whether Convex still needs the cached login the last attempt did not
-  /// complete. Surfaced so the app can decide when to retry.
-  public var needsConvexLoginRetry: Bool { convexAuthProvider.needsCachedLogin }
-
   /// Unsynced work that outlived a revoked session. The UI surfaces it on the
   /// next sign-in by the same account.
   public private(set) var retainedUnsyncedWork = 0

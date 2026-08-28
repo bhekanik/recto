@@ -627,13 +627,13 @@ struct Round6AuthTests {
     // with an empty outbox never reaches the drain's auth-error recovery.
     await auth.handleSessionSwitchForTesting(from: "user_A", toUserId: "user_B")
     #expect(await attempts.value == 1)
-    #expect(await auth.needsConvexLoginRetry, "the session is still unauthenticated")
+    #expect(await auth.convexAuthProvider.needsCachedLogin, "the session is still unauthenticated")
     #expect(await auth.status == .signedIn(userId: "user_B"), "the app is usable, just read-only")
 
     // Reconnect or foreground, with the sockets stopped for the bridge swap.
     #expect(await auth.recoverConvexLoginIfNeeded())
     #expect(await attempts.value == 2)
-    #expect(await auth.needsConvexLoginRetry == false)
+    #expect(await auth.convexAuthProvider.needsCachedLogin == false)
 
     // And it is a no-op once the session is synced — a login per foreground
     // would replace the auth bridge for no reason.
@@ -699,10 +699,10 @@ struct Round6AuthTests {
     // Nothing is queued, so no drain will ever fail and re-authenticate. The
     // recovery path is the only thing that can bring the library back.
     #expect(try await store.pendingJobCount() == 0)
-    #expect(await auth.needsConvexLoginRetry)
+    #expect(await auth.convexAuthProvider.needsCachedLogin)
 
     #expect(await auth.recoverConvexLoginIfNeeded())
-    #expect(await auth.needsConvexLoginRetry == false)
+    #expect(await auth.convexAuthProvider.needsCachedLogin == false)
     // The sockets were rebuilt after the successful login, which is what makes
     // `documents.list` arrive.
     #expect(await coordinator.events.filter { $0 == "sync.start" }.count == 2)

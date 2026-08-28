@@ -282,6 +282,10 @@ public actor DocumentSession {
     await withTransition { isFrozen = true }
   }
 
+  public func resume() async {
+    await withTransition { isFrozen = false }
+  }
+
   /// The guard on every user-triggered mutating transition.
   ///
   /// `EditSessionCoordinating.freezeAndFlushAll()` promises that no session
@@ -294,10 +298,6 @@ public actor DocumentSession {
   /// and that flush is how the pending draft reaches the count.
   private func requireWritable() throws {
     guard !isFrozen else { throw SessionError.frozen }
-  }
-
-  public func resume() async {
-    await withTransition { isFrozen = false }
   }
 
   private func performLocalChange(
@@ -729,7 +729,8 @@ public actor DocumentSession {
   ) async {
     // A debounce that fires after the freeze is still the user's text arriving
     // late. The draft it holds is already on disk from the write-ahead save.
-    guard !isFrozen, let document else { return }
+    guard !isFrozen else { return }
+    guard let document else { return }
     let words = countWords(markdown)
     let job = OutboxJob(
       documentLocalId: documentLocalId,

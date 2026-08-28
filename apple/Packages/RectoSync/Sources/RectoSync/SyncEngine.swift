@@ -563,17 +563,16 @@ public actor SyncEngine: SyncControlling {
   /// The barrier and the job's deletion commit together, and the reconciliation
   /// that owns the barrier runs afterwards. A crash in that window leaves a
   /// barrier nobody will ever clear — `drainPass` skips blocked documents, so
-  /// nothing else would look at it again.
-  /// Recovery entry point for a barrier no reconciliation ever finished.
-  /// `start()` calls this; the app can also call it after a forced relaunch.
+  /// nothing else would look at it again. `start()` calls this; the app can too,
+  /// after a forced relaunch.
   public func reconcileAbandonedBarriers() async {
     await reconcileAbandonedBarriers(generation: lifecycle)
   }
 
   private func reconcileAbandonedBarriers(generation: Int) async {
     guard
-      let blocked = try? await store.documentsBlocked(
-        byReasons: QueueBlockReason.provisionalReasons), !blocked.isEmpty
+      let blocked = try? await store.documentsBlocked(byReasons: QueueBlockReason.provisional),
+      !blocked.isEmpty
     else { return }
     for localId in blocked {
       guard isCurrent(generation) else { return }
