@@ -428,7 +428,8 @@ function mountStudio(handle: ReturnType<typeof fakeHandle>) {
 					syncHook.markLocalProjectionPending(
 						projection.markdown,
 						projection.projectionId ?? crypto.randomUUID(),
-						projection.kind ?? "text",
+						projection.kind ?? "draft",
+						projection.pointerNodeId,
 					);
 				}
 			},
@@ -1132,6 +1133,18 @@ describe("studio sync + history contract", () => {
 			void s.history.tagVersion("after projection");
 		});
 
+		// The tag is queued behind the commit that created the node it names — a
+		// tag can otherwise reach the server before that node exists.
+		await settleSavesAhead();
+		const flushedNode = s.history.currentNodeId ?? LOCAL_NODE;
+		await ackHeadCommit(flushedNode, AHEAD_TEXT, 5_000, 3, [
+			rootNode(),
+			localNode(),
+			...s.history.nodes.filter(
+				(n) => n.nodeId !== ROOT && n.nodeId !== LOCAL_NODE,
+			),
+		]);
+
 		// Reading the pointer before the flush would tag the pre-draft node.
 		const tagged = lastCallTo(getFunctionName(api.versions.create));
 		expect(tagged?.args.nodeId).toBe(s.history.currentNodeId);
@@ -1600,7 +1613,7 @@ describe("studio sync + history contract", () => {
 		s.unmount();
 	});
 
-	it("T1: an undo whose pointer write fails stays unsynced", async () => {
+	it("T1: an unanswered pointer write is retried, not abandoned", async () => {
 		const handle = fakeHandle();
 		dagRows = [rootNode(), remoteNode()];
 		const s = mountStudio(handle);
@@ -1614,15 +1627,16 @@ describe("studio sync + history contract", () => {
 		// document "saved".
 		expect(s.syncStatus).toBe("unsynced");
 
-		// The write never lands. The client must not settle showing the node it
-		// failed to move to — it re-syncs to the head the server does have.
+		// The write goes unanswered. That is NOT a refusal — it may yet have
+		// landed — so it is retried rather than abandoned, and the document is
+		// reported unresolved rather than saved.
+		const attemptsBefore = callsTo(NAMES.updatePointer).length;
 		await rejectNext(NAMES.updatePointer);
 		await settle();
 
-		const strandedOnFailedTarget =
-			s.projectedMarkdown === REMOTE_TEXT && s.syncStatus === "saved";
-		expect(strandedOnFailedTarget).toBe(false);
-		expect(s.history.currentNodeId).toBe(ROOT);
+		expect(s.syncStatus).not.toBe("saved");
+		expect(s.history.hasUnresolvedWrites).toBe(true);
+		expect(callsTo(NAMES.updatePointer).length).toBeGreaterThan(attemptsBefore);
 		s.unmount();
 	});
 
@@ -1982,6 +1996,168 @@ describe("studio sync + history contract", () => {
 		expect(s.syncStatus).not.toBe("saved");
 		expect(loadDraft(DOC_ID)?.markdown).toBe(TYPED);
 		s.unmount();
+	});
+
+	it("N1: a retried commit cannot overtake an undo made after it", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode()];
+		const s = mountStudio(handle);
+		s.render(AT_ROOT);
+
+		s.type(TYPED);
+		await settle(600);
+		await settleSavesAhead();
+
+		// The commit goes unanswered, so it waits at the head of the queue.
+		await rejectNext(NAMES.commitEdit);
+		const typedNode = s.history.currentNodeId ?? ROOT;
+
+		// The writer undoes. Sent directly, this pointer move would land first and
+		// then be reversed when the commit's retry finally arrived.
+		s.run(() => s.history.undo());
+		expect(s.history.currentNodeId).toBe(ROOT);
+		expect(callsTo(NAMES.updatePointer)).toEqual([]);
+
+		// The retry goes out first, as the writer's own order demands...
+		await settle(2_000);
+		const commits = callsTo(NAMES.commitEdit);
+		expect(commits.length).toBeGreaterThan(1);
+		await ackHeadCommit(typedNode, TYPED, 3_000, 2, [
+			rootNode(),
+			...s.history.nodes.filter((n) => n.nodeId !== ROOT),
+		]);
+
+		// ...and only then the undo, so the undo is what stands.
+		await settle();
+		const pointerWrites = callsTo(NAMES.updatePointer);
+		expect(pointerWrites.length).toBe(1);
+		expect(pointerWrites[0]?.args.currentNodeId).toBe(ROOT);
+		expect(s.history.currentNodeId).toBe(ROOT);
+		s.unmount();
+	});
+
+	it("N1: a queued pointer move is stamped when it is sent", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode(), remoteNode()];
+		const s = mountStudio(handle);
+		s.render(AT_ROOT);
+
+		s.type(TYPED);
+		await settle(600);
+		await settleSavesAhead();
+		await rejectNext(NAMES.commitEdit);
+
+		const queuedAt = Date.now();
+		s.run(() => s.history.navigateTo(REMOTE));
+
+		// Long enough that a timestamp taken at queue time would be stale against
+		// writes the server accepted while this one waited.
+		await settle(5_000);
+		const head = s.history.nodes.find((n) => n.nodeId !== ROOT)?.nodeId ?? ROOT;
+		await ackHeadCommit(head, TYPED, 6_000, 2, [
+			rootNode(),
+			remoteNode(),
+			...s.history.nodes.filter((n) => n.nodeId !== ROOT),
+		]);
+		await settle();
+
+		const move = lastCallTo(NAMES.updatePointer);
+		expect(move).toBeDefined();
+		expect(move?.args.updatedAt as number).toBeGreaterThan(queuedAt);
+		s.unmount();
+	});
+
+	it("N2: unmount disposes the grouping controller before its timer fires", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode()];
+		const s = mountStudio(handle);
+		s.render(AT_ROOT);
+		await settle(0);
+
+		// Typed, with the grouping boundary still open.
+		s.type(TYPED);
+		const commitsBefore = callsTo(NAMES.commitEdit).length;
+		const clearsBefore = removedKeys.length;
+
+		s.unmount();
+		const timersAfterUnmount = vi.getTimerCount();
+		await settle(30_000);
+
+		// Left armed, the idle timer fired after teardown: it published a recovery
+		// id through a host that no longer exists and sent a commit for a document
+		// the writer had already closed.
+		expect(callsTo(NAMES.commitEdit).length).toBe(commitsBefore);
+		expect(vi.getTimerCount()).toBeLessThanOrEqual(timersAfterUnmount);
+		expect(removedKeys.slice(clearsBefore)).toEqual([]);
+	});
+
+	it("N3: an identical autosaved body never retires a node commit", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode()];
+		const s = mountStudio(handle);
+		s.render(AT_ROOT);
+
+		// The autosave stores this text first; the grouping boundary then closes
+		// the same text into a node.
+		s.type(TYPED);
+		await settle(600);
+		await respond(NAMES.updateMarkdown, {
+			updatedAt: 2_000,
+			stale: false,
+			headMoved: false,
+		});
+		await settle(0);
+
+		// A later flush finds the body already matching. That says the DRAFT was
+		// saved; it says nothing about whether the node landed.
+		s.run(() => {
+			void s.sync.flushSync();
+		});
+		await settle(600);
+
+		expect(s.syncStatus).not.toBe("saved");
+		expect(s.history.currentNodeId).not.toBe(ROOT);
+		s.unmount();
+	});
+
+	it("N4: a pending pointer move survives a reload", async () => {
+		const handle = fakeHandle();
+		// A node whose text is identical to the root's. Navigating to it changes
+		// no body at all, which is the whole difficulty: recovery cannot tell from
+		// the text whether the move landed.
+		const twin: HistoryNode = {
+			nodeId: "01TWINNODEIDENTICALTEXT00",
+			parentNodeId: ROOT,
+			patch: JSON.stringify({ from: 0, to: 0, insert: "" }),
+			snapshot: "",
+			selection: null,
+			origin: "other-device",
+			createdAt: 2,
+		};
+		dagRows = [rootNode(), twin];
+		const first = mountStudio(handle);
+		first.render(AT_ROOT);
+
+		// Navigate; the write never lands, so the move is still pending.
+		first.run(() => first.history.navigateTo(twin.nodeId));
+		await rejectNext(NAMES.updatePointer);
+
+		const stored = loadDraft(DOC_ID);
+		expect(stored?.projectionKind).toBe("pointer");
+		expect(stored?.pointerNodeId).toBe(twin.nodeId);
+		expect(stored?.markdown).toBe("");
+		first.unmount();
+
+		// Reload. The server is still on the root and the stored body is identical
+		// to the server's, so judged by text alone recovery deleted the move
+		// outright — an undo the server had never accepted, silently dropped.
+		const reopened = fakeHandle();
+		const second = mountStudio(reopened);
+		second.render(AT_ROOT);
+		await settle(0);
+
+		expect(loadDraft(DOC_ID)?.pointerNodeId).toBe(twin.nodeId);
+		second.unmount();
 	});
 
 	it("X4: a newer observation of our own head clears a stale queued pointer", async () => {
