@@ -623,6 +623,7 @@ struct Round6AuthTests {
     await MainActor.run {
       auth.convexAuthProvider.activeSessionID = { "sess_B" }
       auth.convexAuthProvider.cachedLogin = { await attempts.bump() > 1 }
+      auth.convexAuthProvider.convexLogout = { await coordinator.record("convex.logout") }
     }
 
     // First transition: the token fetch fails. Recording the session id before
@@ -637,6 +638,9 @@ struct Round6AuthTests {
     #expect(await auth.status == .convexLoginRequired(userId: "user_B"))
     #expect(await coordinator.events.contains("sync.start") == false, "sync stayed stopped")
     #expect(await coordinator.events.contains("sessions.resume") == false)
+    #expect(
+      await coordinator.events.contains("convex.logout"),
+      "the previous account's auth bridge was removed")
 
     // Reconnect or foreground, with the sockets stopped for the bridge swap.
     #expect(await auth.recoverConvexLoginIfNeeded())
