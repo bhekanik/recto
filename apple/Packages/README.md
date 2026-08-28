@@ -362,8 +362,3 @@ swift test --package-path apple/Packages/RectoCore --filter LiveConvex
 They sign in with Clerk's `+clerk_test` address and the fixed `424242` code, so
 no `CLERK_SECRET_KEY` and no mailbox are needed. Documents they create are
 titled `native-spike-…` and deleted by the test.
-
-One live case is wrapped in `withKnownIssue`: `commitEdit`'s parent rule is on
-`main` but the **dev deployment is still running the pre-merge build** and
-accepts a mis-parented node. When dev is redeployed the wrapper reports an unmet
-known issue — that is the signal to delete it, not a new failure.

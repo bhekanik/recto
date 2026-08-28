@@ -229,20 +229,14 @@ struct LiveConvexTests {
       origin: "integration-test", createdAt: Date().timeIntervalSince1970 * 1000,
       markdown: "confused", wordCount: 1, expectedHeadNodeId: first.nodeId,
       clientMutationId: ulid())
-    // The rule is on `main` (convex/documents.ts, "node.parentNodeId must equal
-    // expectedHeadNodeId") but the DEV DEPLOYMENT is still running the
-    // pre-merge build, so it accepts the node. Recorded as a known issue rather
-    // than asserted away: once dev is redeployed this block stops failing and
-    // Swift Testing reports the known issue as unmet, which is the signal to
-    // delete this wrapper.
-    await withKnownIssue("dev deployment predates PR #11's parent rule") {
-      await #expect(throws: (any Error).self) { _ = try await transport.commitEdit(misparented) }
+    // The rule lives in convex/documents.ts ("node.parentNodeId must equal
+    // expectedHeadNodeId"); the deployed server refuses the node outright.
+    await #expect(throws: (any Error).self) { _ = try await transport.commitEdit(misparented) }
 
-      let nodes = try await transport.listNodes(
-        documentId: created.documentId, sinceCreatedAt: nil)
-      #expect(!nodes.contains { $0.nodeId == misparented.nodeId })
-      #expect(nodes.count == 2)
-    }
+    let nodes = try await transport.listNodes(
+      documentId: created.documentId, sinceCreatedAt: nil)
+    #expect(!nodes.contains { $0.nodeId == misparented.nodeId })
+    #expect(nodes.count == 2)
 
     try await transport.remove(documentId: created.documentId)
   }
