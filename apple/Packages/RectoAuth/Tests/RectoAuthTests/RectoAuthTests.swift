@@ -444,3 +444,277 @@ struct Round5AuthTests {
     #expect(await auth.status == .signedOut)
   }
 }
+
+@Suite("round-6 auth")
+struct Round6AuthTests {
+  /// Records the order of everything an identity change drives, and holds
+  /// `stop()` open the way a subscription that has not torn down yet would.
+  private actor Coordinator: SyncControlling, EditSessionCoordinating {
+    private(set) var events: [String] = []
+    private let suspendStop: Bool
+    /// `stop()` parked here until the test lets it finish. A real `stop()`
+    /// awaits subscriptions that are still delivering; anything that reaches
+    /// the auth bridge in this window is talking to a client whose sockets the
+    /// previous account is still using.
+    private var stopGate: CheckedContinuation<Void, Never>?
+
+    init(suspendStop: Bool = false) { self.suspendStop = suspendStop }
+
+    func record(_ event: String) { events.append(event) }
+
+    func stop() async {
+      events.append("sync.stop.begin")
+      if suspendStop {
+        await withCheckedContinuation { self.stopGate = $0 }
+      }
+      events.append("sync.stop.end")
+    }
+    func releaseStop() {
+      stopGate?.resume()
+      stopGate = nil
+    }
+    /// Suspend until `stop()` is parked, so the test knows the window is open.
+    func awaitStopBegan() async {
+      // Bounded: a regression that never stops the sockets must fail the test,
+      // not hang the suite.
+      for _ in 0..<10_000 where !events.contains("sync.stop.begin") { await Task.yield() }
+    }
+    func start() async { events.append("sync.start") }
+    func clear() { events.removeAll() }
+    func freezeAndFlushAll() async { events.append("sessions.freeze") }
+    func resumeAll() async { events.append("sessions.resume") }
+  }
+
+  private func storeOwnedByA() async throws -> RectoStore {
+    let store = try RectoStore.inMemory()
+    try await store.setMirrorOwner("user_A")
+    try await store.save(
+      DocumentRecord(
+        localId: "doc-1", title: "A's work", markdown: "synced", wordCount: 1,
+        localHeadNodeId: "root", syncState: .synced, updatedAt: 0, createdAt: 0))
+    return store
+  }
+
+  // MARK: - 1. Only RectoAuth may change the Convex identity, and only quiesced
+
+  @Test("the Convex identity changes after the old account's sockets have stopped")
+  func convexLoginWaitsForSocketTeardown() async throws {
+    let store = try await storeOwnedByA()
+    let auth = await RectoAuth(store: store)
+    let coordinator = Coordinator(suspendStop: true)
+    await auth.attach(sync: coordinator)
+    await auth.attach(sessions: coordinator)
+    await MainActor.run {
+      auth.convexAuthProvider.activeSessionID = { "sess_B" }
+      auth.convexAuthProvider.cachedLogin = {
+        await coordinator.record("convex.login")
+        return true
+      }
+    }
+
+    let transition = Task { @MainActor in
+      await auth.handleSessionSwitchForTesting(from: "user_A", toUserId: "user_B")
+    }
+    await coordinator.awaitStopBegan()
+    // Wide open: nothing is holding the main actor, so a second listener would
+    // have had every chance to reach `loginFromCache()` by now.
+    for _ in 0..<50 { await Task.yield() }
+
+    // The provider used to run its own `Clerk.shared.auth.events` listener, and
+    // Clerk broadcasts to both streams with no ordering between them.
+    #expect(
+      await coordinator.events.contains("convex.login") == false,
+      "the Convex identity changed while the previous account's sockets were up")
+
+    await coordinator.releaseStop()
+    await transition.value
+
+    #expect(await coordinator.events == [
+      "sessions.freeze", "sync.stop.begin", "sync.stop.end", "convex.login",
+      "sessions.resume", "sync.start",
+    ])
+    #expect(await auth.status == .signedIn(userId: "user_B"))
+  }
+
+  @Test("a revoked session logs the Convex client out")
+  func revocationLogsConvexOut() async throws {
+    let store = try await storeOwnedByA()
+    let auth = await RectoAuth(store: store)
+    let coordinator = Coordinator()
+    await auth.attach(sync: coordinator)
+    await auth.attach(sessions: coordinator)
+    await MainActor.run {
+      auth.convexAuthProvider.activeSessionID = { nil }
+      auth.convexAuthProvider.convexLogout = { await coordinator.record("convex.logout") }
+    }
+
+    await auth.handleSessionRevokedForTesting(previousUserId: "user_A")
+
+    #expect(await auth.status == .signedOut)
+    #expect(await coordinator.events.contains("convex.logout"))
+    // Clerk is already gone; the client would otherwise hold a dead FFI bridge.
+    let events = await coordinator.events
+    let stopIndex = try #require(events.firstIndex(of: "sync.stop.end"))
+    let logoutIndex = try #require(events.firstIndex(of: "convex.logout"))
+    #expect(stopIndex < logoutIndex)
+  }
+
+  // MARK: - 2. An unowned mirror is purged before the new owner can read it
+
+  @Test("a clean unowned mirror is emptied, not relabelled")
+  func cleanUnownedMirrorIsPurged() async throws {
+    let store = try RectoStore.inMemory()
+    // No ownership marker: a mirror migrated from a build that predates them.
+    try await store.save(
+      DocumentRecord(
+        localId: "doc-1", title: "an earlier session's work", markdown: "private text",
+        wordCount: 2, localHeadNodeId: "root", syncState: .synced, updatedAt: 0, createdAt: 0))
+
+    let auth = await RectoAuth(store: store)
+    #expect(try await auth.claimMirrorForTesting(userId: "user_B"))
+
+    // `stray == 0` used to be read as "this is safe to hand over", and B could
+    // read the previous session's documents until sync eventually removed them.
+    #expect(try await store.documents().isEmpty)
+    #expect(try await store.mirrorOwner() == "user_B")
+    #expect(await auth.status != .blockedByRetainedWork(owner: "an earlier session", count: 0))
+  }
+
+  @Test("a dirty unowned mirror blocks, and an explicit discard really discards")
+  func dirtyUnownedMirrorRequiresConsent() async throws {
+    let store = try RectoStore.inMemory()
+    try await store.save(
+      DocumentRecord(
+        localId: "doc-1", title: "an earlier session's work", markdown: "", wordCount: 0,
+        localHeadNodeId: "root", updatedAt: 0, createdAt: 0))
+    _ = try await store.enqueue(
+      OutboxJob(
+        documentLocalId: "doc-1", kind: .commitEdit, clientMutationId: "m1", payload: "{}",
+        createdAt: 0))
+
+    let auth = await RectoAuth(store: store)
+    #expect(try await auth.claimMirrorForTesting(userId: "user_B") == false)
+    #expect(try await store.pendingJobCount() == 1)
+    #expect(await auth.status == .blockedByRetainedWork(owner: "an earlier session", count: 1))
+
+    // The discard path only moved the marker, so the work the user had just
+    // agreed to destroy was handed to B instead.
+    #expect(await auth.discardRetainedWorkAndClaimForTesting(userId: "user_B"))
+    #expect(try await store.documents().isEmpty)
+    #expect(try await store.pendingJobCount() == 0)
+    #expect(try await store.mirrorOwner() == "user_B")
+  }
+
+  // MARK: - 7. One failed login must not suppress every retry
+
+  @Test("a failed cached login is retried for the same Clerk session")
+  func failedLoginIsRetried() async throws {
+    let store = try RectoStore.inMemory()
+    try await store.setMirrorOwner("user_B")
+    let auth = await RectoAuth(store: store)
+    let coordinator = Coordinator()
+    await auth.attach(sync: coordinator)
+    await auth.attach(sessions: coordinator)
+
+    let attempts = Counter()
+    await MainActor.run {
+      auth.convexAuthProvider.activeSessionID = { "sess_B" }
+      auth.convexAuthProvider.cachedLogin = { await attempts.bump() > 1 }
+    }
+
+    // First transition: the token fetch fails. Recording the session id before
+    // looking at the result made every later attempt return early, and a user
+    // with an empty outbox never reaches the drain's auth-error recovery.
+    await auth.handleSessionSwitchForTesting(from: "user_A", toUserId: "user_B")
+    #expect(await attempts.value == 1)
+    #expect(await auth.needsConvexLoginRetry, "the session is still unauthenticated")
+    #expect(await auth.status == .signedIn(userId: "user_B"), "the app is usable, just read-only")
+
+    // Reconnect or foreground, with the sockets stopped for the bridge swap.
+    #expect(await auth.recoverConvexLoginIfNeeded())
+    #expect(await attempts.value == 2)
+    #expect(await auth.needsConvexLoginRetry == false)
+
+    // And it is a no-op once the session is synced — a login per foreground
+    // would replace the auth bridge for no reason.
+    #expect(await auth.recoverConvexLoginIfNeeded())
+    #expect(await attempts.value == 2)
+  }
+
+  @Test("the retry stops the sockets before it replaces the bridge")
+  func retryIsQuiesced() async throws {
+    let store = try RectoStore.inMemory()
+    try await store.setMirrorOwner("user_B")
+    let auth = await RectoAuth(store: store)
+    let coordinator = Coordinator(suspendStop: true)
+    await auth.attach(sync: coordinator)
+    await auth.attach(sessions: coordinator)
+
+    let attempts = Counter()
+    await MainActor.run {
+      auth.convexAuthProvider.activeSessionID = { "sess_B" }
+      auth.convexAuthProvider.cachedLogin = {
+        await coordinator.record("convex.login")
+        return await attempts.bump() > 1
+      }
+    }
+    let first = Task { @MainActor in
+      await auth.handleSessionSwitchForTesting(from: "user_A", toUserId: "user_B")
+    }
+    await coordinator.awaitStopBegan()
+    await coordinator.releaseStop()
+    await first.value
+    await coordinator.clear()
+
+    let retry = Task { @MainActor in await auth.recoverConvexLoginIfNeeded() }
+    await coordinator.awaitStopBegan()
+    for _ in 0..<50 { await Task.yield() }
+    #expect(
+      await coordinator.events.contains("convex.login") == false,
+      "the retry replaced the auth bridge before the sockets were down")
+    await coordinator.releaseStop()
+    #expect(await retry.value)
+
+    #expect(await coordinator.events == [
+      "sync.stop.begin", "sync.stop.end", "convex.login", "sync.start",
+    ])
+  }
+
+  @Test("a read-only session still hydrates once the login lands")
+  func readOnlyLibraryHydratesAfterRecovery() async throws {
+    let store = try RectoStore.inMemory()
+    try await store.setMirrorOwner("user_B")
+    let auth = await RectoAuth(store: store)
+    let coordinator = Coordinator()
+    await auth.attach(sync: coordinator)
+    await auth.attach(sessions: coordinator)
+
+    let attempts = Counter()
+    await MainActor.run {
+      auth.convexAuthProvider.activeSessionID = { "sess_B" }
+      auth.convexAuthProvider.cachedLogin = { await attempts.bump() > 1 }
+    }
+    await auth.handleSessionSwitchForTesting(from: "user_A", toUserId: "user_B")
+
+    // Nothing is queued, so no drain will ever fail and re-authenticate. The
+    // recovery path is the only thing that can bring the library back.
+    #expect(try await store.pendingJobCount() == 0)
+    #expect(await auth.needsConvexLoginRetry)
+
+    #expect(await auth.recoverConvexLoginIfNeeded())
+    #expect(await auth.needsConvexLoginRetry == false)
+    // The sockets were rebuilt after the successful login, which is what makes
+    // `documents.list` arrive.
+    #expect(await coordinator.events.filter { $0 == "sync.start" }.count == 2)
+  }
+}
+
+private actor Counter {
+  private(set) var value = 0
+
+  @discardableResult
+  func bump() -> Int {
+    value += 1
+    return value
+  }
+}

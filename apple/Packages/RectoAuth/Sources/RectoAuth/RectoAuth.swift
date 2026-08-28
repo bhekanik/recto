@@ -217,13 +217,20 @@ public final class RectoAuth {
         // An unowned mirror. Anything already on disk predates ownership
         // tracking, so it is not safely attributable to this user.
         let stray = try await store.unsyncedWorkCount()
-        if stray > 0, !discardingRetainedWork {
+        guard stray == 0 || discardingRetainedWork else {
           logger.error("unowned mirror holds \(stray) unsynced change(s); refusing to claim it")
           retainedUnsyncedWork = stray
           status = .blockedByRetainedWork(owner: "an earlier session", count: stray)
           return false
         }
-        try await store.setMirrorOwner(userId)
+        // PURGE, not just relabel. Rows with no ownership marker are still
+        // somebody's documents: a migrated mirror whose work had all synced
+        // passed the `stray == 0` check and was handed to the next person to
+        // sign in, who could read it until sync eventually removed it. The
+        // explicit-discard path was worse — it skipped the block and then kept
+        // the very work the user had just agreed to destroy.
+        try await store.purgeAndSetMirrorOwner(userId)
+        retainedUnsyncedWork = 0
 
       case (let owner?, nil):
         // Signed out with data still on disk: leave it, it belongs to `owner`
@@ -254,22 +261,42 @@ public final class RectoAuth {
   /// Test seam for a direct active-to-active session change.
   func handleSessionSwitchForTesting(from previousUserId: String, toUserId: String) async {
     status = .signedIn(userId: previousUserId)
-    await sessions?.freezeAndFlushAll()
-    await sync?.stop()
-    await switchOwner(to: toUserId)
+    await performIdentityTransition(to: toUserId)
   }
 
   /// Test seam for a session Clerk revoked externally.
   func handleSessionRevokedForTesting(previousUserId: String) async {
     status = .signedIn(userId: previousUserId)
-    await handleSessionChanged(nil)
+    await performIdentityTransition(to: nil)
   }
 
   /// Bring the app up for `userId` once the mirror is known to be theirs.
+  ///
+  /// Convex's identity changes HERE, after `sync.stop()` has returned and the
+  /// mirror has been claimed, and before the sockets come back. A login replaces
+  /// convex-swift's auth bridge and its FFI callback (#21/#26); doing it while
+  /// the previous account's subscriptions are still running lets one of them
+  /// deliver the new account's results into the old account's mirror.
   private func publishSignedIn(_ userId: String) async {
+    await convexAuthProvider.syncActiveSession()
     status = .signedIn(userId: userId)
     await sessions?.resumeAll()
     await sync?.start()
+  }
+
+  /// Retry a cached Convex login that failed, with the sockets down.
+  ///
+  /// Call on reconnect and on foreground. A user with nothing in the outbox
+  /// never reaches the drain's auth-error recovery, so without this one failed
+  /// login left the library empty until the process restarted.
+  @discardableResult
+  public func recoverConvexLoginIfNeeded() async -> Bool {
+    guard case .signedIn = status, convexAuthProvider.needsCachedLogin else { return true }
+    logger.info("retrying the cached Convex login with the sockets stopped")
+    await sync?.stop()
+    let recovered = await convexAuthProvider.syncActiveSession()
+    await sync?.start()
+    return recovered
   }
 
   /// Status changes, for the UI and for `RectoSync` (which must re-subscribe on
@@ -382,8 +409,14 @@ public final class RectoAuth {
   // MARK: - Private
 
   private func handleSessionChanged(_ session: Session?) async {
+    await performIdentityTransition(to: Self.activeUserId(of: session))
+  }
+
+  /// The ONE ordering an identity change takes: freeze editing, stop and await
+  /// every socket, settle mirror ownership, change the Convex identity, publish,
+  /// and only then bring the sockets back.
+  private func performIdentityTransition(to nextUserId: String?) async {
     let previousUserId = status.userId
-    let nextUserId = Self.activeUserId(of: session)
     guard previousUserId != nextUserId else { return }
 
     // Stop everything that could still write BEFORE any decision is taken.
@@ -405,6 +438,9 @@ public final class RectoAuth {
         status = .signedOut
         return
       }
+      // Clerk has already dropped the session; the client is holding a dead
+      // bridge until the SDK's own `logout()` clears the FFI callback.
+      await convexAuthProvider.logoutConvexClient()
       if pending > 0 {
         // Retained, not deleted, and not readable: the data stays owned by the
         // previous account, so `claimMirror` refuses to open it under anyone
@@ -432,6 +468,10 @@ public final class RectoAuth {
     guard await claimMirror(for: nextUserId) else { return }
     await publishSignedIn(nextUserId)
   }
+
+  /// Whether Convex still needs the cached login the last attempt did not
+  /// complete. Surfaced so the app can decide when to retry.
+  public var needsConvexLoginRetry: Bool { convexAuthProvider.needsCachedLogin }
 
   /// Unsynced work that outlived a revoked session. The UI surfaces it on the
   /// next sign-in by the same account.
@@ -471,6 +511,7 @@ public final class RectoAuth {
   private func handleAccountDeleted() async {
     await sessions?.freezeAndFlushAll()
     await sync?.stop()
+    await convexAuthProvider.logoutConvexClient()
     do {
       // The account is gone; there is nowhere left to sync to, so retaining is
       // pointless and the rows must not outlive it.

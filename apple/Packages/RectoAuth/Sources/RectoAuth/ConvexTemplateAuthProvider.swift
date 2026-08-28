@@ -66,13 +66,24 @@ public actor ConvexAuthCoordinator {
 
   /// Run `body` after any auth call already in flight has finished.
   public func perform(_ body: @escaping @Sendable () async -> Void) async {
-    let previous = inFlight
-    let task = Task {
-      await previous?.value
+    await perform { () -> Bool in
       await body()
+      return true
     }
-    inFlight = task
-    await task.value
+  }
+
+  /// The same, for a call whose answer the caller needs. Recording a login as
+  /// successful without looking at its result is how one transient failure used
+  /// to become a permanently unauthenticated client.
+  @discardableResult
+  public func perform<T: Sendable>(_ body: @escaping @Sendable () async -> T) async -> T {
+    let previous = inFlight
+    let task = Task { () -> T in
+      await previous?.value
+      return await body()
+    }
+    inFlight = Task { _ = await task.value }
+    return await task.value
   }
 }
 
@@ -82,37 +93,44 @@ public final class ConvexTemplateAuthProvider: AuthProvider {
 
   private let logger = Logger(subsystem: "com.bhekani.recto", category: "auth")
   private let template: String
-  private var sessionListener: Task<Void, Never>?
+  /// The Clerk session Convex is currently logged in for. Written only after a
+  /// login has actually succeeded.
   private var syncedSessionID: String?
   private weak var client: ConvexClientWithAuth<String>?
+
+  /// Which Clerk session is active. A seam so the identity state machine can be
+  /// tested without a configured Clerk SDK — `Clerk.shared` calls `fatalError`
+  /// when it was never configured.
+  var activeSessionID: @MainActor @Sendable () -> String? = {
+    guard RectoAuth.isClerkConfigured, let session = Clerk.shared.session,
+      session.status == .active
+    else { return nil }
+    return session.id
+  }
+  /// Overrides for the two effects on the Convex client, for the same reason.
+  var cachedLogin: (@MainActor @Sendable () async -> Bool)?
+  var convexLogout: (@MainActor @Sendable () async -> Void)?
 
   public init(template: String = convexJWTTemplate) {
     self.template = template
   }
 
-  deinit {
-    sessionListener?.cancel()
-  }
-
-  /// Convex has no idea that Clerk restored a session from the keychain, so the
-  /// session stream has to drive `loginFromCache()` / `logout()` on the client.
-  public func bind(client: ConvexClientWithAuth<String>) {
+  /// Hand the provider the client it authenticates, and bring Convex in line
+  /// with whatever session Clerk restored from the keychain.
+  ///
+  /// A ONE-SHOT, not a listener. This used to follow `Clerk.shared.auth.events`
+  /// itself, and `RectoAuth` follows the same stream: Clerk broadcasts to both
+  /// with no ordering between them, so on an A-to-B switch this side could reach
+  /// `loginFromCache()` — replacing the FFI auth bridge and its callback — while
+  /// A's subscriptions were still running and still writing into A's mirror.
+  /// Every transition after this one is `RectoAuth`'s, which freezes editing,
+  /// stops and awaits the sockets, and settles ownership first.
+  ///
+  /// Safe here because the transport is still being constructed: no socket
+  /// exists yet.
+  public func bind(client: ConvexClientWithAuth<String>) async {
     self.client = client
-    // `Clerk.shared` calls `fatalError` when the SDK was never configured, and
-    // constructing the transport reaches this immediately — so a debug build, a
-    // widget or a test that never called `configureClerk` would crash here
-    // rather than simply having no session.
-    guard RectoAuth.isClerkConfigured else { return }
-    sessionListener?.cancel()
-    sessionListener = Task { [weak self] in
-      await self?.syncSession(Clerk.shared.session)
-      for await event in Clerk.shared.auth.events {
-        if Task.isCancelled { break }
-        if case .sessionChanged(_, let newSession) = event {
-          await self?.syncSession(newSession)
-        }
-      }
-    }
+    await syncActiveSession()
   }
 
   public func login(onIdToken: @Sendable @escaping (String?) -> Void) async throws -> String {
@@ -175,35 +193,71 @@ public final class ConvexTemplateAuthProvider: AuthProvider {
     return token
   }
 
-  /// `.sessionChanged` also fires for in-place session updates, so only real
-  /// transitions are forwarded to Convex.
-  private func syncSession(_ session: Session?) async {
-    guard let client else { return }
-    let activeID = (session?.status == .active) ? session?.id : nil
-    guard activeID != syncedSessionID else { return }
-    syncedSessionID = activeID
+  /// Bring the Convex client's identity in line with Clerk's current session.
+  ///
+  /// Call ONLY from `RectoAuth`, and only with every socket stopped: a login
+  /// replaces the auth bridge and the FFI callback, and neither replacement is
+  /// synchronized (convex-swift #21/#26).
+  ///
+  /// Returns whether Convex now holds the identity Clerk has.
+  @discardableResult
+  public func syncActiveSession() async -> Bool {
+    let activeID = activeSessionID()
+    guard activeID != syncedSessionID else { return true }
 
-    let logger = self.logger
-    await ConvexAuthCoordinator.shared.perform {
-      if activeID != nil {
-        // A session becoming active replaces the bridge. `RectoAuth` has already
-        // stopped sync by the time this fires for a switch, and at first launch
-        // there are no sockets yet — the two moments where replacement is safe.
-        logger.info("clerk session became active; logging Convex in from cache")
-        _ = await client.loginFromCache()
-      } else {
-        logger.info("clerk session ended; logging Convex out")
-        await client.logout()
-      }
+    guard let activeID else {
+      logger.info("clerk session ended; logging Convex out")
+      await runConvexLogout()
+      syncedSessionID = nil
+      return true
     }
+
+    logger.info("clerk session became active; logging Convex in from cache")
+    guard await runCachedLogin() else {
+      // Deliberately record NOTHING. Writing the id first and ignoring the
+      // result meant one transient token or network failure left Convex
+      // unauthenticated while every later attempt for the same session returned
+      // early. A user with no queued work never reaches auth-error recovery, so
+      // their documents simply never arrived until the process restarted.
+      logger.error("cached Convex login failed; leaving the session unsynced for a retry")
+      syncedSessionID = nil
+      return false
+    }
+    syncedSessionID = activeID
+    return true
+  }
+
+  /// Clerk has an active session that Convex is not logged in for — the state a
+  /// failed `syncActiveSession()` leaves behind, and what a reconnect or a
+  /// foreground resume checks.
+  public var needsCachedLogin: Bool {
+    guard let activeID = activeSessionID() else { return false }
+    return activeID != syncedSessionID
+  }
+
+  private func runCachedLogin() async -> Bool {
+    if let cachedLogin { return await cachedLogin() }
+    guard let client else { return false }
+    return await ConvexAuthCoordinator.shared.perform { () -> Bool in
+      if case .success = await client.loginFromCache() { return true }
+      return false
+    }
+  }
+
+  private func runConvexLogout() async {
+    if let convexLogout {
+      await convexLogout()
+      return
+    }
+    guard let client else { return }
+    await ConvexAuthCoordinator.shared.perform { await client.logout() }
   }
 
   /// Log the Convex client out through the SDK, which is the only path that
   /// clears the FFI auth callback. Signing out through Clerk alone leaves the
   /// client holding a dead bridge.
   public func logoutConvexClient() async {
-    guard let client else { return }
     syncedSessionID = nil
-    await ConvexAuthCoordinator.shared.perform { await client.logout() }
+    await runConvexLogout()
   }
 }
