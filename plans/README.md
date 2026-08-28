@@ -35,7 +35,7 @@ larger and phased; ship the craft features first.
 | 019 | Docs reconciliation — model id, per-hunk, critique residue, schema, banners | P2 | S | — | DONE (2026-07-06) |
 | 020 | `.docx` export via remark-docx (supersedes html-to-docx ADR pin) | P3 | M | 012 (soft) | DONE (2026-07-06; images export as alt-text hyperlinks; operator fidelity pass in Word/Docs/LibreOffice still recommended — fixture .docx in session scratchpad) |
 | 021 | E2E smoke harness (Playwright + Clerk testing) + record pending manual smoke pass | P2 | L | 012 | DONE (2026-07-06; harness + 5 specs, 4 green + AI-undo self-skip; 4 pending smoke flows recorded; found the bug behind plan 022) |
-| 022 | Fix undo-after-AI-accept pointer race (editor blanks, empty markdown syncs up) | P1 | M | 021 | TODO (found by 021's harness — data-loss bug) |
+| 022 | Fix undo-after-AI-accept pointer race (editor blanks, empty markdown syncs up) | P1 | M | 021 | IN REVIEW (2026-08-28; root cause = the cross-device pointer-adoption effect re-running on every local commit and adopting the not-yet-published server pointer; fixed by `decideServerPointer` + atomic `documents.commitEdit` (ADR-19); deterministic unit repro in `lib/history/pointer-race.test.ts`; e2e self-skip removed, ×5 proof pending a dev `CLERK_SECRET_KEY`) |
 | 023 | Native Swift/SwiftUI macOS/iPadOS/iPhone apps (App Store) + AI on Convex with BYOK, metering, LangSmith | P1 | XL | 022 | IN PROGRESS (program plan + design plan + orchestration file; milestones N0–N10 become plans 024+; wave 1 workers start after compaction) |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | REJECTED (one-line rationale)

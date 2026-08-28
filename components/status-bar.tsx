@@ -49,10 +49,17 @@ const MODE_ICON: Record<Mode, typeof Type> = {
 	preview: Eye,
 };
 
-type StatusBarProps = {
+export type StatusBarProps = {
 	wordCount: number;
 	readingMinutes: number;
 	syncStatus: SyncStatus;
+	/**
+	 * Present only while a write is stuck. The indicator becomes a control that
+	 * opens the confirmation — which is where the server's message, what would
+	 * be discarded, and Retry live. It deliberately does NOT discard on click:
+	 * discarding is lossy and a one-click control could not say so.
+	 */
+	onShowBlocked?: () => void;
 	mode: Mode;
 	onModeChange: (mode: Mode) => void;
 	theme: Theme;
@@ -128,19 +135,25 @@ const SYNC_META: Record<
 		dot: "bg-[var(--color-warning)]",
 		text: "text-[var(--color-warning)]",
 	},
+	unresolved: {
+		label: "Not synced",
+		dot: "bg-[var(--color-danger)]",
+		text: "text-[var(--color-danger)]",
+	},
 };
 
 // Fixed-width slot with an always-present (transparent when idle) dot, so the
 // label flipping between Saving/Saved/Unsynced never reflows its neighbours.
-function SyncIndicator({ status }: { status: SyncStatus }) {
+function SyncIndicator({
+	status,
+	onShowBlocked,
+}: {
+	status: SyncStatus;
+	onShowBlocked?: () => void;
+}) {
 	const meta = SYNC_META[status];
-	return (
-		<span
-			className={cn(
-				"flex items-center gap-[var(--space-2)]",
-				meta?.text ?? "text-[var(--color-ink-tertiary)]",
-			)}
-		>
+	const body = (
+		<>
 			<span
 				className={cn(
 					"h-[6px] w-[6px] rounded-full",
@@ -151,8 +164,27 @@ function SyncIndicator({ status }: { status: SyncStatus }) {
 			<span className="hidden min-w-[3.75rem] sm:inline-block">
 				{meta?.label ?? ""}
 			</span>
-		</span>
+		</>
 	);
+	const className = cn(
+		"flex items-center gap-[var(--space-2)]",
+		meta?.text ?? "text-[var(--color-ink-tertiary)]",
+	);
+	// "Not synced" is the one status a writer can do something about, so when
+	// there is something to do it is a control rather than a label.
+	if (onShowBlocked) {
+		return (
+			<button
+				type="button"
+				className={cn(className, "underline decoration-dotted")}
+				onClick={onShowBlocked}
+				title="A change couldn't be saved. Open the details to try again or discard it."
+			>
+				{body}
+			</button>
+		);
+	}
+	return <span className={className}>{body}</span>;
 }
 
 const iconBtn =
@@ -258,6 +290,7 @@ export function StatusBar({
 	wordCount,
 	readingMinutes,
 	syncStatus,
+	onShowBlocked,
 	mode,
 	onModeChange,
 	theme,
@@ -586,7 +619,7 @@ export function StatusBar({
 				>
 					·
 				</span>
-				<SyncIndicator status={syncStatus} />
+				<SyncIndicator status={syncStatus} onShowBlocked={onShowBlocked} />
 			</div>
 		</footer>
 	);

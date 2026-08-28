@@ -14,6 +14,7 @@ export default defineConfig({
 			"lib/**/*.test.ts",
 			"convex/**/*.test.ts",
 			"packages/**/*.test.ts",
+			"components/**/*.test.tsx",
 		],
 		exclude: ["**/*.bun.test.ts"],
 		testTimeout: 30_000,
