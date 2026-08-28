@@ -380,6 +380,7 @@ export const reviewerAppend = mutation({
 		);
 
 		// Idempotent append — exactly like docNodes.append, tagged review:<userId>.
+		let mustInsertNode = false;
 		const existing = await ctx.db
 			.query("docNodes")
 			.withIndex("by_document_node", (q) =>
@@ -423,21 +424,10 @@ export const reviewerAppend = mutation({
 				throw new Error("Malformed patch");
 			}
 
-			await ctx.db.insert("docNodes", {
-				documentId: args.documentId,
-				nodeId: args.nodeId,
-				parentNodeId: args.parentNodeId,
-				patch: args.patch,
-				snapshot: args.snapshot,
-				selection: args.selection,
-				origin: `review:${userId}`,
-				// Indexed attribution, alongside the `review:<userId>` origin string
-				// the review surface already reads. Account deletion has to find one
-				// reviewer's suggestion nodes across every document they ever
-				// suggested on, and a prefix match is not an index (ADR-21).
-				authorUserId: userId,
-				createdAt: args.createdAt,
-			});
+			// Inserted below, once the branch it belongs to is known — the node
+			// carries `branchId` so account deletion can decide per branch rather
+			// than per (document, reviewer) (ADR-21).
+			mustInsertNode = true;
 		}
 
 		// Open-or-advance this reviewer's branch row (status "open").
@@ -456,23 +446,45 @@ export const reviewerAppend = mutation({
 				.first();
 		}
 
+		const branchId = branch
+			? branch._id
+			: await ctx.db.insert("reviewBranches", {
+					documentId: args.documentId,
+					reviewerUserId: userId,
+					baseNodeId: doc.currentNodeId,
+					headNodeId: args.nodeId,
+					status: "open",
+					createdAt: now,
+					updatedAt: now,
+				});
 		if (branch) {
 			await ctx.db.patch(branch._id, {
 				headNodeId: args.nodeId,
 				updatedAt: now,
 			});
-			return { nodeId: args.nodeId, branchId: branch._id };
 		}
 
-		const branchId = await ctx.db.insert("reviewBranches", {
-			documentId: args.documentId,
-			reviewerUserId: userId,
-			baseNodeId: doc.currentNodeId,
-			headNodeId: args.nodeId,
-			status: "open",
-			createdAt: now,
-			updatedAt: now,
-		});
+		// The node insert waited for the branch id. Both writes are in the same
+		// transaction, so a node can never exist without the branch it names.
+		if (mustInsertNode) {
+			await ctx.db.insert("docNodes", {
+				documentId: args.documentId,
+				nodeId: args.nodeId,
+				parentNodeId: args.parentNodeId,
+				patch: args.patch,
+				snapshot: args.snapshot,
+				selection: args.selection,
+				origin: `review:${userId}`,
+				// Indexed attribution, alongside the `review:<userId>` origin string
+				// the review surface already reads. Account deletion has to find one
+				// reviewer's suggestion nodes across every document they ever
+				// suggested on, and a prefix match is not an index (ADR-21).
+				authorUserId: userId,
+				branchId,
+				createdAt: args.createdAt,
+			});
+		}
+
 		return { nodeId: args.nodeId, branchId };
 	},
 });

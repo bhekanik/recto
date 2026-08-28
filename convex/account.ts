@@ -225,9 +225,30 @@ export const beginDeletion = internalMutation({
 			updatedAt: now,
 			phase: "blobs",
 		});
+
+		// Scheduled from INSIDE the transaction that creates the tombstone, so
+		// the two commit together: a crash between "the account is fenced" and
+		// "something is going to finish it" would otherwise leave an inert
+		// account with no continuation. Only on creation, so a retry cannot
+		// stack up another job.
+		await ctx.scheduler.runAfter(
+			RESUME_DELAY_MS,
+			internal.account.resumeDeletion,
+			{ userId: args.userId, attempt: 1 },
+		);
+
 		return { phase: "blobs" as const, resumed: false as const };
 	},
 });
+
+/**
+ * Phases only ever move forward. Two runs of the same deletion can overlap —
+ * the user pressing the button again while the scheduled continuation is
+ * working — and an older run writing `rows` over `purged` would clear
+ * `expiresAt` and un-finish a deletion that every other job had already
+ * observed as complete.
+ */
+const PHASE_ORDER = ["blobs", "rows", "identity", "purged"] as const;
 
 export const setDeletionPhase = internalMutation({
 	args: { userId: v.string(), phase: phaseValidator },
@@ -236,7 +257,12 @@ export const setDeletionPhase = internalMutation({
 			.query("accountDeletions")
 			.withIndex("by_user", (q) => q.eq("userId", args.userId))
 			.unique();
-		if (!row) return;
+		if (!row) return { phase: null };
+
+		if (PHASE_ORDER.indexOf(args.phase) <= PHASE_ORDER.indexOf(row.phase)) {
+			return { phase: row.phase };
+		}
+
 		const now = Date.now();
 		await ctx.db.patch(row._id, {
 			phase: args.phase,
@@ -245,6 +271,7 @@ export const setDeletionPhase = internalMutation({
 			expiresAt:
 				args.phase === "purged" ? now + TOMBSTONE_RETENTION_MS : undefined,
 		});
+		return { phase: args.phase };
 	},
 });
 
@@ -309,9 +336,28 @@ async function runDeletion(
 	let rowsDeleted = 0;
 
 	if (startPhase === "blobs") {
-		const blobs = await drain(() =>
-			ctx.runMutation(internal.accountPurge.purgeBlobs, { userId }),
-		);
+		// The survey runs to completion before a single file is deleted: it is
+		// what says whether somebody ELSE's document points at one of this user's
+		// blobs. Deleting first and asking later is not recoverable.
+		const survey = await drain(async () => {
+			const result = await ctx.runMutation(
+				internal.accountPurge.surveyBlobRefs,
+				{ userId },
+			);
+			return { deleted: result.scanned, done: result.done };
+		});
+		if (!survey.done) {
+			throw new Error(
+				`Blob reference survey did not finish in ${MAX_PURGE_PASSES} passes. Run it again to continue.`,
+			);
+		}
+
+		const blobs = await drain(async () => {
+			const result = await ctx.runMutation(internal.accountPurge.purgeBlobs, {
+				userId,
+			});
+			return { deleted: result.deleted + result.kept, done: result.done };
+		});
 		blobsDeleted += blobs.deleted;
 		if (!blobs.done) {
 			// Deliberately before the row purge and the Clerk delete: files the
@@ -322,6 +368,19 @@ async function runDeletion(
 				`Blob purge did not finish in ${MAX_PURGE_PASSES} passes (${blobsDeleted} deleted). Run it again to continue.`,
 			);
 		}
+
+		// Files a pre-`/upload-image` browser tab stored without ever recording
+		// ownership. Bounded, and conservative: only tokens nobody else mentions.
+		const orphans = await drain(() =>
+			ctx.runMutation(internal.accountPurge.purgeUnattributedBlobs, { userId }),
+		);
+		blobsDeleted += orphans.deleted;
+		if (!orphans.done) {
+			throw new Error(
+				`Unattributed blob purge did not finish in ${MAX_PURGE_PASSES} passes. Run it again to continue.`,
+			);
+		}
+
 		await ctx.runMutation(internal.account.setDeletionPhase, {
 			userId,
 			phase: "rows",
@@ -364,14 +423,37 @@ async function runDeletion(
 	}
 
 	// Anything that landed between the last pass and the identity going away.
+	// The survey drain runs again first: it returns immediately once done, and a
+	// deletion resumed at `identity` (or carrying a tombstone from before the
+	// survey existed) would otherwise reach the blob sweep with nothing to
+	// decide against.
+	await drain(async () => {
+		const result = await ctx.runMutation(internal.accountPurge.surveyBlobRefs, {
+			userId,
+		});
+		return { deleted: result.scanned, done: result.done };
+	});
+
 	const tail = await drain(() =>
 		ctx.runMutation(internal.accountPurge.purgeData, { userId, granteeEmail }),
 	);
 	rowsDeleted += tail.deleted;
-	const tailBlobs = await drain(() =>
-		ctx.runMutation(internal.accountPurge.purgeBlobs, { userId }),
-	);
+	const tailBlobs = await drain(async () => {
+		const result = await ctx.runMutation(internal.accountPurge.purgeBlobs, {
+			userId,
+		});
+		return { deleted: result.deleted + result.kept, done: result.done };
+	});
 	blobsDeleted += tailBlobs.deleted;
+
+	// Not `purged`: the phase stays `identity` so the scheduled continuation
+	// picks this up, rather than the tombstone starting to expire over work
+	// that is demonstrably unfinished.
+	if (!tail.done || !tailBlobs.done) {
+		throw new Error(
+			"The final sweep did not finish; the account stays fenced and the deletion will be retried.",
+		);
+	}
 
 	await ctx.runMutation(internal.account.setDeletionPhase, {
 		userId,
@@ -462,13 +544,10 @@ export const deleteEverything = action({
 			granteeEmail,
 		});
 
-		// A server-owned continuation, so finishing does not depend on the caller
-		// staying connected. It no-ops when this call completes the deletion.
-		await ctx.scheduler.runAfter(
-			RESUME_DELAY_MS,
-			internal.account.resumeDeletion,
-			{ userId, attempt: 1 },
-		);
+		// The server-owned continuation is scheduled inside `beginDeletion`, in
+		// the same transaction that writes the tombstone — scheduling it here
+		// instead left a crash window where the account was fenced with nothing
+		// arranged to finish it, and stacked another job on every retry.
 
 		return await runDeletion(
 			ctx,
