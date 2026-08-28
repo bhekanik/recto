@@ -32,6 +32,7 @@
 | [ADR-16](#adr-16--phase-0-spike-b-cloud-undo-tree-confirmed) | Phase 0 Spike B: cloud undo-tree DAG **confirmed** | D8 |
 | [ADR-17](#adr-17--phase-1-foundation-deviations-reconcile-in-phase-34) | Phase 1 foundation deviations (reconcile in Phase 3–4) | — |
 | [ADR-18](#adr-18--shadcn-ui-is-the-component-system-compose-dont-reinvent) | shadcn/ui is the component system; compose, don't reinvent | D13, P3 |
+| [ADR-20](#adr-20--light-theme-paper-palette--appearance-setting-reverses-d13) | Light theme: Paper palette + appearance setting, reverses D13 | **Reverses D13**; locks D-N5 |
 
 ---
 
@@ -471,7 +472,7 @@ Matching the user's existing Convex + Next pattern source minimizes novelty risk
 
 ## ADR-12 — UI is Tailwind v4 + shadcn primitives + OKLCH, dark-only
 
-**Status:** Accepted. Locks **D13** ("Dark only. No light theme") and the styling stack.
+**Status:** Accepted, **partially superseded**. Locks the styling stack (Tailwind v4 + shadcn + OKLCH). Its dark-only clause — and D13 with it — is reversed by [ADR-20](#adr-20--light-theme-paper-palette--appearance-setting-reverses-d13).
 
 ### Context
 
@@ -483,7 +484,7 @@ UI uses **Tailwind v4** + **shadcn primitives** + an **OKLCH** color palette, an
 
 ### Alternatives rejected
 
-- **Shipping a light theme / theme toggle.** **Rejected** — explicitly a non-goal ([`README.md`](./README.md) §5); dark-only is a locked decision (D13). Building a second palette is scope we deliberately do not take.
+- **Shipping a light theme / theme toggle.** **Rejected at the time** — explicitly a non-goal ([`README.md`](./README.md) §5); dark-only was a locked decision (D13). Building a second palette was scope we deliberately did not take. **Reversed by [ADR-20](#adr-20--light-theme-paper-palette--appearance-setting-reverses-d13)** once plan 023 put Recto on Apple platforms, where appearance is a system axis.
 - **Using shadcn defaults as the visual identity.** **Rejected** — the product principle is bespoke, not templated ([`README.md`](./README.md) §4.6). shadcn is used as accessible *primitives*, then restyled.
 - **Non-OKLCH color (raw hex/HSL palette).** **Rejected** — OKLCH is the user's convention and gives perceptually-uniform control over a restrained dark palette, which matters for a typography-first dark UI.
 
@@ -589,11 +590,12 @@ Copy writes a **single `ClipboardItem`** to the async Clipboard API carrying **t
 | ADR-09 | D8, D9 | [`07-undo-tree.md`](./07-undo-tree.md), [`08-version-control.md`](./08-version-control.md) |
 | ADR-10 | D8, D10 | [`07-undo-tree.md`](./07-undo-tree.md), [`03-data-model.md`](./03-data-model.md), [`10-sync-persistence.md`](./10-sync-persistence.md) |
 | ADR-11 | D12, D14 | [`02-architecture.md`](./02-architecture.md), [`03-data-model.md`](./03-data-model.md), [`10-sync-persistence.md`](./10-sync-persistence.md) |
-| ADR-12 | D13 | [`12-design-system.md`](./12-design-system.md), [`13-keyboard-commands.md`](./13-keyboard-commands.md) |
+| ADR-12 | D13 (dark-only clause superseded by ADR-20) | [`12-design-system.md`](./12-design-system.md), [`13-keyboard-commands.md`](./13-keyboard-commands.md) |
 | ADR-13 | — | [`11-clipboard-export.md`](./11-clipboard-export.md), [`06-markdown-dialect.md`](./06-markdown-dialect.md) |
 | ADR-14 | — | [`11-clipboard-export.md`](./11-clipboard-export.md), [`12-design-system.md`](./12-design-system.md) |
 | ADR-15 | D6 | [`05-lossless-bridge.md`](./05-lossless-bridge.md), [`../plan/phase-0-spikes.md`](../plan/phase-0-spikes.md) |
 | ADR-16 | D8 | [`07-undo-tree.md`](./07-undo-tree.md), [`10-sync-persistence.md`](./10-sync-persistence.md), [`../plan/phase-0-spikes.md`](../plan/phase-0-spikes.md) |
+| ADR-20 | Reverses D13; locks D-N5 | [`12-design-system.md`](./12-design-system.md), [`../../packages/design-tokens/tokens.json`](../../packages/design-tokens/tokens.json) |
 
 ---
 
@@ -729,7 +731,7 @@ Recto needs accessible UI primitives (buttons, inputs, dialogs, alerts) without 
 **All UI components use [shadcn/ui](https://ui.shadcn.com/)** as the component system:
 
 1. **Install primitives from shadcn** into [`components/ui/`](../../components/ui/) via `bunx shadcn add <component>`.
-2. **Restyle via Recto OKLCH tokens** — map shadcn CSS variables (`--background`, `--primary`, etc.) to the canonical tokens in [`12-design-system.md`](./12-design-system.md) §2.1; never ship stock light-theme defaults (D13).
+2. **Restyle via Recto OKLCH tokens** — map shadcn CSS variables (`--background`, `--primary`, etc.) to the canonical tokens in [`12-design-system.md`](./12-design-system.md) §2.1; never ship stock shadcn defaults in either appearance.
 3. **Compose custom UI from shadcn building blocks** — if a needed element has no shadcn component, build it by composing existing primitives (e.g. `Card` + `Alert` + `Button`), not raw HTML with ad-hoc styles.
 4. **No parallel component libraries** — no MUI, Radix direct imports in app code (shadcn wraps Radix/Base UI), no one-off styled `<button>`/`<input>` in feature code.
 
@@ -738,7 +740,7 @@ Configuration: [`components.json`](../../components.json) (style: `base-nova`, `
 ### Alternatives rejected
 
 - **Hand-rolled components only.** Rejected — duplicates accessibility and interaction work shadcn already solves.
-- **Stock shadcn defaults un-themed.** Rejected — violates P3 and D13; tokens must be mapped to Recto OKLCH.
+- **Stock shadcn defaults un-themed.** Rejected — violates P3; tokens must be mapped to Recto OKLCH (in both appearances since ADR-20).
 - **Multiple UI libraries.** Rejected — inconsistent patterns and bundle weight.
 
 ### Consequences
@@ -750,3 +752,48 @@ Configuration: [`components.json`](../../components.json) (style: `base-nova`, `
 ### References
 
 - [`12-design-system.md`](./12-design-system.md) §6 · [`../plan/phase-1-foundation.md`](../plan/phase-1-foundation.md) G1.3
+
+---
+
+## ADR-20 — Light theme: Paper palette + appearance setting, reverses D13
+
+**Status:** Accepted (2026-08-28). **Reverses D13** ("Dark only. No light theme") and supersedes the dark-only clause of [ADR-12](#adr-12--ui-is-tailwind-v4--shadcn-primitives--oklch-dark-only). Locks **D-N5** of [`../../plans/023-native-apple-apps.md`](../../plans/023-native-apple-apps.md).
+
+### Context
+
+D13 was taken when Recto was a web app with one designed surface. Plan 023 takes Recto native to macOS, iPadOS and iPhone, where the appearance is a system-level axis: Apple apps are expected to follow Light/Dark, the asset catalog is built around the pair, and an app that ignores it reads as a port rather than a Mac app. The same plan also moves the palette to a shared token source consumed by both web and native ([`../../plans/023-native-apple-apps-design.md`](../../plans/023-native-apple-apps-design.md) §5), so the appearance decision has to be taken once, for both.
+
+The web side had also accumulated the cost of the assumption: a hard-coded `className="dark"` on `<html>`, hairline shadows authored as pure black, and a `prefers-color-scheme` that was deliberately ignored.
+
+### Decision
+
+Recto ships **two designed palettes as a launch pair**:
+
+- **Twilight** — the existing dark palette, values unchanged.
+- **Paper** — a new light palette: a warm near-white canvas (hue 85) under hue-285 ink, the same structure and the same accent hue as Twilight, with lightness inverted and the semantic colours darkened until they measure AA on paper.
+
+An **appearance** setting (`system` · `light` · `dark`, default `system`) is device-local, sits beside the palette picker in the status bar and in the command palette, and resolves to a `dark` class on `<html>` written by a blocking script before the first paint. Aurora, Dawn and Moonlit remain **dark-only** and are offered only while the appearance resolves to dark; they get designed light twins later, or not at all.
+
+Both palettes come from one source, [`packages/design-tokens/tokens.json`](../../packages/design-tokens/tokens.json), built with Style Dictionary into the CSS custom properties `app/globals.css` imports, an `Colors.xcassets` catalog, `RectoTokens.swift`, and an sRGB hex table for widgets that cannot parse OKLCH (Clerk). Contrast is asserted numerically in `packages/design-tokens/tokens.test.ts` for both appearances; a staleness test fails if the committed outputs drift from the JSON.
+
+### Alternatives rejected
+
+- **Keep D13 on the web, ship light only on native.** Rejected — two palettes and two design systems, and the token package exists precisely so there is one. The web is where the palette is authored and reviewed.
+- **Invert Twilight algorithmically.** Rejected — an inverted dark palette reads grey and dirty on paper: black shadows become smudges, the accent loses its glow role, and the semantics fall below AA. Paper is authored, not computed.
+- **Light twins for all four palettes.** Rejected for launch — one designed light palette beats four undesigned ones (plan 023 orchestration §0).
+- **`next-themes`.** Rejected — it keeps the appearance under its own storage key and React context, so the preference would live in a second store beside `recto:studio-settings`. What it adds over that cost is the eight-line blocking script in [`../../lib/studio/appearance.ts`](../../lib/studio/appearance.ts).
+
+### Consequences
+
+- `app/layout.tsx` no longer forces `dark`; it injects the appearance script and `suppressHydrationWarning`.
+- Anything authored as "dark-only" is now a token: panel and toolbar shadows (`--elevation-*`), the reduced-transparency scrim (`--scrim-opaque`), and the film grain's blend mode and opacity (`--grain-*`), which is `multiply` on paper because `soft-light` is invisible at 0.99 L.
+- A new token, `--color-on-accent`, carries text on an accent fill: dark keeps ink-primary, light needs near-white. shadcn's `--primary-foreground` / `--accent-foreground` map to it.
+- Clerk's widgets follow the resolved appearance from the generated hex table; the stale coral palette is gone.
+- Every future palette change goes through `tokens.json` + `bun run tokens:build`, never by editing `globals.css`.
+- The design system's P4 ("dark only") is retired; §2.5 contrast targets now apply to both appearances.
+
+### References
+
+- [`../../plans/023-native-apple-apps.md`](../../plans/023-native-apple-apps.md) §5, D-N5 · [`../../plans/023-native-apple-apps-design.md`](../../plans/023-native-apple-apps-design.md) §2, §5 · [`12-design-system.md`](./12-design-system.md) §2 · [`packages/design-tokens/`](../../packages/design-tokens/)
+- [Style Dictionary](https://styledictionary.com/) · [Apple HIG — Dark Mode](https://developer.apple.com/design/human-interface-guidelines/dark-mode) · [WCAG 2.2 SC 1.4.3 / 1.4.11](https://www.w3.org/TR/WCAG22/)
+

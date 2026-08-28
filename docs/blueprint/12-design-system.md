@@ -6,14 +6,14 @@
 
 ## 1. Design principles
 
-Recto's design is governed by README §4 product principles 5 ("the tool disappears"), 6 ("premium and bespoke"), and 7 ("minimalism removes chrome, not safety nets"), and by the locked theme decision D13 (**dark only**). These principles are normative; every token and component below exists to serve them.
+Recto's design is governed by README §4 product principles 5 ("the tool disappears"), 6 ("premium and bespoke"), and 7 ("minimalism removes chrome, not safety nets"), and by the paired-appearance decision [ADR-20](./14-tech-decisions.md#adr-20--light-theme-paper-palette--appearance-setting-reverses-d13) (**Twilight dark + Paper light**, which reverses D13). These principles are normative; every token and component below exists to serve them.
 
 | # | Principle | What it means in practice | What it forbids |
 |---|-----------|---------------------------|-----------------|
 | P1 | **Typography-first — the type IS the UI** | The defining surface of Recto is set type. Hierarchy, rhythm, and state are expressed primarily through typographic treatment (size, weight, color/ink level, measure, spacing), not through boxes, cards, shadows, and borders. The reading surface is the product. | Decorating the page with containers, drop shadows, gradients, or ornamental dividers to create "design." |
 | P2 | **The tool disappears** | Minimal chrome. The writing surface dominates every layout. Affordances are contextual (slash palette, contextual toolbar, command palette) and surface on demand, then recede (README §4 P5; [`./04-editor-modes.md`](./04-editor-modes.md) §2.3, §2.4). | Persistent toolbars, ribbons, sidebars-by-default, or any always-on chrome competing with the text for attention. |
-| P3 | **Premium and bespoke** | Considered typography, a restrained dark palette, deliberate motion. The interface should read as designed by hand for one writer, not assembled from defaults. The bespoke pass in Phase 5 ([`../plan/phase-5-polish-and-export.md`](../plan/phase-5-polish-and-export.md)) is where this is taken to a finish using the `frontend-design` skill. | A templated shadcn default look: stock radii, stock shadows, the default Inter-on-near-black card aesthetic, generic accent blue. |
-| P4 | **Dark only** | There is exactly one theme. The palette is authored natively for dark (D13, README §5 non-goals). It is not a light theme inverted. | A light theme, a theme toggle, `prefers-color-scheme` light handling, or any `light`/`dark` class duplication. |
+| P3 | **Premium and bespoke** | Considered typography, a restrained palette, deliberate motion. The interface should read as designed by hand for one writer, not assembled from defaults. The bespoke pass in Phase 5 ([`../plan/phase-5-polish-and-export.md`](../plan/phase-5-polish-and-export.md)) is where this is taken to a finish using the `frontend-design` skill. | A templated shadcn default look: stock radii, stock shadows, the default Inter-on-near-black card aesthetic, generic accent blue. |
+| P4 | **Two authored appearances** | Exactly two palettes ship: **Twilight** (dark) and **Paper** (light). Each is authored for its appearance — Paper is not Twilight inverted, and Twilight is not Paper inverted. The appearance follows the system by default, with an explicit override (ADR-20). | Algorithmically inverting one palette to get the other; a third undesigned palette; per-component `light:`/`dark:` overrides instead of tokens that flip. |
 | P5 | **Calm and focused** | Low overall luminance, low chroma, generous whitespace, quiet motion. The default emotional register is calm. Color and motion are spent sparingly so that when they appear (a single accent, a brief transition) they carry meaning. | Saturated accents used as decoration, busy animation, attention-grabbing color, high-contrast UI furniture. |
 | P6 | **Minimalism removes chrome, not safety nets** | Hiding menus is allowed; dropping word count, the saving/sync indicator, undo/version affordances, or focus rings is not (README §4 P7). Quiet ≠ absent. | Removing the status bar, the saving indicator, the offline indicator, or focus rings "for cleanliness." |
 
@@ -25,48 +25,32 @@ These resolve a tension the rest of the document keeps in view: **maximal calm f
 
 ### 2.1 Authoring model
 
-The palette is authored in **OKLCH** and consumed through **Tailwind v4** (README §6 stack: "Tailwind v4, shadcn primitives, OKLCH dark palette"). OKLCH is chosen deliberately: it is perceptually uniform, so equal numeric steps in lightness (`L`) read as equal visual steps, which makes a layered dark palette tractable and lets us hold chroma low and constant across hues for a calm, coherent surface (P5).
+The palette is authored in **OKLCH** and consumed through **Tailwind v4** (README §6 stack). OKLCH is chosen deliberately: it is perceptually uniform, so equal numeric steps in lightness (`L`) read as equal visual steps, which makes a layered palette tractable and lets us hold chroma low and constant across hues for a calm, coherent surface (P5).
 
-Tailwind v4 declares design tokens as CSS custom properties inside an `@theme` block; we define the palette once there and reference it through utility classes and component CSS. The tokens below are the **canonical token names** — use these names everywhere, exactly.
+**The values live in one place: [`packages/design-tokens/tokens.json`](../../packages/design-tokens/tokens.json).** Style Dictionary builds it into the CSS custom properties `app/globals.css` imports, a `Colors.xcassets` catalog and `RectoTokens.swift` for the Apple apps, and an sRGB hex table for widgets that cannot parse OKLCH. Change a colour there and run `bun run tokens:build`; a test fails when the committed outputs drift. Never hand-edit a colour in `globals.css`.
 
-```css
-/* globals.css — Tailwind v4 theme tokens (dark only, D13). */
-/* OKLCH: oklch(L C H) — L lightness 0–1, C chroma, H hue degrees. */
-@theme {
-  /* — Background layers (lowest → highest in the z/elevation sense) — */
-  --color-bg-app:        oklch(0.16 0.012 265);  /* deepest: the app canvas behind everything */
-  --color-bg-surface:    oklch(0.20 0.014 265);  /* raised: the writing surface, panes */
-  --color-bg-raised:     oklch(0.24 0.016 265);  /* raised UI: palette, menus, toolbar */
-  --color-bg-overlay:    oklch(0.27 0.018 265);  /* overlay/popover top layer, dialogs */
+The token names below are the **canonical names** — use these everywhere, exactly. Each exists in every palette, so a component references the name and the appearance resolves the value.
 
-  /* — Ink levels (text on dark) — */
-  --color-ink-primary:   oklch(0.95 0.006 265);  /* body text, headings */
-  --color-ink-secondary: oklch(0.80 0.008 265);  /* secondary text, labels */
-  --color-ink-tertiary:  oklch(0.64 0.010 265);  /* muted: placeholders, hints, status */
-
-  /* — Lines / borders — */
-  --color-line:          oklch(0.30 0.012 265);  /* default hairline border */
-  --color-line-strong:   oklch(0.40 0.014 265);  /* emphasized border (focused pane divider) */
-
-  /* — Accents (restrained; spend sparingly — P5) — */
-  --color-accent:        oklch(0.78 0.085 235);  /* primary accent: cool, restrained */
-  --color-accent-muted:  oklch(0.46 0.055 235);  /* primary accent at rest / subtle fills */
-  --color-accent-2:      oklch(0.80 0.075 165);  /* secondary accent: links, secondary emphasis */
-
-  /* — Semantic — */
-  --color-success:       oklch(0.80 0.090 150);  /* saved / synced */
-  --color-warning:       oklch(0.84 0.110 85);   /* unsynced / attention */
-  --color-danger:        oklch(0.70 0.140 25);   /* destructive / error */
-
-  /* — Selection & focus — */
-  --color-selection:     oklch(0.78 0.085 235 / 0.22); /* text-selection wash (accent, low alpha) */
-  --color-focus-ring:    oklch(0.82 0.090 235);        /* visible focus ring (see §8) */
-}
-```
+| Token | Role |
+|-------|------|
+| `--color-bg-app` `--color-bg-surface` `--color-bg-raised` `--color-bg-overlay` `--color-bg-hover` | The four background layers plus the hover fill (§2.2) |
+| `--color-ink-primary` `--color-ink-secondary` `--color-ink-tertiary` | The three ink levels (§2.3) |
+| `--color-on-accent` | Text/icon on an accent or danger **fill** — not the same as ink-primary in light |
+| `--color-line` `--color-line-strong` | Hairlines; `-strong` marks the focused pane |
+| `--color-accent` `--color-accent-muted` `--color-accent-2` `--color-accent-wash` | The one live affordance, its fill, links, and the selected-row wash |
+| `--color-success` `--color-warning` `--color-danger` | Status meaning only, never decoration (§2.4) |
+| `--color-lint-passive` `--color-lint-readability` `--color-lint-adverb` `--color-lint-weasel` | Prose-lint squiggles |
+| `--color-comment` `--color-comment-wash` `--color-comment-wash-strong` | Comment anchors |
+| `--color-selection` `--color-focus-ring` `--color-caret` | Selection wash, focus ring, caret |
+| `--atmos-1` `--atmos-2` `--scrim` `--scrim-opaque` | The atmosphere washes and the overlay scrim (plus its reduced-transparency fallback) |
+| `--elevation-panel` `--elevation-toolbar` | The only two lifts in the product; tinted, never pure black |
+| `--grain-opacity` `--grain-blend` | Film grain — `soft-light` on Twilight, `multiply` on Paper |
 
 ### 2.2 Background layers
 
-Recto uses **four background layers**, separated by lightness rather than by drop shadow. On a dark surface, raising luminance reads as "closer / higher" the way a shadow does on light — so elevation is expressed as a step up in `L`, keeping with P1/P3 (no stock shadows) and P5 (calm).
+Recto uses **four background layers**, separated by lightness rather than by drop shadow, keeping with P1/P3 (no stock shadows) and P5 (calm).
+
+On **Twilight**, raising luminance reads as "closer / higher" the way a shadow does on light, so elevation is a step **up** in `L`. On **Paper** the relationship inverts for furniture — `bg-raised` and `bg-overlay` step **down** in `L` — with one deliberate exception: `bg-surface`, the writing sheet, stays **lighter** than `bg-app`. That is the signature the whole design rests on ([`../../plans/023-native-apple-apps-design.md`](../../plans/023-native-apple-apps-design.md) §2: "the sheet on the atmosphere"), and it is asserted in `packages/design-tokens/tokens.test.ts`.
 
 | Token | Role | Used by |
 |-------|------|---------|
@@ -93,7 +77,7 @@ Three ink levels carry the entire text hierarchy (P1). Hierarchy is expressed by
 - **Accents** are restrained (P5). There is **one primary accent** (`--color-accent`, a cool low-chroma hue) and **one secondary accent** (`--color-accent-2`). The primary accent marks the single most important live affordance in view (active selection in the command palette, focus ring, the synced/active state of the saving indicator). The secondary accent is for links and secondary emphasis so that links do not compete with the primary accent's "this is the live thing" meaning.
 - **Semantics** (`--color-success`, `--color-warning`, `--color-danger`) are reserved strictly for status meaning: success = saved/synced, warning = unsynced/offline, danger = destructive/error. They are never decorative.
 
-### 2.5 Contrast (WCAG on dark)
+### 2.5 Contrast (WCAG, both appearances)
 
 Contrast is a hard constraint, not a preference (P6, §8). Ink levels are tuned so that:
 
@@ -105,7 +89,12 @@ Contrast is a hard constraint, not a preference (P6, §8). Ink levels are tuned 
 | Semantic colors as text/icon on their layer | ≥ 4.5:1 | Status must be legible, not just present. |
 | `--color-focus-ring` against adjacent surfaces | ≥ 3:1 (WCAG non-text) | Focus indication must clear the non-text contrast minimum. |
 
-> Verify these numerically during the Phase 5 design pass and whenever a token's `L` changes — OKLCH lightness is perceptually uniform but is not a WCAG contrast ratio; the ratio must be measured, not assumed.
+These are measured, not assumed: OKLCH lightness is perceptually uniform but is not a WCAG contrast ratio. `packages/design-tokens/tokens.test.ts` asserts every row above for **both** Twilight and Paper with `culori`, so a token change that breaks a ratio fails the build.
+
+Two deliberate exclusions, both recorded there:
+
+- **`--color-line-strong` is not held to 3:1.** It is a decorative hairline, which WCAG 1.4.11 exempts; the 3:1 non-text obligation is carried by `--color-focus-ring`, which is asserted against all four layers.
+- **`--color-on-accent` on `--color-accent-muted` clears 4.5:1 on Paper but measures 3.15:1 on Twilight.** Pre-existing; fixing it means darkening `accent-muted` in all four dark palettes, which is a separate change.
 
 ---
 
@@ -437,7 +426,7 @@ Accessibility is a hard constraint, consistent with P6 (minimalism never removes
 
 | Area | Requirement |
 |------|-------------|
-| **Contrast on dark** | Meet the targets in §2.5: body prose ≥ 7:1, secondary/tertiary text and semantic text ≥ 4.5:1, focus ring and non-text indication ≥ 3:1. "Muted" ink never drops below AA. |
+| **Contrast** | Meet the targets in §2.5 **in both appearances**: body prose ≥ 7:1, secondary/tertiary text and semantic text ≥ 4.5:1, focus ring and non-text indication ≥ 3:1. "Muted" ink never drops below AA. Enforced by the token contrast tests. |
 | **Visible focus rings** | Every focusable element shows a visible focus indicator using `--color-focus-ring` (≥ 3:1, WCAG 1.4.11). Use `:focus-visible` so the ring appears for keyboard focus without cluttering mouse interaction. Focus rings are a safety net and are never removed for aesthetics (P6). |
 | **Full keyboard operability** | Everything is reachable and operable from the keyboard — command palette, slash command palette, document switcher, mode switching, undo-tree and version-history navigation. The keymap is authoritative in [`./13-keyboard-commands.md`](./13-keyboard-commands.md). No action is mouse-only. |
 | **ARIA — command palette / switcher** | `cmdk`-based palettes expose combobox/listbox semantics (`role="combobox"` on the input, `role="listbox"`/`role="option"` on results, `aria-activedescendant` for the highlighted item) so the highlighted option is announced as the writer filters. |
@@ -445,7 +434,7 @@ Accessibility is a hard constraint, consistent with P6 (minimalism never removes
 | **ARIA — dialogs** | Dialogs use `role="dialog"` with `aria-modal="true"`, a labelled title (`aria-labelledby`), focus trapped while open, focus restored to the trigger on close, and `Esc` to dismiss. |
 | **ARIA — toasts / status** | Transient toasts and the saving/offline indicator are announced via an appropriate live region (`role="status"`/`aria-live="polite"`, or `assertive` for errors) so persistence state is conveyed non-visually too (P6, §5). |
 | **Reduced motion** | `prefers-reduced-motion` is honored (§7.4). |
-| **Respect OS settings** | Honor OS reduced-motion. Note that **dark-only (D13) means there is no light theme to offer** — `prefers-color-scheme` is intentionally not a switch — but reduced-motion, reduced-transparency (avoid load-bearing transparency; the layered backgrounds in §2.2 already convey elevation without relying on alpha), and forced-colors/high-contrast modes are respected. |
+| **Respect OS settings** | `prefers-color-scheme` selects the appearance by default (ADR-20); the writer can override it to light or dark and the choice is remembered per device. Reduced-motion (§7.4), reduced-transparency (avoid load-bearing transparency; the layered backgrounds in §2.2 already convey elevation without relying on alpha) and forced-colors/high-contrast are respected. |
 
 ---
 

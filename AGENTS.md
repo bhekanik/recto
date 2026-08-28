@@ -6,7 +6,13 @@
 - Add new primitives: `bunx shadcn add <name>`
 - Custom UI = compose shadcn primitives (`Card`, `Button`, `Input`, `Alert`, …), not raw HTML + one-off styles.
 - shadcn semantic tokens in `app/globals.css` map to Recto OKLCH tokens (`--color-bg-app`, etc.).
-- Dark-only (D13). No light theme.
+
+## Palette (ADR-20)
+
+- Light + dark: **Twilight** (dark) and **Paper** (light); appearance is `system | light | dark`, default `system`.
+- Aurora/Dawn/Moonlit are dark-only and only offered while the appearance resolves to dark.
+- The palette source is `packages/design-tokens/tokens.json`. Never hand-edit colours in `app/globals.css` — change the JSON and run `bun run tokens:build` (a test fails if the committed outputs are stale).
+- Anything appearance-dependent is a token: `--elevation-*`, `--scrim-opaque`, `--grain-*`, `--color-on-accent`. No raw `oklch(0 0 0 / …)` shadows.
 
 ## Canonical markdown
 

@@ -9,14 +9,22 @@ import {
 	type LintOptions,
 } from "@/lib/lint";
 import type { GoalKind } from "@/lib/stats/streak";
+import { SETTINGS_STORAGE_KEY } from "@/lib/studio/appearance";
 
 export type { FocusScope, LintCategory, LintOptions };
 
 /** The writing-body typeface — the chrome is always sans. */
 export type ReadingFont = "sans" | "serif";
 
-/** Calm/ethereal colour themes. Each is a soft-coloured dark palette (D13). */
+/** Calm/ethereal colour themes. Each is a soft-coloured DARK palette (ADR-20). */
 export type Theme = "twilight" | "aurora" | "dawn" | "moonlit";
+
+/**
+ * Light/dark axis (ADR-20, reverses D13). `system` follows
+ * `prefers-color-scheme`. Orthogonal to `theme`: the dark palettes above apply
+ * only while this resolves to dark; light is always Paper.
+ */
+export type Appearance = "system" | "light" | "dark";
 
 /** How the history compare diff splits text. */
 export type DiffGranularity = "word" | "line";
@@ -61,8 +69,19 @@ export const THEMES: { id: Theme; label: string; hint: string }[] = [
 
 const THEME_IDS = THEMES.map((t) => t.id);
 
+/** Ordered for the cycle control + command palette; first is the default. */
+export const APPEARANCES: { id: Appearance; label: string; hint: string }[] = [
+	{ id: "system", label: "System", hint: "follow the OS" },
+	{ id: "light", label: "Light", hint: "Paper" },
+	{ id: "dark", label: "Dark", hint: "Twilight & friends" },
+];
+
+const APPEARANCE_IDS = APPEARANCES.map((a) => a.id);
+
 export type StudioSettings = {
-	/** Soft-coloured dark palette for the whole studio. */
+	/** Light/dark axis; `system` follows the OS (ADR-20). */
+	appearance: Appearance;
+	/** Soft-coloured dark palette for the whole studio. Ignored while light. */
 	theme: Theme;
 	/** Body typeface for the writing surface (Bear sans / Substack serif). */
 	readingFont: ReadingFont;
@@ -113,6 +132,8 @@ export const READING_SCALE_MAX = 2.0;
 const READING_SCALE_STEP = 0.1;
 
 const DEFAULTS: StudioSettings = {
+	// Follow the OS by default — the writer's machine already knows the answer.
+	appearance: "system",
 	theme: "twilight",
 	readingFont: "sans",
 	readingScale: 1,
@@ -153,8 +174,6 @@ const DEFAULTS: StudioSettings = {
 	aiTransformMode: "pending",
 };
 
-const STORAGE_KEY = "recto:studio-settings";
-
 /** Coerce a stored lint-categories blob to a complete, boolean-valued map. */
 function loadLintCategories(value: unknown): LintOptions {
 	const source =
@@ -182,10 +201,14 @@ function clampScale(value: number): number {
 function loadSettings(): StudioSettings {
 	if (typeof window === "undefined") return DEFAULTS;
 	try {
-		const raw = window.localStorage.getItem(STORAGE_KEY);
+		const raw = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
 		if (!raw) return DEFAULTS;
 		const parsed = JSON.parse(raw) as Partial<StudioSettings>;
 		return {
+			appearance:
+				parsed.appearance && APPEARANCE_IDS.includes(parsed.appearance)
+					? parsed.appearance
+					: DEFAULTS.appearance,
 			theme:
 				parsed.theme && THEME_IDS.includes(parsed.theme)
 					? parsed.theme
@@ -254,6 +277,8 @@ function loadSettings(): StudioSettings {
 }
 
 export type StudioSettingsApi = StudioSettings & {
+	setAppearance: (appearance: Appearance) => void;
+	cycleAppearance: () => void;
 	setTheme: (theme: Theme) => void;
 	cycleTheme: () => void;
 	toggleReadingFont: () => void;
@@ -302,11 +327,27 @@ export function useStudioSettings(): StudioSettingsApi {
 
 	useEffect(() => {
 		try {
-			window.localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+			window.localStorage.setItem(
+				SETTINGS_STORAGE_KEY,
+				JSON.stringify(settings),
+			);
 		} catch {
 			// Private mode / quota — settings simply won't persist.
 		}
 	}, [settings]);
+
+	const setAppearance = useCallback((appearance: Appearance) => {
+		setSettings((s) => ({ ...s, appearance }));
+	}, []);
+
+	const cycleAppearance = useCallback(() => {
+		setSettings((s) => {
+			const i = APPEARANCE_IDS.indexOf(s.appearance);
+			const next =
+				APPEARANCE_IDS[(i + 1) % APPEARANCE_IDS.length] ?? s.appearance;
+			return { ...s, appearance: next };
+		});
+	}, []);
 
 	const setTheme = useCallback((theme: Theme) => {
 		setSettings((s) => ({ ...s, theme }));
@@ -490,6 +531,8 @@ export function useStudioSettings(): StudioSettingsApi {
 
 	return {
 		...settings,
+		setAppearance,
+		cycleAppearance,
 		setTheme,
 		cycleTheme,
 		toggleReadingFont,

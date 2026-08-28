@@ -17,16 +17,20 @@
 		"convex:codegen": "convex codegen",
 		"core:build": "bun run packages/recto-core-js/build.ts",
 		"core:parity": "bun run packages/recto-core-js/parity.ts",
-		"fixtures:build": "bun run packages/editor-fixtures/build.ts"
+		"fixtures:build": "bun run packages/editor-fixtures/build.ts",
+		"tokens:build": "bun run packages/design-tokens/build.ts"
 	},
 	"devDependencies": {
 		"@clerk/testing": "^2.1.7",
 		"@playwright/test": "^1.61.1",
 		"@types/bun": "latest",
+		"@types/culori": "4.0.1",
 		"@types/js-yaml": "^4.0.9",
 		"@types/node": "^25.9.2",
 		"@types/react": "^19.2.17",
-		"@types/react-dom": "^19.2.3"
+		"@types/react-dom": "^19.2.3",
+		"culori": "4.0.2",
+		"style-dictionary": "5.5.2"
 	},
 	"peerDependencies": {
 		"typescript": "^5"
