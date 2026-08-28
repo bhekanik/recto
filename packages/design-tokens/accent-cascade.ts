@@ -64,8 +64,16 @@ const CASES = [
 		theme: "moonlit",
 		expected: tokens.palette.moonlit.color.accent.$value,
 	},
+	// The studio never removes `data-theme`, so a light appearance always
+	// coexists with a stored dark palette; Paper must win over every one of them.
+	...(["twilight", "aurora", "dawn", "moonlit"] as const).map((theme) => ({
+		name: `Paper (light, stored ${theme})`,
+		className: "",
+		theme,
+		expected: tokens.palette.paper.color.accent.$value,
+	})),
 	{
-		name: "Paper (light)",
+		name: "Paper (light, no data-theme)",
 		className: "",
 		theme: null,
 		expected: tokens.palette.paper.color.accent.$value,
@@ -75,7 +83,11 @@ const CASES = [
 /** Compiles `app/globals.css` exactly as the app's PostCSS pipeline does. */
 async function compileGlobals(): Promise<string> {
 	const source = await Bun.file(GLOBALS).text();
-	const result = await postcss([tailwind()]).process(source, { from: GLOBALS });
+	// `optimize` is what `next build` turns on (Lightning CSS pass); the check
+	// must see the stylesheet that ships, not the dev-mode one.
+	const result = await postcss([tailwind({ optimize: true })]).process(source, {
+		from: GLOBALS,
+	});
 	return result.css;
 }
 
