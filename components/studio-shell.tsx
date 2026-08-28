@@ -56,6 +56,7 @@ import {
 } from "@/lib/studio/use-studio-settings";
 import { useWritingStats } from "@/lib/studio/use-writing-stats";
 import { useZenMode } from "@/lib/studio/use-zen-mode";
+import { displaySyncStatus } from "@/lib/sync/sync-indicator";
 import { cn } from "@/lib/utils";
 import { findLeaf } from "@/lib/workspace/queries";
 import {
@@ -675,10 +676,15 @@ function StudioWorkspace() {
 						<StatusBar
 							wordCount={activeSync.wordCount}
 							readingMinutes={readingTimeMinutes(activeSync.wordCount)}
-							syncStatus={
-								activeSync.hasUnresolvedWrites
-									? "unresolved"
-									: activeSync.syncStatus
+							syncStatus={displaySyncStatus({
+								status: activeSync.syncStatus,
+								hasPendingWrites: activeSync.hasPendingWrites,
+								blocked: activeSync.blockedWrite !== null,
+							})}
+							onResolveBlocked={
+								activeSync.blockedWrite
+									? activeSync.resolveBlockedWrite
+									: undefined
 							}
 							mode={activeMode}
 							onModeChange={(m) => dispatchModeSwitch(m)}

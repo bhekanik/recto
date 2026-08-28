@@ -7,6 +7,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import type { EditorHandle } from "@/lib/editor/handle";
 import { loadDraft } from "@/lib/sync/draft-buffer";
+import { displaySyncStatus } from "@/lib/sync/sync-indicator";
 
 import type { HistoryController, HistoryNode } from "./use-document-history";
 
@@ -96,6 +97,7 @@ const NAMES = {
 	updateMarkdown: getFunctionName(api.documents.updateMarkdown),
 	updatePointer: getFunctionName(api.documents.updateCurrentNodeId),
 	ensureRoot: getFunctionName(api.docNodes.ensureRoot),
+	createVersion: getFunctionName(api.versions.create),
 };
 
 function callsTo(name: string): MutationCall[] {
@@ -202,8 +204,20 @@ async function settleSavesAhead(updatedAt = 1_500): Promise<void> {
 	}
 }
 
-/** Fail the oldest unanswered mutation, as a dropped connection would. */
-async function rejectNext(expectedName: string): Promise<void> {
+/**
+ * Fail the oldest unanswered mutation the way the SERVER fails one.
+ *
+ * A rejected Convex mutation promise is never a lost connection: the client
+ * retries offline and internal failures itself until the server confirms, so a
+ * rejection means the server ran the function and refused — an application,
+ * developer or limit error. Modelling a dropped connection as a rejection is
+ * what made the old harness bless a retry loop that can never succeed; a
+ * disconnection is modelled by simply LEAVING a call unanswered.
+ */
+async function refuseNext(
+	expectedName: string,
+	message = "Server Error: refused",
+): Promise<void> {
 	const call = mutationCalls.find((c) => !c.settled);
 	if (!call) throw new Error(`no unanswered mutation; wanted ${expectedName}`);
 	if (call.name !== expectedName) {
@@ -213,8 +227,23 @@ async function rejectNext(expectedName: string): Promise<void> {
 	}
 	call.settled = true;
 	await act(async () => {
-		call.reject(new Error("network"));
+		call.reject(new Error(message));
 	});
+}
+
+/** Calls the client has sent and not yet had answered. */
+function outstanding(): MutationCall[] {
+	return mutationCalls.filter((c) => !c.settled);
+}
+
+/**
+ * Only one history write may be on the wire at a time. Two in flight means the
+ * pump was re-entered while the head was pending — which sends the head twice,
+ * and `versions.create` is not idempotent.
+ */
+function expectOneWriteInFlight(): void {
+	const live = outstanding().filter((c) => c.name !== NAMES.updateMarkdown);
+	expect(live.map((c) => c.name)).toHaveLength(1);
 }
 
 async function respondAllRemaining(
@@ -392,6 +421,7 @@ function mountStudio(handle: ReturnType<typeof fakeHandle>) {
 			getEditorHandle: () => handle,
 			serverMarkdown: server?.markdown,
 			serverUpdatedAt: server?.updatedAt,
+			serverCurrentNodeId: server?.currentNodeId,
 			enabled: server !== undefined,
 			getCurrentHeadNodeId,
 			getHasPendingDraft,
@@ -423,7 +453,7 @@ function mountStudio(handle: ReturnType<typeof fakeHandle>) {
 						projection.resolvedProjectionId,
 					);
 				} else if (projection.source === "recovered-draft") {
-					syncHook.adoptRecoveredDraft(projection.markdown);
+					syncHook.adoptRecoveredDraft(projection.markdown, projection.kind);
 				} else {
 					syncHook.markLocalProjectionPending(
 						projection.markdown,
@@ -1613,7 +1643,7 @@ describe("studio sync + history contract", () => {
 		s.unmount();
 	});
 
-	it("T1: an unanswered pointer write is retried, not abandoned", async () => {
+	it("T1: an unanswered pointer write is left to Convex, never re-sent", async () => {
 		const handle = fakeHandle();
 		dagRows = [rootNode(), remoteNode()];
 		const s = mountStudio(handle);
@@ -1627,16 +1657,38 @@ describe("studio sync + history contract", () => {
 		// document "saved".
 		expect(s.syncStatus).toBe("unsynced");
 
-		// The write goes unanswered. That is NOT a refusal — it may yet have
-		// landed — so it is retried rather than abandoned, and the document is
-		// reported unresolved rather than saved.
-		const attemptsBefore = callsTo(NAMES.updatePointer).length;
-		await rejectNext(NAMES.updatePointer);
-		await settle();
-
+		// Going offline is a PENDING mutation, not a rejected one: the Convex
+		// client holds it and retries until the server confirms. Re-sending it
+		// ourselves would be a duplicate write, so nothing here may.
+		await settle(30_000);
+		expect(callsTo(NAMES.updatePointer)).toHaveLength(1);
+		expect(s.history.hasPendingWrites).toBe(true);
+		expect(s.history.blockedWrite).toBeNull();
 		expect(s.syncStatus).not.toBe("saved");
-		expect(s.history.hasUnresolvedWrites).toBe(true);
-		expect(callsTo(NAMES.updatePointer).length).toBeGreaterThan(attemptsBefore);
+
+		// Reconnected: the same call finally answers, and the move is done.
+		await respond(
+			NAMES.updatePointer,
+			{
+				applied: true,
+				currentNodeId: REMOTE,
+				updatedAt: 4_000,
+				pointerRevision: 2,
+			},
+			{
+				server: {
+					currentNodeId: REMOTE,
+					markdown: REMOTE_TEXT,
+					updatedAt: 4_000,
+					pointerRevision: 2,
+					markdownHeadNodeId: REMOTE,
+				},
+			},
+		);
+		await settle();
+		expect(callsTo(NAMES.updatePointer)).toHaveLength(1);
+		expect(s.history.hasPendingWrites).toBe(false);
+		expect(s.syncStatus).toBe("saved");
 		s.unmount();
 	});
 
@@ -1658,7 +1710,7 @@ describe("studio sync + history contract", () => {
 			const outstanding = mutationCalls.find(
 				(c) => !c.settled && c.name === NAMES.ensureRoot,
 			);
-			if (outstanding) await rejectNext(NAMES.ensureRoot);
+			if (outstanding) await refuseNext(NAMES.ensureRoot);
 			await settle(30_000);
 		}
 		window.removeEventListener("recto:toast", onToast);
@@ -1747,7 +1799,7 @@ describe("studio sync + history contract", () => {
 		// The pane goes away with the call still outstanding.
 		s.unmount();
 		const timersAfterUnmount = vi.getTimerCount();
-		await rejectNext(NAMES.ensureRoot);
+		await refuseNext(NAMES.ensureRoot);
 
 		// A rejection arriving after unmount has no timer to cancel — the cleanup
 		// already ran — so without a binding token it SCHEDULES one, against a
@@ -1906,7 +1958,7 @@ describe("studio sync + history contract", () => {
 		s.unmount();
 	});
 
-	it("Q3: a rejected commit is retried and holds its descendants back", async () => {
+	it("Q3: an unanswered commit holds its descendants back", async () => {
 		const handle = fakeHandle();
 		dagRows = [rootNode()];
 		const s = mountStudio(handle);
@@ -1921,25 +1973,29 @@ describe("studio sync + history contract", () => {
 		const clientMutationId = firstAttempt[0]?.args.clientMutationId;
 		await settleSavesAhead();
 
-		// The commit is REJECTED — the transaction rolled back, so the node never
-		// landed. A descendant sent now would chain off a node the server has
-		// never seen.
-		await rejectNext(NAMES.commitEdit);
+		// The commit is still on the wire. A descendant sent now would chain off
+		// a node the server may never have received.
 		s.run(() => {
 			s.history.commitProgrammatic(AI, { origin: "ai:grammar" });
 		});
+		await settle(30_000);
 		expect(callsTo(NAMES.commitEdit)).toHaveLength(1);
-		expect(s.history.hasUnresolvedWrites).toBe(true);
+		expectOneWriteInFlight();
+		expect(s.history.hasPendingWrites).toBe(true);
 
-		// The retry reuses the original identity, which the server answers
-		// idempotently — a rejection is not a refusal.
-		await settle(2_000);
-		const retried = callsTo(NAMES.commitEdit);
-		expect(retried.length).toBeGreaterThan(1);
-		expect(retried[1]?.args.clientMutationId).toBe(clientMutationId);
+		// Once the head lands, the descendant follows — and only then.
+		const head = s.history.nodes.find((n) => n.nodeId !== ROOT)?.nodeId ?? ROOT;
+		await ackHeadCommit(head, TYPED, 3_000, 2, [
+			rootNode(),
+			...s.history.nodes.filter((n) => n.nodeId !== ROOT),
+		]);
+		await settle(0);
+		const sent = callsTo(NAMES.commitEdit);
+		expect(sent).toHaveLength(2);
+		expect(sent[0]?.args.clientMutationId).toBe(clientMutationId);
 		// The server rejects a commit whose node does not descend from the head
-		// it names, so a retry must carry the SAME pairing, not a re-derived one.
-		for (const attempt of retried) {
+		// it names, so every attempt must carry the SAME pairing.
+		for (const attempt of sent) {
 			const node = attempt.args.node as { parentNodeId: string | null };
 			expect(attempt.args.expectedHeadNodeId).toBe(node.parentNodeId);
 		}
@@ -1978,7 +2034,7 @@ describe("studio sync + history contract", () => {
 		s.unmount();
 	});
 
-	it("Q6: an unanswered commit is unresolved, not refused", async () => {
+	it("Q6: an unanswered commit is pending, never saved", async () => {
 		const handle = fakeHandle();
 		dagRows = [rootNode()];
 		const s = mountStudio(handle);
@@ -1987,18 +2043,18 @@ describe("studio sync + history contract", () => {
 		s.type(TYPED);
 		await settle(600);
 		await settleSavesAhead();
-		await rejectNext(NAMES.commitEdit);
 
-		// A timeout must never look like a refusal: the write may yet have landed,
-		// so the work stays pending, the draft stays recoverable, and the writer is
-		// told the document is unresolved rather than shown a reassuring tick.
-		expect(s.history.hasUnresolvedWrites).toBe(true);
+		// The commit is outstanding. Nothing may call the document saved while it
+		// is: the draft stays recoverable and the queue reports itself occupied.
+		await settle(30_000);
+		expect(s.history.hasPendingWrites).toBe(true);
+		expect(s.history.blockedWrite).toBeNull();
 		expect(s.syncStatus).not.toBe("saved");
 		expect(loadDraft(DOC_ID)?.markdown).toBe(TYPED);
 		s.unmount();
 	});
 
-	it("N1: a retried commit cannot overtake an undo made after it", async () => {
+	it("N1: an unanswered commit cannot overtake an undo made after it", async () => {
 		const handle = fakeHandle();
 		dagRows = [rootNode()];
 		const s = mountStudio(handle);
@@ -2008,20 +2064,19 @@ describe("studio sync + history contract", () => {
 		await settle(600);
 		await settleSavesAhead();
 
-		// The commit goes unanswered, so it waits at the head of the queue.
-		await rejectNext(NAMES.commitEdit);
+		// The commit is on the wire, unanswered, so it holds the head of the queue.
 		const typedNode = s.history.currentNodeId ?? ROOT;
 
 		// The writer undoes. Sent directly, this pointer move would land first and
-		// then be reversed when the commit's retry finally arrived.
+		// then be reversed when the commit finally arrived.
 		s.run(() => s.history.undo());
 		expect(s.history.currentNodeId).toBe(ROOT);
 		expect(callsTo(NAMES.updatePointer)).toEqual([]);
-
-		// The retry goes out first, as the writer's own order demands...
 		await settle(2_000);
-		const commits = callsTo(NAMES.commitEdit);
-		expect(commits.length).toBeGreaterThan(1);
+		expect(callsTo(NAMES.commitEdit)).toHaveLength(1);
+		expectOneWriteInFlight();
+
+		// The commit lands first, as the writer's own order demands...
 		await ackHeadCommit(typedNode, TYPED, 3_000, 2, [
 			rootNode(),
 			...s.history.nodes.filter((n) => n.nodeId !== ROOT),
@@ -2045,7 +2100,6 @@ describe("studio sync + history contract", () => {
 		s.type(TYPED);
 		await settle(600);
 		await settleSavesAhead();
-		await rejectNext(NAMES.commitEdit);
 
 		const queuedAt = Date.now();
 		s.run(() => s.history.navigateTo(REMOTE));
@@ -2140,13 +2194,15 @@ describe("studio sync + history contract", () => {
 
 		// Navigate; the write never lands, so the move is still pending.
 		first.run(() => first.history.navigateTo(twin.nodeId));
-		await rejectNext(NAMES.updatePointer);
 
 		const stored = loadDraft(DOC_ID);
 		expect(stored?.projectionKind).toBe("pointer");
 		expect(stored?.pointerNodeId).toBe(twin.nodeId);
 		expect(stored?.markdown).toBe("");
 		first.unmount();
+		// The page is gone: whatever it had on the wire dies with it, and the
+		// reload's writes are the only ones left to answer.
+		mutationCalls.length = 0;
 
 		// Reload. The server is still on the root and the stored body is identical
 		// to the server's, so judged by text alone recovery deleted the move
@@ -2157,7 +2213,511 @@ describe("studio sync + history contract", () => {
 		await settle(0);
 
 		expect(loadDraft(DOC_ID)?.pointerNodeId).toBe(twin.nodeId);
+
+		// The recovered move is REPLAYED, at the target the writer left off on,
+		// and it is a pointer write that goes out — not a markdown save.
+		expect(second.history.currentNodeId).toBe(twin.nodeId);
+		const replay = lastCallTo(NAMES.updatePointer);
+		expect(replay?.args.currentNodeId).toBe(twin.nodeId);
+
+		// Settling the automatic markdown save is where the loss used to happen:
+		// its success retired the recovered POINTER id, deleted the record and
+		// reported "Saved" for a move the server had never taken.
+		await settleSavesAhead(2_500);
+		await settle(600);
+		expect(loadDraft(DOC_ID)?.pointerNodeId).toBe(twin.nodeId);
+		expect(second.syncStatus).not.toBe("saved");
+
+		// Only the move's own acknowledgement retires it.
+		await respond(
+			NAMES.updatePointer,
+			{
+				applied: true,
+				currentNodeId: twin.nodeId,
+				updatedAt: 3_000,
+				pointerRevision: 2,
+			},
+			{
+				server: {
+					currentNodeId: twin.nodeId,
+					markdown: "",
+					updatedAt: 3_000,
+					pointerRevision: 2,
+					markdownHeadNodeId: twin.nodeId,
+				},
+			},
+		);
+		await settle();
+		expect(loadDraft(DOC_ID)).toBeNull();
+		expect(second.syncStatus).toBe("saved");
 		second.unmount();
+	});
+
+	it("M1: a second version tag waits for the first to answer", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode()];
+		const s = mountStudio(handle);
+		s.render(AT_ROOT);
+		await settle(0);
+		await settleSavesAhead();
+
+		// Two tags in quick succession. Re-entering the pump on the second one
+		// sent the FIRST a second time, and versions.create is not idempotent —
+		// the same label was inserted twice.
+		s.run(() => {
+			void s.history.tagVersion("v1");
+			void s.history.tagVersion("v2");
+		});
+		await settle(0);
+		expect(callsTo(NAMES.createVersion)).toHaveLength(1);
+		expect(lastCallTo(NAMES.createVersion)?.args.label).toBe("v1");
+		expectOneWriteInFlight();
+
+		await respond(NAMES.createVersion, null);
+		await settle(0);
+		const sent = callsTo(NAMES.createVersion);
+		expect(sent).toHaveLength(2);
+		expect(sent.map((c) => c.args.label)).toEqual(["v1", "v2"]);
+		s.unmount();
+	});
+
+	it("M1/M2: a refused commit is sent once and schedules no retry", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode()];
+		const s = mountStudio(handle);
+		s.render(AT_ROOT);
+
+		s.type(TYPED);
+		await settle(600);
+		await settleSavesAhead();
+		expect(callsTo(NAMES.commitEdit)).toHaveLength(1);
+
+		// The server ran the function and refused it. Convex retries offline and
+		// internal failures itself, so this is an application error: the same
+		// arguments can never start succeeding, and re-sending them looped for
+		// ever with everything behind it stuck.
+		const timersBefore = vi.getTimerCount();
+		await refuseNext(NAMES.commitEdit, "Server Error: document too large");
+		expect(vi.getTimerCount()).toBeLessThanOrEqual(timersBefore);
+
+		await settle(60_000);
+		expect(callsTo(NAMES.commitEdit)).toHaveLength(1);
+		expect(s.history.blockedWrite?.kind).toBe("commit");
+		expect(s.history.blockedWrite?.message).toContain("too large");
+		// Terminal, but never a loss: the text stays on screen, dirty, and in the
+		// recovery record.
+		expect(handle.text).toBe(TYPED);
+		expect(loadDraft(DOC_ID)?.markdown).toBe(TYPED);
+		expect(s.syncStatus).not.toBe("saved");
+		expect(
+			displaySyncStatus({
+				status: s.syncStatus as never,
+				hasPendingWrites: s.history.hasPendingWrites,
+				blocked: s.history.blockedWrite !== null,
+			}),
+		).toBe("unresolved");
+		s.unmount();
+	});
+
+	it("M2: resolving a refused commit keeps the text and re-syncs the head", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode()];
+		const s = mountStudio(handle);
+		s.render(AT_ROOT);
+
+		s.type(TYPED);
+		await settle(600);
+		await settleSavesAhead();
+		await refuseNext(NAMES.commitEdit, "Server Error: refused");
+		expect(s.history.blockedWrite).not.toBeNull();
+
+		// The writer's way out. Their words survive; only the refused transition
+		// is given up, and the document goes back onto the head the server has.
+		s.run(() => s.history.resolveBlockedWrite());
+		expect(s.history.blockedWrite).toBeNull();
+		expect(s.history.hasPendingWrites).toBe(false);
+		expect(handle.text).toBe(TYPED);
+		expect(s.history.currentNodeId).toBe(ROOT);
+
+		// And the text is committable again — as an ordinary child of the head the
+		// server actually holds.
+		await settle(2_000);
+		const retry = lastCallTo(NAMES.commitEdit);
+		expect(retry?.args.expectedHeadNodeId).toBe(ROOT);
+		expect(retry?.args.markdown).toBe(TYPED);
+		s.unmount();
+	});
+
+	it("M2: a refused version tag reports itself and releases the writes behind it", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode()];
+		const s = mountStudio(handle);
+		s.render(AT_ROOT);
+		await settle(0);
+		await settleSavesAhead();
+
+		const toasts: string[] = [];
+		const onToast = (event: Event) => {
+			toasts.push((event as CustomEvent<{ message: string }>).detail.message);
+		};
+		window.addEventListener("recto:toast", onToast);
+
+		s.run(() => {
+			void s.history.tagVersion("v1");
+			void s.history.tagVersion("v2");
+		});
+		await settle(0);
+		await refuseNext(NAMES.createVersion, "Server Error: unknown node");
+		await settle(0);
+		window.removeEventListener("recto:toast", onToast);
+
+		// A label names no text and nothing chains off it, so its refusal is
+		// reported and the queue moves on. Holding for it stranded unrelated
+		// later writes behind a version name.
+		expect(toasts.some((t) => t.includes("version"))).toBe(true);
+		expect(s.history.blockedWrite).toBeNull();
+		expect(callsTo(NAMES.createVersion)).toHaveLength(2);
+		expect(lastCallTo(NAMES.createVersion)?.args.label).toBe("v2");
+		s.unmount();
+	});
+
+	it("M4: a pointer move compares revisions, not the browser clock", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode(), remoteNode()];
+		const s = mountStudio(handle);
+		// A browser clock far behind the server's own timestamps. Under the old
+		// last-write-wins rule this move loses to `doc.updatedAt` immediately.
+		vi.setSystemTime(0);
+		const AHEAD: ServerDoc = {
+			currentNodeId: ROOT,
+			markdown: "",
+			updatedAt: 9_000_000_000_000,
+			pointerRevision: 4,
+			markdownHeadNodeId: ROOT,
+		};
+		s.render(AHEAD);
+		await settle(0);
+
+		s.run(() => s.history.navigateTo(REMOTE));
+		const move = lastCallTo(NAMES.updatePointer);
+		expect((move?.args.updatedAt as number) < AHEAD.updatedAt).toBe(true);
+		// The revision the client last observed, which is what the server now
+		// compares against instead.
+		expect(move?.args.expectedPointerRevision).toBe(4);
+
+		await respond(
+			NAMES.updatePointer,
+			{
+				applied: true,
+				currentNodeId: REMOTE,
+				updatedAt: 9_000_000_001_000,
+				pointerRevision: 5,
+			},
+			{
+				server: {
+					currentNodeId: REMOTE,
+					markdown: REMOTE_TEXT,
+					updatedAt: 9_000_000_001_000,
+					pointerRevision: 5,
+					markdownHeadNodeId: REMOTE,
+				},
+			},
+		);
+		await settle();
+		expect(s.history.currentNodeId).toBe(REMOTE);
+		s.unmount();
+	});
+
+	it("M4: an earlier markdown write landing first does not lose the pointer move", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode(), remoteNode()];
+		const s = mountStudio(handle);
+		vi.setSystemTime(0);
+		s.render({
+			currentNodeId: ROOT,
+			markdown: "",
+			updatedAt: 1_000,
+			pointerRevision: 3,
+			markdownHeadNodeId: ROOT,
+		});
+		await settle(0);
+
+		// An autosave is already ahead of the pointer in Convex's ordered queue.
+		// It executes first and stamps `doc.updatedAt` with a server clock — which
+		// the pointer's own `Date.now()` is then behind.
+		s.type(TYPED);
+		await settle(600);
+		await respond(
+			NAMES.updateMarkdown,
+			{ updatedAt: 8_000_000_000_000, stale: false, headMoved: false },
+			{
+				server: {
+					currentNodeId: ROOT,
+					markdown: TYPED,
+					updatedAt: 8_000_000_000_000,
+					pointerRevision: 3,
+					markdownHeadNodeId: ROOT,
+				},
+			},
+		);
+		await settleSavesAhead(8_000_000_000_000);
+		// Let the typed node land so the navigation is not queued behind it.
+		const typedNode = s.history.currentNodeId ?? ROOT;
+		if (typedNode !== ROOT) {
+			await ackHeadCommit(typedNode, TYPED, 8_000_000_001_000, 4, [
+				rootNode(),
+				remoteNode(),
+				...s.history.nodes.filter((n) => n.nodeId !== ROOT),
+			]);
+		}
+		await settleSavesAhead(8_000_000_001_000);
+
+		s.run(() => s.history.navigateTo(REMOTE));
+		await settle(0);
+		const move = lastCallTo(NAMES.updatePointer);
+		expect(move).toBeDefined();
+		// The markdown write moved `updatedAt` far past this client's clock; the
+		// revision it compares against is untouched by it.
+		expect((move?.args.updatedAt as number) < 8_000_000_000_000).toBe(true);
+		expect(move?.args.expectedPointerRevision).toBe(4);
+		s.unmount();
+	});
+
+	it("M4: a refused compare-and-set reconciles to the head the server returned", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode(), remoteNode()];
+		const s = mountStudio(handle);
+		s.render(AT_ROOT);
+		await settle(0);
+
+		s.run(() => s.history.navigateTo(REMOTE));
+		expect(s.history.currentNodeId).toBe(REMOTE);
+
+		// Another device got there first, so our expected revision is stale.
+		await respond(NAMES.updatePointer, {
+			applied: false,
+			currentNodeId: ROOT,
+			pointerRevision: 7,
+		});
+		await settle();
+
+		// The projection path takes us back to the head the server kept, and the
+		// refused move is resolved rather than left dirty for ever.
+		expect(s.history.currentNodeId).toBe(ROOT);
+		expect(s.projectedMarkdown).toBe("");
+		expect(s.syncStatus).toBe("saved");
+		expect(loadDraft(DOC_ID)).toBeNull();
+
+		// The next move compares against the revision the refusal reported.
+		s.run(() => s.history.navigateTo(REMOTE));
+		expect(lastCallTo(NAMES.updatePointer)?.args.expectedPointerRevision).toBe(
+			7,
+		);
+		s.unmount();
+	});
+
+	it("M5: a queued version tag is never reported as saved", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode()];
+		const s = mountStudio(handle);
+		s.render(AT_ROOT);
+		await settle(0);
+		await settleSavesAhead();
+		expect(s.syncStatus).toBe("saved");
+
+		// A version creates no pending projection of its own, so the autosave's
+		// status kept saying "Saved" while the version was still uncreated.
+		s.run(() => {
+			void s.history.tagVersion("Chapter one");
+		});
+		await settle(0);
+		expect(s.history.hasPendingWrites).toBe(true);
+		expect(
+			displaySyncStatus({
+				status: s.syncStatus as never,
+				hasPendingWrites: s.history.hasPendingWrites,
+				blocked: s.history.blockedWrite !== null,
+			}),
+		).toBe("unsynced");
+
+		await respond(NAMES.createVersion, null);
+		await settle(0);
+		expect(s.history.hasPendingWrites).toBe(false);
+		expect(
+			displaySyncStatus({
+				status: s.syncStatus as never,
+				hasPendingWrites: s.history.hasPendingWrites,
+				blocked: s.history.blockedWrite !== null,
+			}),
+		).toBe("saved");
+		s.unmount();
+	});
+
+	it("M3: a recovered pointer move the server already took is cleared", async () => {
+		const handle = fakeHandle();
+		const twin: HistoryNode = {
+			nodeId: "01TWINNODEIDENTICALTEXT00",
+			parentNodeId: ROOT,
+			patch: JSON.stringify({ from: 0, to: 0, insert: "" }),
+			snapshot: "",
+			selection: null,
+			origin: "other-device",
+			createdAt: 2,
+		};
+		dagRows = [rootNode(), twin];
+		const first = mountStudio(handle);
+		first.render(AT_ROOT);
+		first.run(() => first.history.navigateTo(twin.nodeId));
+		expect(loadDraft(DOC_ID)?.pointerNodeId).toBe(twin.nodeId);
+		first.unmount();
+		mutationCalls.length = 0;
+
+		// The move DID land; only its answer was lost. Recovery has to judge that
+		// against the head the SERVER is on — it used to be handed this device's
+		// own head, which is still null while recovery runs, so the check never
+		// fired and the move was replayed for ever.
+		const second = mountStudio(fakeHandle());
+		second.render({
+			currentNodeId: twin.nodeId,
+			markdown: "",
+			updatedAt: 3_000,
+			pointerRevision: 2,
+			markdownHeadNodeId: twin.nodeId,
+		});
+		await settle(0);
+
+		expect(loadDraft(DOC_ID)).toBeNull();
+		expect(callsTo(NAMES.updatePointer)).toHaveLength(0);
+		expect(second.history.currentNodeId).toBe(twin.nodeId);
+		second.unmount();
+	});
+
+	it("M3: a recovered pointer move whose target never landed keeps its text", async () => {
+		const handle = fakeHandle();
+		const ghost: HistoryNode = {
+			nodeId: "01GHOSTNODENEVERLANDED000",
+			parentNodeId: ROOT,
+			patch: JSON.stringify({ from: 0, to: 0, insert: TYPED }),
+			snapshot: TYPED,
+			selection: null,
+			origin: "test-device",
+			createdAt: 2,
+		};
+		dagRows = [rootNode(), ghost];
+		const first = mountStudio(handle);
+		first.render(AT_ROOT);
+		first.run(() => first.history.navigateTo(ghost.nodeId));
+		expect(loadDraft(DOC_ID)?.pointerNodeId).toBe(ghost.nodeId);
+		first.unmount();
+		mutationCalls.length = 0;
+
+		// The commit that would have created the target never landed, so on the
+		// reload the node is not in the DAG at all and nobody can apply the move.
+		// What survives is the TEXT: the record is demoted to a plain draft rather
+		// than left claiming a move nothing could ever retire.
+		dagRows = [rootNode()];
+		const reopened = fakeHandle();
+		const second = mountStudio(reopened);
+		second.render(AT_ROOT);
+		await settle(0);
+
+		expect(reopened.text).toBe(TYPED);
+		expect(loadDraft(DOC_ID)?.projectionKind).toBe("draft");
+		expect(loadDraft(DOC_ID)?.pointerNodeId).toBeUndefined();
+		// No pointer write is invented for a node the server has never heard of.
+		expect(callsTo(NAMES.updatePointer)).toHaveLength(0);
+		expect(second.history.currentNodeId).toBe(ROOT);
+
+		// And the text is saved as ordinary work rather than sitting unsynced for
+		// ever behind a dead move.
+		await settle(600);
+		expect(lastCallTo(NAMES.commitEdit)?.args.markdown).toBe(TYPED);
+		second.unmount();
+	});
+
+	it("M3: a markdown save never retires a pointer move stuck behind a refused write", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode()];
+		const s = mountStudio(handle);
+		s.render(AT_ROOT);
+
+		s.type(TYPED);
+		await settle(600);
+		await settleSavesAhead();
+		// The commit is refused, so the queue is terminal and nothing behind it
+		// can be sent — including the pointer move the writer makes next.
+		await refuseNext(NAMES.commitEdit, "Server Error: refused");
+		s.run(() => s.history.undo());
+		expect(s.history.currentNodeId).toBe(ROOT);
+		expect(callsTo(NAMES.updatePointer)).toHaveLength(0);
+		expect(loadDraft(DOC_ID)?.projectionKind).toBe("pointer");
+
+		// The autosave still runs, and it carries the POINTER work's id because
+		// that is what is pending. Its success proves the text reached the server;
+		// it proves nothing about the move, and retiring it here deleted the
+		// recovery record and reported "Saved" for a move nobody had sent.
+		s.run(() => {
+			void s.sync.flushSync();
+		});
+		await settle(0);
+		const save = mutationCalls.find(
+			(c) => !c.settled && c.name === NAMES.updateMarkdown,
+		);
+		expect(save).toBeDefined();
+		await respond(
+			NAMES.updateMarkdown,
+			{ updatedAt: 4_000, stale: false, headMoved: false },
+			{
+				server: {
+					currentNodeId: ROOT,
+					markdown: "",
+					updatedAt: 4_000,
+					pointerRevision: 1,
+					markdownHeadNodeId: ROOT,
+				},
+			},
+		);
+		await settle(600);
+
+		expect(loadDraft(DOC_ID)?.projectionKind).toBe("pointer");
+		expect(loadDraft(DOC_ID)?.pointerNodeId).toBe(ROOT);
+		expect(s.syncStatus).not.toBe("saved");
+		s.unmount();
+	});
+
+	it("M4: a move made after another device's compares against their revision", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode(), remoteNode()];
+		const s = mountStudio(handle);
+		s.render({
+			currentNodeId: ROOT,
+			markdown: "",
+			updatedAt: 1_000,
+			pointerRevision: 4,
+			markdownHeadNodeId: ROOT,
+		});
+		await settle(0);
+
+		// The other device moves the head. Nothing of ours is in flight, so this
+		// observation is simply adopted.
+		s.render({
+			currentNodeId: REMOTE,
+			markdown: REMOTE_TEXT,
+			updatedAt: 2_000,
+			pointerRevision: 5,
+			markdownHeadNodeId: REMOTE,
+		});
+		await settle();
+		expect(s.history.currentNodeId).toBe(REMOTE);
+
+		// Our next move must compare against what we have SEEN, not against the
+		// revision we hydrated on — the server would refuse the stale one, and the
+		// writer's undo would vanish for no reason they could observe.
+		s.run(() => s.history.navigateTo(ROOT));
+		expect(lastCallTo(NAMES.updatePointer)?.args.expectedPointerRevision).toBe(
+			5,
+		);
+		s.unmount();
 	});
 
 	it("X4: a newer observation of our own head clears a stale queued pointer", async () => {
@@ -2277,11 +2837,13 @@ describe("studio sync + history contract", () => {
 		s.run(() => s.history.navigateTo(ROOT));
 		s.run(() => s.history.navigateTo(REMOTE));
 		expect(s.history.currentNodeId).toBe(REMOTE);
-		expect(callsTo(NAMES.updatePointer).length).toBe(3);
+		// One at a time: the second and third moves wait behind the first.
+		expect(callsTo(NAMES.updatePointer).length).toBe(1);
+		expect(lastCallTo(NAMES.updatePointer)?.args.currentNodeId).toBe(REMOTE);
 
-		// The FIRST navigate finally answers, rejected, naming ROOT as the winner.
-		// Settling by node id would apply that to the third move (same node), queue
-		// ROOT, and walk the pointer off the node the writer just chose.
+		// The FIRST navigate answers, refused, naming ROOT as the winner. Settling
+		// by node id would apply that to the third move (same node), queue ROOT,
+		// and walk the pointer off the node the writer just chose.
 		await respond(NAMES.updatePointer, {
 			applied: false,
 			currentNodeId: ROOT,
@@ -2290,6 +2852,10 @@ describe("studio sync + history contract", () => {
 		await settle();
 
 		expect(s.history.currentNodeId).toBe(REMOTE);
+		// And the queue carries on in the writer's own order, rather than the
+		// refusal of the first move standing in for the third.
+		expect(callsTo(NAMES.updatePointer).length).toBe(2);
+		expect(lastCallTo(NAMES.updatePointer)?.args.currentNodeId).toBe(ROOT);
 		s.unmount();
 	});
 

@@ -18,6 +18,7 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { BridgeSession } from "@/lib/bridge/coordinator";
 import { getDeviceOrigin } from "@/lib/history/origin";
 import {
+	type BlockedWrite,
 	type HistoryController,
 	useDocumentHistory,
 } from "@/lib/history/use-document-history";
@@ -45,8 +46,12 @@ export type DocumentSyncState = {
 	 * document. Panes key their mode snapshot on it.
 	 */
 	projectionGeneration: string;
-	/** A write the server never answered is still outstanding (N3). */
-	hasUnresolvedWrites: boolean;
+	/** Work the server has not confirmed yet — queued or in flight. */
+	hasPendingWrites: boolean;
+	/** A write the server refused; terminal until the writer resolves it. */
+	blockedWrite: BlockedWrite | null;
+	/** Discard the refused write and everything behind it, keeping the text. */
+	resolveBlockedWrite: () => void;
 	handleEditorChange: () => void;
 	flushMarkdown: (markdown: string) => Promise<void>;
 	recordHistory: (opts?: { structural?: boolean }) => void;
@@ -175,6 +180,7 @@ function OwnerSyncHost({
 		getEditorHandle,
 		serverMarkdown: document?.markdown,
 		serverUpdatedAt: document?.updatedAt,
+		serverCurrentNodeId: document?.currentNodeId,
 		enabled,
 		deriveTitle: deriveTitleFromMarkdown,
 		isManualTitle: registry.isManuallyRenamed(documentId),
@@ -234,7 +240,7 @@ function OwnerSyncHost({
 					projection.resolvedProjectionId,
 				);
 			} else if (projection.source === "recovered-draft") {
-				adoptRecoveredDraft(projection.markdown);
+				adoptRecoveredDraft(projection.markdown, projection.kind);
 			} else {
 				// A programmatic seed (AI accept, version restore) never reaches
 				// handleEditorChange, and a pointer move changes no text at all, so
@@ -308,7 +314,9 @@ function OwnerSyncHost({
 		pendingConflict: sync.pendingConflict,
 		markdown: projectedMarkdown,
 		projectionGeneration,
-		hasUnresolvedWrites: history.hasUnresolvedWrites,
+		hasPendingWrites: history.hasPendingWrites,
+		blockedWrite: history.blockedWrite,
+		resolveBlockedWrite: history.resolveBlockedWrite,
 		handleEditorChange,
 		flushMarkdown: sync.flushMarkdown,
 		recordHistory: history.recordChange,
@@ -328,7 +336,8 @@ function OwnerSyncHost({
 		sync.wordCount,
 		sync.syncStatus,
 		sync.pendingConflict,
-		history.hasUnresolvedWrites,
+		history.hasPendingWrites,
+		history.blockedWrite,
 		// The PROJECTION, not documents.markdown: a change that only moves what
 		// the panes should render — an undo, a branch switch, a remote projection
 		// at the same word count — never touched the raw field, so it never
@@ -439,6 +448,7 @@ function ReviewerSyncHost({
 	}, [canSuggest, recordHistory]);
 	const noopRecord = useCallback(() => {}, []);
 	const noopFlush = useCallback(() => {}, []);
+	const noopResolveBlocked = useCallback(() => {}, []);
 
 	const stateRef = useRef<DocumentSyncState | null>(null);
 	stateRef.current = {
@@ -449,7 +459,9 @@ function ReviewerSyncHost({
 		pendingConflict: false,
 		markdown: shared?.markdown ?? "",
 		projectionGeneration: "reviewer",
-		hasUnresolvedWrites: false,
+		hasPendingWrites: false,
+		blockedWrite: null,
+		resolveBlockedWrite: noopResolveBlocked,
 		handleEditorChange,
 		// No owner write path for a grantee — flushing markdown is a no-op.
 		flushMarkdown: async () => {},
@@ -532,7 +544,8 @@ export function WorkspaceProvider({
 				// An undo can republish identical text; without this the panes never
 				// learn that their mode snapshot has been superseded.
 				prev.projectionGeneration !== state.projectionGeneration ||
-				prev.hasUnresolvedWrites !== state.hasUnresolvedWrites
+				prev.hasPendingWrites !== state.hasPendingWrites ||
+				prev.blockedWrite !== state.blockedWrite
 			) {
 				setSyncVersion((v) => v + 1);
 			}

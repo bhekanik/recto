@@ -62,11 +62,28 @@ export type HistoryController = {
 	 */
 	getHeadNodeId: () => string | null;
 	/**
-	 * True while a commit the server never answered is waiting to be retried.
-	 * The document is neither saved nor refused — it is unresolved, and the
-	 * writer should be told that rather than shown a reassuring tick.
+	 * Writes this device has produced that the server has not confirmed — queued,
+	 * or sent and still outstanding. A manual version tag creates no pending
+	 * projection of its own, so without this the status bar said "Saved" while
+	 * the version was still uncreated.
 	 */
-	hasUnresolvedWrites: boolean;
+	hasPendingWrites: boolean;
+	/**
+	 * A write the server REFUSED with an error re-sending cannot fix. Convex
+	 * retries offline and internal failures itself until the server confirms, so
+	 * a rejected mutation promise is an application, developer or limit error —
+	 * never a lost response. Retrying it with the same arguments loops forever
+	 * and blocks every write behind it, so it becomes terminal and the writer is
+	 * offered a way out.
+	 */
+	blockedWrite: BlockedWrite | null;
+	/**
+	 * Give up on the blocked write and everything queued behind it, keeping what
+	 * is on screen: the document is re-based onto the head the server actually
+	 * has, with the writer's text held as an open draft that their next edit
+	 * commits as an ordinary child node.
+	 */
+	resolveBlockedWrite: () => void;
 	/** Local input the tree has not captured yet — see GroupingController. */
 	hasPendingDraft: () => boolean;
 	/**
@@ -87,17 +104,24 @@ const HANDLE_RETRY_MS = 250;
 /** Automatic ensureRoot attempts before the writer is asked to retry. */
 const ENSURE_ROOT_MAX_ATTEMPTS = 4;
 const ENSURE_ROOT_BASE_DELAY_MS = 400;
-/** Backoff for retrying a commit the server never answered. */
-const OUTBOX_BASE_DELAY_MS = 500;
-const OUTBOX_MAX_DELAY_MS = 15_000;
+
+/**
+ * A write the server refused. Terminal: the same arguments cannot start
+ * succeeding, so it is never re-sent on its own.
+ */
+export type BlockedWrite = {
+	kind: "commit" | "pointer";
+	/** The server's own message, kept for diagnostics rather than as a label. */
+	message: string;
+};
 
 /**
  * One history-dependent write, waiting its turn.
  *
  * Commits, pointer moves and version tags all go through a SINGLE ordered
- * queue. They are not independent: a pointer move sent while a rejected commit
- * waits to be retried would be overtaken when that retry finally lands, so an
- * undo the writer had already performed was silently reversed. The queue
+ * queue, one at a time. They are not independent: a pointer move sent past a
+ * commit the server has not answered would be overtaken when that commit lands,
+ * silently reversing an undo the writer had already performed. The queue
  * preserves the order the writer produced the events in.
  */
 type OutboxEntry = {
@@ -105,7 +129,6 @@ type OutboxEntry = {
 	moveToken: number | null;
 	/** The unsaved work it carries, for the acknowledgement to name. */
 	projectionId: string | null;
-	attempts: number;
 } & (
 	| {
 			kind: "commit";
@@ -298,8 +321,19 @@ export function useDocumentHistory(args: {
 		serverUpdatedAt: number;
 		ok: boolean;
 	}) => void;
-	/** A draft restored from storage on open, resolved without an editor. */
-	getRecoveredDraft?: () => { present: boolean; markdown: string } | null;
+	/**
+	 * A draft restored from storage on open, resolved without an editor. `kind`
+	 * and `pointerNodeId` are what make a recovered POINTER move replayable:
+	 * without them it looked like plain text, no queue entry was rebuilt, and the
+	 * next markdown acknowledgement retired a move the server never took.
+	 */
+	getRecoveredDraft?: () => {
+		present: boolean;
+		markdown: string;
+		projectionId?: string;
+		kind?: "draft" | "commit" | "pointer";
+		pointerNodeId?: string;
+	} | null;
 	/** Unsaved local work the server has not answered yet (S2/S3). */
 	getPendingProjectionId?: () => string | null;
 }): HistoryController {
@@ -354,17 +388,29 @@ export function useDocumentHistory(args: {
 	const [rootFailed, setRootFailed] = useState(false);
 	const localMoveRef = useRef<LocalPointerMove | null>(null);
 	const moveTokenRef = useRef(0);
-	// Commits waiting on the server, oldest first. A rejected commitEdit means
-	// the transaction ROLLED BACK — the node never landed — so sending its
-	// descendants would chain the tree off a node the server has never seen.
-	// They queue behind it and the same clientMutationId is retried, which the
-	// server answers idempotently.
+	// History-dependent writes waiting on the server, oldest first. A rejected
+	// commitEdit means the transaction ROLLED BACK — the node never landed — so
+	// sending its descendants would chain the tree off a node the server has
+	// never seen.
 	const outboxRef = useRef<OutboxEntry[]>([]);
-	const outboxTimerRef = useRef<number | null>(null);
-	// True once a commit has failed without an answer. A timeout is not a
-	// refusal: the write may yet have landed, so the work stays pending and the
-	// writer is told the document is unresolved rather than saved.
-	const [outboxStalled, setOutboxStalled] = useState(false);
+	// The entry currently in flight. Without it, anything that queued more work
+	// re-entered the pump and sent the head a SECOND time: two quick version
+	// tags inserted the first tag twice, because versions.create is not
+	// idempotent.
+	const outboxActiveRef = useRef<OutboxEntry | null>(null);
+	// Queue depth, mirrored into state because it is what the status bar reads.
+	// A version tag publishes no projection of its own, so it was invisible to
+	// the sync status and a manual version could sit uncreated under "Saved".
+	const [pendingWrites, setPendingWrites] = useState(0);
+	// A write the server refused. Terminal — see BlockedWrite. Mirrored in a ref
+	// because the pump reads it synchronously: the rejection that sets it and the
+	// next enqueue can land in the same tick, before React has re-rendered.
+	const blockedRef = useRef<BlockedWrite | null>(null);
+	const [blockedWrite, setBlockedWrite] = useState<BlockedWrite | null>(null);
+	// The `documents.pointerRevision` this client last observed or was told it
+	// produced. Pointer writes compare-and-set against it instead of racing a
+	// browser clock against server-generated timestamps.
+	const observedPointerRevisionRef = useRef(0);
 	// What each in-flight write carries, kept independently of the pointer-move
 	// slot. That slot is cleared as soon as the server echoes the new head —
 	// which Convex delivers BEFORE the mutation's own result — so an
@@ -425,11 +471,11 @@ export function useDocumentHistory(args: {
 		localMoveRef.current = null;
 		inFlightRef.current.clear();
 		outboxRef.current = [];
-		if (outboxTimerRef.current !== null) {
-			window.clearTimeout(outboxTimerRef.current);
-			outboxTimerRef.current = null;
-		}
-		setOutboxStalled(false);
+		outboxActiveRef.current = null;
+		setPendingWrites(0);
+		blockedRef.current = null;
+		setBlockedWrite(null);
+		observedPointerRevisionRef.current = 0;
 		pendingRemotePointerRef.current = null;
 		pendingRecordRef.current = null;
 		headNodeIdRef.current = null;
@@ -553,6 +599,13 @@ export function useDocumentHistory(args: {
 		pendingRemotePointerRef.current = next;
 	}, []);
 
+	/** Queue a write and report the new depth, then try to send. */
+	const enqueue = useCallback((entry: OutboxEntry) => {
+		outboxRef.current.push(entry);
+		setPendingWrites(outboxRef.current.length);
+		pumpOutboxRef.current();
+	}, []);
+
 	// Merge the reactive DAG with any optimistically-appended local nodes.
 	const nodes = useMemo<HistoryNode[]>(() => {
 		const remote = (dagRows ?? []) as HistoryNode[];
@@ -575,11 +628,10 @@ export function useDocumentHistory(args: {
 		const id = currentNodeIdRef.current;
 		if (!id || id === lastAutoNodeIdRef.current) return;
 		lastAutoNodeIdRef.current = id;
-		outboxRef.current.push({
+		enqueue({
 			kind: "version",
 			moveToken: null,
 			projectionId: null,
-			attempts: 0,
 			nodeId: id,
 			label: `Autosave ${new Date().toLocaleTimeString([], {
 				hour: "2-digit",
@@ -587,7 +639,6 @@ export function useDocumentHistory(args: {
 			})}`,
 			versionKind: "auto",
 		});
-		pumpOutboxRef.current();
 	}, AUTO_VERSION_MS);
 
 	// A one-shot origin override consumed by the next commit (AI transforms tag
@@ -600,39 +651,61 @@ export function useDocumentHistory(args: {
 	 *
 	 * Nothing behind an unanswered write may go out. A commit's descendants would
 	 * chain off a node the server may not have; a pointer move sent past a
-	 * waiting commit is overtaken when that commit's retry lands, silently
+	 * waiting commit is overtaken when that commit finally lands, silently
 	 * reversing an undo the writer had already performed.
 	 */
 	const pumpOutbox = useCallback(() => {
-		if (outboxTimerRef.current !== null) return;
+		// One write at a time. Re-entering the pump while the head was in flight
+		// sent it twice — and versions.create is not idempotent, so two quick
+		// tags inserted the first one twice.
+		if (outboxActiveRef.current !== null) return;
+		// Terminal: the server has refused the head and re-sending cannot help.
+		if (blockedRef.current !== null) return;
 		const entry = outboxRef.current[0];
 		if (!entry) return;
 		if (!documentId) return;
-		entry.attempts += 1;
+		outboxActiveRef.current = entry;
+
+		// The latch is cleared EXACTLY ONCE, by whichever of the paths below runs
+		// first, and always before the queue advances or the entry goes terminal.
+		let released = false;
+		const release = () => {
+			if (released) return;
+			released = true;
+			if (outboxActiveRef.current === entry) outboxActiveRef.current = null;
+		};
 
 		const onAnswered = () => {
+			release();
 			if (outboxRef.current[0] !== entry) return false;
 			outboxRef.current.shift();
-			setOutboxStalled(false);
+			setPendingWrites(outboxRef.current.length);
 			return true;
 		};
 
 		/**
-		 * Unanswered is NOT refused: the write may have landed and the reply been
-		 * lost. The entry stays at the head under its original identity — which
-		 * the server replays idempotently — and nothing behind it is sent.
+		 * The server REFUSED this write. Convex retries offline and internal
+		 * failures itself until the server confirms, so a rejected promise is an
+		 * application, developer or limit error — an oversized commit, an unknown
+		 * pointer target — and the same arguments cannot start succeeding. It
+		 * becomes terminal rather than looping: the entry stays at the head so
+		 * its work stays pending and recoverable, nothing behind it is sent, and
+		 * the writer is offered an explicit way out.
 		 */
-		const onUnanswered = () => {
+		const onRefused = (kind: "commit" | "pointer", error: unknown) => {
+			release();
 			if (outboxRef.current[0] !== entry) return;
-			setOutboxStalled(true);
-			const delay = Math.min(
-				OUTBOX_BASE_DELAY_MS * 2 ** (entry.attempts - 1),
-				OUTBOX_MAX_DELAY_MS,
+			blockedRef.current = {
+				kind,
+				message: error instanceof Error ? error.message : String(error),
+			};
+			setBlockedWrite(blockedRef.current);
+			toast(
+				kind === "commit"
+					? "This change couldn't be saved. Your text is safe — see the status bar."
+					: "That history move couldn't be saved. See the status bar.",
+				"error",
 			);
-			outboxTimerRef.current = window.setTimeout(() => {
-				outboxTimerRef.current = null;
-				pumpOutboxRef.current();
-			}, delay);
 		};
 
 		if (entry.kind === "commit") {
@@ -640,6 +713,10 @@ export function useDocumentHistory(args: {
 				.then((result) => {
 					if (!onAnswered()) return;
 					if (result.committed) {
+						observedPointerRevisionRef.current = Math.max(
+							observedPointerRevisionRef.current,
+							result.pointerRevision,
+						);
 						settleLocalMove(
 							entry.moveToken,
 							result.pointerRevision,
@@ -649,6 +726,10 @@ export function useDocumentHistory(args: {
 						// Another writer owns the head. Queue theirs so the next safe
 						// moment adopts it; the writer is probably still mid-sentence,
 						// and re-projecting under their caret is not an option.
+						observedPointerRevisionRef.current = Math.max(
+							observedPointerRevisionRef.current,
+							result.remotePointerRevision,
+						);
 						queueRemotePointer({
 							nodeId: result.remoteHeadNodeId,
 							revision: result.remotePointerRevision,
@@ -661,23 +742,31 @@ export function useDocumentHistory(args: {
 					}
 					pumpOutboxRef.current();
 				})
-				.catch(onUnanswered);
+				.catch((error) => onRefused("commit", error));
 			return;
 		}
 
 		if (entry.kind === "pointer") {
-			// The last-write-wins stamp is taken HERE, not when the move was made:
-			// a move that waited behind a retry would otherwise carry a timestamp
-			// older than writes the server has since accepted, and lose to them.
+			// Ordered by the server's own revision counter, not by a clock. The
+			// wall-clock rule compared `Date.now()` here against a server-generated
+			// `doc.updatedAt`: a slow browser clock, or an earlier queued markdown
+			// write executing first, made the server reject a move the writer had
+			// just made. `updatedAt` is still sent for clients of this mutation
+			// that predate the compare-and-set.
 			void updatePointer({
 				documentId,
 				currentNodeId: entry.nodeId,
 				markdown: entry.markdown,
 				wordCount: countWords(entry.markdown),
 				updatedAt: Date.now(),
+				expectedPointerRevision: observedPointerRevisionRef.current,
 			})
 				.then((result) => {
 					if (!onAnswered()) return;
+					observedPointerRevisionRef.current = Math.max(
+						observedPointerRevisionRef.current,
+						result.pointerRevision,
+					);
 					if (result.applied) {
 						// Only now is the queue known to be superseded. Clearing it
 						// before the write would drop a remote head this move never
@@ -689,7 +778,8 @@ export function useDocumentHistory(args: {
 							result.updatedAt,
 						);
 					} else {
-						// Rejected: the server told us which head won — keep it.
+						// Refused by the compare-and-set: the server told us which head
+						// won, and at which revision — keep both.
 						queueRemotePointer({
 							nodeId: result.currentNodeId,
 							revision: result.pointerRevision,
@@ -699,10 +789,7 @@ export function useDocumentHistory(args: {
 					}
 					pumpOutboxRef.current();
 				})
-				.catch((error) => {
-					onUnanswered();
-					void error;
-				});
+				.catch((error) => onRefused("pointer", error));
 			return;
 		}
 
@@ -716,7 +803,14 @@ export function useDocumentHistory(args: {
 				if (!onAnswered()) return;
 				pumpOutboxRef.current();
 			})
-			.catch(onUnanswered);
+			.catch(() => {
+				// A version tag names no text and nothing chains off it, so a refusal
+				// is reported and the queue moves on. Holding the queue for it would
+				// strand unrelated later writes behind a label.
+				if (!onAnswered()) return;
+				toast("Couldn't create that version.", "error");
+				pumpOutboxRef.current();
+			});
 	}, [
 		commitEdit,
 		createVersion,
@@ -726,8 +820,8 @@ export function useDocumentHistory(args: {
 		updatePointer,
 	]);
 
-	// The pump re-enters itself through a ref so a retry scheduled by an older
-	// render still reaches the current implementation.
+	// The pump re-enters itself through a ref so a response answered under an
+	// older render still reaches the current implementation.
 	const pumpOutboxRef = useRef(pumpOutbox);
 	pumpOutboxRef.current = pumpOutbox;
 
@@ -763,11 +857,10 @@ export function useDocumentHistory(args: {
 
 			// One transaction: the node, the pointer, the markdown. See the
 			// documents.commitEdit doc comment for why these can't be separate.
-			outboxRef.current.push({
+			enqueue({
 				kind: "commit",
 				moveToken,
 				projectionId,
-				attempts: 0,
 				args: {
 					documentId,
 					node: {
@@ -782,17 +875,17 @@ export function useDocumentHistory(args: {
 					markdown: commit.markdown,
 					wordCount: countWords(commit.markdown),
 					expectedHeadNodeId: commit.parentNodeId,
-					// The node's own id: stable across retries, unique per commit, so
-					// the server recognises a replay as the same attempt.
+					// The node's own id: stable, unique per commit, so the server
+					// recognises Convex's own re-delivery as the same attempt.
 					clientMutationId: commit.nodeId,
 				},
 			});
-			pumpOutboxRef.current();
 			debouncedAutoVersion();
 		},
 		[
 			debouncedAutoVersion,
 			documentId,
+			enqueue,
 			origin,
 			publishProjection,
 			setPointer,
@@ -842,18 +935,67 @@ export function useDocumentHistory(args: {
 		}
 
 		const map = indexNodes(dagRows as HistoryNode[]);
-		const rootMarkdown = map.has(serverCurrentNodeId)
-			? materialize(serverCurrentNodeId, map)
+		observedPointerRevisionRef.current = Math.max(
+			observedPointerRevisionRef.current,
+			serverPointerRevision ?? 0,
+		);
+
+		// Local input outranks anything from the server: keystrokes that landed
+		// before the DAG resolved, or a draft recovered from storage. The recovery
+		// result is a tagged flag rather than a non-empty string, because a draft
+		// that deletes everything is still one the writer meant to keep.
+		const pending = pendingRecordRef.current;
+		pendingRecordRef.current = null;
+		const recovered = getRecoveredDraft?.() ?? null;
+
+		// A pointer move the server never confirmed, restored from storage.
+		// Recovery reconstructed no queue entry for it, so the automatic markdown
+		// save that follows hydration retired the recovered record and reported
+		// "Saved" for a move the server never took. It is replayed instead, under
+		// its STORED identity, so only its own acknowledgement can retire it.
+		//
+		// Not when keystrokes beat the DAG: those already rewrote the stored
+		// record as a plain draft, so the id here could never be acknowledged, and
+		// the writer has moved on from the move anyway.
+		const recoveredPointer =
+			recovered?.present &&
+			recovered.kind === "pointer" &&
+			recovered.pointerNodeId !== undefined &&
+			recovered.projectionId !== undefined &&
+			recovered.pointerNodeId !== serverCurrentNodeId &&
+			pending === null
+				? {
+						nodeId: recovered.pointerNodeId,
+						projectionId: recovered.projectionId,
+					}
+				: null;
+		const replayPointer =
+			recoveredPointer && map.has(recoveredPointer.nodeId)
+				? recoveredPointer
+				: null;
+		// The target is not in the DAG: the commit that would have created it
+		// never landed, so this move is dead and nobody can apply it. What
+		// survives is the TEXT, so the record is demoted to a plain draft. Left
+		// claiming a pointer move it would never be retired by anything — the
+		// document would sit unsynced for ever and its own autosave could not
+		// clear it.
+		const demoteRecovered = recoveredPointer !== null && replayPointer === null;
+
+		// Hydrate where the writer left off, which for a replayed move is its
+		// target rather than the head the server is still showing.
+		const headNodeId = replayPointer?.nodeId ?? serverCurrentNodeId;
+		const rootMarkdown = map.has(headNodeId)
+			? materialize(headNodeId, map)
 			: (serverMarkdown ?? "");
 
 		const controller = new GroupingController({
-			rootNodeId: serverCurrentNodeId,
+			rootNodeId: headNodeId,
 			rootMarkdown,
 			onCommit,
 		});
 		controllerRef.current = controller;
-		setPointer(serverCurrentNodeId);
-		headNodeIdRef.current = serverCurrentNodeId;
+		setPointer(headNodeId);
+		headNodeIdRef.current = headNodeId;
 		hydratedRef.current = true;
 
 		// First open goes through the SAME provenance rule as a remote update.
@@ -863,20 +1005,36 @@ export function useDocumentHistory(args: {
 		const handle = getHandleRef.current();
 		const editorText = handle?.getCanonicalMarkdown() ?? "";
 
-		// Local input outranks anything from the server: keystrokes that landed
-		// before the DAG resolved, or a draft recovered from storage. The recovery
-		// result is a tagged flag rather than a non-empty string, because a draft
-		// that deletes everything is still one the writer meant to keep.
-		const pending = pendingRecordRef.current;
-		pendingRecordRef.current = null;
-		const recovered = getRecoveredDraft?.() ?? null;
+		if (replayPointer) {
+			if (editorText !== rootMarkdown) {
+				handle?.seed(rootMarkdown, { programmatic: true });
+			}
+			const moveToken = startLocalMove(
+				headNodeId,
+				rootMarkdown,
+				replayPointer.projectionId,
+			);
+			publishProjection(rootMarkdown, "local", 0, replayPointer.projectionId, {
+				kind: "pointer",
+				pointerNodeId: headNodeId,
+			});
+			enqueue({
+				kind: "pointer",
+				moveToken,
+				projectionId: replayPointer.projectionId,
+				nodeId: headNodeId,
+				markdown: rootMarkdown,
+			});
+			return;
+		}
+
 		const localInput =
 			pending?.markdown ?? (recovered?.present ? recovered.markdown : null);
 
 		// Opening is the first thing this device has seen, so there is no earlier
 		// baseline for the server to be newer than.
 		const serverDraft = trustedServerDraft({
-			headNodeId: serverCurrentNodeId,
+			headNodeId,
 			materialized: rootMarkdown,
 			serverMarkdown,
 			serverMarkdownHeadNodeId,
@@ -898,22 +1056,27 @@ export function useDocumentHistory(args: {
 			shown,
 			localInput === null ? "server" : "recovered-draft",
 			serverUpdatedAt ?? 0,
+			undefined,
+			demoteRecovered ? { kind: "draft" } : undefined,
 		);
 	}, [
 		enabled,
 		documentId,
 		dagRows,
+		enqueue,
 		reconcileTick,
 		rootFailed,
 		serverCurrentNodeId,
 		serverMarkdown,
 		serverMarkdownHeadNodeId,
+		serverPointerRevision,
 		serverUpdatedAt,
 		ensureRoot,
 		getRecoveredDraft,
 		onCommit,
 		publishProjection,
 		setPointer,
+		startLocalMove,
 	]);
 
 	// Suppress grouping while a navigation re-projects state into the editor, so
@@ -990,19 +1153,24 @@ export function useDocumentHistory(args: {
 				pointerNodeId: nodeId,
 			});
 			// Through the SAME queue as commits. Sent directly, this move would be
-			// overtaken by the retry of a commit still waiting ahead of it, which
-			// silently reversed an undo the writer had already performed.
-			outboxRef.current.push({
+			// overtaken by a commit still waiting ahead of it, which silently
+			// reversed an undo the writer had already performed.
+			enqueue({
 				kind: "pointer",
 				moveToken,
 				projectionId,
-				attempts: 0,
 				nodeId,
 				markdown,
 			});
-			pumpOutboxRef.current();
 		},
-		[documentId, nodesById, publishProjection, setPointer, startLocalMove],
+		[
+			documentId,
+			enqueue,
+			nodesById,
+			publishProjection,
+			setPointer,
+			startLocalMove,
+		],
 	);
 
 	const undo = useCallback(() => {
@@ -1037,18 +1205,16 @@ export function useDocumentHistory(args: {
 			if (!id) return;
 			// Queued behind the commit that created this node. Sent directly, a tag
 			// can reach the server before the node it names exists.
-			outboxRef.current.push({
+			enqueue({
 				kind: "version",
 				moveToken: null,
 				projectionId: null,
-				attempts: 0,
 				nodeId: id,
 				label,
 				versionKind: kind,
 			});
-			pumpOutboxRef.current();
 		},
-		[documentId],
+		[documentId, enqueue],
 	);
 
 	// Additive restore (D9): fork forward — seed the version's materialized state
@@ -1120,6 +1286,48 @@ export function useDocumentHistory(args: {
 		() => controllerRef.current?.hasPendingDraft ?? false,
 		[],
 	);
+
+	/**
+	 * The writer's way out of a refused write. Everything queued goes — the
+	 * blocked entry, and everything behind it, which chains off a node the server
+	 * never received — but the TEXT stays: the document is moved onto the head
+	 * the server actually has, with what is on screen held as an open draft, so
+	 * the next edit commits it as an ordinary child of that head.
+	 */
+	const resolveBlockedWrite = useCallback(() => {
+		if (blockedRef.current === null) return;
+		const discarded = outboxRef.current;
+		outboxRef.current = [];
+		outboxActiveRef.current = null;
+		setPendingWrites(0);
+		blockedRef.current = null;
+		setBlockedWrite(null);
+		// Each discarded write's own work is reported refused, never accepted, so
+		// its text stays dirty and stays in the recovery record.
+		for (const entry of discarded) settleLocalMove(entry.moveToken, null);
+		localMoveRef.current = null;
+
+		// Move onto the server's head. The editor is deliberately NOT re-seeded:
+		// the whole point is that the writer keeps what they were looking at.
+		const serverHead = serverCurrentNodeId ?? currentNodeIdRef.current;
+		const map = nodesByIdRef.current;
+		if (!serverHead || !map.has(serverHead)) return;
+		let materialized: string;
+		try {
+			materialized = materialize(serverHead, map);
+		} catch {
+			return;
+		}
+		const controller = controllerRef.current;
+		controller?.setCurrent(serverHead, materialized);
+		setPointer(serverHead);
+		headNodeIdRef.current = serverHead;
+		pendingRemotePointerRef.current = null;
+		const onScreen =
+			getHandleRef.current()?.getCanonicalMarkdown() ?? materialized;
+		if (onScreen !== materialized) controller?.record(onScreen, null);
+		setReconcileTick((tick) => tick + 1);
+	}, [serverCurrentNodeId, setPointer, settleLocalMove]);
 
 	const materializeAt = useCallback(
 		(nodeId: string) => {
@@ -1288,6 +1496,14 @@ export function useDocumentHistory(args: {
 		if (serverCurrentNodeId === undefined) return;
 		if (serverPointerRevision === undefined) return;
 
+		// Every observation advances what the next pointer write compares against.
+		// Forwards only: an older snapshot arriving late must not walk the
+		// expectation backwards and make the next move lose.
+		observedPointerRevisionRef.current = Math.max(
+			observedPointerRevisionRef.current,
+			serverPointerRevision,
+		);
+
 		const decision = decideServerPointer({
 			serverCurrentNodeId,
 			serverPointerRevision,
@@ -1346,11 +1562,8 @@ export function useDocumentHistory(args: {
 			controllerRef.current = null;
 
 			outboxRef.current = [];
+			outboxActiveRef.current = null;
 			inFlightRef.current.clear();
-			if (outboxTimerRef.current !== null) {
-				window.clearTimeout(outboxTimerRef.current);
-				outboxTimerRef.current = null;
-			}
 			// Every other hook-owned timer, so nothing survives to touch state or
 			// storage behind us.
 			markEditorIdle.cancel();
@@ -1393,7 +1606,9 @@ export function useDocumentHistory(args: {
 		tagVersion,
 		materializeAt,
 		getHeadNodeId,
-		hasUnresolvedWrites: outboxStalled,
+		hasPendingWrites: pendingWrites > 0,
+		blockedWrite,
+		resolveBlockedWrite,
 		hasPendingDraft,
 		reconcileRemote,
 	};

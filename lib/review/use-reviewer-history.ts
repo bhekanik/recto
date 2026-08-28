@@ -278,6 +278,7 @@ export function useReviewerHistory(args: {
 	const getHeadNodeId = useCallback(() => currentNodeIdRef.current, []);
 	const noPendingDraft = useCallback(() => false, []);
 	const noRemoteToReconcile = useCallback(() => true, []);
+	const noopResolveBlocked = useCallback(() => {}, []);
 
 	return {
 		nodes,
@@ -295,8 +296,10 @@ export function useReviewerHistory(args: {
 		materializeAt,
 		getHeadNodeId,
 		// The reviewer surface writes through review.reviewerAppend, which has no
-		// outbox — there is nothing here that can be left unresolved.
-		hasUnresolvedWrites: false,
+		// outbox — there is nothing here to be queued or refused.
+		hasPendingWrites: false,
+		blockedWrite: null,
+		resolveBlockedWrite: noopResolveBlocked,
 		hasPendingDraft: noPendingDraft,
 		reconcileRemote: noRemoteToReconcile,
 	};

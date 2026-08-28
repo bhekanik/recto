@@ -53,6 +53,12 @@ type StatusBarProps = {
 	wordCount: number;
 	readingMinutes: number;
 	syncStatus: SyncStatus;
+	/**
+	 * Present only when the server has REFUSED a write. Re-sending it cannot
+	 * help, so the indicator becomes the writer's way out: discard the refused
+	 * write and keep the text, which their next edit saves as a new change.
+	 */
+	onResolveBlocked?: () => void;
 	mode: Mode;
 	onModeChange: (mode: Mode) => void;
 	theme: Theme;
@@ -137,15 +143,16 @@ const SYNC_META: Record<
 
 // Fixed-width slot with an always-present (transparent when idle) dot, so the
 // label flipping between Saving/Saved/Unsynced never reflows its neighbours.
-function SyncIndicator({ status }: { status: SyncStatus }) {
+function SyncIndicator({
+	status,
+	onResolveBlocked,
+}: {
+	status: SyncStatus;
+	onResolveBlocked?: () => void;
+}) {
 	const meta = SYNC_META[status];
-	return (
-		<span
-			className={cn(
-				"flex items-center gap-[var(--space-2)]",
-				meta?.text ?? "text-[var(--color-ink-tertiary)]",
-			)}
-		>
+	const body = (
+		<>
 			<span
 				className={cn(
 					"h-[6px] w-[6px] rounded-full",
@@ -156,8 +163,27 @@ function SyncIndicator({ status }: { status: SyncStatus }) {
 			<span className="hidden min-w-[3.75rem] sm:inline-block">
 				{meta?.label ?? ""}
 			</span>
-		</span>
+		</>
 	);
+	const className = cn(
+		"flex items-center gap-[var(--space-2)]",
+		meta?.text ?? "text-[var(--color-ink-tertiary)]",
+	);
+	// "Not synced" is the one status a writer can do something about, so when
+	// there is something to do it is a control rather than a label.
+	if (onResolveBlocked) {
+		return (
+			<button
+				type="button"
+				className={cn(className, "underline decoration-dotted")}
+				onClick={onResolveBlocked}
+				title="This change was refused by the server. Discard it and keep your text — your next edit saves it as a new change."
+			>
+				{body}
+			</button>
+		);
+	}
+	return <span className={className}>{body}</span>;
 }
 
 const iconBtn =
@@ -263,6 +289,7 @@ export function StatusBar({
 	wordCount,
 	readingMinutes,
 	syncStatus,
+	onResolveBlocked,
 	mode,
 	onModeChange,
 	theme,
@@ -591,7 +618,10 @@ export function StatusBar({
 				>
 					·
 				</span>
-				<SyncIndicator status={syncStatus} />
+				<SyncIndicator
+					status={syncStatus}
+					onResolveBlocked={onResolveBlocked}
+				/>
 			</div>
 		</footer>
 	);

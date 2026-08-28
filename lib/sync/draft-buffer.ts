@@ -89,6 +89,10 @@ export function reconcileDraft(
 	draftOrigin?: string;
 	/** Pointer work still waiting: the node the writer was trying to reach. */
 	pendingPointerNodeId?: string;
+	/** Identity of the surviving work, so its acknowledgement can name it. */
+	projectionId?: string;
+	/** What kind of work survived, so a markdown write cannot retire it. */
+	projectionKind?: "draft" | "commit" | "pointer";
 } {
 	const draft = loadDraft(documentId);
 	if (!draft) {
@@ -109,6 +113,8 @@ export function reconcileDraft(
 			hadConflict: draft.markdown !== serverMarkdown,
 			draftOrigin: draft.origin,
 			pendingPointerNodeId: draft.pointerNodeId,
+			projectionId: draft.projectionId,
+			projectionKind: "pointer",
 		};
 	}
 
@@ -122,6 +128,8 @@ export function reconcileDraft(
 			markdown: draft.markdown,
 			hadConflict: true,
 			draftOrigin: draft.origin,
+			projectionId: draft.projectionId,
+			projectionKind: draft.projectionKind ?? "draft",
 		};
 	}
 
