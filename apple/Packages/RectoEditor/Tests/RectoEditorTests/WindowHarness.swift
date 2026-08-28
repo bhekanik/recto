@@ -129,6 +129,72 @@ struct WindowHarness {
         return String(hash, radix: 16)
     }
 
+    /// The rect a character range occupies, in hosting-view coordinates.
+    ///
+    /// TextKit 2 only: `textLayoutManager`, never `layoutManager`. Returns nil
+    /// before the viewport has been laid out.
+    func rect(forCharacterRange range: NSRange) -> NSRect? {
+        guard let textView = editorTextView,
+              let local = textViewRect(forCharacterRange: range) else { return nil }
+        return textView.convert(local, to: hostingView)
+    }
+
+    /// The same rect, left in the text view's own coordinate system — which is
+    /// what `characterIndexForInsertion(at:)` and the other hit-testing APIs
+    /// take, and what avoids a flipped-coordinate round trip through SwiftUI's
+    /// hosting view.
+    func textViewRect(forCharacterRange range: NSRange) -> NSRect? {
+        guard let textView = editorTextView,
+              let layoutManager = textView.textLayoutManager,
+              let contentManager = layoutManager.textContentManager,
+              let start = contentManager.location(contentManager.documentRange.location,
+                                                  offsetBy: range.location),
+              let fragment = layoutManager.textLayoutFragment(for: start) else { return nil }
+        var frame = fragment.layoutFragmentFrame
+        let origin = textView.textContainerOrigin
+        frame.origin.x += origin.x
+        frame.origin.y += origin.y
+        return frame
+    }
+
+    /// The marker slot: the strip between the line's left edge and where its
+    /// text actually starts.
+    ///
+    /// Bullets, ordered numbers and task boxes are DRAWN there by the layout
+    /// fragment; the authored `-` or `1.` is kerned to zero width and painted
+    /// clear. So this strip is empty for a paragraph and holds exactly the
+    /// drawn glyph for a list item — which is the only place an attribute dump
+    /// cannot look. The width comes from the paragraph's head indent rather
+    /// than a guess, because that indent is what pushes the text aside to make
+    /// room for the glyph.
+    func markerGutter(forCharacterRange range: NSRange) -> NSRect? {
+        guard let line = rect(forCharacterRange: range),
+              let storage = editorTextView?.textStorage,
+              range.location < storage.length,
+              let paragraph = storage.attribute(.paragraphStyle, at: range.location,
+                                                effectiveRange: nil) as? NSParagraphStyle,
+              paragraph.headIndent > 1 else { return nil }
+        return NSRect(x: line.minX, y: line.minY,
+                      width: paragraph.headIndent, height: max(1, line.height))
+    }
+
+    /// Mean brightness of `rect`. Unlike `inkCoverage`, which is relative to
+    /// the rect's own corner, this is absolute — so it can tell a filled code
+    /// block from bare sheet, where every pixel is uniform and coverage is 0.
+    func averageBrightness(in rect: NSRect) -> Double {
+        guard let rep = bitmap(of: rect), rep.pixelsWide > 0, rep.pixelsHigh > 0 else { return 0 }
+        var total = 0.0
+        var count = 0
+        for y in stride(from: 0, to: rep.pixelsHigh, by: 2) {
+            for x in stride(from: 0, to: rep.pixelsWide, by: 2) {
+                guard let pixel = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                total += Double(pixel.brightnessComponent)
+                count += 1
+            }
+        }
+        return count == 0 ? 0 : total / Double(count)
+    }
+
     // MARK: - Text
 
     /// Strings readable from real AppKit text views. SwiftUI `Text` does not
