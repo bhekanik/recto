@@ -1,0 +1,4 @@
+// Copy to Local.xcconfig (gitignored) or run scripts/write-local-config.sh.
+// The "//" in a URL must be written as $(RECTO_SLASH)$(RECTO_SLASH).
+RECTO_CLERK_PUBLISHABLE_KEY = pk_test_...
+RECTO_CONVEX_DEPLOYMENT_URL = https:$(RECTO_SLASH)$(RECTO_SLASH)your-deployment.convex.cloud

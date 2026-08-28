@@ -1,0 +1,407 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		24951138EDB1CA6EB5ED45D3 /* ConvexMobile in Frameworks */ = {isa = PBXBuildFile; productRef = 9C038245CF1105860F65368E /* ConvexMobile */; };
+		4A81407459C9536A8EF0BDF6 /* JWT.swift in Sources */ = {isa = PBXBuildFile; fileRef = 983D34BF94709FE7EB232EC6 /* JWT.swift */; };
+		4C3B97EE609B0C22CCA3D953 /* ClerkKit in Frameworks */ = {isa = PBXBuildFile; productRef = ED00BCC88158BBBA884C2730 /* ClerkKit */; };
+		9C0A3CAD4A675BF2C8827DAD /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEC565C45CEBE0F16E7CE7A3 /* ContentView.swift */; };
+		9CF23098FE46041DB6071838 /* NativeSpikeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7593D4CAFE9C3FD37EE88FBD /* NativeSpikeApp.swift */; };
+		A616931A450380ED4CBDA0D5 /* SpikeConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21813FCC5405BE3B48710F4C /* SpikeConfig.swift */; };
+		BFBD42DD73AE558156C8700B /* SpikeLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E3B411A1CD365500BDAF4F8 /* SpikeLog.swift */; };
+		D15E30245AD492F906A72633 /* ConvexTemplateAuthProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 033C56FBDFD8FE9C865D4BB2 /* ConvexTemplateAuthProvider.swift */; };
+		E4263ED81C61AF9A18771FB3 /* SpikeModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F424A04CDDEBC82D10808E77 /* SpikeModel.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		033C56FBDFD8FE9C865D4BB2 /* ConvexTemplateAuthProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConvexTemplateAuthProvider.swift; sourceTree = "<group>"; };
+		0E3B411A1CD365500BDAF4F8 /* SpikeLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeLog.swift; sourceTree = "<group>"; };
+		1C2499F4B760095D99B665FF /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
+		21813FCC5405BE3B48710F4C /* SpikeConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeConfig.swift; sourceTree = "<group>"; };
+		5828A209B66A9B66B6B3F09B /* NativeSpike.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = NativeSpike.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		7593D4CAFE9C3FD37EE88FBD /* NativeSpikeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeSpikeApp.swift; sourceTree = "<group>"; };
+		983D34BF94709FE7EB232EC6 /* JWT.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JWT.swift; sourceTree = "<group>"; };
+		DEC565C45CEBE0F16E7CE7A3 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		F424A04CDDEBC82D10808E77 /* SpikeModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeModel.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		848567549A4CD6505E42050B /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4C3B97EE609B0C22CCA3D953 /* ClerkKit in Frameworks */,
+				24951138EDB1CA6EB5ED45D3 /* ConvexMobile in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		43CF03A3A26A6EDC65585782 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				DEC565C45CEBE0F16E7CE7A3 /* ContentView.swift */,
+				033C56FBDFD8FE9C865D4BB2 /* ConvexTemplateAuthProvider.swift */,
+				983D34BF94709FE7EB232EC6 /* JWT.swift */,
+				7593D4CAFE9C3FD37EE88FBD /* NativeSpikeApp.swift */,
+				21813FCC5405BE3B48710F4C /* SpikeConfig.swift */,
+				0E3B411A1CD365500BDAF4F8 /* SpikeLog.swift */,
+				F424A04CDDEBC82D10808E77 /* SpikeModel.swift */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		8CDB64D8F43929CD16E49BF3 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				1C2499F4B760095D99B665FF /* Base.xcconfig */,
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
+		9EAF359708AF22D923B5D8B9 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				5828A209B66A9B66B6B3F09B /* NativeSpike.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		CD7F729430C9CF5B022CD0E3 = {
+			isa = PBXGroup;
+			children = (
+				8CDB64D8F43929CD16E49BF3 /* Config */,
+				43CF03A3A26A6EDC65585782 /* Sources */,
+				9EAF359708AF22D923B5D8B9 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		F452D8C3F3A453073EF2693F /* NativeSpike */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B43522408DDF7ABCD4D6F64C /* Build configuration list for PBXNativeTarget "NativeSpike" */;
+			buildPhases = (
+				8567FD1BC16A26C415AF022D /* Sources */,
+				848567549A4CD6505E42050B /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = NativeSpike;
+			packageProductDependencies = (
+				ED00BCC88158BBBA884C2730 /* ClerkKit */,
+				9C038245CF1105860F65368E /* ConvexMobile */,
+			);
+			productName = NativeSpike;
+			productReference = 5828A209B66A9B66B6B3F09B /* NativeSpike.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A804F50C2CAD30514C23C332 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					F452D8C3F3A453073EF2693F = {
+						DevelopmentTeam = WAVMJLFY95;
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = E01D1F9911FA91D38502DD2E /* Build configuration list for PBXProject "NativeSpike" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = CD7F729430C9CF5B022CD0E3;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				A71DC503C3F9C9BAC05217A9 /* XCRemoteSwiftPackageReference "clerk-ios" */,
+				B2CAA6A65782462AE36D98F9 /* XCRemoteSwiftPackageReference "convex-swift" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 9EAF359708AF22D923B5D8B9 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				F452D8C3F3A453073EF2693F /* NativeSpike */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		8567FD1BC16A26C415AF022D /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				9C0A3CAD4A675BF2C8827DAD /* ContentView.swift in Sources */,
+				D15E30245AD492F906A72633 /* ConvexTemplateAuthProvider.swift in Sources */,
+				4A81407459C9536A8EF0BDF6 /* JWT.swift in Sources */,
+				9CF23098FE46041DB6071838 /* NativeSpikeApp.swift in Sources */,
+				A616931A450380ED4CBDA0D5 /* SpikeConfig.swift in Sources */,
+				BFBD42DD73AE558156C8700B /* SpikeLog.swift in Sources */,
+				E4263ED81C61AF9A18771FB3 /* SpikeModel.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		4B02D12E168303AE33D870A1 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 1C2499F4B760095D99B665FF /* Base.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = "";
+				CODE_SIGN_ENTITLEMENTS = Resources/NativeSpike.macOS.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = Resources/NativeSpike.iOS.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = Resources/NativeSpike.iOS.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Resources/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bhekani.recto.spike.native;
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		744F4C249B5ED7C38DA272A1 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = WAVMJLFY95;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				"EXCLUDED_ARCHS[sdk=macosx*]" = x86_64;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		851396B5369521F6BD8E589E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = WAVMJLFY95;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				"EXCLUDED_ARCHS[sdk=macosx*]" = x86_64;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		9F1486A7B0C58272B7C43094 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 1C2499F4B760095D99B665FF /* Base.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = "";
+				CODE_SIGN_ENTITLEMENTS = Resources/NativeSpike.macOS.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = Resources/NativeSpike.iOS.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = Resources/NativeSpike.iOS.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Resources/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bhekani.recto.spike.native;
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		B43522408DDF7ABCD4D6F64C /* Build configuration list for PBXNativeTarget "NativeSpike" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				9F1486A7B0C58272B7C43094 /* Debug */,
+				4B02D12E168303AE33D870A1 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		E01D1F9911FA91D38502DD2E /* Build configuration list for PBXProject "NativeSpike" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				851396B5369521F6BD8E589E /* Debug */,
+				744F4C249B5ED7C38DA272A1 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		A71DC503C3F9C9BAC05217A9 /* XCRemoteSwiftPackageReference "clerk-ios" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/clerk/clerk-ios";
+			requirement = {
+				kind = exactVersion;
+				version = 1.5.0;
+			};
+		};
+		B2CAA6A65782462AE36D98F9 /* XCRemoteSwiftPackageReference "convex-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/get-convex/convex-swift";
+			requirement = {
+				kind = exactVersion;
+				version = 0.8.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		9C038245CF1105860F65368E /* ConvexMobile */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B2CAA6A65782462AE36D98F9 /* XCRemoteSwiftPackageReference "convex-swift" */;
+			productName = ConvexMobile;
+		};
+		ED00BCC88158BBBA884C2730 /* ClerkKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A71DC503C3F9C9BAC05217A9 /* XCRemoteSwiftPackageReference "clerk-ios" */;
+			productName = ClerkKit;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = A804F50C2CAD30514C23C332 /* Project object */;
+}

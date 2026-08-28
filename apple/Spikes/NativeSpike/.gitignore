@@ -1,0 +1,8 @@
+# Environment values (Clerk publishable key, Convex deployment URL).
+Config/Local.xcconfig
+
+# Xcode local state.
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+build/
+DerivedData/

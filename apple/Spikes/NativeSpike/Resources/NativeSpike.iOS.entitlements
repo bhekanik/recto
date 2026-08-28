@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Clerk stores the session in the keychain. An unsigned simulator build
+	     has no keychain entitlement at all and Clerk.configure traps with
+	     OSStatus -34018, so the simulator build has to be signed (ad hoc is
+	     enough) with this group. -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>WAVMJLFY95.com.bhekani.recto.spike.native</string>
+	</array>
+</dict>
+</plist>
