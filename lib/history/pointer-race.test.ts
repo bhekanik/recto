@@ -100,24 +100,59 @@ function lastCallTo(name: string): MutationCall | undefined {
 	return mutationCalls.findLast((c) => c.name === name);
 }
 
+/** Query state a mutation's result becomes visible alongside. */
+type Snapshot = { server?: ServerDoc; dag?: HistoryNode[] };
+
+let renderServer: ((server: ServerDoc) => void) | null = null;
+
 /**
- * Answer the OLDEST unanswered call to `name`. Convex delivers a client's
- * mutation results in the order they were sent, so a test that settles them out
- * of order is testing something the runtime cannot do.
+ * Answer the oldest unanswered mutation, whatever function it called.
+ *
+ * Convex orders ALL of one client's mutations, not just those to the same
+ * function, so a per-function queue would let a test express an interleaving the
+ * runtime cannot produce. `expectedName` asserts the caller knows which call is
+ * actually next.
+ *
+ * `snapshot` advances the reactive queries BEFORE the promise settles, which is
+ * the order Convex guarantees: a mutation's result never arrives before the
+ * query results that reflect it.
  */
-async function respond(name: string, result: unknown): Promise<void> {
-	const call = mutationCalls.find((c) => c.name === name && !c.settled);
-	if (!call) throw new Error(`no unanswered ${name} call to respond to`);
+async function respond(
+	expectedName: string,
+	result: unknown,
+	snapshot?: Snapshot,
+): Promise<void> {
+	const call = mutationCalls.find((c) => !c.settled);
+	if (!call) throw new Error(`no unanswered mutation; wanted ${expectedName}`);
+	if (call.name !== expectedName) {
+		throw new Error(
+			`next unanswered mutation is ${call.name}, not ${expectedName}`,
+		);
+	}
 	call.settled = true;
+	if (snapshot?.dag) dagRows = snapshot.dag;
+	if (snapshot?.server) renderServer?.(snapshot.server);
 	await act(async () => {
 		call.resolve(result);
 	});
 }
 
-/** Answer every outstanding call to `name`, oldest first. */
-async function respondAll(name: string, result: unknown): Promise<void> {
-	while (mutationCalls.some((c) => c.name === name && !c.settled)) {
-		await respond(name, result);
+const OK_SAVE = { updatedAt: 1_500, stale: false, headMoved: false };
+
+/**
+ * Answer every outstanding mutation in the order the client sent them, taking
+ * each result from `results` by function name. Tests that only care about one
+ * function still have to answer the others, because the real client does.
+ */
+async function drain(results: Record<string, unknown>): Promise<void> {
+	let next = mutationCalls.find((c) => !c.settled);
+	while (next) {
+		const result = results[next.name];
+		if (result === undefined) {
+			throw new Error(`no result supplied for ${next.name}`);
+		}
+		await respond(next.name, result);
+		next = mutationCalls.find((c) => !c.settled);
 	}
 }
 
@@ -187,6 +222,8 @@ type ServerDoc = {
 	markdown: string;
 	updatedAt: number;
 	pointerRevision: number;
+	/** Undefined models a legacy headless save: markdown of unknown provenance. */
+	markdownHeadNodeId?: string;
 };
 
 /**
@@ -240,6 +277,8 @@ function mountStudio(handle: ReturnType<typeof fakeHandle>) {
 			serverMarkdown: server?.markdown,
 			serverUpdatedAt: server?.updatedAt,
 			serverPointerRevision: server?.pointerRevision,
+			serverMarkdownHeadNodeId: server?.markdownHeadNodeId,
+			getBaselineUpdatedAt: syncHook.getBaselineUpdatedAt,
 			enabled: server !== undefined,
 			origin: "test-device",
 			onRemoteProjection: syncHook.acceptRemoteProjection,
@@ -273,6 +312,10 @@ function mountStudio(handle: ReturnType<typeof fakeHandle>) {
 			root.render(createElement(Harness, { server }));
 		});
 	}
+	// Let respond() advance the query snapshot before it settles a mutation.
+	renderServer = (server: ServerDoc) => {
+		root.render(createElement(Harness, { server }));
+	};
 
 	act(() => {
 		root = createRoot(container);
@@ -397,6 +440,7 @@ const AT_ROOT: ServerDoc = {
 	markdown: "",
 	updatedAt: 1_000,
 	pointerRevision: 1,
+	markdownHeadNodeId: ROOT,
 };
 
 describe("studio sync + history contract", () => {
@@ -408,6 +452,7 @@ describe("studio sync + history contract", () => {
 		).IS_REACT_ACT_ENVIRONMENT = true;
 		mutationCalls.length = 0;
 		dagRows = undefined;
+		renderServer = null;
 		installLocalStorage();
 		vi.useFakeTimers();
 	});
@@ -425,18 +470,22 @@ describe("studio sync + history contract", () => {
 		if (!typedNodeId) throw new Error("the typed sentence committed no node");
 		expect(typedNodeId).not.toBe(ROOT);
 
-		await respond(NAMES.commitEdit, {
-			committed: true,
-			headNodeId: typedNodeId,
-			updatedAt: 2_000,
-			pointerRevision: 2,
-		});
 		dagRows = [rootNode(), ...s.history.nodes.filter((n) => n.nodeId !== ROOT)];
+		await drain({
+			[NAMES.commitEdit]: {
+				committed: true,
+				headNodeId: typedNodeId,
+				updatedAt: 2_000,
+				pointerRevision: 2,
+			},
+			[NAMES.updateMarkdown]: OK_SAVE,
+		});
 		s.render({
 			currentNodeId: typedNodeId,
 			markdown: TYPED,
 			updatedAt: 2_000,
 			pointerRevision: 2,
+			markdownHeadNodeId: typedNodeId,
 		});
 
 		// The AI transform's own commit path: seed, record, flush, one node.
@@ -502,10 +551,18 @@ describe("studio sync + history contract", () => {
 		// Only clears caused by the divergence count; an earlier no-op flush
 		// legitimately clears an empty draft on open.
 		const clearsBefore = removedKeys.length;
-		await respondAll(NAMES.updateMarkdown, {
-			updatedAt: 5_000,
-			stale: true,
-			headMoved: true,
+		await drain({
+			[NAMES.updateMarkdown]: {
+				updatedAt: 5_000,
+				stale: true,
+				headMoved: true,
+			},
+			[NAMES.commitEdit]: {
+				committed: false,
+				diverged: true,
+				remoteHeadNodeId: REMOTE,
+				remotePointerRevision: 5,
+			},
 		});
 
 		// The draft must never be DISCARDED here: only a completed projection may
@@ -555,11 +612,14 @@ describe("studio sync + history contract", () => {
 		handle.focused = true;
 		s.type(TYPED);
 		await settle(600);
-		await respondAll(NAMES.commitEdit, {
-			committed: true,
-			headNodeId: "x",
-			updatedAt: 1_500,
-			pointerRevision: 2,
+		await drain({
+			[NAMES.commitEdit]: {
+				committed: true,
+				headNodeId: "x",
+				updatedAt: 1_500,
+				pointerRevision: 2,
+			},
+			[NAMES.updateMarkdown]: OK_SAVE,
 		});
 
 		dagRows = [rootNode(), remoteNode()];
@@ -615,23 +675,20 @@ describe("studio sync + history contract", () => {
 		s.type(TYPED);
 		await settle(600);
 
-		// Answer the first save, or the flush pipeline stays busy and the
-		// assertion below would hold for the wrong reason.
-		await respondAll(NAMES.updateMarkdown, {
-			updatedAt: 1_500,
-			stale: false,
-			headMoved: false,
+		// Answer everything outstanding, or the flush pipeline stays busy and the
+		// assertion below would hold for the wrong reason. The commit is refused:
+		// another device owns the head, and its node is NOT in this client's DAG
+		// yet, so the projection cannot run.
+		await drain({
+			[NAMES.updateMarkdown]: OK_SAVE,
+			[NAMES.commitEdit]: {
+				committed: false,
+				diverged: true,
+				remoteHeadNodeId: REMOTE,
+				remotePointerRevision: 5,
+			},
 		});
 		await settle(0);
-
-		// The commit is refused: another device owns the head. The winning node is
-		// NOT in this client's DAG yet, so the projection cannot run.
-		await respond(NAMES.commitEdit, {
-			committed: false,
-			diverged: true,
-			remoteHeadNodeId: REMOTE,
-			remotePointerRevision: 5,
-		});
 
 		const savesBefore = callsTo(NAMES.updateMarkdown).length;
 		const clearsBefore = removedKeys.length;
@@ -660,8 +717,11 @@ describe("studio sync + history contract", () => {
 			markdown: AHEAD_TEXT,
 			updatedAt: 2_000,
 			pointerRevision: 2,
+			markdownHeadNodeId: LOCAL_NODE,
 		});
-		await settle();
+		// Nothing was ever typed here, so the editor is already idle and the
+		// projection lands on this render — before any grouping boundary closes.
+		await settle(0);
 
 		expect(s.history.currentNodeId).toBe(LOCAL_NODE);
 		// Projecting materialize(LOCAL_NODE) would silently drop the words that
@@ -674,14 +734,206 @@ describe("studio sync + history contract", () => {
 		);
 		expect(overwrote).toBe(false);
 
-		// The controller sits on the node, so the next edit turns that rescued
-		// draft into an ordinary node rather than a patch against itself.
-		const extended = `${AHEAD_TEXT} typed here`;
-		s.type(extended);
+		// The controller sits on the node, so when the draft's boundary closes it
+		// becomes an ordinary child of that node rather than a patch against
+		// itself — which is how the rescued text finally enters the DAG.
 		await settle(600);
-		const commit = lastCallTo(NAMES.commitEdit);
-		expect(commit?.args.expectedHeadNodeId).toBe(LOCAL_NODE);
-		expect(commit?.args.markdown).toBe(extended);
+		const rescued = callsTo(NAMES.commitEdit).find(
+			(c) => c.args.markdown === AHEAD_TEXT,
+		);
+		expect(rescued?.args.expectedHeadNodeId).toBe(LOCAL_NODE);
+		s.unmount();
+	});
+
+	it("Y1: never promotes markdown of unknown provenance into the tree", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode()];
+		const s = mountStudio(handle);
+		s.render(AT_ROOT);
+
+		// A legacy client saved without the compare-and-set, so the server holds
+		// text with no stamp. It may belong to a branch this device knows nothing
+		// about; the node's own materialization is the only trustworthy value.
+		dagRows = [rootNode(), localNode()];
+		s.render({
+			currentNodeId: LOCAL_NODE,
+			markdown: "text from a legacy client with no provenance",
+			updatedAt: 2_000,
+			pointerRevision: 2,
+			markdownHeadNodeId: undefined,
+		});
+		await settle();
+
+		expect(s.history.currentNodeId).toBe(LOCAL_NODE);
+		expect(handle.text).toBe(LOCAL_TEXT);
+		// Nothing untrusted was turned into a node.
+		const promoted = callsTo(NAMES.commitEdit).some(
+			(c) => c.args.markdown === "text from a legacy client with no provenance",
+		);
+		expect(promoted).toBe(false);
+		s.unmount();
+	});
+
+	it("Y1: distrusts a stamp naming a different head", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode()];
+		const s = mountStudio(handle);
+		s.render(AT_ROOT);
+
+		dagRows = [rootNode(), localNode()];
+		s.render({
+			currentNodeId: LOCAL_NODE,
+			markdown: AHEAD_TEXT,
+			updatedAt: 2_000,
+			pointerRevision: 2,
+			// The stored text belongs to some other branch's head.
+			markdownHeadNodeId: REMOTE,
+		});
+		await settle();
+
+		expect(handle.text).toBe(LOCAL_TEXT);
+		s.unmount();
+	});
+
+	it("Y2: projects a newer same-head draft instead of treating it as a no-op", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode(), localNode()];
+		const s = mountStudio(handle);
+		// This device is already sitting on LOCAL_NODE.
+		s.render({
+			currentNodeId: LOCAL_NODE,
+			markdown: LOCAL_TEXT,
+			updatedAt: 1_000,
+			pointerRevision: 2,
+			markdownHeadNodeId: LOCAL_NODE,
+		});
+		await settle();
+		expect(s.history.currentNodeId).toBe(LOCAL_NODE);
+		expect(handle.text).toBe(LOCAL_TEXT);
+
+		// The other device keeps typing: markdown and updatedAt move, the pointer
+		// does not. The pointer being unchanged used to make this a no-op.
+		s.render({
+			currentNodeId: LOCAL_NODE,
+			markdown: AHEAD_TEXT,
+			updatedAt: 4_000,
+			pointerRevision: 2,
+			markdownHeadNodeId: LOCAL_NODE,
+		});
+		await settle();
+
+		expect(handle.text).toBe(AHEAD_TEXT);
+		const overwrote = callsTo(NAMES.updateMarkdown).some(
+			(c) => c.args.markdown === LOCAL_TEXT,
+		);
+		expect(overwrote).toBe(false);
+		s.unmount();
+	});
+
+	it("Y3: an undo straight after a projection keeps the rescued draft", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode(), localNode()];
+		const s = mountStudio(handle);
+		s.render({
+			currentNodeId: LOCAL_NODE,
+			markdown: LOCAL_TEXT,
+			updatedAt: 1_000,
+			pointerRevision: 2,
+			markdownHeadNodeId: LOCAL_NODE,
+		});
+		await settle();
+
+		s.render({
+			currentNodeId: LOCAL_NODE,
+			markdown: AHEAD_TEXT,
+			updatedAt: 4_000,
+			pointerRevision: 2,
+			markdownHeadNodeId: LOCAL_NODE,
+		});
+		// Nothing was typed, so the projection lands immediately; stop well before
+		// the 500ms grouping boundary, which is the state Y3 is about.
+		await settle(0);
+		expect(handle.text).toBe(AHEAD_TEXT);
+
+		// Undo before typing anything. The rescued draft must become a node first,
+		// or this navigation would discard it.
+		s.run(() => s.history.undo());
+
+		const rescued = callsTo(NAMES.commitEdit).find(
+			(c) => c.args.markdown === AHEAD_TEXT,
+		);
+		expect(rescued?.args.expectedHeadNodeId).toBe(LOCAL_NODE);
+		expect(handle.text).toBe(LOCAL_TEXT);
+		s.unmount();
+	});
+
+	it("Y3: a version tag straight after a projection names the flushed node", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode(), localNode()];
+		const s = mountStudio(handle);
+		s.render({
+			currentNodeId: LOCAL_NODE,
+			markdown: LOCAL_TEXT,
+			updatedAt: 1_000,
+			pointerRevision: 2,
+			markdownHeadNodeId: LOCAL_NODE,
+		});
+		await settle();
+
+		s.render({
+			currentNodeId: LOCAL_NODE,
+			markdown: AHEAD_TEXT,
+			updatedAt: 4_000,
+			pointerRevision: 2,
+			markdownHeadNodeId: LOCAL_NODE,
+		});
+		// Tag while the rescued draft is still OPEN — before the grouping boundary
+		// would have closed it for us.
+		await settle(0);
+
+		await act(async () => {
+			void s.history.tagVersion("after projection");
+		});
+
+		// Reading the pointer before the flush would tag the pre-draft node.
+		const tagged = lastCallTo(getFunctionName(api.versions.create));
+		expect(tagged?.args.nodeId).toBe(s.history.currentNodeId);
+		expect(tagged?.args.nodeId).not.toBe(LOCAL_NODE);
+		s.unmount();
+	});
+
+	it("Y4: defers projection while the pane has no writable editor", async () => {
+		const preview = fakeHandle();
+		preview.readOnly = true; // a preview-only pane
+		const s = mountStudio(preview);
+		dagRows = [rootNode()];
+		s.render(AT_ROOT);
+
+		dagRows = [rootNode(), remoteNode()];
+		s.render({
+			currentNodeId: REMOTE,
+			markdown: REMOTE_TEXT,
+			updatedAt: 2_000,
+			pointerRevision: 2,
+			markdownHeadNodeId: REMOTE,
+		});
+		await settle();
+
+		// Seeding a preview handle is a no-op, so advancing the pointer here would
+		// leave the tree claiming a projection no editor ever received.
+		expect(s.history.currentNodeId).toBe(ROOT);
+		expect(s.history.getHeadNodeId()).toBeNull();
+
+		// Switching to an editable lens must complete it, without a stale flush.
+		preview.readOnly = false;
+		await settle();
+
+		expect(s.history.currentNodeId).toBe(REMOTE);
+		expect(preview.text).toBe(REMOTE_TEXT);
+		const staleFlush = callsTo(NAMES.updateMarkdown).some(
+			(c) => c.args.markdown === REMOTE_TEXT,
+		);
+		expect(staleFlush).toBe(false);
 		s.unmount();
 	});
 
