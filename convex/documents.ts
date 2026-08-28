@@ -50,6 +50,19 @@ export type RefusalCode =
 	| "too_large"
 	| "parent_mismatch";
 
+/**
+ * Codes a client may treat as terminal (retrying the identical call can never
+ * succeed). `unauthenticated` is deliberately absent: a 60-second Clerk token
+ * can expire between queued jobs, so an outbox re-authenticates and retries.
+ */
+export const TERMINAL_REFUSAL_CODES: ReadonlySet<RefusalCode> = new Set([
+	"invalid_argument",
+	"not_found",
+	"unknown_node",
+	"too_large",
+	"parent_mismatch",
+]);
+
 export function refuse(code: RefusalCode, message: string): never {
 	throw new ConvexError({ code, message });
 }
