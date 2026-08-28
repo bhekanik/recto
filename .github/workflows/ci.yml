@@ -69,9 +69,22 @@ jobs:
       - uses: actions/checkout@v4
       - run: sudo xcode-select -s /Applications/Xcode_26.6.app
       - run: swift --version
-      - name: Build
+      # Warnings are failures. The engine's soundness argument is that its
+      # mutable static caches are main-actor isolated, and every actor-isolation
+      # warning is that argument leaking. `unsafeFlags` cannot carry
+      # -warnings-as-errors (SwiftPM refuses them in a package consumed as a
+      # dependency), so the gate lives here. The dependency is compiled from
+      # source, so this covers the fork too.
+      - name: Build (warnings are failures)
         working-directory: apple/Packages/RectoEditor
-        run: swift build
+        run: |
+          set -o pipefail
+          swift build 2>&1 | tee build.log
+          if grep -q 'warning:' build.log; then
+            echo "::error::Swift emitted warnings; see below."
+            grep 'warning:' build.log | sort -u | head -40
+            exit 1
+          fi
       # Three times: the suite mounts real AppKit windows, and window-backed
       # tests are where flakiness hides. A run that only passes sometimes must
       # fail here rather than in someone's afternoon.

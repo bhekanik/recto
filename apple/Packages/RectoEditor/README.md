@@ -217,13 +217,32 @@ renders them is stage 2; the data it will read is here now, and
   empty lines behind. The engine collapses those lines' paragraph style too.
 - **One `NSTextContentStorage` per document, not per view.** `RectoTextStorage`
   holds a `MarkdownEditorController`, and the controller owns the storage; every
-  `RectoEditorView` on that storage gets its own layout manager, container and
-  selection. Two windows on one document therefore share the characters and the
-  attributes. Two views do share the *styling*, so caret-driven marker reveal
-  follows whichever view moved its selection last — per-view reveal needs
-  per-view rendering attributes, which is stage 2.
+  `RectoEditorView` on it gets its own layout manager, container and selection.
+  Two windows on one document therefore share the characters and the attributes,
+  and an edit through either is immediately the other's.
+- **One controller means one presentation**, enforced at attach. Marker hiding is
+  a font size and a kern — it changes *layout*, not just colour — so it cannot be
+  moved into a per-layout-manager rendering-attributes overlay, because rendering
+  attributes do not affect layout. Presentation-dependent styling therefore has
+  to be written into the shared storage, and a rich view and a raw view of one
+  document would overwrite each other. Show a document in two presentations by
+  giving each its own `RectoTextStorage`. Two views in the *same* presentation
+  are fine and share reveal state: marker reveal follows whichever view moved its
+  selection last. Splitting the styler into document-shared base attributes and a
+  per-view overlay needs a hiding technique that does not affect layout — a
+  stage-2 design question, not a patch.
 - **Closing one window must not detach the others.** `controller.detach(textView:)`
-  removes one attachment; `textViews` lists them all.
+  removes one attachment (and its layout manager from the storage); `textViews`
+  lists them all.
+- **Bind the seam to a view.** `RectoEditorView`'s `onAttach` hands each instance
+  a `RectoTextView` bound to that view. `storage.textView` resolves to whichever
+  attached last and is only right for a single-window document — find, a vim key
+  layer, typewriter scrolling and focus dimming all act on the window the reader
+  is in.
+- **An edit through one view invalidates every other view's parse.** The parse
+  caches key on a per-coordinator counter and on the document's length, and a
+  same-length edit (`*a*` → `**a`) moves neither, so a second window styled
+  syntax that was no longer there.
 - **Focus dimming cannot use `setRenderingAttributes`.** Task boxes, ordered
   numbers and table bitmaps are drawn by the fragment; a colour attribute cannot
   recolour them. Stage 2 wraps the fragment draw in a CGContext transparency
