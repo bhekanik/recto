@@ -201,7 +201,7 @@ in-flight workers are producing (§4).
 | W8 js-cores | N3 | 023/js-cores | in review (verified: vim 153, parity green, Swift 23+23, gate ok); Codex running | #10 | Codex running | n/a (CI) |
 | W9a editor-engine stage 1 (fork plumbing + dialect + RectoEditor skeleton) | N5 | 023/editor-engine | round 2 (Codex: 8 blocking: frontmatter header, per-view storage vs D-N1, external assignment emits onEdit, surrogate split, Writing Tools bypass, raw-mode substitutions, paste rewrites, fence perf cliff; 3 should-fix now, 2 to W9b) | #9 + fork PR #1 (`cf9e593`) | Claude r1 / Codex r1 | n/a (CI) |
 | W9b editor-engine stage 2 (blocks, features, undo-tree, typewriter) | N5 | 023/editor-engine-2 | blocked on W9a | | | |
-| W10 native-core | N4 | 023/native-core | round 2 fixed (17/17, revert-verified; 129 tests); orchestrator verifying; Codex r2 running | #7 | Claude r1 / Codex r1 | n/a (CI) |
+| W10 native-core | N4 | 023/native-core | round 3 (Codex r2: 7 of 17 partially fixed + 11 new blocking: server-draft provenance, timer-generation races, root re-key of pointer payloads, remote-deletion vs draft, sign-out race/event bypass, cold-start mirror owner, stop() not awaiting tasks, completedAndStop, keep-local queue order, resolution CAS, undecodable payloads) | #7 | Claude r1 / Codex r1+r2 | n/a (CI) |
 | W11 ai-on-convex | N2 | 023/ai-convex | blocked on W7 | | | |
 | W12 mac-alpha | N6 | 023/mac-alpha | blocked on W9, W10, W8, W2 | | | |
 | W13 mac-beta | N7 | 023/mac-beta | blocked on W12, W11 | | | |
