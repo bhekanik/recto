@@ -67,15 +67,48 @@ struct SingleViewTests {
         func record(_ seam: RectoTextView?) { states.append(seam != nil) }
     }
 
+    @Observable
+    @MainActor
+    final class LifecycleModel {
+        var showsFirst = true
+        var showsSecond = false
+    }
+
+    private struct LifecycleHost: View {
+        let storage: RectoTextStorage
+        let model: LifecycleModel
+        let first: AttachmentLog
+        let second: AttachmentLog
+        var body: some View {
+            VStack(spacing: 0) {
+                if model.showsFirst {
+                    RectoEditorView(
+                        storage: storage,
+                        styler: MarkdownStyler(presentation: .rich, theme: .twilight),
+                        onAttach: first.record
+                    )
+                }
+                if model.showsSecond {
+                    RectoEditorView(
+                        storage: storage,
+                        styler: MarkdownStyler(presentation: .rich, theme: .twilight),
+                        onAttach: second.record
+                    )
+                }
+            }
+        }
+    }
+
     private struct RemountHost: View {
         let storage: RectoTextStorage
         let model: RemountModel
-        let attachments: AttachmentLog
+        let original: AttachmentLog
+        let replacement: AttachmentLog
         var body: some View {
             RectoEditorView(
                 storage: storage,
                 styler: MarkdownStyler(presentation: .rich, theme: .twilight),
-                onAttach: attachments.record
+                onAttach: model.identity == 0 ? original.record : replacement.record
             )
             .id(model.identity)
         }
@@ -129,25 +162,73 @@ struct SingleViewTests {
         #expect(storage.markdown == Self.source)
     }
 
-    @Test("a remount announces the replacement editor")
-    func remountAnnouncesTheReplacement() {
+    @Test("unmount clears the view-scoped attachment observer")
+    func unmountClearsAttachmentObserver() {
         let storage = RectoTextStorage(documentId: "single", markdown: Self.source)
-        let model = RemountModel()
-        let attachments = AttachmentLog()
+        let model = LifecycleModel()
+        let first = AttachmentLog()
+        let second = AttachmentLog()
         let harness = WindowHarness(
-            RemountHost(storage: storage, model: model, attachments: attachments))
+            LifecycleHost(storage: storage, model: model, first: first, second: second))
         defer { harness.tearDown() }
 
-        #expect(attachments.states.last == true)
-        let initialAnnouncementCount = attachments.states.count
+        #expect(first.states == [true])
+        model.showsFirst = false
+        harness.layout()
+
+        #expect(first.states == [true, false])
+        #expect(storage.controller.onAttach == nil,
+                "Recto left a consumer callback retained on the controller")
+    }
+
+    @Test("a refused second view cannot replace the first view's observer")
+    func refusedViewDoesNotReplaceAttachmentObserver() {
+        let storage = RectoTextStorage(documentId: "single", markdown: Self.source)
+        let model = LifecycleModel()
+        let first = AttachmentLog()
+        let second = AttachmentLog()
+        let harness = WindowHarness(
+            LifecycleHost(storage: storage, model: model, first: first, second: second))
+        defer { harness.tearDown() }
+
+        model.showsSecond = true
+        harness.layout()
+        #expect(first.states == [true])
+        #expect(second.states == [false],
+                "the refused view reported the first view's seam as its own")
+
+        model.showsSecond = false
+        harness.layout()
+        #expect(first.states == [true],
+                "the refused view's teardown changed the first view's attachment")
+        #expect(second.states == [false])
+
+        model.showsFirst = false
+        harness.layout()
+        #expect(first.states == [true, false],
+                "the refused view replaced the first view's detach observer")
+    }
+
+    @Test("a remount notifies the old and replacement observers independently")
+    func remountKeepsAttachmentObserversScoped() {
+        let storage = RectoTextStorage(documentId: "single", markdown: Self.source)
+        let model = RemountModel()
+        let original = AttachmentLog()
+        let replacement = AttachmentLog()
+        let harness = WindowHarness(
+            RemountHost(storage: storage, model: model,
+                        original: original, replacement: replacement))
+        defer { harness.tearDown() }
+
+        #expect(original.states == [true])
         model.identity = 1
         harness.layout()
 
         #expect(storage.controller.isAttached)
-        #expect(attachments.states.count > initialAnnouncementCount,
-                "the remount produced no attachment update")
-        #expect(attachments.states.last == true,
-                "the replacement editor took over without announcing its seam")
+        #expect(original.states == [true, false],
+                "the old wrapper's teardown did not reach its own observer")
+        #expect(replacement.states == [false, true],
+                "the replacement did not report refusal followed by takeover")
     }
 
     // MARK: - The presentation switch, on the one view

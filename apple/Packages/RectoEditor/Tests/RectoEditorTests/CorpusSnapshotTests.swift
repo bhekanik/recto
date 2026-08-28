@@ -24,7 +24,7 @@ import Testing
 @Suite("Corpus snapshots")
 struct CorpusSnapshotTests {
 
-    static let cases: [(name: String, markdown: String)] = {
+    nonisolated static let cases: [(name: String, markdown: String)] = {
         guard let dir = Bundle.module.url(forResource: "Corpus", withExtension: nil),
               let files = try? FileManager.default.contentsOfDirectory(
                 at: dir, includingPropertiesForKeys: nil)

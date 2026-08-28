@@ -28,9 +28,10 @@ extension RealWindowTests {
 struct FragmentRenderingTests {
 
     private func mount(_ markdown: String,
-                       _ presentation: Presentation = .rich) -> WindowHarness {
+                       _ presentation: Presentation = .rich,
+                       theme: RectoEditorTheme? = nil) -> WindowHarness {
         let storage = RectoTextStorage(documentId: "fragment", markdown: markdown)
-        let styler = MarkdownStyler(presentation: presentation, theme: .twilight)
+        let styler = MarkdownStyler(presentation: presentation, theme: theme ?? .twilight)
         return WindowHarness(RectoEditorView(storage: storage, styler: styler))
     }
 
@@ -96,26 +97,36 @@ struct FragmentRenderingTests {
 
     @Test("a fenced code block paints a background behind its text")
     func codeBlockBackgroundIsDrawn() {
-        let harness = mount("Before\n\n```swift\nlet x = 1\n```\n\nAfter\n")
+        let markdown = "Before\n\n```swift\nlet x = 1\n```\n\nAfter\n"
+        let harness = mount(markdown)
         defer { harness.tearDown() }
         let codeLocation = ("Before\n\n```swift\n" as NSString).length
         guard let codeLine = harness.rect(
-            forCharacterRange: NSRange(location: codeLocation, length: 0)),
-            let proseLine = harness.rect(forCharacterRange: NSRange(location: 0, length: 0))
-        else {
+            forCharacterRange: NSRange(location: codeLocation, length: 0)) else {
             Issue.record("no layout fragments for the code block")
             return
         }
         // The fill runs the full container width, so sample well right of any
-        // glyph. Absolute brightness, not coverage: a uniformly filled rect has
-        // no internal contrast at all, which is exactly what coverage measures.
+        // glyph. Compare with the same render after making the raised token
+        // equal to the sheet: if the renderer stops painting the token, the two
+        // margins become identical.
         func rightMargin(_ rect: NSRect) -> NSRect {
             NSRect(x: rect.maxX - 60, y: rect.minY, width: 50, height: max(1, rect.height))
         }
-        let code = harness.averageBrightness(in: rightMargin(codeLine))
-        let prose = harness.averageBrightness(in: rightMargin(proseLine))
-        #expect(code > prose + 0.01,
-                "the code block's right margin is as dark as bare sheet — no background painted")
+        var flatTheme = RectoEditorTheme.twilight
+        flatTheme.raised = flatTheme.sheet
+        let flatHarness = mount(markdown, theme: flatTheme)
+        defer { flatHarness.tearDown() }
+        guard let flatCodeLine = flatHarness.rect(
+            forCharacterRange: NSRange(location: codeLocation, length: 0)) else {
+            Issue.record("no layout fragment for the flat-theme control")
+            return
+        }
+
+        let codeMargin = rightMargin(codeLine)
+        let flatMargin = rightMargin(flatCodeLine)
+        #expect(harness.fingerprint(of: codeMargin) != flatHarness.fingerprint(of: flatMargin),
+                "the code block ignores the raised fill token")
     }
 
     @Test("a table renders as a drawn block, not as its collapsed source")

@@ -178,23 +178,6 @@ struct WindowHarness {
                       width: paragraph.headIndent, height: max(1, line.height))
     }
 
-    /// Mean brightness of `rect`. Unlike `inkCoverage`, which is relative to
-    /// the rect's own corner, this is absolute — so it can tell a filled code
-    /// block from bare sheet, where every pixel is uniform and coverage is 0.
-    func averageBrightness(in rect: NSRect) -> Double {
-        guard let rep = bitmap(of: rect), rep.pixelsWide > 0, rep.pixelsHigh > 0 else { return 0 }
-        var total = 0.0
-        var count = 0
-        for y in stride(from: 0, to: rep.pixelsHigh, by: 2) {
-            for x in stride(from: 0, to: rep.pixelsWide, by: 2) {
-                guard let pixel = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
-                total += Double(pixel.brightnessComponent)
-                count += 1
-            }
-        }
-        return count == 0 ? 0 : total / Double(count)
-    }
-
     // MARK: - Text
 
     /// Strings readable from real AppKit text views. SwiftUI `Text` does not

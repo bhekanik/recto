@@ -74,28 +74,22 @@ public struct RectoEditorView: View {
             fontSize: styler.typography.resolvedSize,
             documentId: storage.documentId,
             isEditable: styler.presentation.isEditable,
+            onAttachmentChange: attachmentObserver,
             onTextMutation: { storage.editorDidMutate($0) },
             placeholder: placeholderText
         )
-        .onAppear { observeAttachment() }
     }
 
-    /// `onAppear` runs after the first attachment. Keeping the callback on the
-    /// controller also covers remount handover, where SwiftUI builds the
-    /// replacement before dismantling the old view and does not call
-    /// `onAppear` again after the replacement takes ownership.
-    private func observeAttachment() {
+    private var attachmentObserver: ((NSTextView?) -> Void)? {
+        guard let onAttach else { return nil }
         let controller = storage.controller
-        controller.onAttach = onAttach.map { callback in
-            { [weak controller] textView in
-                guard let controller, textView != nil else {
-                    callback(nil)
-                    return
-                }
-                callback(RectoTextView(controller: controller))
+        return { [weak controller] textView in
+            guard let controller, textView != nil else {
+                onAttach(nil)
+                return
             }
+            onAttach(RectoTextView(controller: controller))
         }
-        onAttach?(controller.isAttached ? storage.textView : nil)
     }
 
     private var placeholderText: NSAttributedString? {
