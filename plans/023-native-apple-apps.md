@@ -208,8 +208,14 @@ SwiftUI app (windows, scenes, navigation, sheets, settings, commands)
   `normalize(md)`, `parseOutline(md)`, `countWords(md)`, `htmlFromMarkdown(md)`,
   `markdownFromHtml(html)`, `lint(md, categories)`, `streak(days, today)`.
   Built with `bun build --target=browser` (no DOM APIs used); loaded once per
-  process in a `JSContext` on a background queue; calls are sync and small
-  (documents ≤ 950 kB). Parity: the same fixture corpus the web runs.
+  process in a `JSContext` on a background queue. **Measured 2026-08-28 (W3):**
+  ~9 ms per kB of Markdown per whole-document call in the system `JSContext`
+  (927 kB → 9 s), so calls run off the main thread at document boundaries
+  (open, paste, save, mode switch, export), not per keystroke; `countWords`,
+  `parseOutline` and `streak` are ported to Swift with fixture parity for the
+  per-keystroke paths. iOS in-process JavaScriptCore may lack a JIT for
+  third-party apps: the N3 go/no-go is a device measurement (50 kB
+  `normalize` < 1 s on an iPhone). Parity: the same fixture corpus the web runs.
 - Not in JS: editing, rendering, history (Swift ports with fixtures), sync.
 
 ### 1.6 Auth flow
