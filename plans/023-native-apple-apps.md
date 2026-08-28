@@ -264,7 +264,8 @@ apple/Design/Recto.icon      Icon Composer source
   pinned Bun and builds the JS bundles. Internal TestFlight from `main`,
   external from tags.
 - Mac channel: MAS. Entitlements `app-sandbox`, `network.client`,
-  `files.user-selected.read-write`. Direct build (Developer ID, hardened
+  `files.user-selected.read-write`, **`com.apple.security.cs.allow-jit`** (JavaScriptCore
+  runs interpreter-only without it; W8 measured 13× on `normalize`). Direct build (Developer ID, hardened
   runtime, `notarytool`, Sparkle 2) documented as a later option.
 
 ## 3. Feature matrix and keyboard modes
