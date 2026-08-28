@@ -1017,3 +1017,67 @@ Both palettes come from one source, [`packages/design-tokens/tokens.json`](../..
 - [`../../plans/023-native-apple-apps.md`](../../plans/023-native-apple-apps.md) §5, D-N5 · [`../../plans/023-native-apple-apps-design.md`](../../plans/023-native-apple-apps-design.md) §2, §5 · [`12-design-system.md`](./12-design-system.md) §2 · [`packages/design-tokens/`](../../packages/design-tokens/)
 - [Style Dictionary](https://styledictionary.com/) · [Apple HIG — Dark Mode](https://developer.apple.com/design/human-interface-guidelines/dark-mode) · [WCAG 2.2 SC 1.4.3 / 1.4.11](https://www.w3.org/TR/WCAG22/)
 
+
+---
+
+## ADR-21 — Settings and workspaces on Convex; account deletion
+
+**Status:** Accepted (2026-08-28). Implements plan 023 §4.1 items 2–6; supports **D-N2** (native owns data) and **D-N4** (additive backend before the native beta). Required by App Store guideline **5.1.1(v)**.
+
+### Context
+
+Three things the web could get away with as a single-client app stop working the moment a Mac, an iPad and an iPhone hit the same backend:
+
+1. **Settings lived only in `localStorage`.** Signing in on a new machine meant setting up the studio again from scratch — 23 toggles, every one of them a decision the writer already made once.
+2. **`workspaces` was one row per user.** Fine with one browser. With three devices it becomes a fight: each device writes its own pane tree on every focus change and stomps the others, and a Mac's four-way split is not a layout an iPhone can render anyway.
+3. **There was no way to delete an account.** Guideline 5.1.1(v) requires an in-app path that deletes the account itself — not just its data, and not a "email us" link. Without it the iOS app cannot ship.
+
+Two smaller gaps came from the same direction: an offline-created document has no way to be created idempotently once the network returns, and the native apps have no Markdown-to-`.docx` pipeline and should not grow a second one that drifts from the web's.
+
+### Decision
+
+**1. `settings` is one opaque JSON object per user.** `settings.get` / `settings.save {json, expectedUpdatedAt?}`, validated as a JSON *object* (`v.string()` accepts `""`), capped at 64 KiB of UTF-8. The server never looks inside, so adding a setting needs no migration and a client that does not know a key leaves it alone rather than dropping it. The price is that the server cannot merge two devices' writes: this is last-write-wins over the whole object, with an optional compare-and-set for callers that would rather be told they lost. `updatedAt` is strictly increasing so two saves in one millisecond cannot share a stamp.
+
+**2. Not every setting syncs.** The split is by whether a setting is about the **writer** or about the **screen in front of them**. `appearance`, `readingScale`, `topToolbar` and `outlineOpen` stay on the device; the other nineteen sync. The full table and its reasoning are in [`10-sync-persistence.md`](./10-sync-persistence.md) §8. `appearance` and `theme` land on opposite sides on purpose — `appearance` answers "is this room dark right now" and already defaults to following the OS, while the palette is taste and taste travels.
+
+**3. `workspaces` is keyed by `(userId, deviceId)`,** with `deviceClass` (`mac` | `ipad` | `iphone` | `web`) and an opaque `json` layout. "Resume from &lt;device&gt; layout" is an explicit query (`workspaces.listForUser` → `workspaces.getForDevice`), never an implicit overwrite. Device rows are capped at 32 per user, least-recently-updated evicted, because a cleared browser mints a new id.
+
+**4. `account.deleteEverything` is an action driving bounded internal mutations.** Storage blobs first (the markdown naming them is the only evidence of ownership, and it disappears with the documents), then every user-keyed row in batches of 256, then the Clerk user **last**. Each step is "delete some of what is left", which makes the whole thing idempotent for free — no cursor to resume from, only what is still there. `CLERK_SECRET_KEY` is checked *before* anything is deleted: data gone with the login still alive is the one outcome worse than not deleting.
+
+**5. `documents.create` takes an optional `documentUuid`.** A second call with the same uuid returns the first call's document and root node instead of a duplicate holding the same text. Scoped per user (`by_user_uuid`). `documents.rootNodeId` is stored so a replay can hand the root back without walking the history.
+
+**6. `export.docx` is a `"use node"` action running the web's renderer.** `lib/export/docx-render.ts` is imported by both `lib/export/docx.ts` (browser, Blob + download) and `convex/export.ts` (server, Convex storage + a URL the scheduler deletes after 15 minutes). `.md` and `.html` stay local on both platforms — they are string transformations of text the client already holds.
+
+### Sign in with Apple: detected, not revoked
+
+`deleteEverything` reports an `appleRevocation` status and **does not perform TN3194 revocation**. Two inputs are missing and neither is a matter of writing more code:
+
+- **The Apple signing credentials.** `POST https://appleid.apple.com/auth/revoke` needs a `client_secret` JWT signed ES256 with the team's `.p8` key. Team ID, Services ID, Key ID and the key itself are Apple Developer credentials; none are on this deployment, and Clerk never holds them either.
+- **A token to revoke.** Clerk's `OauthAccessToken` object has no `refresh_token` field for any provider, and what `GET /users/{id}/oauth_access_tokens/oauth_apple` returns for an Apple account is unverified — Sign in with Apple is not yet enabled on the Clerk instance (W5, N0a).
+
+And deleting the Clerk user does not cover it: Clerk's own Sign in with Apple guide states that deleting the user "does not reset this on Apple's side." So the action detects an Apple external account and reports exactly what stopped it, rather than implying a revocation that did not happen. **This is a release blocker for the iOS build** (plan 023 §10).
+
+### Alternatives rejected
+
+- **A column per setting.** Rejected — the settings shape changes with almost every feature, so it would mean a schema migration each time, plus a window where a native client that knows a key the server does not has that key silently dropped.
+- **Sync every setting.** Rejected — it lets a desk at midnight force dark mode on a phone in daylight, and a 1.6× zoom calibrated for a phone onto a 27" monitor.
+- **A second table for device workspaces.** Rejected — the legacy row and the device rows are the same concept at two points in a migration, and two tables would leave permanent dead weight. The legacy columns are optional and clearly marked instead.
+- **Compare-and-set on the web's settings pushes.** Rejected — on a lost CAS the only resolution available is to discard the change the writer made a second ago. The CAS stays in the API for the native outbox, which replays writes minutes late.
+- **Deleting the Clerk user first.** Rejected — it strands the data with nobody able to reach it. The chosen order can leave an empty-but-live account, which is recoverable; the other cannot.
+- **Shipping ES256 client-secret signing anyway.** Rejected — crypto that has never run against a real Apple account, for a provider that is not configured, would read as done and be discovered broken by a rejected app review.
+- **Rendering `.docx` in the Convex default runtime.** Not possible: remark-docx compiles OOXML through `docx`/`jszip`, hence `"use node"`.
+
+### Consequences
+
+- The deployed web client keeps working through the deploy: `workspaces.get/save` still serve the legacy row, now found by scanning the user's rows rather than `.unique()` on `by_user` — which would throw the moment a device row exists, inside the old client's own save.
+- Each migrating browser reads the legacy row exactly once, to seed its device row. Nothing writes it again. Removing it is a follow-up, not part of this change.
+- `lib/studio/use-studio-settings.ts` is now the hook and the action surface only; the shape, defaults and coercion moved to `lib/studio/settings-schema.ts` so the sync layer can validate a blob written by another device. All previous exports are re-exported, so no consumer changed.
+- Hydration must not run in the same commit as the first push, or the device sends its pre-hydration settings straight back over the server's. `useSettingsSync` tracks hydration in state, not a ref, for exactly that reason.
+- `convex/files.ts:deleteStoredFile` checks the row before deleting: `ctx.storage.delete` throws "Delete on non-existent doc" for a file that is already gone, and an expiry can fire after the account purge removed the same blob.
+- The account purge resolves storage references against live `documents.markdown` only, not the whole `docNodes` history — reading every node for a large account would blow the per-mutation read limit. Anything missed becomes unreferenced when the documents go, and the daily orphan sweep collects it within its 24 h grace window.
+- Deployment needs `CLERK_SECRET_KEY` in the Convex environment (both dev and prod). Without it `account.deleteEverything` refuses up front and deletes nothing.
+
+### References
+
+- [`../../plans/023-native-apple-apps.md`](../../plans/023-native-apple-apps.md) §4.1, §10 · [`03-data-model.md`](./03-data-model.md) §1.2, §3.4–§3.6 · [`10-sync-persistence.md`](./10-sync-persistence.md) §8 · [`11-clipboard-export.md`](./11-clipboard-export.md)
+- [App Store Review Guideline 5.1.1(v)](https://developer.apple.com/app-store/review/guidelines/#data-collection-and-storage) · [Apple TN3194 — Handling account deletions and revoking tokens for Sign in with Apple](https://developer.apple.com/documentation/technotes/tn3194-handling-account-deletions-and-revoking-tokens-for-sign-in-with-apple) · [Clerk Backend API — Delete user](https://clerk.com/docs/reference/backend-api/tag/Users#operation/DeleteUser)

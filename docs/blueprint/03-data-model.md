@@ -59,6 +59,13 @@ owning plan is the contract:
 | `documentShares` | Per-document share grants (commenter/suggester roles). | [`plans/010-review-collaboration.md`](../../plans/010-review-collaboration.md) |
 | `reviewBranches` | Index over reviewer suggestion branches in the undo DAG (status drives accept/reject). | [`plans/010-review-collaboration.md`](../../plans/010-review-collaboration.md) |
 | `comments` | Anchored review comments (human and AI reviewers). | [`plans/010-review-collaboration.md`](../../plans/010-review-collaboration.md) |
+| `settings` | The writer's synced preferences, one opaque JSON object per user. | [`plans/023-native-apple-apps.md`](../../plans/023-native-apple-apps.md) §4.1, ADR-21 |
+
+### 1.2 Changes made for the native apps (ADR-21)
+
+- **`workspaces` is now keyed by `(userId, deviceId)`**, not one row per user (§3.4). A device row carries `deviceId`, `deviceClass` (`mac` | `ipad` | `iphone` | `web`) and an opaque `json` layout; the pre-migration row has none of those and is still served by `workspaces.get/save`. A user has at most one legacy row and one row per device, capped at 32 devices (least-recently-used evicted).
+- **`documents.documentUuid`** (optional) is a client-minted idempotency key for creation, indexed `by_user_uuid`. **`documents.rootNodeId`** (optional) stores the root so a replayed `create` can hand back the same one without walking the history.
+- **Indexes added for account deletion**: `reviewBranches.by_reviewer`, `comments.by_author`, `docChunks.by_user`. A user's traces on *other people's* documents are only reachable by author/reviewer, and a vector index cannot be queried as a range.
 
 ---
 
@@ -314,6 +321,97 @@ workspace.save(args: {
 // Upserts the user's one workspace row (insert if absent, patch if present).
 // Debounced like document saves — layout changes are not on a hot path.
 ```
+
+**Superseded by the per-device surface (ADR-21).** The pair above is the LEGACY
+shape: it still exists, because a browser tab loaded before the migration keeps
+calling it and because each migrating client reads it once to seed its own
+device row. Nothing writes it any more. New clients use:
+
+```ts
+// query
+workspaces.getForDevice(args: { deviceId: string }): {
+  deviceId: string;
+  deviceClass: "mac" | "ipad" | "iphone" | "web";
+  json: string;         // opaque to the server; the client's own layout shape
+  updatedAt: number;
+} | null;
+
+// mutation — last-write-wins; only that device's own windows write it
+workspaces.saveForDevice(args: {
+  deviceId: string;     // non-empty, ≤64 chars
+  deviceClass: "mac" | "ipad" | "iphone" | "web";
+  json: string;         // ≤256 KiB (UTF-8)
+}): { updatedAt: number };
+
+// query — the menu behind "Resume from <device> layout"; metadata only, so
+// opening it does not ship every device's tree. Fetch the chosen one with
+// getForDevice. Newest first.
+workspaces.listForUser(): {
+  deviceId: string;
+  deviceClass: "mac" | "ipad" | "iphone" | "web";
+  updatedAt: number;
+}[];
+```
+
+A Mac's four-way split is not a layout an iPhone can render, so one shared row
+meant every device overwrote the others on each focus change. Moving to another
+device's layout is now something the writer asks for.
+
+### 3.5 `settings.*`
+
+```ts
+// query
+settings.get(): { json: string; updatedAt: number } | null;
+
+// mutation
+settings.save(args: {
+  json: string;                    // a JSON OBJECT, ≤64 KiB (UTF-8)
+  expectedUpdatedAt?: number;      // omit for plain LWW
+}): { saved: true; conflict: false; updatedAt: number }
+ | { saved: false; conflict: true; json: string | null; updatedAt: number | null };
+```
+
+The server stores one opaque object per user and never looks inside it, so
+adding a setting needs no migration and a client that does not know a key
+leaves it alone. It cannot merge two devices' writes either, hence LWW over the
+whole object with an optional compare-and-set for callers that would rather be
+told they lost than overwrite blindly. `updatedAt` is strictly increasing, so
+two saves inside one millisecond cannot share a stamp and let a stale CAS pass.
+
+Not every setting lives here — see
+[`10-sync-persistence.md`](./10-sync-persistence.md) §8 for the split.
+
+### 3.6 `account.deleteEverything` / `export.docx`
+
+```ts
+// action (authenticated) — App Store guideline 5.1.1(v)
+account.deleteEverything(): {
+  userId: string;
+  rowsDeleted: number;
+  blobsDeleted: number;
+  clerkUserDeleted: boolean;
+  appleRevocation:
+    | { status: "not-applicable" }
+    | { status: "skipped"; reason: string }
+    | { status: "unknown"; reason: string };
+};
+
+// action (authenticated) — one .docx renderer for web and native
+export.docx(args: { documentId: Id<"documents">; origin?: string }): {
+  storageId: string;
+  url: string;          // deleted after EXPORT_TTL_MS (15 min) by the scheduler
+  filename: string;
+  bytes: number;
+  expiresAt: number;
+};
+```
+
+`deleteEverything` purges storage blobs first (the markdown naming them is the
+only evidence of ownership), then every user-keyed row in bounded batches, then
+the Clerk user LAST — every step before it is idempotent, so a failure leaves an
+account that can still sign in and retry. `export.docx` renders the SERVER's
+canonical markdown through `lib/export/docx-render.ts`, the same module the
+browser runs; clients with unsynced edits must flush first.
 
 ---
 

@@ -1,281 +1,71 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-
-import type { FocusScope } from "@/lib/editor/focus-range";
-import {
-	ALL_CATEGORIES,
-	type LintCategory,
-	type LintOptions,
-} from "@/lib/lint";
+import { useCallback, useState } from "react";
 import type { GoalKind } from "@/lib/stats/streak";
 import { SETTINGS_STORAGE_KEY } from "@/lib/studio/appearance";
+import type {
+	AiTransformMode,
+	Appearance,
+	DiffGranularity,
+	DiffLayout,
+	FocusScope,
+	GoalScope,
+	GoalStyle,
+	LintCategory,
+	PreviewVariant,
+	ReadingFont,
+	StudioSettings,
+	Theme,
+} from "@/lib/studio/settings-schema";
+import {
+	APPEARANCE_IDS,
+	clampGoalTarget,
+	clampScale,
+	coerceSettings,
+	DEFAULTS,
+	READING_SCALE_STEP,
+	THEME_IDS,
+} from "@/lib/studio/settings-schema";
+import { useSettingsSync } from "@/lib/studio/use-settings-sync";
 
-export type { FocusScope, LintCategory, LintOptions };
-
-/** The writing-body typeface — the chrome is always sans. */
-export type ReadingFont = "sans" | "serif";
-
-/** Calm/ethereal colour themes. Each is a soft-coloured DARK palette (ADR-20). */
-export type Theme = "twilight" | "aurora" | "dawn" | "moonlit";
+export type {
+	AiTransformMode,
+	Appearance,
+	DiffGranularity,
+	DiffLayout,
+	FocusScope,
+	GoalScope,
+	GoalStyle,
+	LintCategory,
+	LintOptions,
+	PreviewVariant,
+	ReadingFont,
+	StudioSettings,
+	Theme,
+} from "@/lib/studio/settings-schema";
+export {
+	APPEARANCES,
+	READING_SCALE_MAX,
+	READING_SCALE_MIN,
+	THEMES,
+} from "@/lib/studio/settings-schema";
 
 /**
- * Light/dark axis (ADR-20, reverses D13). `system` follows
- * `prefers-color-scheme`. Orthogonal to `theme`: the dark palettes above apply
- * only while this resolves to dark; light is always Paper.
+ * Read this device's settings out of localStorage. Device storage stays the
+ * source of truth for the first paint even when signed in: it is synchronous,
+ * so the studio never flashes defaults while a Convex query is in flight, and
+ * it is the whole story while signed out or offline.
  */
-export type Appearance = "system" | "light" | "dark";
-
-/** How the history compare diff splits text. */
-export type DiffGranularity = "word" | "line";
-/** How the history compare diff is laid out. */
-export type DiffLayout = "inline" | "side-by-side";
-
-/** Goal widget shape in the status bar (A/B toggle 1). */
-export type GoalStyle = "ring" | "bar";
-/** Which goal the status-bar widget tracks (A/B toggle 2). */
-export type GoalScope = "document" | "daily";
-
-/**
- * What the preview mode renders: the standard rendered Markdown, or the
- * inbox/email render (subject + preheader chrome + email-safe inline-CSS body).
- * A switchable variant of preview mode — not a fifth mode (plan 008).
- */
-export type PreviewVariant = "rendered" | "email";
-
-/**
- * How an accepted AI transform lands (plan 009 — switchable A/B fork, never a
- * hard pick). `"replace"`: the AI node becomes the tip immediately (reject =
- * undo). `"pending"`: the AI node still lands (reversible by construction) but
- * the UI shows an explicit accept/reject affordance and auto-undoes on reject.
- */
-export type AiTransformMode = "pending" | "replace";
-
-const GOAL_KINDS: GoalKind[] = ["at-least", "about", "at-most"];
-
-/** Clamp a goal target to a non-negative integer (0 = no goal). */
-function clampGoalTarget(value: number): number {
-	if (!Number.isFinite(value)) return 0;
-	return Math.max(0, Math.round(value));
-}
-
-/** Ordered for the cycle control + command palette; first is the default. */
-export const THEMES: { id: Theme; label: string; hint: string }[] = [
-	{ id: "twilight", label: "Twilight", hint: "indigo · periwinkle" },
-	{ id: "aurora", label: "Aurora", hint: "teal · aqua-mint" },
-	{ id: "dawn", label: "Dawn", hint: "charcoal · rose-lavender" },
-	{ id: "moonlit", label: "Moonlit", hint: "near-black · silver-cyan" },
-];
-
-const THEME_IDS = THEMES.map((t) => t.id);
-
-/** Ordered for the cycle control + command palette; first is the default. */
-export const APPEARANCES: { id: Appearance; label: string; hint: string }[] = [
-	{ id: "system", label: "System", hint: "follow the OS" },
-	{ id: "light", label: "Light", hint: "Paper" },
-	{ id: "dark", label: "Dark", hint: "Twilight & friends" },
-];
-
-const APPEARANCE_IDS = APPEARANCES.map((a) => a.id);
-
-export type StudioSettings = {
-	/** Light/dark axis; `system` follows the OS (ADR-20). */
-	appearance: Appearance;
-	/** Soft-coloured dark palette for the whole studio. Ignored while light. */
-	theme: Theme;
-	/** Body typeface for the writing surface (Bear sans / Substack serif). */
-	readingFont: ReadingFont;
-	/** Text-zoom multiplier for the reading column (not the font size — the whole column). */
-	readingScale: number;
-	/** Native browser spellcheck squigglies in the editors. */
-	spellcheck: boolean;
-	/** Persistent top formatting toolbar visibility. */
-	topToolbar: boolean;
-	/** Convert pasted rich HTML (Word/Docs/web) into canonical Markdown on paste. */
-	smartPaste: boolean;
-	/** Granularity of the history compare diff (word = prose standard). */
-	diffGranularity: DiffGranularity;
-	/** Layout of the history compare diff. */
-	diffLayout: DiffLayout;
-	/** Per-document word goal target (0 = no goal). Per-device preference. */
-	wordGoalTarget: number;
-	/** Direction of the word goal (at-least / about / at-most). */
-	wordGoalKind: GoalKind;
-	/** Optional daily word goal target (0 = no daily goal). Per-device preference. */
-	dailyGoalTarget: number;
-	/** Goal widget display: ring or bar (A/B toggle 1). */
-	goalStyle: GoalStyle;
-	/** Which goal the status-bar widget tracks: document or daily (A/B toggle 2). */
-	goalScope: GoalScope;
-	/** Typewriter scrolling — keep the caret line vertically centered (plan 003). */
-	typewriter: boolean;
-	/** Focus dimming — fade everything but the active sentence/paragraph. */
-	focusDim: boolean;
-	/** Granularity of the focus-dim highlight (A/B toggle). */
-	focusDimScope: FocusScope;
-	/** Prose linter on/off (plan 004) — opt-in highlight-only, off by default. */
-	lint: boolean;
-	/** Per-category lint toggles (passive / readability / adverb / weasel). */
-	lintCategories: LintOptions;
-	/** Docked document-outline panel visibility (plan 005). */
-	outlineOpen: boolean;
-	/** Preview-mode render: rendered Markdown or the inbox/email preview (plan 008). */
-	previewVariant: PreviewVariant;
-	/** Master gate for all AI features (plan 009) — opt-in, OFF by default. */
-	aiEnabled: boolean;
-	/** How an accepted AI transform lands (switchable A/B fork; plan 009). */
-	aiTransformMode: AiTransformMode;
-};
-
-export const READING_SCALE_MIN = 0.8;
-export const READING_SCALE_MAX = 2.0;
-const READING_SCALE_STEP = 0.1;
-
-const DEFAULTS: StudioSettings = {
-	// Follow the OS by default — the writer's machine already knows the answer.
-	appearance: "system",
-	theme: "twilight",
-	readingFont: "sans",
-	readingScale: 1,
-	spellcheck: true,
-	topToolbar: true,
-	// Smart paste defaults ON — pasting from Word/Docs/web should land as clean
-	// canonical Markdown, not raw style spans (plan 007).
-	smartPaste: true,
-	diffGranularity: "word",
-	diffLayout: "inline",
-	wordGoalTarget: 0,
-	wordGoalKind: "at-least",
-	dailyGoalTarget: 0,
-	goalStyle: "ring",
-	goalScope: "document",
-	// Focus mode is opt-in — off by default so the studio looks unchanged on first run.
-	typewriter: false,
-	focusDim: false,
-	focusDimScope: "sentence",
-	// Prose linter is opt-in — off by default (highlighting fights minimalism); all
-	// categories on once enabled, each individually toggleable.
-	lint: false,
-	lintCategories: {
-		passive: true,
-		readability: true,
-		adverb: true,
-		weasel: true,
-	},
-	// Outline panel is closed by default — it docks over the canvas on demand.
-	outlineOpen: false,
-	// Preview mode shows the rendered Markdown by default; the email/inbox preview
-	// is opt-in (a newsletter-specific lens), toggled per device.
-	previewVariant: "rendered",
-	// AI features are opt-in — OFF by default so the studio is unchanged on first
-	// run and AI is never ambient (plan 009; AUGMENT, don't replace).
-	aiEnabled: false,
-	// Default to the safer "pending" confirm UX for AI transforms (plan 009).
-	aiTransformMode: "pending",
-};
-
-/** Coerce a stored lint-categories blob to a complete, boolean-valued map. */
-function loadLintCategories(value: unknown): LintOptions {
-	const source =
-		value && typeof value === "object"
-			? (value as Record<string, unknown>)
-			: {};
-	const result = {} as LintOptions;
-	for (const category of ALL_CATEGORIES) {
-		const stored = source[category];
-		// Default each category to on (the only way to turn one off is to opt out).
-		result[category] = typeof stored === "boolean" ? stored : true;
-	}
-	return result;
-}
-
-function clampScale(value: number): number {
-	const clamped = Math.min(
-		READING_SCALE_MAX,
-		Math.max(READING_SCALE_MIN, value),
-	);
-	// Avoid float drift (e.g. 0.7999999) so the displayed % is clean.
-	return Math.round(clamped * 100) / 100;
-}
-
 function loadSettings(): StudioSettings {
 	if (typeof window === "undefined") return DEFAULTS;
 	try {
 		const raw = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
 		if (!raw) return DEFAULTS;
-		const parsed = JSON.parse(raw) as Partial<StudioSettings>;
-		return {
-			appearance:
-				parsed.appearance && APPEARANCE_IDS.includes(parsed.appearance)
-					? parsed.appearance
-					: DEFAULTS.appearance,
-			theme:
-				parsed.theme && THEME_IDS.includes(parsed.theme)
-					? parsed.theme
-					: DEFAULTS.theme,
-			readingFont: parsed.readingFont === "serif" ? "serif" : "sans",
-			readingScale:
-				typeof parsed.readingScale === "number"
-					? clampScale(parsed.readingScale)
-					: DEFAULTS.readingScale,
-			spellcheck:
-				typeof parsed.spellcheck === "boolean"
-					? parsed.spellcheck
-					: DEFAULTS.spellcheck,
-			topToolbar:
-				typeof parsed.topToolbar === "boolean"
-					? parsed.topToolbar
-					: DEFAULTS.topToolbar,
-			smartPaste:
-				typeof parsed.smartPaste === "boolean"
-					? parsed.smartPaste
-					: DEFAULTS.smartPaste,
-			diffGranularity: parsed.diffGranularity === "line" ? "line" : "word",
-			diffLayout:
-				parsed.diffLayout === "side-by-side" ? "side-by-side" : "inline",
-			wordGoalTarget:
-				typeof parsed.wordGoalTarget === "number"
-					? clampGoalTarget(parsed.wordGoalTarget)
-					: DEFAULTS.wordGoalTarget,
-			wordGoalKind:
-				parsed.wordGoalKind && GOAL_KINDS.includes(parsed.wordGoalKind)
-					? parsed.wordGoalKind
-					: DEFAULTS.wordGoalKind,
-			dailyGoalTarget:
-				typeof parsed.dailyGoalTarget === "number"
-					? clampGoalTarget(parsed.dailyGoalTarget)
-					: DEFAULTS.dailyGoalTarget,
-			goalStyle: parsed.goalStyle === "bar" ? "bar" : "ring",
-			goalScope: parsed.goalScope === "daily" ? "daily" : "document",
-			typewriter:
-				typeof parsed.typewriter === "boolean"
-					? parsed.typewriter
-					: DEFAULTS.typewriter,
-			focusDim:
-				typeof parsed.focusDim === "boolean"
-					? parsed.focusDim
-					: DEFAULTS.focusDim,
-			focusDimScope:
-				parsed.focusDimScope === "paragraph" ? "paragraph" : "sentence",
-			lint: typeof parsed.lint === "boolean" ? parsed.lint : DEFAULTS.lint,
-			lintCategories: loadLintCategories(parsed.lintCategories),
-			outlineOpen:
-				typeof parsed.outlineOpen === "boolean"
-					? parsed.outlineOpen
-					: DEFAULTS.outlineOpen,
-			previewVariant: parsed.previewVariant === "email" ? "email" : "rendered",
-			aiEnabled:
-				typeof parsed.aiEnabled === "boolean"
-					? parsed.aiEnabled
-					: DEFAULTS.aiEnabled,
-			aiTransformMode:
-				parsed.aiTransformMode === "replace" ? "replace" : "pending",
-		};
+		return coerceSettings(JSON.parse(raw), DEFAULTS);
 	} catch {
 		return DEFAULTS;
 	}
 }
-
 export type StudioSettingsApi = StudioSettings & {
 	setAppearance: (appearance: Appearance) => void;
 	cycleAppearance: () => void;
@@ -319,22 +109,17 @@ export type StudioSettingsApi = StudioSettings & {
 /**
  * Persisted, user-tunable writing-surface settings. The user prefers knobs over
  * fixed picks (font, zoom, spellcheck, chrome) — each is a remembered toggle.
+ *
+ * Every setting is written to this device's localStorage; the subset that
+ * belongs to the writer rather than to the screen is also synced through Convex
+ * (`useSettingsSync`, ADR-21) so a new machine arrives already set up.
  */
 export function useStudioSettings(): StudioSettingsApi {
 	// Studio only renders client-side (after auth), so a lazy initializer reading
 	// localStorage is safe and avoids a settings flash on mount.
 	const [settings, setSettings] = useState<StudioSettings>(loadSettings);
 
-	useEffect(() => {
-		try {
-			window.localStorage.setItem(
-				SETTINGS_STORAGE_KEY,
-				JSON.stringify(settings),
-			);
-		} catch {
-			// Private mode / quota — settings simply won't persist.
-		}
-	}, [settings]);
+	useSettingsSync(settings, setSettings);
 
 	const setAppearance = useCallback((appearance: Appearance) => {
 		setSettings((s) => ({ ...s, appearance }));

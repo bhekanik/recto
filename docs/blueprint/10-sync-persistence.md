@@ -188,3 +188,64 @@ This is the ADR summary; the full rationale and rejected alternatives live in [`
 | **OT** (operational transform) | Same mismatch: OT is machinery for transforming **concurrent operations from multiple participants** into a consistent order. With a single user, ordering across devices is adequately handled by Convex OCC + debounced last-write-wins + the stale guard (§5). OT adds transform complexity for a conflict class that does not occur. |
 
 What we use instead is exactly what the single-user, lossless-Markdown design calls for: the local editor owns live state (§1), debounced last-write-wins persistence of the canonical Markdown (§2, §5), reactive idle hydration (§3), and the append-only undo DAG as the durable history/recovery net ([`07-undo-tree.md`](./07-undo-tree.md), [`08-version-control.md`](./08-version-control.md)). Simpler, lossless, and matched to the actual problem.
+
+---
+
+## 8. What syncs and what stays on the device (ADR-21)
+
+Two stores hold the studio's preferences, and the boundary between them is a
+product decision, not a technical one.
+
+**localStorage holds everything**, under `recto:studio-settings`. It is
+synchronous, so the studio never flashes defaults while a Convex query is in
+flight; it is what the pre-paint appearance script reads; and it is the whole
+story while signed out or offline. A device id lives beside it under
+`recto:device-id` — a random UUID, no fingerprinting.
+
+**Convex holds a subset**, in the `settings` table as one opaque JSON object.
+The test for what belongs there is whether the setting is about the **writer**
+or about the **screen in front of them**.
+
+| Stays on the device | Why |
+|---|---|
+| `appearance` | Answers "is this room dark right now". It already defaults to `system`, which is a per-device answer from the OS; syncing it would let a desk at midnight force dark mode on a phone in daylight. |
+| `readingScale` | Calibrated against one display's size and viewing distance. A comfortable 1.6× on a phone is unreadable zoom on a 27" monitor. |
+| `topToolbar` | Window furniture. A phone has no room for it. |
+| `outlineOpen` | Window furniture. Syncing it would let a desktop session close a panel on a tablet mid-sentence. |
+
+| Syncs | Why |
+|---|---|
+| `theme` | Taste, not environment. The palette is part of how the writer's studio looks to them, and it should follow onto a new machine. (`appearance` decides *whether* a dark palette applies at all, which is why the two split differently.) |
+| `readingFont`, `spellcheck`, `smartPaste` | How the writer works with text. |
+| `diffGranularity`, `diffLayout` | How they read their own history. |
+| `wordGoalTarget`, `wordGoalKind`, `dailyGoalTarget`, `goalStyle`, `goalScope` | Goals belong to the writer. The streak data behind them (`writingStats`) is already per-user, so keeping the target per-device would have shown one person two different goals against one streak. |
+| `typewriter`, `focusDim`, `focusDimScope` | Focus-mode habits. |
+| `lint`, `lintCategories` | Which prose rules this writer wants held to. |
+| `previewVariant` | Whether they are writing a newsletter. |
+| `aiEnabled`, `aiTransformMode` | AI posture, which is a stance, not a screen. Note this is a preference, not consent: it does not carry the 5.1.2(i) consent record. |
+
+### 8.1 How the two stay in step
+
+1. **localStorage is written on every change**, signed in or not.
+2. **On first hydration the server wins.** A device that has never signed in on
+   this account seeds the server from its own localStorage; after that, signing
+   in on a new machine adopts the writer's settings rather than pushing that
+   machine's defaults over them.
+3. **Pushes are debounced 800 ms and are plain last-write-wins.**
+   `settings.save` offers a compare-and-set and the web deliberately does not
+   use it: on a lost CAS the only resolution available here would be to discard
+   the change the writer made a second ago in favour of another device's older
+   one. Two devices changing the same setting inside a second is not a real
+   scenario for one person's writing app; silently undoing their click is a real
+   annoyance. The CAS stays in the API for the native outbox, which replays
+   writes minutes late and does need to be told it lost.
+4. **A key the server does not carry keeps its local value.** That is what makes
+   adding a setting safe: an older client round-tripping the object does not
+   erase a key it has never heard of, and a newer client's unknown key survives
+   because the server stores the object whole.
+5. **The device-local keys are filtered on the way out and on the way in.** The
+   server never sees them, and a blob that somehow contains them cannot change
+   this device's appearance or zoom.
+
+Pane layout is the same story one level up: it lives in `workspaces`, keyed by
+`(userId, deviceId)` — see [`03-data-model.md`](./03-data-model.md) §3.4.

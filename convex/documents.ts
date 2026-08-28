@@ -1,7 +1,7 @@
 import type { GenericMutationCtx, GenericQueryCtx } from "convex/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import { mutation, query } from "./_generated/server";
+import { internalQuery, mutation, query } from "./_generated/server";
 
 type QueryCtx = GenericQueryCtx<import("./_generated/dataModel").DataModel>;
 type MutationCtx = GenericMutationCtx<
@@ -87,6 +87,21 @@ export const list = query({
 	},
 });
 
+/**
+ * Title + canonical markdown for a document, for the Node-runtime `export.docx`
+ * action (plan 023 §4.1(6)). Actions have no database access, and a `"use node"`
+ * module cannot define a query, so ownership is re-checked here against the
+ * userId the action read from the JWT — never a userId the caller supplied.
+ */
+export const forExport = internalQuery({
+	args: { documentId: v.id("documents"), userId: v.string() },
+	handler: async (ctx, args) => {
+		const doc = await ctx.db.get(args.documentId);
+		if (!doc || doc.userId !== args.userId) return null;
+		return { title: doc.title, markdown: doc.markdown };
+	},
+});
+
 /** Get one document including markdown body. */
 export const get = query({
 	args: { documentId: v.id("documents") },
@@ -113,11 +128,46 @@ export const get = query({
 	},
 });
 
-/** Create a new document and its root undo-tree node, in one transaction. */
+/**
+ * Create a new document and its root undo-tree node, in one transaction.
+ *
+ * `documentUuid` makes creation idempotent for clients that mint a document
+ * offline (plan 023 §4.1(5)): the second call with the same uuid returns the
+ * document the first one made instead of a duplicate holding the same text.
+ * Scoped per user, so two accounts choosing the same uuid do not collide.
+ * Omitting it keeps the old behaviour — every call creates a document.
+ */
 export const create = mutation({
-	args: { title: v.optional(v.string()) },
+	args: {
+		title: v.optional(v.string()),
+		/** Client-minted idempotency key; omit for a plain online create. */
+		documentUuid: v.optional(v.string()),
+	},
 	handler: async (ctx, args) => {
 		const userId = await requireUserId(ctx);
+		const documentUuid = args.documentUuid;
+
+		if (documentUuid !== undefined) {
+			requireId(documentUuid, "documentUuid");
+			const existing = await ctx.db
+				.query("documents")
+				.withIndex("by_user_uuid", (q) =>
+					q.eq("userId", userId).eq("documentUuid", documentUuid),
+				)
+				.unique();
+			if (existing) {
+				return {
+					documentId: existing._id,
+					// Every document created WITH a uuid stores its root, so the
+					// fallback is unreachable in practice; it exists because the field
+					// is optional for documents created before this change, which by
+					// definition carry no uuid and cannot be found here.
+					rootNodeId: existing.rootNodeId ?? existing.currentNodeId,
+					created: false as const,
+				};
+			}
+		}
+
 		const now = Date.now();
 		const rootNodeId = crypto.randomUUID();
 		const title = args.title?.trim() || "Untitled";
@@ -128,6 +178,8 @@ export const create = mutation({
 			markdown: "",
 			wordCount: 0,
 			currentNodeId: rootNodeId,
+			rootNodeId,
+			documentUuid,
 			createdAt: now,
 			updatedAt: now,
 		});
@@ -144,7 +196,7 @@ export const create = mutation({
 			createdAt: now,
 		});
 
-		return { documentId, rootNodeId };
+		return { documentId, rootNodeId, created: true as const };
 	},
 });
 

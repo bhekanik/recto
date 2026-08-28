@@ -33,16 +33,77 @@ export default defineSchema({
 				pointerRevision: v.optional(v.number()),
 			}),
 		),
+		// Client-chosen idempotency key for creation. An offline client mints the
+		// document locally and only later reaches `documents.create`; without a key
+		// a retried create makes a second document holding the same text. Optional:
+		// documents created by the web (online, one call) have none.
+		documentUuid: v.optional(v.string()),
+		// The nodeId of this document's root node. Stored because a replayed
+		// `create` has to hand the caller back the same root it got the first
+		// time, and `currentNodeId` has usually moved on by then; finding it by
+		// walking `docNodes` for `parentNodeId === null` would scan the whole
+		// history. Optional: rows created before this field have none.
+		rootNodeId: v.optional(v.string()),
 	})
 		.index("by_user", ["userId"])
-		.index("by_user_updated", ["userId", "updatedAt"]),
+		.index("by_user_updated", ["userId", "updatedAt"])
+		.index("by_user_uuid", ["userId", "documentUuid"]),
 
+	/**
+	 * Pane layout, per user AND per device (plan 023 §4.1(3)). A Mac's four-way
+	 * split is not a layout an iPhone can show, so a single shared row made every
+	 * device fight over one tree; each device now owns its own row and "Resume
+	 * from <device> layout" is an explicit action (`workspaces.listForUser` +
+	 * `getForDevice`), never an implicit overwrite.
+	 *
+	 * Two row shapes live here during the migration. The LEGACY row (no
+	 * `deviceId`, columns spelled out) is what the deployed web client reads and
+	 * writes through `workspaces.get/save`; the DEVICE row (`deviceId` +
+	 * `deviceClass` + `json`) is the shape every client moves to. The legacy
+	 * columns are optional so device rows can omit them, not because a legacy row
+	 * may lack them. A user has at most one legacy row and one row per device.
+	 */
 	workspaces: defineTable({
 		userId: v.string(),
-		paneTree: v.string(),
-		openDocumentIds: v.array(v.id("documents")),
-		activePaneId: v.string(),
-		perPaneViewState: v.string(),
+		updatedAt: v.number(),
+		// Device rows only.
+		deviceId: v.optional(v.string()),
+		deviceClass: v.optional(
+			v.union(
+				v.literal("mac"),
+				v.literal("ipad"),
+				v.literal("iphone"),
+				v.literal("web"),
+			),
+		),
+		// Device rows only: the serialized layout, opaque to the server. A JSON
+		// string rather than columns because each device class shapes its own
+		// layout (panes on the Mac, a tab stack on iPhone) and the server has no
+		// business validating either.
+		json: v.optional(v.string()),
+		// Legacy row only.
+		paneTree: v.optional(v.string()),
+		openDocumentIds: v.optional(v.array(v.id("documents"))),
+		activePaneId: v.optional(v.string()),
+		perPaneViewState: v.optional(v.string()),
+	})
+		.index("by_user", ["userId"])
+		.index("by_user_device", ["userId", "deviceId"]),
+
+	/**
+	 * The writer's synced preferences, one row per user (plan 023 §4.1(2)). An
+	 * opaque JSON object so adding a setting needs no migration: the shape is the
+	 * client's contract with itself, and a client that does not know a key leaves
+	 * it alone rather than dropping it (`settings.save` merges nothing — the
+	 * client sends the whole object it read).
+	 *
+	 * Deliberately NOT every setting. Preferences about the machine you are
+	 * sitting at — light/dark, text zoom, which panels are open — stay in device
+	 * storage; see docs/blueprint/10-sync-persistence.md §8 for the split.
+	 */
+	settings: defineTable({
+		userId: v.string(),
+		json: v.string(),
 		updatedAt: v.number(),
 	}).index("by_user", ["userId"]),
 
@@ -103,7 +164,10 @@ export default defineSchema({
 		updatedAt: v.number(),
 	})
 		.index("by_document", ["documentId"])
-		.index("by_document_reviewer", ["documentId", "reviewerUserId"]),
+		.index("by_document_reviewer", ["documentId", "reviewerUserId"])
+		// Account deletion has to find every branch a user opened on SOMEONE
+		// ELSE's document, where the documentId is not known up front.
+		.index("by_reviewer", ["reviewerUserId"]),
 
 	// Anchored comments on a shared document (plan 010, Phase B). Anchor stores the
 	// quoted text + position hint; re-located by search so it survives edits.
@@ -121,7 +185,11 @@ export default defineSchema({
 		threadParentId: v.optional(v.id("comments")),
 		resolved: v.boolean(),
 		createdAt: v.number(),
-	}).index("by_document", ["documentId"]),
+	})
+		.index("by_document", ["documentId"])
+		// Same reason as reviewBranches.by_reviewer: a user's comments on other
+		// people's documents are only reachable by author.
+		.index("by_author", ["authorUserId"]),
 
 	// RAG over the writer's own drafts (plan 009, Phase C): paragraph-windowed
 	// chunks of each document with their embedding. The vectorIndex dimensions
@@ -141,6 +209,9 @@ export default defineSchema({
 		updatedAt: v.number(),
 	})
 		.index("by_document", ["documentId"])
+		// A vector index cannot be queried as a plain range, so account deletion
+		// needs an ordinary index to sweep one user's chunks.
+		.index("by_user", ["userId"])
 		.vectorIndex("by_embedding", {
 			vectorField: "embedding",
 			dimensions: 1536,

@@ -93,3 +93,21 @@ export const orphanSweep = internalMutation({
 		return { scanned: files.length, deleted };
 	},
 });
+
+/**
+ * Delete one stored blob. Used by the scheduler to expire a generated `.docx`
+ * (convex/export.ts).
+ *
+ * `ctx.storage.delete` throws "Delete on non-existent doc" for a file that is
+ * already gone, and an expiry can genuinely fire after the account purge or an
+ * earlier sweep removed the same blob. That is the outcome this wanted, not a
+ * failure worth retrying, so the row is checked first.
+ */
+export const deleteStoredFile = internalMutation({
+	args: { storageId: v.id("_storage") },
+	handler: async (ctx, args) => {
+		const existing = await ctx.db.system.get(args.storageId);
+		if (existing === null) return;
+		await ctx.storage.delete(args.storageId);
+	},
+});

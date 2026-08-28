@@ -1,16 +1,9 @@
 import { toast } from "@/lib/ui/toast";
 import type { ExportSource } from "./clipboard";
+import { safeFilename } from "./filename";
 import { generateExportHtml } from "./html";
 
-/** Strip illegal filename chars, collapse whitespace, cap length (blueprint 11 §4). */
-export function safeFilename(title: string): string {
-	const cleaned = title
-		.replace(/[\\/:*?"<>|]/g, "-")
-		.replace(/\s+/g, " ")
-		.trim()
-		.slice(0, 120);
-	return cleaned || "untitled";
-}
+export { safeFilename };
 
 /** Download a blob via a synthetic <a>, revoking the object URL after the click. */
 export function triggerDownload(blob: Blob, filename: string): void {

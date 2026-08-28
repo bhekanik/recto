@@ -9,6 +9,7 @@ import { AiReviewPanel } from "@/components/ai/ai-review-panel";
 import { AiTransformPopover } from "@/components/ai/ai-transform-popover";
 import { RelatedPassagesPanel } from "@/components/ai/related-passages-panel";
 import { CommandPalette } from "@/components/command-palette";
+import { DeleteAccountDialog } from "@/components/delete-account-dialog";
 import { DocumentSwitcher } from "@/components/document-switcher";
 import { EmptyState } from "@/components/empty-state";
 import {
@@ -23,6 +24,11 @@ import { StatusBar } from "@/components/status-bar";
 import { Toaster } from "@/components/toaster";
 import { TopFormatToolbar } from "@/components/top-format-toolbar";
 import { Button } from "@/components/ui/button";
+import {
+	Popover,
+	PopoverContent,
+	PopoverTrigger,
+} from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RenderPaneNode } from "@/components/workspace/render-pane-node";
 import { api } from "@/convex/_generated/api";
@@ -305,9 +311,25 @@ function StudioWorkspace() {
 	}, [actions, createDocument, workspace?.activePaneId]);
 
 	const { signOut } = useClerk();
+	const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+	const [deleteAccountOpen, setDeleteAccountOpen] = useState(false);
 	const handleSignOut = useCallback(async () => {
 		await signOut();
 		window.location.href = "/login";
+	}, [signOut]);
+
+	/**
+	 * After deletion the Clerk user no longer exists, so `signOut` may well
+	 * fail — the point of calling it is to clear the local session before
+	 * leaving, and failing to do that must not strand the writer in a studio
+	 * whose account is gone.
+	 */
+	const handleAccountDeleted = useCallback(async () => {
+		try {
+			await signOut();
+		} finally {
+			window.location.href = "/login";
+		}
 	}, [signOut]);
 
 	const getExportSource = useCallback((): ExportSource | null => {
@@ -627,14 +649,44 @@ function StudioWorkspace() {
 									⌘K
 								</span>
 							</button>
-							<Button
-								variant="ghost"
-								size="sm"
-								className="text-[var(--color-ink-tertiary)] hover:text-[var(--color-ink-primary)]"
-								onClick={() => void handleSignOut()}
-							>
-								Sign out
-							</Button>
+							{/* Account menu rather than a bare "Sign out": guideline
+							    5.1.1(v) requires in-app account deletion, and a
+							    destructive action does not belong loose in the header. */}
+							<Popover open={accountMenuOpen} onOpenChange={setAccountMenuOpen}>
+								<PopoverTrigger
+									className="px-2 text-[length:var(--text-ui-sm)] text-[var(--color-ink-tertiary)] transition-colors duration-[var(--motion-fast)] hover:text-[var(--color-ink-primary)]"
+									aria-label="Account"
+								>
+									Account
+								</PopoverTrigger>
+								<PopoverContent
+									align="end"
+									className="w-56 gap-1 border border-[var(--color-line)] bg-[var(--color-bg-raised)] p-1"
+								>
+									<Button
+										variant="ghost"
+										size="sm"
+										className="justify-start"
+										onClick={() => {
+											setAccountMenuOpen(false);
+											void handleSignOut();
+										}}
+									>
+										Sign out
+									</Button>
+									<Button
+										variant="ghost"
+										size="sm"
+										className="justify-start text-[var(--color-danger)] hover:text-[var(--color-danger)]"
+										onClick={() => {
+											setAccountMenuOpen(false);
+											setDeleteAccountOpen(true);
+										}}
+									>
+										Delete account…
+									</Button>
+								</PopoverContent>
+							</Popover>
 						</div>
 					</header>
 
@@ -833,6 +885,15 @@ function StudioWorkspace() {
 						}}
 					/>
 				)}
+
+				<DeleteAccountDialog
+					open={deleteAccountOpen}
+					onOpenChange={(open) => {
+						setDeleteAccountOpen(open);
+						if (!open) dispatchFocusEditor();
+					}}
+					onDeleted={() => void handleAccountDeleted()}
+				/>
 
 				{activeDocId && activeDocIsOwned && (
 					<ReviewSurface

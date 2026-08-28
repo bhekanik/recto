@@ -16,6 +16,7 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { FOCUS_PANE_EVENT } from "@/lib/events";
 import type { Mode } from "@/lib/modes/types";
 import { createDefaultWorkspace } from "./defaults";
+import { getDeviceId, WEB_DEVICE_CLASS } from "./device";
 import {
 	closePane,
 	mergeViewStateFromMap,
@@ -57,27 +58,85 @@ type UseWorkspacePersistenceArgs = {
 	validDocumentIds: Set<string>;
 };
 
+/** The stored layout, whichever row it came from. */
+type StoredLayout = {
+	paneTree: string;
+	activePaneId: string;
+	perPaneViewState: string;
+};
+
+/**
+ * Parse a device row's `json` blob; null when it is unusable. The server stores
+ * it opaquely, so this is an untrusted string: narrowed from `unknown` rather
+ * than cast, and a bad blob costs the layout, not the session.
+ */
+function parseStoredLayout(json: string): StoredLayout | null {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(json);
+	} catch {
+		return null;
+	}
+	if (typeof parsed !== "object" || parsed === null) return null;
+	const { paneTree, activePaneId, perPaneViewState } = parsed as Record<
+		keyof StoredLayout,
+		unknown
+	>;
+	if (
+		typeof paneTree !== "string" ||
+		typeof activePaneId !== "string" ||
+		typeof perPaneViewState !== "string"
+	) {
+		return null;
+	}
+	return { paneTree, activePaneId, perPaneViewState };
+}
+
 export function useWorkspacePersistence({
 	enabled,
 	validDocumentIds,
 }: UseWorkspacePersistenceArgs) {
-	const savedWorkspace = useQuery(api.workspaces.get, enabled ? {} : "skip");
-	const saveWorkspace = useMutation(api.workspaces.save);
+	// Read on mount, not at module scope: this hook renders on the server first,
+	// where there is no localStorage to mint an id in.
+	const [deviceId, setDeviceId] = useState<string | null>(null);
+	useEffect(() => {
+		setDeviceId(getDeviceId());
+	}, []);
+
+	const deviceWorkspace = useQuery(
+		api.workspaces.getForDevice,
+		enabled && deviceId ? { deviceId } : "skip",
+	);
+	// One-time migration read: only when this device has no row of its own does
+	// the old shared row matter, and only to seed from. Nothing writes it back.
+	const legacyWorkspace = useQuery(
+		api.workspaces.get,
+		enabled && deviceWorkspace === null ? {} : "skip",
+	);
+	const saveWorkspace = useMutation(api.workspaces.saveForDevice);
 
 	const [workspace, setWorkspace] = useState<WorkspaceState | null>(null);
 	const [hydrated, setHydrated] = useState(false);
 	const hydratedRef = useRef(false);
 	const workspaceRef = useRef(workspace);
 	workspaceRef.current = workspace;
+	const deviceIdRef = useRef(deviceId);
+	deviceIdRef.current = deviceId;
 
 	const persist = useCallback(
 		async (state: WorkspaceState) => {
+			const currentDeviceId = deviceIdRef.current;
+			if (!currentDeviceId) return;
 			const payload = serializeWorkspace(state.paneTree);
 			await saveWorkspace({
-				paneTree: payload.paneTree,
-				openDocumentIds: payload.openDocumentIds,
-				activePaneId: state.activePaneId,
-				perPaneViewState: payload.perPaneViewState,
+				deviceId: currentDeviceId,
+				deviceClass: WEB_DEVICE_CLASS,
+				json: JSON.stringify({
+					paneTree: payload.paneTree,
+					openDocumentIds: payload.openDocumentIds,
+					activePaneId: state.activePaneId,
+					perPaneViewState: payload.perPaneViewState,
+				}),
 			});
 		},
 		[saveWorkspace],
@@ -113,26 +172,35 @@ export function useWorkspacePersistence({
 	}, [debouncedPersist, debouncedViewStatePersist, persist]);
 
 	useEffect(() => {
-		if (!enabled || savedWorkspace === undefined) return;
+		if (!enabled || deviceWorkspace === undefined) return;
+		// Still waiting on the legacy row this device would migrate from.
+		if (deviceWorkspace === null && legacyWorkspace === undefined) return;
 		if (hydratedRef.current) return;
 
-		if (savedWorkspace === null) {
-			setWorkspace(createDefaultWorkspace());
+		const stored: StoredLayout | null =
+			deviceWorkspace !== null
+				? parseStoredLayout(deviceWorkspace.json)
+				: (legacyWorkspace ?? null);
+
+		const finish = (state: WorkspaceState) => {
+			setWorkspace(state);
 			hydratedRef.current = true;
 			setHydrated(true);
+		};
+
+		if (stored === null) {
+			finish(createDefaultWorkspace());
 			return;
 		}
 
-		let tree = parsePaneTree(savedWorkspace.paneTree);
+		let tree = parsePaneTree(stored.paneTree);
 		if (!tree) {
-			setWorkspace(createDefaultWorkspace());
-			hydratedRef.current = true;
-			setHydrated(true);
+			finish(createDefaultWorkspace());
 			return;
 		}
 
 		try {
-			const viewMap = JSON.parse(savedWorkspace.perPaneViewState) as Record<
+			const viewMap = JSON.parse(stored.perPaneViewState) as Record<
 				string,
 				{ mode: Mode; viewState: PaneViewState }
 			>;
@@ -144,16 +212,12 @@ export function useWorkspacePersistence({
 		tree = reconcileDanglingDocs(tree, validDocumentIds);
 
 		const leaves = collectLeaves(tree);
-		const activePaneId = leaves.some(
-			(l) => l.paneId === savedWorkspace.activePaneId,
-		)
-			? savedWorkspace.activePaneId
+		const activePaneId = leaves.some((l) => l.paneId === stored.activePaneId)
+			? stored.activePaneId
 			: (leaves[0]?.paneId ?? createDefaultWorkspace().activePaneId);
 
-		setWorkspace({ paneTree: tree, activePaneId });
-		hydratedRef.current = true;
-		setHydrated(true);
-	}, [enabled, savedWorkspace, validDocumentIds]);
+		finish({ paneTree: tree, activePaneId });
+	}, [enabled, deviceWorkspace, legacyWorkspace, validDocumentIds]);
 
 	useEffect(() => {
 		const onVisibility = () => {
@@ -185,7 +249,7 @@ export function useWorkspacePersistence({
 		scheduleSave,
 		flushSave,
 		isHydrated: hydrated,
-		loading: enabled && (savedWorkspace === undefined || !hydrated),
+		loading: enabled && (deviceWorkspace === undefined || !hydrated),
 	};
 }
 
