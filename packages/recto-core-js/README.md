@@ -5,9 +5,14 @@ a `JSContext` (plan 023 D-N3, §1.5). It is the same code the web runs, so
 losslessness is a property of the build, not of two implementations agreeing.
 
 ```sh
-bun run core:build    # → dist/recto-core.js + manifest.json (sha256)
-bun run core:parity   # fixtures in a DOM-free realm, then in a real JSContext
+bun run core:build            # → dist/recto-core.js + manifest.json (sha256)
+bun run core:parity           # fixtures in a DOM-free realm, then in a real JSContext
+bun run core:parity --bench   # …and the whole-document timings below (~1 min)
 ```
+
+CI runs `core:parity` without `--bench`: the parity checks and the small-call
+timing take about a second, while the ~950 kB benchmarks take tens of seconds
+and are noise on a shared runner. The numbers below are the record.
 
 `dist/` and `manifest.json` are build output and are not committed. The Xcode
 copy-resources script compares the copied bundle's sha256 against
@@ -92,7 +97,7 @@ core:parity` proves it by running every entry point in a realm that has none.
 
 ¹ the corpus concatenated to size: thousands of duplicate footnote and
 link-reference definitions, which remark resolves super-linearly. `core:parity`
-runs a 250 kB version of it so a push does not cost three minutes of CI.
+`--bench` uses a 250 kB version of it, since it is about shape rather than scale.
 The Bun column is the same bundle loaded as a script; `lib/` imported directly
 as ES modules is another ~1.5× faster again (313 ms on the prose document).
 

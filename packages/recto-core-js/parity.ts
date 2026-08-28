@@ -2,11 +2,14 @@
  * `bun run core:parity` — checks `dist/recto-core.js` against the fixtures and,
  * on macOS, against the same fixtures inside a real `JSContext`.
  *
- * Three things are proved here:
+ * Two things are proved on every run:
  *  1. The bundle produces exactly what `lib/` produces (it IS `lib/`, but the
  *     bundler picks package entry points, so this catches a wrong one).
  *  2. Nothing on any API path touches a DOM global — the realm has none.
- *  3. The numbers: bundle size, load time, per-call latency on a ~950 kB doc.
+ *
+ * `--bench` adds the whole-document timings on two ~950 kB documents. They take
+ * tens of seconds and are noise on a shared CI runner, so they are opt-in; the
+ * numbers they produced are recorded in the README.
  */
 
 import { writeFile } from "node:fs/promises";
@@ -17,9 +20,9 @@ import { analyze } from "@/lib/lint/analyze";
 import type { LintOptions } from "@/lib/lint/types";
 import { markdownFromHtml } from "@/lib/markdown/from-html";
 import { renderPreviewHtml } from "@/lib/preview/render";
-import { currentStreak } from "@/lib/stats/streak";
 import corpus from "@/packages/editor-fixtures/markdown-corpus.json";
 import outlineFixture from "@/packages/editor-fixtures/outline.json";
+import streakFixture from "@/packages/editor-fixtures/streak.json";
 import wordCountFixture from "@/packages/editor-fixtures/word-count.json";
 
 import { BUNDLE_PATH, loadCore } from "./bare-realm";
@@ -31,6 +34,9 @@ const corpusPath = join(
 	"editor-fixtures",
 	"markdown-corpus.json",
 );
+
+/** Whole-document timings are opt-in — see the module comment. */
+const bench = process.argv.includes("--bench");
 
 const failures: string[] = [];
 function expect(actual: unknown, expected: unknown, what: string): void {
@@ -110,16 +116,13 @@ expect(
 	await analyze(lintSample, everyCategory),
 	"lint matches lib/lint/analyze",
 );
-const days = [
-	{ date: "2026-08-25", words: 100 },
-	{ date: "2026-08-26", words: 100 },
-	{ date: "2026-08-27", words: 0 },
-];
-expect(
-	core.streak(days, "2026-08-27"),
-	currentStreak(days, "2026-08-27"),
-	"streak matches lib/stats/streak",
-);
+for (const testCase of streakFixture.cases) {
+	expect(
+		core.streak(testCase.days, testCase.today),
+		testCase.streak,
+		`streak "${testCase.name}"`,
+	);
+}
 
 /**
  * Two ~950 kB documents, because they behave very differently: ordinary prose is
@@ -166,39 +169,36 @@ function benchDocuments(): { name: string; markdown: string }[] {
 
 /**
  * One run per document: at ~950 kB a single call already takes seconds, so
- * repeating it buys noise reduction CI does not need. The numbers quoted in the
- * README are best-of-3 from a quiet machine.
+ * repeating it buys noise reduction nothing here needs. The numbers quoted in
+ * the README are best-of-3 from a quiet machine.
  */
-function bestMs(run: () => void, runs: number): number {
-	let best = Number.POSITIVE_INFINITY;
-	for (let i = 0; i < runs; i++) {
-		const start = performance.now();
-		run();
-		best = Math.min(best, performance.now() - start);
-	}
-	return best;
+function callMs(run: () => void): number {
+	const start = performance.now();
+	run();
+	return performance.now() - start;
 }
 
-const documents = benchDocuments();
 const documentPaths: string[] = [];
-for (const { name, markdown } of documents) {
-	const path = join(packageDir, "dist", name);
-	await writeFile(path, markdown);
-	documentPaths.push(path);
-	const label = `${name} (${(markdown.length / 1024).toFixed(0)} kB)`.padEnd(
-		34,
-	);
-	console.log(
-		`call     ${label} normalize ${bestMs(() => core.normalize(markdown), 1)
-			.toFixed(3)
-			.padStart(8)} ms · ` +
-			`countWords ${bestMs(() => core.countWords(markdown), 1)
+if (bench) {
+	for (const { name, markdown } of benchDocuments()) {
+		const path = join(packageDir, "dist", name);
+		await writeFile(path, markdown);
+		documentPaths.push(path);
+		const label = `${name} (${(markdown.length / 1024).toFixed(0)} kB)`.padEnd(
+			34,
+		);
+		console.log(
+			`call     ${label} normalize ${callMs(() => core.normalize(markdown))
 				.toFixed(3)
 				.padStart(8)} ms · ` +
-			`parseOutline ${bestMs(() => core.parseOutline(markdown), 1)
-				.toFixed(3)
-				.padStart(8)} ms (bun)`,
-	);
+				`countWords ${callMs(() => core.countWords(markdown))
+					.toFixed(3)
+					.padStart(8)} ms · ` +
+				`parseOutline ${callMs(() => core.parseOutline(markdown))
+					.toFixed(3)
+					.padStart(8)} ms (bun)`,
+		);
+	}
 }
 
 if (failures.length > 0) {
@@ -209,7 +209,7 @@ if (failures.length > 0) {
 console.log(
 	`parity   ${corpus.cases.length}/${corpus.cases.length} corpus cases + idempotence sweep, ` +
 		`${wordCountFixture.cases.length} word-count, ${outlineFixture.cases.length} outline, ` +
-		"and all 7 globals green in a DOM-free realm",
+		`${streakFixture.cases.length} streak, and all 7 globals green in a DOM-free realm`,
 );
 
 if (process.platform !== "darwin") {
