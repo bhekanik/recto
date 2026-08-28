@@ -63,18 +63,20 @@ struct PerfTests {
     }
 
     /// A paragraph that runs straight into a fenced code block with no blank
-    /// line between them costs roughly three times as much per keystroke —
-    /// anywhere in the document, not only near the fence. Measured on an M3 Max
-    /// in Release: 6.1 ms p50 with the blank line, 16.2 ms without, on documents
-    /// of the same length (85k characters) and the same fragment count.
+    /// line is valid CommonMark, and is what pressing Return once produces.
     ///
-    /// Canonical Markdown always writes the blank line, so a document that has
-    /// been through `serialize(parse(md))` never has this shape — but a document
-    /// being typed has not, and this is what a reader creates by pressing Return
-    /// once instead of twice. Not gated: it records the number so the stage-2
-    /// investigation starts from a measurement rather than a guess.
-    @Test("cost of a paragraph abutting a fence, with and without a blank line")
-    func fenceAdjacencyCost() {
+    /// It used to cost three times as much per keystroke — anywhere in the
+    /// document, not only near the fence — because `incrementalParse` bailed
+    /// whenever the reparsed window ended in a fenced block, forcing a full
+    /// reparse of every block and token. Measured on an M3 Max in Release:
+    /// 4.4 ms p50 with the blank line, 14.4 ms without, at the same document
+    /// length and fragment count. The parser now proves the fence is contained
+    /// instead of assuming the worst, and both shapes land at ~5.5 ms.
+    ///
+    /// Both are asserted, because "we print the number" is how a 14 ms result
+    /// passed an 8 ms budget for a whole review round.
+    @Test("both fence shapes meet the typing budget")
+    func fenceAdjacencyMeetsTheBudget() {
         func document(blankLineBeforeFence: Bool) -> String {
             var out = ""
             for index in 0..<400 {
@@ -89,10 +91,13 @@ struct PerfTests {
             }
             return out
         }
-        report("typing, blank line before the fence",
-               typingSamples(in: document(blankLineBeforeFence: true)))
-        report("typing, fence abuts the paragraph",
-               typingSamples(in: document(blankLineBeforeFence: false)))
+        for (label, blankLine) in [("blank line before the fence", true),
+                                   ("fence abuts the paragraph", false)] {
+            let samples = typingSamples(in: document(blankLineBeforeFence: blankLine))
+            report("typing, \(label)", samples)
+            #expect(percentile(samples, 0.5) < Self.typingBudgetMilliseconds,
+                    "\(label): over the typing budget")
+        }
     }
 
     // MARK: - Helpers

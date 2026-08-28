@@ -193,6 +193,18 @@ renders them is stage 2; the data it will read is here now, and
 - **TextKit 2 returns estimated fragment heights** for content it has not laid
   out, so any scroll target computed from geometry above the caret needs settle
   passes (`layoutViewport()`, re-measure, up to three times).
+- **Raw mode turns off five AppKit rewrites** — quote and dash substitution,
+  automatic text replacement, spelling correction and smart insert/delete — and
+  restores the reader's preferences on leaving it. Without that, AppKit edits
+  the Markdown source, which is the one thing raw promises it will not do.
+- **Paste of the private Markdown flavour, and of plain text in raw, is
+  verbatim.** The cleanup and the blockquote/table context transforms apply to
+  foreign rich-mode text only. Sanitising a copy from another Recto view lost
+  indented code blocks and hard breaks.
+- **Every range is UTF-16 and scalar-aligned.** `MarkdownTextPatch.diff` walks
+  Unicode scalars and converts at the end; a range that bisects a surrogate pair
+  is refused. A code-unit diff of `A😀Z` → `A😂Z` builds a replacement out of
+  half a character: right document, unencodable mutation.
 - **`lists.helpersEnabled` is misleadingly named.** It reads as an editing
   switch (auto-continue, auto-indent, marker conversion) but also gates the
   drawn bullets, numbers and task boxes. Tying it to "editable" leaves preview
@@ -203,11 +215,15 @@ renders them is stage 2; the data it will read is here now, and
   newline starts a new line fragment whatever font it is set in, so shrinking
   the characters of a frontmatter block or a setext underline would leave the
   empty lines behind. The engine collapses those lines' paragraph style too.
-- **A paragraph abutting a fenced code block with no blank line costs ~3x per
-  keystroke** — 4.4 ms vs 13.4 ms on an M3 Max, anywhere in the document, at the
-  same length and fragment count. Canonical Markdown always writes the blank
-  line, so a normalised document never has this shape, but one being typed does.
-  Unexplained; `PerfTests.fenceAdjacencyCost` records it for stage 2.
+- **One `NSTextContentStorage` per document, not per view.** `RectoTextStorage`
+  holds a `MarkdownEditorController`, and the controller owns the storage; every
+  `RectoEditorView` on that storage gets its own layout manager, container and
+  selection. Two windows on one document therefore share the characters and the
+  attributes. Two views do share the *styling*, so caret-driven marker reveal
+  follows whichever view moved its selection last — per-view reveal needs
+  per-view rendering attributes, which is stage 2.
+- **Closing one window must not detach the others.** `controller.detach(textView:)`
+  removes one attachment; `textViews` lists them all.
 - **Focus dimming cannot use `setRenderingAttributes`.** Task boxes, ordered
   numbers and table bitmaps are drawn by the fragment; a colour attribute cannot
   recolour them. Stage 2 wraps the fragment draw in a CGContext transparency
@@ -225,3 +241,16 @@ drives `applyPatch` for undo and redo.
 
 `.vim` joins `Presentation` after the N0c spike; it is a key-handling layer over
 `.raw`, not a fourth rendering path.
+
+Two review findings are deliberately stage 2, because both need a
+source-to-visible range map that does not exist yet:
+
+- **VoiceOver reads the raw Markdown.** Marker hiding is font, kern and colour;
+  the accessibility value is still the source, delimiters and hidden URLs
+  included, and frontmatter is read out as YAML. Rich and preview need a
+  presentation-aware accessibility projection (raw should keep exposing the
+  source).
+- **Find matches text nobody can see.** `NSTextFinder` and the engine's own
+  find search the raw string, so searching preview for `**` or a hidden URL
+  reports matches and highlights a zero-width range. Rich and preview need to
+  search a visible-text projection and map results back to source coordinates.
