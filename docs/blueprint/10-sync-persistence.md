@@ -232,12 +232,17 @@ or about the **screen in front of them**.
    in on a new machine adopts the writer's settings rather than pushing that
    machine's defaults over them.
 3. **Pushes are debounced 800 ms and always compare-and-set.** The hook tracks
-   which settings *this device* changed and has not had accepted. On a lost CAS
-   it takes the winner's values for every setting this device did not touch,
-   keeps the one it did, and writes again on top of the winner's stamp — so the
-   writer's most recent click survives *and* a stale tab cannot revert another
-   device. A failed save (offline, rejected) leaves those keys dirty and a
-   backoff timer re-sends them; nothing is dropped.
+   which settings *this device* changed and has not had accepted, each with the
+   revision it was at when the request went out. On a lost CAS it takes the
+   winner's values for every setting this device did not touch, keeps the one it
+   did, and writes again on top of the winner's stamp — so the writer's most
+   recent click survives *and* a stale tab cannot revert another device. An
+   acknowledgement clears only the keys whose revision is unchanged, so a change
+   made while the save was in flight is not marked saved by it. A failed save
+   (offline, rejected) leaves those keys dirty, persists them to
+   `recto:settings-dirty` so a reload does not lose them, and a backoff timer
+   re-sends; the backoff stops after six attempts but a later change or an
+   `online` event resumes it.
 4. **A key the server does not carry keeps its local value, and a key this
    BUILD does not know is carried through untouched.** `SYNCED_KEYS` is compiled
    from the running build's defaults, so an older web client's idea of "the whole

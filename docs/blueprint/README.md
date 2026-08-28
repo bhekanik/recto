@@ -144,14 +144,38 @@ versions: {                 // tagged snapshots — references into docNodes
 }                            // index: by_document (documentId)
 
 workspaces: {               // one per (user, device) since ADR-21; "resume where I left off"
-  userId: Id<"users">,
-  paneTree: string,         // JSON: recursive split layout (see 09)
-  openDocumentIds: Id<"documents">[],
-  activePaneId: string,
-  perPaneViewState: string, // JSON: per-pane mode + cursor/scroll
+  userId: string,           // Clerk subject
+  deviceId: string,         // random per-browser/app id
+  deviceClass: "mac" | "ipad" | "iphone" | "web",
+  json: string,             // JSON: the device's whole layout (see 09)
+  updatedAt: number,
+}                            // indexes: by_user (userId), by_user_device (userId, deviceId)
+
+settings: {                 // one per user; the writer's synced preferences (ADR-21)
+  userId: string,
+  json: string,             // an opaque JSON object; the server never looks inside
   updatedAt: number,
 }                            // index: by_user (userId)
+
+blobs: {                    // ownership for stored files; _storage carries none (ADR-21)
+  storageId: Id<"_storage">,
+  ownerUserId: string,
+  kind: "upload" | "export",
+  createdAt: number,
+}                            // indexes: by_owner (ownerUserId), by_storage (storageId)
+
+accountDeletions: {         // an in-flight or just-finished deletion (ADR-21)
+  userId: string,           // while this row exists, every user mutation refuses
+  phase: "blobs" | "rows" | "identity" | "purged",
+  expiresAt?: number,       // set on completion; swept 24h later
+}                            // indexes: by_user (userId), by_expires (expiresAt)
 ```
+
+The pre-migration `workspaces` row — `paneTree` / `openDocumentIds` /
+`activePaneId` / `perPaneViewState`, no `deviceId` — still exists and is still
+served by `workspaces.get`/`save`, purely so a browser tab loaded before the
+migration keeps working and each client can seed its device row once. Nothing
+writes it any more. See [`03-data-model.md`](./03-data-model.md) §3.4.
 
 **Hard constraints to respect (Convex):** max ~1 MiB per document/value; store history as **separate rows** (never an embedded array of versions); delta-encode `docNodes.patch` with periodic `snapshot`s.
 

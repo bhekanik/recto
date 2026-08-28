@@ -61,13 +61,14 @@ owning plan is the contract:
 | `comments` | Anchored review comments (human and AI reviewers). | [`plans/010-review-collaboration.md`](../../plans/010-review-collaboration.md) |
 | `settings` | The writer's synced preferences, one opaque JSON object per user. | [`plans/023-native-apple-apps.md`](../../plans/023-native-apple-apps.md) §4.1, ADR-21 |
 | `blobs` | Ownership for stored files: `storageId → {ownerUserId, kind}`. `_storage` carries no owner. | ADR-21 |
-| `accountDeletions` | An in-flight (or just-finished) account deletion. Its existence blocks every user-facing mutation for that user. | ADR-21 |
+| `accountDeletions` | An in-flight (or just-finished) account deletion. Its existence blocks every user-facing mutation for that user, and it carries the paged foreign-reference survey's cursors and token buckets. | ADR-21 |
+| `blobRefs`, `migrationProgress` | Migration-only scaffolding for the blob-owner backfill. Dropped by `migrations.cleanupBlobRefs`. | ADR-21 |
 
 ### 1.2 Changes made for the native apps (ADR-21)
 
 - **`workspaces` is now keyed by `(userId, deviceId)`**, not one row per user (§3.4). A device row carries `deviceId`, `deviceClass` (`mac` | `ipad` | `iphone` | `web`) and an opaque `json` layout; the pre-migration row has none of those and is still served by `workspaces.get/save`. A user has at most one legacy row and one row per device, capped at 32 devices (least-recently-used evicted).
 - **`documents.documentUuid`** (optional) is a client-minted idempotency key for creation, indexed `by_user_uuid`. **`documents.rootNodeId`** (optional) stores the root so a replayed `create` can hand back the same one without walking the history.
-- **`docNodes.authorUserId`** (optional, indexed `by_author_document`) attributes a suggestion node to the reviewer who wrote it. The node lives in the document OWNER's rows, so nothing keyed to the reviewer reaches it, and the pre-existing `review:<userId>` origin string is not an index.
+- **`docNodes.authorUserId`** (optional, indexed `by_author_document`) attributes a suggestion node to the reviewer who wrote it. The node lives in the document OWNER's rows, so nothing keyed to the reviewer reaches it, and the pre-existing `review:<userId>` origin string is not an index. **`docNodes.branchId`** records which review branch it belongs to, so account deletion decides per branch rather than per (document, reviewer) — one accepted branch must not rescue that reviewer's rejected ones.
 - **Indexes added for account deletion**: `reviewBranches.by_reviewer`, `comments.by_author`, `docChunks.by_user`, `blobs.by_owner`, `blobs.by_storage`, `accountDeletions.by_user`, `accountDeletions.by_expires`. A user's traces on *other people's* documents are only reachable by author/reviewer, and a vector index cannot be queried as a range.
 
 ---
@@ -428,9 +429,17 @@ it if the caller disconnects.
 generated file's ownership before handing out its URL; clients with unsynced
 edits must flush first.
 
-Two one-shot backfills exist for rows that predate ADR-21 —
-`migrations.backfillNodeAuthors` and `migrations.backfillBlobOwners`. Both are
-idempotent and bounded; run each until it reports `done`.
+Image uploads do **not** use `files.generateUploadUrl` any more. They POST to
+`{NEXT_PUBLIC_CONVEX_SITE_URL}/upload-image` (`convex/http.ts`) with a
+Convex-templated Clerk JWT; the action stores the bytes and records ownership
+before answering, and deletes what it stored if the claim is refused. The signed-URL
+mutation remains only for browser tabs deployed before that change.
+
+Six one-shot migration steps exist for rows that predate ADR-21 —
+`backfillNodeAuthors`, `backfillNodeBranches`, `scanDocumentRefs`,
+`scanNodeRefs`, `backfillBlobOwners`, `cleanupBlobRefs`. Each is idempotent,
+bounded, and keeps its own progress in `migrationProgress`; run each until it
+reports `done`.
 
 ---
 
