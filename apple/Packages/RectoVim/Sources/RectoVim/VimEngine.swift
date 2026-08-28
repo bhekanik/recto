@@ -65,6 +65,8 @@ public final class VimEngine {
         let setText: JSValue
         let getText: JSValue
         let getState: JSValue
+        let insertText: JSValue
+        let setExternalInput: JSValue
         let map: JSValue
         let noremap: JSValue
         let unmap: JSValue
@@ -130,6 +132,8 @@ public final class VimEngine {
             setText: try member("setText"),
             getText: try member("getText"),
             getState: try member("getState"),
+            insertText: try member("insertText"),
+            setExternalInput: try member("setExternalInput"),
             map: try member("map"),
             noremap: try member("noremap"),
             unmap: try member("unmap"),
@@ -185,6 +189,35 @@ public final class VimEngine {
     @discardableResult
     public func promptKey(_ key: String, modifiers: VimModifiers = []) throws -> VimResult {
         try decode("promptKey", functions.promptKey.call(withArguments: [key, modifiers.rawValue]))
+    }
+
+    /// Hand text input to the host's own input system instead of synthesising it
+    /// from key names.
+    ///
+    /// A `keyDown` event carries one key name; real text input does not. NFD
+    /// arrives as a base letter and a combining mark, an emoji as several
+    /// scalars, a dead key as a composition, an IME as marked text rewritten
+    /// before it commits. With this on, the engine declines printable keys in
+    /// insert mode and waits for `insertText`.
+    public func setExternalInput(_ enabled: Bool) {
+        functions.setExternalInput.call(withArguments: [enabled])
+    }
+
+    /// Text the host's input system produced, as one transaction: the mirror is
+    /// updated, the core sees the change so `.` can replay it, and the resulting
+    /// edit comes back for the host to apply. The host must not have inserted
+    /// the text itself first.
+    ///
+    /// `from`/`to` are UTF-16 offsets for a replacement range — AppKit and UIKit
+    /// both supply one when committing over marked text.
+    @discardableResult
+    public func insertText(_ text: String, from: Int? = nil, to: Int? = nil) throws -> VimResult {
+        var arguments: [Any] = [text]
+        if let from {
+            arguments.append(from)
+            arguments.append(to ?? from)
+        }
+        return try decode("insertText", functions.insertText.call(withArguments: arguments))
     }
 
     /// Place the caret. `ch` is a UTF-16 column.

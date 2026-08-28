@@ -27,6 +27,10 @@ public final class VimUITextViewAdapter: NSObject, VimGeometryProvider, VimHisto
 
     public var onStatusChange: ((VimStatus) -> Void)?
 
+    /// Replay could not be completed and the engine has been resynced from the
+    /// storage. Same contract as the AppKit adapter.
+    public var onReplayFailure: ((VimReplayFailure) -> Void)?
+
     private var applyingEdits = false
     private static let log = Logger(subsystem: "com.bhekani.recto", category: "RectoVim")
 
@@ -41,7 +45,37 @@ public final class VimUITextViewAdapter: NSObject, VimGeometryProvider, VimHisto
 
     public func start() throws {
         try engine.start(text: textView.text ?? "")
+        // The text view's input system owns text input: it is the only thing
+        // that sees NFD, dead keys, emoji and IME as what they are. UIKit has no
+        // `BlockCaretTextView` equivalent to hook, so a `UITextView` subclass
+        // must override `insertText(_:)` (and `UITextInput.replace(_:withText:)`
+        // when it supports marked text) and forward to `insertText` below.
+        engine.setExternalInput(true)
         try apply(engine.state())
+    }
+
+    /// Text the input system produced. Returns true when vim took it, in which
+    /// case the caller must not insert it itself.
+    @discardableResult
+    public func insertText(
+        _ text: String,
+        replacementRange: NSRange = NSRange(location: NSNotFound, length: 0)
+    ) -> Bool {
+        do {
+            let result: VimResult
+            if replacementRange.location == NSNotFound {
+                result = try engine.insertText(text)
+            } else {
+                result = try engine.insertText(
+                    text, from: replacementRange.location,
+                    to: NSMaxRange(replacementRange))
+            }
+            try apply(result)
+            return result.handled
+        } catch {
+            Self.log.error("insertText failed: \(String(describing: error), privacy: .public)")
+            return false
+        }
     }
 
     /// Call from `pressesBegan`. Returns true when vim consumed the key, in
@@ -83,22 +117,57 @@ public final class VimUITextViewAdapter: NSObject, VimGeometryProvider, VimHisto
 
     private func apply(_ result: VimResult) throws {
         if !result.edits.isEmpty && !result.resynced {
-            applyEdits(result.edits)
+            if let failure = applyEdits(result.edits) {
+                // The engine committed these to its mirror before handing them
+                // over, so a partial replay leaves the two disagreeing and every
+                // later journal range pointing at the wrong text.
+                try resyncFromStorage()
+                onReplayFailure?(failure)
+                onStatusChange?(VimStatus(result: try engine.state()))
+                return
+            }
         }
         applySelection(result)
         if let scroll = result.scroll { applyScroll(scroll) }
         onStatusChange?(VimStatus(result: result))
     }
 
-    private func applyEdits(_ edits: [VimEdit]) {
+    private func resyncFromStorage() throws {
+        let text = textView.text ?? ""
+        let selection = GraphemeClamp.range(in: text as NSString, textView.selectedRange)
+        applyingEdits = true
+        defer { applyingEdits = false }
+        _ = try engine.setText(
+            text, anchor: selection.location, head: NSMaxRange(selection))
+    }
+
+    /// Returns nil on success, or the first failure — at which point replay has
+    /// stopped and the caller must resync.
+    private func applyEdits(_ edits: [VimEdit]) -> VimReplayFailure? {
         applyingEdits = true
         defer { applyingEdits = false }
         textView.undoManager?.beginUndoGrouping()
+        defer { textView.undoManager?.endUndoGrouping() }
+
         for edit in edits {
-            guard let range = textRange(for: edit.range) else { continue }
+            let length = ((textView.text ?? "") as NSString).length
+            guard edit.range.location >= 0, NSMaxRange(edit.range) <= length,
+                let range = textRange(for: edit.range)
+            else {
+                return .rangeOutOfBounds(edit.range, documentLength: length)
+            }
+            // A delegate that vetoes has no way to say so through `replace`, so
+            // the check has to happen before the call.
+            if let delegate = textView.delegate,
+                delegate.textView?(
+                    textView, shouldChangeTextIn: edit.range,
+                    replacementText: edit.insert) == false
+            {
+                return .rejectedByDelegate(edit.range)
+            }
             textView.replace(range, withText: edit.insert)
         }
-        textView.undoManager?.endUndoGrouping()
+        return nil
     }
 
     private func applySelection(_ result: VimResult) {

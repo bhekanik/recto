@@ -59,7 +59,16 @@ struct TextViewAdapterTests {
 
         func press(_ spec: String) {
             for key in VimKeys.parse(spec) {
-                _ = adapter.handle(key: key.key, modifiers: key.modifiers)
+                if adapter.handle(key: key.key, modifiers: key.modifiers) { continue }
+                // What `super.keyDown` would do: the text view's input system
+                // turns a key vim declined into `insertText:`, which routes back
+                // through the adapter. Driving it here means the whole suite
+                // exercises the real input path rather than a synthetic one.
+                guard key.key.count == 1, !key.modifiers.contains(.control),
+                    !key.modifiers.contains(.command)
+                else { continue }
+                textView.insertText(
+                    key.key, replacementRange: NSRange(location: NSNotFound, length: 0))
             }
         }
 

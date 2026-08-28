@@ -78,6 +78,33 @@ public struct VimResult: Decodable, Sendable {
     }
 }
 
+/// Why replaying the edit journal onto the text storage had to stop.
+///
+/// Every one of these means the engine's mirror and the storage would have
+/// diverged, so the adapter resyncs the engine from the storage and reports
+/// this. Continuing past a failed edit is what makes every later journal range
+/// point at the wrong text.
+public enum VimReplayFailure: Sendable, Equatable {
+    /// A delegate returned false from `shouldChangeText` / `shouldChangeTextIn`.
+    case rejectedByDelegate(NSRange)
+    /// The range does not fit the document — the two were already out of step,
+    /// or a host edit landed between the keystroke and the replay.
+    case rangeOutOfBounds(NSRange, documentLength: Int)
+    /// The text view has no storage to write to.
+    case noTextStorage
+
+    public var description: String {
+        switch self {
+        case .rejectedByDelegate(let range):
+            return "the text view's delegate rejected the edit at \(range)"
+        case .rangeOutOfBounds(let range, let length):
+            return "the edit range \(range) does not fit a document of \(length) units"
+        case .noTextStorage:
+            return "the text view has no text storage"
+        }
+    }
+}
+
 /// Caret shape per mode, as the design plan specifies (§4.3).
 public enum VimCaretShape: Sendable {
     case block   // normal

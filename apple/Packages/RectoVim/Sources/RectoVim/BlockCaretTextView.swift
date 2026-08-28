@@ -1,7 +1,7 @@
 #if canImport(AppKit)
 import AppKit
 
-/// `NSTextView` with a vim block caret and a key hook.
+/// `NSTextView` with a vim block caret and the two hooks the adapter needs.
 ///
 /// AppKit has no block-cursor setting, so normal mode draws its own by widening
 /// the insertion-point rect to one character. `drawInsertionPoint` is the
@@ -19,12 +19,45 @@ public final class BlockCaretTextView: NSTextView {
     /// Returns true if the key was consumed by vim.
     public var keyHook: ((NSEvent) -> Bool)?
 
+    /// Text the input system produced — a typed character, a composed dead key,
+    /// an emoji from the picker, a committed IME string, a paste. Returns true
+    /// if vim took it, in which case the text view must not insert it itself.
+    ///
+    /// This exists because a `keyDown` event carries one key name and real text
+    /// input does not: NFD arrives as a base letter plus a combining mark, an
+    /// emoji as several scalars, a dead key as a composition. Synthesising the
+    /// insert from the key name loses all of it, and letting AppKit insert
+    /// directly changes the storage without telling the JS mirror.
+    public var inputHook: ((String, NSRange) -> Bool)?
+
+    /// An IME composition finished. AppKit owns the storage while marked text is
+    /// up, so the adapter resyncs rather than trying to model it.
+    public var compositionDidEnd: (() -> Void)?
+
     public override func keyDown(with event: NSEvent) {
         // Vim first; anything it declines falls through to the text view, which
         // is what keeps system editing behaviour (and IME) working when the vim
         // layer is idle or in insert mode.
         if keyHook?(event) == true { return }
         super.keyDown(with: event)
+    }
+
+    public override func insertText(_ string: Any, replacementRange: NSRange) {
+        let text = (string as? NSAttributedString)?.string ?? (string as? String)
+        // A commit that ends a composition is AppKit's to apply; the adapter
+        // resyncs from the storage once it has.
+        let wasComposing = hasMarkedText()
+        if let text, !wasComposing, inputHook?(text, replacementRange) == true {
+            return
+        }
+        super.insertText(string, replacementRange: replacementRange)
+        if wasComposing, !hasMarkedText() { compositionDidEnd?() }
+    }
+
+    public override func unmarkText() {
+        let wasComposing = hasMarkedText()
+        super.unmarkText()
+        if wasComposing { compositionDidEnd?() }
     }
 
     public override func drawInsertionPoint(

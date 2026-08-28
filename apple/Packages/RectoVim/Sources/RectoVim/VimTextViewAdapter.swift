@@ -21,6 +21,12 @@ public final class VimTextViewAdapter: NSObject, VimGeometryProvider, VimHistory
     /// Mode, pending keys, prompt and messages, for the status bar.
     public var onStatusChange: ((VimStatus) -> Void)?
 
+    /// Replay could not be completed and the engine has been resynced from the
+    /// storage. The document is intact; whatever the keystroke was doing is not.
+    /// A host should surface this rather than swallow it — silently continuing
+    /// is what desynchronises the mirror.
+    public var onReplayFailure: ((VimReplayFailure) -> Void)?
+
     /// True while we are writing into the storage ourselves, so the text view's
     /// own change notifications do not bounce back into JS as external edits.
     private var applyingEdits = false
@@ -37,13 +43,47 @@ public final class VimTextViewAdapter: NSObject, VimGeometryProvider, VimHistory
     }
 
     public func start() throws {
-        // Vim's undo granularity is one command, not one run-loop pass. Left on,
-        // `groupsByEvent` also swallows every edit into a single group when no
-        // run loop is turning — exactly the headless case the adapter tests run
-        // in, where one `u` undid the whole session.
-        textView.undoManager?.groupsByEvent = false
         try engine.start(text: textView.string)
+
+        // The text view's input system owns text input from here on: it is the
+        // only thing that sees NFD sequences, dead-key compositions, emoji and
+        // IME as what they are. `BlockCaretTextView` routes them back through
+        // `insertText`; a custom text view must forward
+        // `insertText(_:replacementRange:)` the same way.
+        engine.setExternalInput(true)
+        if let hooked = textView as? BlockCaretTextView {
+            hooked.inputHook = { [weak self] text, range in
+                self?.insertText(text, replacementRange: range) ?? false
+            }
+            hooked.compositionDidEnd = { [weak self] in
+                try? self?.syncFromTextView()
+            }
+        }
         try apply(engine.state())
+    }
+
+    /// Text the input system produced. Returns true when vim took it, in which
+    /// case the text view must not insert it itself.
+    ///
+    /// A `replacementRange` of `NSNotFound` means "the current selection", which
+    /// is what the engine does by default.
+    @discardableResult
+    public func insertText(_ text: String, replacementRange: NSRange = NSRange(location: NSNotFound, length: 0)) -> Bool {
+        do {
+            let result: VimResult
+            if replacementRange.location == NSNotFound {
+                result = try engine.insertText(text)
+            } else {
+                result = try engine.insertText(
+                    text, from: replacementRange.location,
+                    to: NSMaxRange(replacementRange))
+            }
+            try apply(result)
+            return result.handled
+        } catch {
+            Self.log.error("insertText failed: \(String(describing: error), privacy: .public)")
+            return false
+        }
     }
 
     /// Returns true when vim consumed the key, in which case the text view must
@@ -93,12 +133,31 @@ public final class VimTextViewAdapter: NSObject, VimGeometryProvider, VimHistory
 
     private func apply(_ result: VimResult) throws {
         if !result.edits.isEmpty && !result.resynced {
-            applyEdits(result.edits)
+            if let failure = applyEdits(result.edits) {
+                // The engine committed these edits to its mirror before handing
+                // them over, so a partial replay leaves the two disagreeing and
+                // every later journal range pointing at the wrong text. Take the
+                // storage as the truth and tell the engine.
+                try resyncFromStorage()
+                onReplayFailure?(failure)
+                onStatusChange?(VimStatus(result: try engine.state()))
+                return
+            }
         }
         applySelection(result)
         applyCaretShape(result)
         if let scroll = result.scroll { applyScroll(scroll) }
         onStatusChange?(VimStatus(result: result))
+    }
+
+    /// Hand the storage back to the engine as the source of truth.
+    private func resyncFromStorage() throws {
+        let string = textView.string as NSString
+        let selection = GraphemeClamp.range(in: string, textView.selectedRange())
+        applyingEdits = true
+        defer { applyingEdits = false }
+        _ = try engine.setText(
+            textView.string, anchor: selection.location, head: NSMaxRange(selection))
     }
 
     /// Replay the edit journal onto the text storage, in order.
@@ -114,27 +173,56 @@ public final class VimTextViewAdapter: NSObject, VimGeometryProvider, VimHistory
     /// already snapped them to grapheme boundaries, and re-clamping here against
     /// ICU could disagree by a code unit and desynchronise the two buffers.
     /// `assertClampIsIdentity` states that invariant where a debug build checks it.
-    private func applyEdits(_ edits: [VimEdit]) {
-        guard let storage = textView.textStorage else { return }
+    /// Returns nil on success, or the first failure — at which point replay has
+    /// stopped and the caller must resync.
+    private func applyEdits(_ edits: [VimEdit]) -> VimReplayFailure? {
+        guard let storage = textView.textStorage else {
+            return .noTextStorage
+        }
         applyingEdits = true
         defer { applyingEdits = false }
 
+        // Vim's undo granularity is one command, not one run-loop pass, so the
+        // batch below is one explicit group with event grouping off.
+        //
+        // Off only for the duration of the batch, though. Leaving it off breaks
+        // IME: `setMarkedText` reaches `-[NSUndoManager _prepareEventGrouping]`
+        // through AppKit's coalescing path, which raises when event grouping is
+        // disabled. Leaving it *on* is no good either — with no run loop turning
+        // AppKit swallows a whole session into one group, and one `u` undid
+        // everything. Scoping it to our own writes is what satisfies both.
         let undoManager = textView.undoManager
+        let groupsByEvent = undoManager?.groupsByEvent ?? true
+        undoManager?.groupsByEvent = false
         undoManager?.beginUndoGrouping()
+        defer {
+            undoManager?.endUndoGrouping()
+            undoManager?.groupsByEvent = groupsByEvent
+            // NSTextView coalesces consecutive typing into one undo group, which
+            // would make a single `u` throw away a whole editing session.
+            textView.breakUndoCoalescing()
+        }
+
         for edit in edits {
+            // Bounds before the cluster check: a range that does not fit the
+            // document is the two sides already out of step, and the clamp
+            // assertion would fire on it first and report the wrong cause.
+            let length = (textView.string as NSString).length
+            guard edit.range.location >= 0, NSMaxRange(edit.range) <= length else {
+                return .rangeOutOfBounds(edit.range, documentLength: length)
+            }
             assertClampIsIdentity(edit.range, "edit")
             // JS offsets are UTF-16 code units and so is NSRange, so this is a
             // straight handover — the reason the adapter works in offsets rather
             // than in (line, column) pairs.
             guard textView.shouldChangeText(in: edit.range, replacementString: edit.insert)
-            else { continue }
+            else {
+                return .rejectedByDelegate(edit.range)
+            }
             storage.replaceCharacters(in: edit.range, with: edit.insert)
             textView.didChangeText()
         }
-        undoManager?.endUndoGrouping()
-        // NSTextView coalesces consecutive typing into one undo group, which
-        // would make a single `u` throw away a whole editing session.
-        textView.breakUndoCoalescing()
+        return nil
     }
 
     private func applySelection(_ result: VimResult) {
@@ -207,19 +295,22 @@ public final class VimTextViewAdapter: NSObject, VimGeometryProvider, VimHistory
         return Double(font.ascender - font.descender + font.leading)
     }
 
+    /// Where the *character* is, not where its line starts.
+    ///
+    /// `H`/`M`/`L` and the goal column of `gj`/`gk` are the callers; returning
+    /// the line fragment's origin made every column look like column zero, so a
+    /// `gj` from the middle of a wrapped line landed at its start.
     public func charCoords(offset: Int) -> (left: Double, top: Double, bottom: Double) {
-        guard let rect = lineFragmentRect(at: offset) else { return (0, 0, lineHeight()) }
-        return (Double(rect.minX), Double(rect.minY), Double(rect.maxY))
+        guard let line = displayLine(containing: offset) else { return (0, 0, lineHeight()) }
+        let frame = line.frame
+        return (Double(frame.minX + line.x(of: offset)), Double(frame.minY), Double(frame.maxY))
     }
 
+    /// The inverse: which offset is under this point, on the display line the
+    /// point falls in rather than at the start of the paragraph.
     public func offsetAtCoords(left: Double, top: Double) -> Int {
-        guard let layoutManager = textView.textLayoutManager,
-            let contentManager = layoutManager.textContentManager,
-            let fragment = layoutManager.textLayoutFragment(for: CGPoint(x: left, y: top))
-        else { return 0 }
-        return contentManager.offset(
-            from: contentManager.documentRange.location,
-            to: fragment.rangeInElement.location)
+        guard let line = displayLine(at: CGPoint(x: left, y: top)) else { return 0 }
+        return line.offset(atX: CGFloat(left) - line.frame.minX)
     }
 
     public func scrollInfo() -> (top: Double, height: Double, clientHeight: Double) {
@@ -346,8 +437,25 @@ public final class VimTextViewAdapter: NSObject, VimGeometryProvider, VimHistory
         return previous
     }
 
-    private func lineFragmentRect(at offset: Int) -> CGRect? {
-        displayLine(containing: offset)?.frame
+    private func displayLine(at point: CGPoint) -> DisplayLine? {
+        guard let layoutManager = textView.textLayoutManager,
+            let contentManager = layoutManager.textContentManager,
+            let fragment = layoutManager.textLayoutFragment(for: point)
+        else { return nil }
+        let paragraphStart = contentManager.offset(
+            from: contentManager.documentRange.location, to: fragment.rangeInElement.location)
+        let origin = fragment.layoutFragmentFrame.origin
+        for index in fragment.textLineFragments.indices {
+            let bounds = fragment.textLineFragments[index].typographicBounds
+                .offsetBy(dx: origin.x, dy: origin.y)
+            if point.y < bounds.maxY {
+                return DisplayLine(
+                    fragment: fragment, index: index, paragraphStart: paragraphStart)
+            }
+        }
+        return DisplayLine(
+            fragment: fragment, index: max(0, fragment.textLineFragments.count - 1),
+            paragraphStart: paragraphStart)
     }
 
     // MARK: - VimHistoryProvider
@@ -359,15 +467,18 @@ public final class VimTextViewAdapter: NSObject, VimGeometryProvider, VimHistory
     /// to the text view's undo manager; the product routes to `RectoHistory`,
     /// which is why this is a protocol rather than a direct call.
     ///
-    /// **Known gap for the undo tree**: vim puts the caret at the *start of the
-    /// restored change*, while `NSUndoManager` restores whatever selection it
-    /// recorded. The undo tree must compute a vim-shaped caret from the patch it
-    /// applied rather than read it back off the text view.
+    /// The caret is **vim's**, not `NSUndoManager`'s. Vim puts it at the start of
+    /// the change it just restored; the undo manager restores whatever selection
+    /// it happened to record, which in the text-view proof was two lines away.
+    /// The start of the change is the first offset at which the two versions
+    /// differ, which needs no cooperation from whoever owns undo — the same
+    /// derivation `RectoHistory` will use from its own patch.
     public func performHistory(_ kind: String) -> (text: String, anchor: Int, head: Int)? {
         guard let undoManager = textView.undoManager else { return nil }
         applyingEdits = true
         defer { applyingEdits = false }
 
+        let before = textView.string
         if kind == "undo" {
             guard undoManager.canUndo else { return nil }
             undoManager.undo()
@@ -375,9 +486,20 @@ public final class VimTextViewAdapter: NSObject, VimGeometryProvider, VimHistory
             guard undoManager.canRedo else { return nil }
             undoManager.redo()
         }
-        let string = textView.string as NSString
-        let selection = GraphemeClamp.range(in: string, textView.selectedRange())
-        return (textView.string, selection.location, NSMaxRange(selection))
+        let after = textView.string
+        let caret = GraphemeClamp.caret(
+            in: after as NSString, offset: Self.firstDifference(before, after))
+        return (after, caret, caret)
+    }
+
+    /// The first UTF-16 offset at which two versions of the document differ, or
+    /// the end of the shorter one when it is a prefix of the longer.
+    static func firstDifference(_ before: String, _ after: String) -> Int {
+        let a = Array(before.utf16)
+        let b = Array(after.utf16)
+        var index = 0
+        while index < a.count, index < b.count, a[index] == b[index] { index += 1 }
+        return index
     }
 }
 #endif
