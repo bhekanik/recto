@@ -28,7 +28,6 @@ struct StreakCases: Decodable {
   let streaks: [StreakCase]
   let goals: [GoalCase]
 }
-
 @Suite("streak parity with lib/stats/streak.ts")
 struct StreakTests {
   @Test("streak lengths match the web")
@@ -77,4 +76,3 @@ struct StreakTests {
     #expect(currentStreak(stats, today: "2018-11-05") == 2)
   }
 }
-
