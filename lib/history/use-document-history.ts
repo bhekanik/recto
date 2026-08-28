@@ -368,7 +368,6 @@ export function useDocumentHistory(args: {
 						nodeId: result.remoteHeadNodeId,
 						revision: result.remotePointerRevision,
 					});
-					headNodeIdRef.current = result.remoteHeadNodeId;
 					settleLocalMove(moveToken, null);
 				})
 				.catch(() => settleLocalMove(moveToken, null));
@@ -529,7 +528,6 @@ export function useDocumentHistory(args: {
 						nodeId: result.currentNodeId,
 						revision: result.pointerRevision,
 					});
-					headNodeIdRef.current = result.currentNodeId;
 					settleLocalMove(moveToken, null);
 				})
 				.catch(() => {
@@ -626,7 +624,20 @@ export function useDocumentHistory(args: {
 		[],
 	);
 
-	const getHeadNodeId = useCallback(() => headNodeIdRef.current, []);
+	/**
+	 * The head autosave may write against — null while a remote head is queued.
+	 *
+	 * Adopting the winner's head here would be worse than useless: this device's
+	 * editor still holds ITS text, so passing the compare-and-set would write that
+	 * text under the winner's branch, which is exactly what the CAS exists to
+	 * stop. The head stays tied to what the editor and controller actually hold,
+	 * and only `reconcileRemote` moves it — after the projection that makes it
+	 * true.
+	 */
+	const getHeadNodeId = useCallback(
+		() => (pendingRemotePointerRef.current ? null : headNodeIdRef.current),
+		[],
+	);
 	const hasPendingDraft = useCallback(
 		() => controllerRef.current?.hasPendingDraft ?? false,
 		[],
@@ -679,21 +690,36 @@ export function useDocumentHistory(args: {
 		if (!editorIdleRef.current) return false;
 		if (!nodesById.has(target.nodeId)) return false; // node not synced yet
 
-		let markdown: string;
+		let materialized: string;
 		try {
-			markdown = materialize(target.nodeId, nodesById);
+			materialized = materialize(target.nodeId, nodesById);
 		} catch {
 			return false;
 		}
 
+		// The other device's autosave can be AHEAD of its last node: a writer who
+		// never pauses long enough to close a grouping boundary has their text in
+		// documents.markdown and nowhere else. Projecting the node's text would
+		// erase it, and accepting that as the sync baseline would then overwrite
+		// it on this device's next save.
+		//
+		// So: show the draft, but keep the controller on the node it is a child
+		// of. The next recordChange then produces the materialized -> draft patch
+		// as an ordinary node, which is how the draft finally enters the DAG.
+		const draftAhead =
+			serverCurrentNodeId === target.nodeId &&
+			serverMarkdown !== undefined &&
+			serverMarkdown !== materialized;
+		const editorText = draftAhead ? serverMarkdown : materialized;
+
 		const handle = getHandleRef.current();
 		const caretBefore = handle?.exportCaret().head ?? 0;
 		navigatingRef.current = true;
-		handle?.seed(markdown, { programmatic: true });
+		handle?.seed(editorText, { programmatic: true });
 		// The remote text is a different document; the old offset may not exist in
 		// it, so clamp rather than dropping the caret to the top.
-		handle?.importCaret(caretAtOffset(caretBefore, markdown.length));
-		controllerRef.current?.setCurrent(target.nodeId, markdown);
+		handle?.importCaret(caretAtOffset(caretBefore, editorText.length));
+		controllerRef.current?.setCurrent(target.nodeId, materialized);
 		setPointer(target.nodeId);
 		headNodeIdRef.current = target.nodeId;
 		pendingRemotePointerRef.current = null;
@@ -701,12 +727,20 @@ export function useDocumentHistory(args: {
 			navigatingRef.current = false;
 		}, 200);
 
-		// The sync hook must accept this as the new baseline, or it will flush the
-		// projected text straight back as though the writer had typed it.
-		onRemoteProjectionRef.current?.(markdown, serverUpdatedAt ?? 0);
+		// The sync hook must accept what is ON SCREEN as the new baseline, or it
+		// will flush the projected text back as though the writer had typed it —
+		// and if that text were the materialization, the flush would clobber the
+		// draft this projection just rescued.
+		onRemoteProjectionRef.current?.(editorText, serverUpdatedAt ?? 0);
 		toast("Updated from another device", "info");
 		return true;
-	}, [nodesById, serverUpdatedAt, setPointer]);
+	}, [
+		nodesById,
+		serverCurrentNodeId,
+		serverMarkdown,
+		serverUpdatedAt,
+		setPointer,
+	]);
 
 	// Decide what the latest server observation means, then try to apply it.
 	//
@@ -735,12 +769,14 @@ export function useDocumentHistory(args: {
 			pendingRemotePointerRef.current = null;
 			return;
 		}
-		if (serverCurrentNodeId !== currentNodeIdRef.current) {
-			queueRemotePointer({
-				nodeId: serverCurrentNodeId,
-				revision: serverPointerRevision,
-			});
-		}
+		// Queue EVERY observation, including one naming the head we are already on:
+		// a newer revision pointing back at our own head is how a queued pointer
+		// that has since been superseded gets cleared. Filtering those out left
+		// stale targets in the queue waiting to be projected.
+		queueRemotePointer({
+			nodeId: serverCurrentNodeId,
+			revision: serverPointerRevision,
+		});
 		reconcileRemote();
 	}, [
 		serverCurrentNodeId,

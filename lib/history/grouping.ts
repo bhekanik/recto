@@ -4,6 +4,15 @@ import { ulid } from "./ulid";
 /** ~500ms time-gap coalescing, matching the engines' newGroupDelay (07 §4). */
 export const GROUP_DELAY_MS = 500;
 
+/**
+ * Longest a single draft may absorb changes before it is cut into a node,
+ * matching the autosave maxWait. A writer who never pauses for 500ms otherwise
+ * produces no nodes at all: their text lives only in `documents.markdown`, so a
+ * head divergence has nothing to turn into a branch and the work is device-only
+ * until they stop typing.
+ */
+export const MAX_GROUP_MS = 5_000;
+
 export type NodeSelection = { anchor: number; head: number } | null;
 
 /** One committed undo-tree node, ready to persist + advance the pointer. */
@@ -39,6 +48,8 @@ export class GroupingController {
 	private draftSelection: NodeSelection = null;
 	private lastChangeAt = 0;
 	private lastChangeEnd = -1;
+	/** When the current draft first diverged from its parent; -1 when clean. */
+	private draftStartedAt = -1;
 	private depthSinceSnapshot: number;
 	private idleTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -87,6 +98,7 @@ export class GroupingController {
 		this.draftSelection = null;
 		this.lastChangeAt = 0;
 		this.lastChangeEnd = -1;
+		this.draftStartedAt = -1;
 		this.depthSinceSnapshot = depthSinceSnapshot;
 	}
 
@@ -110,13 +122,18 @@ export class GroupingController {
 			this.draftMarkdown !== this.parentMarkdown &&
 			Math.abs(incremental.from - this.lastChangeEnd) > 1;
 
+		const draftAge = this.draftStartedAt >= 0 ? now - this.draftStartedAt : 0;
 		const boundaryBefore =
-			gap > GROUP_DELAY_MS || adjacencyBreak || Boolean(opts.structural);
+			gap > GROUP_DELAY_MS ||
+			adjacencyBreak ||
+			draftAge > MAX_GROUP_MS ||
+			Boolean(opts.structural);
 
 		if (boundaryBefore && this.draftMarkdown !== this.parentMarkdown) {
 			this.commitDraft();
 		}
 
+		if (this.draftMarkdown === this.parentMarkdown) this.draftStartedAt = now;
 		this.draftMarkdown = markdown;
 		this.draftSelection = selection;
 		this.lastChangeAt = now;
@@ -165,6 +182,7 @@ export class GroupingController {
 		this.parentNodeId = commit.nodeId;
 		this.parentMarkdown = this.draftMarkdown;
 		this.lastChangeEnd = -1;
+		this.draftStartedAt = -1;
 		this.onCommit(commit);
 	}
 
