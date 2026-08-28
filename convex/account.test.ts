@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import {
+	ACCOUNT_DELETION_BLOB_MIGRATIONS_MESSAGE,
 	ACCOUNT_DELETION_UNAVAILABLE_MESSAGE,
 	ACCOUNT_DELETION_UPLOAD_CUTOVER_MESSAGE,
 	CLERK_USER_UNREACHABLE_MESSAGE,
@@ -284,6 +285,12 @@ async function makeLegacyUploadsSafe(t: ReturnType<typeof convexTest>) {
 		const row = await ctx.db.query("legacyUploadCutovers").first();
 		if (row) await ctx.db.patch(row._id, { safeAfter: Date.now() - 1 });
 	});
+}
+
+async function completeBlobMigrations(t: ReturnType<typeof convexTest>) {
+	await runMigration(t, internal.migrations.scanDocumentRefs);
+	await runMigration(t, internal.migrations.scanNodeRefs);
+	await runMigration(t, internal.migrations.backfillBlobOwners);
 }
 
 /** Backfill legacy references before starting deletion. */
@@ -1259,11 +1266,54 @@ describe("account.deleteEverything", () => {
 		).toHaveLength(0);
 	});
 
+	it("refuses before blob migrations finish, then deletes a legacy blob", async () => {
+		const t = convexTest(schema, modules);
+		await makeLegacyUploadsSafe(t);
+		const { documentId } = await seed(t);
+		const legacyBlob = await t.run((ctx) =>
+			ctx.storage.store(new Blob(["legacy"])),
+		);
+		const url = await t.run((ctx) => ctx.storage.getUrl(legacyBlob));
+		if (!url) throw new Error("legacy blob has no URL");
+		await t.run((ctx) =>
+			ctx.db.patch(documentId, { markdown: `mine ![image](${url})` }),
+		);
+		await runMigration(t, internal.migrations.scanDocumentRefs);
+		await runMigration(t, internal.migrations.scanNodeRefs);
+		expect(
+			await t.query(internal.account.getBlobMigrationReadiness, {}),
+		).toEqual({ ready: false, pending: ["backfillBlobOwners"] });
+		const before = await countAll(t);
+		const calls = stubClerk();
+
+		await expect(
+			t.withIdentity(OWNER).action(api.account.deleteEverything, {}),
+		).rejects.toThrow(ACCOUNT_DELETION_BLOB_MIGRATIONS_MESSAGE);
+
+		expect(calls).toHaveLength(0);
+		expect(await countAll(t)).toEqual(before);
+		expect(await storageIds(t)).toContain(legacyBlob);
+		expect(
+			await t.run((ctx) => ctx.db.query("accountDeletions").collect()),
+		).toHaveLength(0);
+
+		await completeBlobMigrations(t);
+		expect(
+			await t.query(internal.account.getBlobMigrationReadiness, {}),
+		).toEqual({ ready: true, pending: [] });
+		const result = await t
+			.withIdentity(OWNER)
+			.action(api.account.deleteEverything, {});
+		expect(result.blobsDeleted).toBe(1);
+		expect(await storageIds(t)).not.toContain(legacyBlob);
+	});
+
 	it("refuses, without deleting anything, when the secret cannot see this user", async () => {
 		const t = convexTest(schema, modules);
 		await makeLegacyUploadsSafe(t);
 		await seed(t);
 		await seedBlobs(t);
+		await completeBlobMigrations(t);
 		const before = await countAll(t);
 		// A secret for the WRONG Clerk instance answers 404 to every call.
 		stubClerk({ userStatus: 404, deleteStatus: 404 });
@@ -1285,6 +1335,7 @@ describe("account.deleteEverything", () => {
 		await makeLegacyUploadsSafe(t);
 		await seed(t);
 		const { theirs } = await seedBlobs(t);
+		await completeBlobMigrations(t);
 		const calls = stubClerk();
 
 		const result = await t
@@ -1312,6 +1363,7 @@ describe("account.deleteEverything", () => {
 		const t = convexTest(schema, modules);
 		await makeLegacyUploadsSafe(t);
 		await seed(t);
+		await completeBlobMigrations(t);
 		stubClerk();
 
 		await t.withIdentity(OWNER).action(api.account.deleteEverything, {});
@@ -1333,6 +1385,7 @@ describe("account.deleteEverything", () => {
 		const t = convexTest(schema, modules);
 		await makeLegacyUploadsSafe(t);
 		await seed(t);
+		await completeBlobMigrations(t);
 		stubClerk({ externalAccounts: [{ provider: "apple" }] });
 
 		const result = await t
@@ -1347,6 +1400,7 @@ describe("account.deleteEverything", () => {
 		const t = convexTest(schema, modules);
 		await makeLegacyUploadsSafe(t);
 		await seed(t);
+		await completeBlobMigrations(t);
 		stubClerk({ externalAccounts: [{ provider: "oauth_apple" }] });
 
 		const result = await t
@@ -1359,6 +1413,7 @@ describe("account.deleteEverything", () => {
 		const t = convexTest(schema, modules);
 		await makeLegacyUploadsSafe(t);
 		await seed(t);
+		await completeBlobMigrations(t);
 		stubClerk({ body: { external_accounts: "nope" } });
 
 		const result = await t
@@ -1371,6 +1426,7 @@ describe("account.deleteEverything", () => {
 		const t = convexTest(schema, modules);
 		await makeLegacyUploadsSafe(t);
 		await seed(t);
+		await completeBlobMigrations(t);
 		// The state a crashed action leaves: data purged, identity already asked
 		// for. Clerk now 404s because the user really is gone.
 		await t.mutation(internal.account.beginDeletion, {
@@ -1393,6 +1449,7 @@ describe("account.deleteEverything", () => {
 		const t = convexTest(schema, modules);
 		await makeLegacyUploadsSafe(t);
 		await seed(t);
+		await completeBlobMigrations(t);
 		stubClerk({ deleteStatus: 500 });
 
 		await expect(
@@ -1407,6 +1464,7 @@ describe("account.deleteEverything", () => {
 		const t = convexTest(schema, modules);
 		await makeLegacyUploadsSafe(t);
 		await seed(t);
+		await completeBlobMigrations(t);
 		stubClerk();
 		const owner = t.withIdentity(OWNER);
 
@@ -1420,6 +1478,7 @@ describe("account.deleteEverything", () => {
 		const t = convexTest(schema, modules);
 		await makeLegacyUploadsSafe(t);
 		await seed(t);
+		await completeBlobMigrations(t);
 		stubClerk();
 		await t.mutation(internal.account.beginDeletion, {
 			userId: OWNER.subject,

@@ -64,6 +64,15 @@ export const CLERK_USER_UNREACHABLE_MESSAGE =
 export const ACCOUNT_DELETION_UPLOAD_CUTOVER_MESSAGE =
 	"Account deletion is temporarily unavailable while upload security is updated. Try again later; no data was deleted.";
 
+export const ACCOUNT_DELETION_BLOB_MIGRATIONS_MESSAGE =
+	"Account deletion is temporarily unavailable while stored files are being prepared. Try again later; no data was deleted.";
+
+const REQUIRED_BLOB_MIGRATIONS = [
+	"scanDocumentRefs",
+	"scanNodeRefs",
+	"backfillBlobOwners",
+] as const;
+
 /**
  * Sign in with Apple token revocation: DETECTED HERE, NOT PERFORMED. Read this
  * before shipping the iOS app — it is an open item on plan 023 §10.
@@ -206,6 +215,38 @@ async function assertLegacyUploadsExpired(
 	const cutover = await ctx.runQuery(internal.files.getLegacyUploadCutover, {});
 	if (!cutover || cutover.safeAfter > Date.now()) {
 		throw new Error(ACCOUNT_DELETION_UPLOAD_CUTOVER_MESSAGE);
+	}
+}
+
+export const getBlobMigrationReadiness = internalQuery({
+	args: {},
+	handler: async (ctx) => {
+		const progress = await Promise.all(
+			REQUIRED_BLOB_MIGRATIONS.map((name) =>
+				ctx.db
+					.query("migrationProgress")
+					.withIndex("by_name", (q) => q.eq("name", name))
+					.unique(),
+			),
+		);
+		return {
+			ready: progress.every((row) => row?.done === true),
+			pending: REQUIRED_BLOB_MIGRATIONS.filter(
+				(_name, index) => progress[index]?.done !== true,
+			),
+		};
+	},
+});
+
+async function assertBlobMigrationsComplete(
+	ctx: GenericActionCtx<DataModel>,
+): Promise<void> {
+	const readiness = await ctx.runQuery(
+		internal.account.getBlobMigrationReadiness,
+		{},
+	);
+	if (!readiness.ready) {
+		throw new Error(ACCOUNT_DELETION_BLOB_MIGRATIONS_MESSAGE);
 	}
 }
 
@@ -533,6 +574,7 @@ export const deleteEverything = action({
 		const secret = process.env.CLERK_SECRET_KEY;
 		if (!secret) throw new Error(ACCOUNT_DELETION_UNAVAILABLE_MESSAGE);
 		await assertLegacyUploadsExpired(ctx);
+		await assertBlobMigrationsComplete(ctx);
 
 		const userId = identity.subject;
 		const granteeEmail =
@@ -592,6 +634,7 @@ export const resumeDeletion = internalAction({
 
 		try {
 			await assertLegacyUploadsExpired(ctx);
+			await assertBlobMigrationsComplete(ctx);
 			await runDeletion(
 				ctx,
 				secret,
