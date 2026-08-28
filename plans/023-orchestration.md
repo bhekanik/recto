@@ -86,7 +86,7 @@ Blocking rules:
 |---|---|---|
 | 1 (now) | W1 history-commit (N1a + N0e) · W2 light-theme (N1c) · W3 core-js (N1d + N0d) · W4 editor-spike (N0b) · W5 native-spike (N0a) · W6 vim-spike (N0c) | W1, W2: merged to `main`, Vercel + Convex prod deployed, post-deploy smoke green. W3: merged, parity CI green. W4/W5/W6: spike reports with go/no-go; code kept on `spike/*` branches, not merged. |
 | 2 | W7 settings-workspaces-deletion (N1b) · W8 js-cores (N3) · W9 editor-engine (N5, long-running) · W10 native-core (N4) | **complete 2026-08-28**: W7 deployed; W8/W9/W10 merged. GitHub billing prevented hosted jobs from starting, so current-main local gates are the merge evidence. |
-| 3 | W11 ai-on-convex (N2, after W7) · W9 continues · W10 continues | W11 deployed to prod with the web client migrated and Next AI routes deleted. |
+| 3 | W11 ai-on-convex (N2, after W7) · W9b editor-engine stage 2 (N5) | W11 deployed to prod with the web client migrated and Next AI routes deleted; W9b merged behind native CI. |
 | 4 | W12 mac-alpha (N6) | Internal TestFlight build uploaded and installable (the "deploy" for native). |
 | 5 | W13 mac-beta (N7) · W14 ios-engine-ipad (N8) | TestFlight builds; accessibility pass. |
 | 6 | W15 iphone (N9) · W16 release (N10) | External TestFlight; App Review submission. |
@@ -219,10 +219,10 @@ in-flight workers are producing (§4).
 | W7 settings-workspaces-deletion | N1b | 023/settings | **merged + deployed** 2026-08-28 (`2d7f13f`); final review added shadcn/Base UI alert-dialog semantics, a server-side blob-migration readiness fence, and deterministic same-key CAS retry; six prod migrations complete; legacy upload fence opens 17:52:15Z | #12 | Claude r1 / Codex r1–r3 + takeover | prod `dpl_E3jGAWAsAZ4bpN1cxkHmTrgMVahe` |
 | W8 js-cores | N3 | 023/js-cores | **merged** 2026-08-28 (`7cf2ebd`); round 6 fixed the sole blocking platform-history crash; verified: vim 230, parity 25/25, RectoVim 70 debug/release, iOS 26.4 simulator 33, root 583; GitHub jobs did not start because of billing; iPhone measurement remains BK | #10 | Claude r1 / Codex r1–r5 + takeover r6 | n/a |
 | W9a editor-engine stage 1 (fork plumbing + dialect + RectoEditor skeleton) | N5 | 023/editor-engine | **integrated** 2026-08-28 (`90c1560`); per-wrapper attachment-observer lifecycle fixed; 78 tests ×3 debug, 78 release, fork 433/431 | #9 (closed after direct squash integration) + fork PR #1 (`9435fed`) | Claude r1 / Codex r1–r5 + takeover | n/a (CI blocked on billing) |
-| W9b editor-engine stage 2 (blocks, features, undo-tree, typewriter) | N5 | 023/editor-engine-2 | blocked on W9a | | | |
+| W9b editor-engine stage 2 (blocks, features, undo-tree, typewriter) | N5 | 023/editor-engine-2 | ready (W9a integrated) | | | |
 | W10 native-core | N4 | 023/native-core | **merged** 2026-08-28 (`0e47287`); final four blockers fixed: failed replacement-login teardown, purge invalidation, pointer CAS, rejected-pointer tail divergence; 215 Swift tests, 5 live skipped | #7 | Claude r1 / Codex r1–r7 + takeover | n/a (CI blocked on billing) |
 | W11 ai-on-convex | N2 | 023/ai-convex | ready (W7 complete) | | | |
-| W12 mac-alpha | N6 | 023/mac-alpha | ready (W2/W8/W9/W10 complete) | | | |
+| W12 mac-alpha | N6 | 023/mac-alpha | blocked on W9b (W2/W8/W9a/W10 complete) | | | |
 | W13 mac-beta | N7 | 023/mac-beta | blocked on W12, W11 | | | |
 | W14 ios-engine-ipad | N8 | 023/ios-ipad | blocked on W9, W12 | | | |
 | W15 iphone | N9 | 023/iphone | blocked on W14 | | | |
