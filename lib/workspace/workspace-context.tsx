@@ -186,6 +186,8 @@ function OwnerSyncHost({
 		serverMarkdown: document?.markdown,
 		serverUpdatedAt: document?.updatedAt,
 		serverPointerRevision: document?.pointerRevision,
+		serverMarkdownHeadNodeId: document?.markdownHeadNodeId,
+		getBaselineUpdatedAt: sync.getBaselineUpdatedAt,
 		enabled,
 		origin: getDeviceOrigin(),
 		onRemoteProjection: acceptRemoteProjection,

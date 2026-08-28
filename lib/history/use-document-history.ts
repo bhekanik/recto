@@ -77,6 +77,8 @@ export type HistoryController = {
 const AUTO_VERSION_MS = 120_000; // tag an auto version ~2min after activity settles
 /** How long the editor must be quiet before remote state may be projected. */
 const EDITOR_IDLE_MS = 2_000;
+/** How often to look for a writable editor while a projection is waiting. */
+const HANDLE_RETRY_MS = 250;
 
 /**
  * This client's own most recent pointer move, tracked until the server echoes it
@@ -145,6 +147,17 @@ export function useDocumentHistory(args: {
 	serverUpdatedAt: number | undefined;
 	/** `documents.pointerRevision`; orders pointer observations (ADR-19). */
 	serverPointerRevision: number | undefined;
+	/**
+	 * `documents.markdownHeadNodeId` — the head `serverMarkdown` belongs to.
+	 * Undefined means unknown provenance (a legacy headless save), and is never
+	 * trusted as a draft.
+	 */
+	serverMarkdownHeadNodeId: string | undefined;
+	/**
+	 * The server `updatedAt` this device's editor already reflects, from the sync
+	 * hook. A "newer draft" must be newer than this or there is nothing to show.
+	 */
+	getBaselineUpdatedAt?: () => number;
 	enabled: boolean;
 	origin: string;
 	/**
@@ -161,6 +174,8 @@ export function useDocumentHistory(args: {
 		serverMarkdown,
 		serverUpdatedAt,
 		serverPointerRevision,
+		serverMarkdownHeadNodeId,
+		getBaselineUpdatedAt,
 		enabled,
 		origin,
 		onRemoteProjection,
@@ -294,6 +309,11 @@ export function useDocumentHistory(args: {
 	}, [dagRows, localNodes]);
 
 	const nodesById = useMemo(() => indexNodes(nodes), [nodes]);
+	// The same map, but advanced synchronously by onCommit. A flush inside undo /
+	// navigateTo / tagVersion creates a node those callers must then look up, and
+	// the memo above only catches up on the next render.
+	const nodesByIdRef = useRef(nodesById);
+	nodesByIdRef.current = nodesById;
 
 	// Auto-versioning on the idle path (blueprint 08 §4, phase-4 C2): a periodic
 	// "auto" tag of the current node, deduped — never a duplicate when nothing
@@ -335,6 +355,10 @@ export function useDocumentHistory(args: {
 				createdAt: Date.now(),
 			};
 			setLocalNodes((prev) => [...prev, node]);
+			nodesByIdRef.current = new Map(nodesByIdRef.current).set(
+				node.nodeId,
+				node,
+			);
 			setPointer(commit.nodeId);
 			const moveToken = startLocalMove(commit.nodeId);
 
@@ -547,13 +571,16 @@ export function useDocumentHistory(args: {
 	);
 
 	const undo = useCallback(() => {
-		const id = currentNodeIdRef.current;
-		if (!id) return;
+		if (!currentNodeIdRef.current) return;
+		// Flush FIRST: an open draft (typed text, or a draft rescued from another
+		// device) becomes a node here, and that node is what we undo from. Reading
+		// the pointer before the flush would step back one level too far.
 		controllerRef.current?.flush();
-		const node = nodesById.get(currentNodeIdRef.current ?? "");
+		const map = nodesByIdRef.current;
+		const node = map.get(currentNodeIdRef.current ?? "");
 		const parent = node?.parentNodeId;
-		if (parent && nodesById.has(parent)) navigateTo(parent);
-	}, [navigateTo, nodesById]);
+		if (parent && map.has(parent)) navigateTo(parent);
+	}, [navigateTo]);
 
 	const redo = useCallback(() => {
 		const id = currentNodeIdRef.current;
@@ -568,9 +595,11 @@ export function useDocumentHistory(args: {
 	const tagVersion = useCallback(
 		async (label: string, kind: "auto" | "manual" = "manual") => {
 			if (!documentId) return;
+			controllerRef.current?.flush();
+			// Re-read after the flush: it may have just turned an open draft into
+			// the node the writer actually means to tag.
 			const id = currentNodeIdRef.current;
 			if (!id) return;
-			controllerRef.current?.flush();
 			await createVersion({ documentId, nodeId: id, label, kind }).catch(() => {
 				toast("Couldn't save version — it may not be synced", "error");
 			});
@@ -678,21 +707,13 @@ export function useDocumentHistory(args: {
 	const reconcileRemote = useCallback((): boolean => {
 		const target = pendingRemotePointerRef.current;
 		if (target === null) return true; // nothing outstanding
-		if (target.nodeId === currentNodeIdRef.current) {
-			pendingRemotePointerRef.current = null;
-			return true;
-		}
-		// Never re-project over text the tree has not captured: those keystrokes
-		// exist nowhere else yet.
-		if (controllerRef.current?.hasPendingDraft) return false;
-		// Idle, not unfocused. In vim and full-screen the editor keeps DOM focus
-		// forever, so a focus gate would defer this indefinitely.
-		if (!editorIdleRef.current) return false;
-		if (!nodesById.has(target.nodeId)) return false; // node not synced yet
+
+		const map = nodesByIdRef.current;
+		if (!map.has(target.nodeId)) return false; // node not synced yet
 
 		let materialized: string;
 		try {
-			materialized = materialize(target.nodeId, nodesById);
+			materialized = materialize(target.nodeId, map);
 		} catch {
 			return false;
 		}
@@ -703,23 +724,54 @@ export function useDocumentHistory(args: {
 		// erase it, and accepting that as the sync baseline would then overwrite
 		// it on this device's next save.
 		//
-		// So: show the draft, but keep the controller on the node it is a child
-		// of. The next recordChange then produces the materialized -> draft patch
-		// as an ordinary node, which is how the draft finally enters the DAG.
-		const draftAhead =
-			serverCurrentNodeId === target.nodeId &&
+		// Trusting it needs PROVENANCE, though. `markdownHeadNodeId` is the head
+		// the stored markdown was written against; when it is absent (a legacy
+		// client saving without the compare-and-set) or names a different head,
+		// that text may belong to another branch entirely and must never be
+		// promoted into this one. Then the node's own materialization is the only
+		// thing we know to be true.
+		const trustedDraft =
 			serverMarkdown !== undefined &&
-			serverMarkdown !== materialized;
-		const editorText = draftAhead ? serverMarkdown : materialized;
+			serverMarkdownHeadNodeId === target.nodeId &&
+			serverMarkdown !== materialized &&
+			(serverUpdatedAt ?? 0) > (getBaselineUpdatedAt?.() ?? 0);
+		const editorText = trustedDraft ? serverMarkdown : materialized;
 
+		const alreadyThere = target.nodeId === currentNodeIdRef.current;
+		// The pointer has not moved and there is no newer trusted draft to show:
+		// the observation is already reflected here.
+		if (alreadyThere && !trustedDraft) {
+			pendingRemotePointerRef.current = null;
+			return true;
+		}
+
+		// Never re-project over text the tree has not captured: those keystrokes
+		// exist nowhere else yet.
+		if (controllerRef.current?.hasPendingDraft) return false;
+		// Idle, not unfocused. In vim and full-screen the editor keeps DOM focus
+		// forever, so a focus gate would defer this indefinitely.
+		if (!editorIdleRef.current) return false;
+
+		// A preview-only pane has a handle whose seed is a no-op. Advancing the
+		// pointer against it would leave the tree claiming a projection that never
+		// reached any editor; wait for a writable lens instead.
 		const handle = getHandleRef.current();
-		const caretBefore = handle?.exportCaret().head ?? 0;
+		if (!handle || handle.readOnly) return false;
+
+		const caretBefore = handle.exportCaret().head;
 		navigatingRef.current = true;
-		handle?.seed(editorText, { programmatic: true });
+		handle.seed(editorText, { programmatic: true });
 		// The remote text is a different document; the old offset may not exist in
 		// it, so clamp rather than dropping the caret to the top.
-		handle?.importCaret(caretAtOffset(caretBefore, editorText.length));
+		handle.importCaret(caretAtOffset(caretBefore, editorText.length));
 		controllerRef.current?.setCurrent(target.nodeId, materialized);
+		if (trustedDraft) {
+			// Hold the rescued draft as an OPEN draft on the node, not as silent
+			// editor text. Every path that leaves this state — undo, branch switch,
+			// version tag, mode switch — flushes first, so the draft becomes a real
+			// child node instead of being discarded by the navigation.
+			controllerRef.current?.record(editorText, null);
+		}
 		setPointer(target.nodeId);
 		headNodeIdRef.current = target.nodeId;
 		pendingRemotePointerRef.current = null;
@@ -735,9 +787,9 @@ export function useDocumentHistory(args: {
 		toast("Updated from another device", "info");
 		return true;
 	}, [
-		nodesById,
-		serverCurrentNodeId,
+		getBaselineUpdatedAt,
 		serverMarkdown,
+		serverMarkdownHeadNodeId,
 		serverUpdatedAt,
 		setPointer,
 	]);
@@ -786,6 +838,21 @@ export function useDocumentHistory(args: {
 		reconcileRemote,
 		reconcileTick,
 	]);
+
+	// A projection deferred for want of a writable editor (preview-only pane) has
+	// nothing else to wake it: no query changes, no keystroke, no blur. Poll while
+	// something is queued, and stop as soon as it lands.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: reconcileTick re-arms the poll after each attempt
+	useEffect(() => {
+		if (pendingRemotePointerRef.current === null) return;
+		const timer = window.setInterval(() => {
+			if (pendingRemotePointerRef.current === null) return;
+			const handle = getHandleRef.current();
+			if (!handle || handle.readOnly) return;
+			setReconcileTick((tick) => tick + 1);
+		}, HANDLE_RETRY_MS);
+		return () => window.clearInterval(timer);
+	}, [reconcileTick, serverCurrentNodeId, serverPointerRevision]);
 
 	// Leaving the editor is an extra chance to reconcile, on top of the idle
 	// timer. `focusout` bubbles where `blur` does not, so one window listener

@@ -56,6 +56,8 @@ type UseDocumentSyncResult = {
 	getCurrentMarkdown: () => string;
 	/** Called by the history hook once it has projected remote state (R3). */
 	acceptRemoteProjection: (markdown: string, serverUpdatedAt: number) => void;
+	/** The server revision the editor currently reflects (ADR-19, Y1). */
+	getBaselineUpdatedAt: () => number;
 };
 
 /** Whether a reactive query update is from a remote writer (not this client's echo). */
@@ -246,6 +248,11 @@ export function useDocumentSync({
 			await new Promise((r) => setTimeout(r, 10));
 		}
 	}, [debouncedFlush, flush]);
+
+	const getBaselineUpdatedAt = useCallback(
+		() => expectedUpdatedAtRef.current,
+		[],
+	);
 
 	const getCurrentMarkdown = useCallback(() => {
 		return (
@@ -444,5 +451,6 @@ export function useDocumentSync({
 		flushMarkdown,
 		getCurrentMarkdown,
 		acceptRemoteProjection,
+		getBaselineUpdatedAt,
 	};
 }
