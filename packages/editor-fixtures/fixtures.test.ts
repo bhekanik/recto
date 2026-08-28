@@ -24,7 +24,11 @@ import { normalizeMarkdown } from "@/lib/markdown/normalize";
 import { extractOutline } from "@/lib/outline/extract";
 import { currentStreak } from "@/lib/stats/streak";
 
-import { generateFixtures, serializeFixture } from "./build";
+import {
+	assertWellFormedStrings,
+	generateFixtures,
+	serializeFixture,
+} from "./build";
 import diffFixture from "./diff-runs.json";
 import historyFixture from "./history-patches.json";
 import corpus from "./markdown-corpus.json";
@@ -62,6 +66,41 @@ describe("markdown-corpus.json", () => {
 			expect(extractOutline(testCase.input)).toEqual(testCase.outline);
 		});
 	}
+
+	for (const testCase of corpus.unicode) {
+		it(`unicode ${testCase.id}: ${testCase.name}`, () => {
+			expect(normalizeMarkdown(testCase.input)).toBe(testCase.normalized);
+			expect(normalizeMarkdown(testCase.normalized)).toBe(testCase.normalized);
+			expect(countWords(testCase.input)).toBe(testCase.words);
+			expect(extractOutline(testCase.input)).toEqual(testCase.outline);
+		});
+	}
+
+	it("keeps the NFC/NFD pair canonically equal but byte-different", () => {
+		const [nfc, nfd] = corpus.unicode;
+		// JS `===` is already code-unit comparison, so this passes trivially here.
+		// It is written down because it is the assertion the Swift spike makes with
+		// `utf16.elementsEqual`, where `==` would compare canonical equivalence and
+		// wave the drift through.
+		expect(nfc?.normalized).not.toBe(nfd?.normalized);
+		expect(nfc?.normalized.normalize("NFC")).toBe(
+			nfd?.normalized.normalize("NFC"),
+		);
+	});
+});
+
+describe("lone-surrogate guard", () => {
+	it("refuses to serialize a fixture Foundation could not decode", () => {
+		expect(() =>
+			assertWellFormedStrings({ cases: [{ input: "bad \ud800 half" }] }),
+		).toThrow(/lone surrogate/);
+	});
+
+	it("accepts astral-plane text, which is well-formed", () => {
+		expect(() =>
+			assertWellFormedStrings({ cases: [{ input: "fine 𝔘 pair" }] }),
+		).not.toThrow();
+	});
 });
 
 describe("word-count.json", () => {

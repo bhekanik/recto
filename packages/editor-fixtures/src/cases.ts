@@ -10,6 +10,68 @@
 
 import type { DiffGranularity } from "@/lib/history/diff";
 
+export type UnicodeCase = { id: number; name: string; input: string };
+
+/**
+ * Cases whose whole point is that a byte-for-byte comparison and a
+ * "looks the same to a human" comparison disagree. Swift's `String ==` is
+ * canonical equivalence, so a port that uses it would accept NFD output where
+ * the web produced NFC; these are the cases that catch that, along with the
+ * surrogate-pair and line-ending handling a UTF-16 offset contract depends on.
+ *
+ * Separate from `CORPUS_CASES` on purpose: the 24-case round-trip corpus is a
+ * frozen gate (blueprint 06 §6) and does not change.
+ */
+export const UNICODE_CASES: UnicodeCase[] = [
+	{
+		id: 1,
+		name: "precomposed NFC accents",
+		input: "# Café\n\nA résumé about élan.\n",
+	},
+	{
+		id: 2,
+		name: "decomposed NFD accents (canonically equal to case 1, different bytes)",
+		input: "# Café\n\nA résumé about élan.\n",
+	},
+	{
+		id: 3,
+		name: "ZWJ family emoji",
+		input:
+			"# \u{1F468}‍\u{1F469}‍\u{1F467}‍\u{1F466}\n\nOne grapheme, seven code units.\n",
+	},
+	{
+		id: 4,
+		name: "regional-indicator flag",
+		input: "The flag \u{1F1FF}\u{1F1E6} in a paragraph.\n",
+	},
+	{
+		id: 5,
+		name: "skin-tone modifier",
+		input: "- wave \u{1F44B}\u{1F3FD}\n- plain \u{1F44B}\n",
+	},
+	{
+		id: 6,
+		name: "astral-plane letters (surrogate pairs before a heading)",
+		input: "\u{1D518}\u{1D52F}\u{1D526} text.\n\n## After the pair\n",
+	},
+	{
+		id: 7,
+		name: "CRLF line endings",
+		input: "# Title\r\n\r\nBody paragraph.\r\n\r\n- item\r\n",
+	},
+	{ id: 8, name: "no trailing newline", input: "# Title\n\nBody." },
+	{
+		id: 9,
+		name: "several trailing newlines",
+		input: "# Title\n\nBody.\n\n\n\n",
+	},
+	{
+		id: 10,
+		name: "non-breaking and zero-width spaces",
+		input: "Hard space and a zero​width one.\n",
+	},
+];
+
 export type WordCountCase = {
 	name: string;
 	markdown: string;

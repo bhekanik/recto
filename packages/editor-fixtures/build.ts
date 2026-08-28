@@ -38,6 +38,7 @@ import {
 	OUTLINE_CASES,
 	PATCH_CASES,
 	STREAK_CASES,
+	UNICODE_CASES,
 	WORD_COUNT_CASES,
 } from "./src/cases";
 
@@ -56,29 +57,55 @@ function yamlValueOf(markdown: string): string | null {
 	return value;
 }
 
+/** One case as the fixture stores it: input plus everything derived from it. */
+function derivedCase(id: number, name: string, input: string, yaml: boolean) {
+	const normalized = normalizeMarkdown(input);
+	check(
+		normalizeMarkdown(normalized) === normalized,
+		`case ${id} (${name}) is not idempotent`,
+	);
+	return {
+		id,
+		name,
+		input,
+		normalized,
+		words: countWords(input),
+		outline: extractOutline(input),
+		// Assertion 4 of the corpus gate: frontmatter bytes survive verbatim.
+		yaml: yaml ? yamlValueOf(input) : null,
+	};
+}
+
 function buildMarkdownCorpus() {
+	const unicode = UNICODE_CASES.map((testCase) =>
+		derivedCase(testCase.id, testCase.name, testCase.input, false),
+	);
+	// The NFC/NFD pair only earns its place if the two really do normalize to
+	// different code units — otherwise a port comparing with canonical
+	// equivalence would pass it by accident.
+	const [nfc, nfd] = unicode;
+	check(
+		nfc !== undefined &&
+			nfd !== undefined &&
+			nfc.normalized !== nfd.normalized &&
+			nfc.normalized.normalize("NFC") === nfd.normalized.normalize("NFC"),
+		"unicode cases 1 and 2 must be canonically equal but byte-different",
+	);
 	return {
 		$source:
 			"lib/markdown/corpus/cases.ts + lib/markdown (CANONICAL_STRINGIFY)",
 		$contract:
-			"normalize(input) === normalized; normalize(normalized) === normalized",
-		cases: CORPUS_CASES.map((testCase) => {
-			const normalized = normalizeMarkdown(testCase.input);
-			check(
-				normalizeMarkdown(normalized) === normalized,
-				`corpus case ${testCase.id} is not idempotent`,
-			);
-			return {
-				id: testCase.id,
-				name: testCase.name,
-				input: testCase.input,
-				normalized,
-				words: countWords(testCase.input),
-				outline: extractOutline(testCase.input),
-				// Assertion 4 of the corpus gate: frontmatter bytes survive verbatim.
-				yaml: testCase.checkFrontmatter ? yamlValueOf(testCase.input) : null,
-			};
-		}),
+			"normalize(input) === normalized; normalize(normalized) === normalized. " +
+			"String comparison is by UTF-16 code unit, never canonical equivalence.",
+		cases: CORPUS_CASES.map((testCase) =>
+			derivedCase(
+				testCase.id,
+				testCase.name,
+				testCase.input,
+				testCase.checkFrontmatter === true,
+			),
+		),
+		unicode,
 	};
 }
 
@@ -269,8 +296,36 @@ export function generateFixtures() {
 	};
 }
 
+/**
+ * Refuse a fixture containing a lone surrogate. `JSON.stringify` happily emits
+ * one as a `\udXXX` escape, but Foundation's `JSONDecoder` rejects the whole
+ * file when it decodes that escape — so the failure would land on a Swift port
+ * as an unreadable fixture rather than here. Nothing in the corpus needs one;
+ * if a case ever does, it has to be escaped deliberately, not smuggled in.
+ */
+export function assertWellFormedStrings(value: unknown, path = "$"): void {
+	if (typeof value === "string") {
+		if (!value.isWellFormed()) {
+			throw new Error(`fixture at ${path} contains a lone surrogate`);
+		}
+		return;
+	}
+	if (Array.isArray(value)) {
+		for (const [i, item] of value.entries()) {
+			assertWellFormedStrings(item, `${path}[${i}]`);
+		}
+		return;
+	}
+	if (value !== null && typeof value === "object") {
+		for (const [key, item] of Object.entries(value)) {
+			assertWellFormedStrings(item, `${path}.${key}`);
+		}
+	}
+}
+
 /** Biome formats JSON with tabs; match it so `biome check` stays clean. */
 export function serializeFixture(value: unknown): string {
+	assertWellFormedStrings(value);
 	return `${JSON.stringify(value, null, "\t")}\n`;
 }
 

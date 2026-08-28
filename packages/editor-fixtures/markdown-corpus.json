@@ -1,6 +1,6 @@
 {
 	"$source": "lib/markdown/corpus/cases.ts + lib/markdown (CANONICAL_STRINGIFY)",
-	"$contract": "normalize(input) === normalized; normalize(normalized) === normalized",
+	"$contract": "normalize(input) === normalized; normalize(normalized) === normalized. String comparison is by UTF-16 code unit, never canonical equivalence.",
 	"cases": [
 		{
 			"id": 1,
@@ -265,6 +265,147 @@
 			"input": "<span>safe</span>\n\n<script>alert(1)</script>\n",
 			"normalized": "<span>safe</span>\n\n<script>alert(1)</script>\n",
 			"words": 1,
+			"outline": [],
+			"yaml": null
+		}
+	],
+	"unicode": [
+		{
+			"id": 1,
+			"name": "precomposed NFC accents",
+			"input": "# Café\n\nA résumé about élan.\n",
+			"normalized": "# Café\n\nA résumé about élan.\n",
+			"words": 5,
+			"outline": [
+				{
+					"depth": 1,
+					"text": "Café",
+					"offset": 0,
+					"index": 0
+				}
+			],
+			"yaml": null
+		},
+		{
+			"id": 2,
+			"name": "decomposed NFD accents (canonically equal to case 1, different bytes)",
+			"input": "# Café\n\nA résumé about élan.\n",
+			"normalized": "# Café\n\nA résumé about élan.\n",
+			"words": 5,
+			"outline": [
+				{
+					"depth": 1,
+					"text": "Café",
+					"offset": 0,
+					"index": 0
+				}
+			],
+			"yaml": null
+		},
+		{
+			"id": 3,
+			"name": "ZWJ family emoji",
+			"input": "# 👨‍👩‍👧‍👦\n\nOne grapheme, seven code units.\n",
+			"normalized": "# 👨‍👩‍👧‍👦\n\nOne grapheme, seven code units.\n",
+			"words": 6,
+			"outline": [
+				{
+					"depth": 1,
+					"text": "👨‍👩‍👧‍👦",
+					"offset": 0,
+					"index": 0
+				}
+			],
+			"yaml": null
+		},
+		{
+			"id": 4,
+			"name": "regional-indicator flag",
+			"input": "The flag 🇿🇦 in a paragraph.\n",
+			"normalized": "The flag 🇿🇦 in a paragraph.\n",
+			"words": 6,
+			"outline": [],
+			"yaml": null
+		},
+		{
+			"id": 5,
+			"name": "skin-tone modifier",
+			"input": "- wave 👋🏽\n- plain 👋\n",
+			"normalized": "- wave 👋🏽\n- plain 👋\n",
+			"words": 4,
+			"outline": [],
+			"yaml": null
+		},
+		{
+			"id": 6,
+			"name": "astral-plane letters (surrogate pairs before a heading)",
+			"input": "𝔘𝔯𝔦 text.\n\n## After the pair\n",
+			"normalized": "𝔘𝔯𝔦 text.\n\n## After the pair\n",
+			"words": 5,
+			"outline": [
+				{
+					"depth": 2,
+					"text": "After the pair",
+					"offset": 14,
+					"index": 0
+				}
+			],
+			"yaml": null
+		},
+		{
+			"id": 7,
+			"name": "CRLF line endings",
+			"input": "# Title\r\n\r\nBody paragraph.\r\n\r\n- item\r\n",
+			"normalized": "# Title\n\nBody paragraph.\n\n- item\n",
+			"words": 4,
+			"outline": [
+				{
+					"depth": 1,
+					"text": "Title",
+					"offset": 0,
+					"index": 0
+				}
+			],
+			"yaml": null
+		},
+		{
+			"id": 8,
+			"name": "no trailing newline",
+			"input": "# Title\n\nBody.",
+			"normalized": "# Title\n\nBody.\n",
+			"words": 2,
+			"outline": [
+				{
+					"depth": 1,
+					"text": "Title",
+					"offset": 0,
+					"index": 0
+				}
+			],
+			"yaml": null
+		},
+		{
+			"id": 9,
+			"name": "several trailing newlines",
+			"input": "# Title\n\nBody.\n\n\n\n",
+			"normalized": "# Title\n\nBody.\n",
+			"words": 2,
+			"outline": [
+				{
+					"depth": 1,
+					"text": "Title",
+					"offset": 0,
+					"index": 0
+				}
+			],
+			"yaml": null
+		},
+		{
+			"id": 10,
+			"name": "non-breaking and zero-width spaces",
+			"input": "Hard space and a zero​width one.\n",
+			"normalized": "Hard space and a zero​width one.\n",
+			"words": 6,
 			"outline": [],
 			"yaml": null
 		}
