@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as ai_langsmithSmoke from "../ai/langsmithSmoke.js";
 import type * as crons from "../crons.js";
 import type * as docNodes from "../docNodes.js";
 import type * as documents from "../documents.js";
@@ -27,6 +28,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  "ai/langsmithSmoke": typeof ai_langsmithSmoke;
   crons: typeof crons;
   docNodes: typeof docNodes;
   documents: typeof documents;

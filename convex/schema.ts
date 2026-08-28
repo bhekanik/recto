@@ -11,6 +11,28 @@ export default defineSchema({
 		currentNodeId: v.string(),
 		createdAt: v.number(),
 		updatedAt: v.number(),
+		// Which head the stored `markdown` belongs to. Without it a client cannot
+		// tell a draft saved ahead of the head (safe to show) from text a legacy
+		// headless save left under someone else's branch (not safe to promote
+		// into the DAG). Absent means "unknown provenance" — never trusted.
+		markdownHeadNodeId: v.optional(v.string()),
+		// Monotonic counter bumped by every write that moves currentNodeId. Clients
+		// order pointer observations by this instead of updatedAt: two writes can
+		// share a millisecond, and a markdown-only write bumps updatedAt without
+		// moving the pointer at all. Optional: rows predating it read as 0.
+		pointerRevision: v.optional(v.number()),
+		// Result of the most recent documents.commitEdit, keyed by the caller's
+		// clientMutationId so a retried commit (offline outbox, flaky network)
+		// replays the original answer instead of being read as a divergence.
+		// Optional: rows written before commitEdit existed have none.
+		lastCommit: v.optional(
+			v.object({
+				clientMutationId: v.string(),
+				headNodeId: v.string(),
+				updatedAt: v.number(),
+				pointerRevision: v.optional(v.number()),
+			}),
+		),
 	})
 		.index("by_user", ["userId"])
 		.index("by_user_updated", ["userId", "updatedAt"]),

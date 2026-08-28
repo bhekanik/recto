@@ -32,6 +32,7 @@
 | [ADR-16](#adr-16--phase-0-spike-b-cloud-undo-tree-confirmed) | Phase 0 Spike B: cloud undo-tree DAG **confirmed** | D8 |
 | [ADR-17](#adr-17--phase-1-foundation-deviations-reconcile-in-phase-34) | Phase 1 foundation deviations (reconcile in Phase 3–4) | — |
 | [ADR-18](#adr-18--shadcn-ui-is-the-component-system-compose-dont-reinvent) | shadcn/ui is the component system; compose, don't reinvent | D13, P3 |
+| [ADR-19](#adr-19--one-edit-is-one-transaction-documentscommitedit) | One edit is one transaction: `documents.commitEdit` | D8, D10 |
 | [ADR-20](#adr-20--light-theme-paper-palette--appearance-setting-reverses-d13) | Light theme: Paper palette + appearance setting, reverses D13 | **Reverses D13**; locks D-N5 |
 
 ---
@@ -595,6 +596,7 @@ Copy writes a **single `ClipboardItem`** to the async Clipboard API carrying **t
 | ADR-14 | — | [`11-clipboard-export.md`](./11-clipboard-export.md), [`12-design-system.md`](./12-design-system.md) |
 | ADR-15 | D6 | [`05-lossless-bridge.md`](./05-lossless-bridge.md), [`../plan/phase-0-spikes.md`](../plan/phase-0-spikes.md) |
 | ADR-16 | D8 | [`07-undo-tree.md`](./07-undo-tree.md), [`10-sync-persistence.md`](./10-sync-persistence.md), [`../plan/phase-0-spikes.md`](../plan/phase-0-spikes.md) |
+| ADR-19 | D8, D10 | [`07-undo-tree.md`](./07-undo-tree.md), [`10-sync-persistence.md`](./10-sync-persistence.md), [`03-data-model.md`](./03-data-model.md) |
 | ADR-20 | Reverses D13; locks D-N5 | [`12-design-system.md`](./12-design-system.md), [`../../packages/design-tokens/tokens.json`](../../packages/design-tokens/tokens.json) |
 
 ---
@@ -752,6 +754,224 @@ Configuration: [`components.json`](../../components.json) (style: `base-nova`, `
 ### References
 
 - [`12-design-system.md`](./12-design-system.md) §6 · [`../plan/phase-1-foundation.md`](../plan/phase-1-foundation.md) G1.3
+
+---
+
+## ADR-19 — one edit is one transaction: `documents.commitEdit`
+
+**Status:** Accepted (2026-08-28). Supports **D8** (branching undo tree), **D10** (LWW pointer, no CRDT), and plan 023's offline outbox for the native clients.
+
+### Context
+
+An edit used to reach Convex as three independent writes:
+
+| Write | Trigger | Debounce |
+|-------|---------|----------|
+| `docNodes.append` | every grouping commit | none (fire-and-forget) |
+| `documents.updateCurrentNodeId` | every grouping commit | 1200 ms |
+| `documents.updateMarkdown` | every editor change | 500 ms (5 s maxWait) |
+
+Nothing ordered them. Between the node landing and the pointer landing, the
+server sat in a state no client had ever intended — the node present, the head
+still on its parent — and `updateMarkdown` could advance `documents.updatedAt`
+in that window without touching `currentNodeId`. A client watching its own
+reactive `documents.get` then saw a stale pointer wearing a fresh timestamp,
+read it as another device's move, and rolled its own pointer backwards onto an
+ancestor. The next undo went a level too far, usually to the empty root; the
+editor blanked and autosync flushed `""` (plan 022).
+
+The native apps make this worse, not better: an offline outbox replays commits
+after a reconnect, so partial application and retried writes stop being edge
+cases.
+
+### Decision
+
+**One edit is one mutation.** `documents.commitEdit` writes the `docNodes` row,
+`currentNodeId`, `markdown`, `wordCount` and `updatedAt` in a single Convex
+transaction:
+
+```ts
+commitEdit({ documentId, node, markdown, wordCount, expectedHeadNodeId, clientMutationId })
+  -> { committed: true, headNodeId, updatedAt }
+   | { committed: false, diverged: true, remoteHeadNodeId }
+```
+
+1. **The node row always lands**, head check or not. The DAG is append-only and
+   ULID-keyed, so a node is never in conflict — only the pointer is contended,
+   and dropping the row would lose the writer's text.
+2. **`expectedHeadNodeId`** is the parent the caller committed onto. If the
+   document head has moved, the pointer and markdown are left untouched and the
+   caller is told the remote head. LWW is preserved but is now *explicit* rather
+   than an accident of write ordering.
+3. **Retries are idempotent** two ways: the same `clientMutationId` replays the
+   stored answer (`documents.lastCommit`), and a commit whose node is already
+   the head returns success rather than a spurious divergence. This obliges the
+   caller to be **strictly sequential**: retry a commit until it is
+   acknowledged before sending the next one. `lastCommit` holds a single
+   mutation id, so an outbox that pipelines commits and later replays an older
+   one — node landed, head since advanced — is told `diverged` instead of
+   replaying its original answer. Widening that means a per-document log of
+   recent mutation ids; nothing needs it yet, and the native outbox (N4) is
+   sequential by design.
+4. **Clients never adopt a server pointer that predates their own unpublished
+   move** (`decideServerPointer` in `lib/history/use-document-history.ts`).
+   The transaction removes the intermediate state; this guard covers the
+   remaining in-flight and not-yet-echoed windows.
+
+   Observations are ordered by **`documents.pointerRevision`**, a monotonic
+   counter every pointer write bumps — not by `updatedAt`. Two writes can share
+   a millisecond, and a markdown-only write advances `updatedAt` without moving
+   the pointer at all, which is exactly what made a stale pointer look fresh.
+
+6. **Projection is one operation, owned by the history hook.** Adopting a remote
+   pointer moves the editor text, the grouping controller and the pointer
+   together (`reconcileRemote`), because it used to move the pointer while the
+   editor kept showing the old text and the sync hook re-seeded on a separate
+   path. `use-document-sync` calls into it instead of seeding, and does not mark
+   a server revision handled until the projection has actually happened.
+
+7. **Reconciliation is gated on idleness, not focus.** In vim and full-screen the
+   editor never gives up DOM focus, so a focus-gated adoption would never fire.
+   Remote state is projected when the grouping controller holds no uncommitted
+   draft and the editor has been quiet for 2s; a blur is an extra trigger, not
+   the condition. The caret is restored by clamped offset and the writer is told
+   ("Updated from another device") — state changing under them silently is worse
+   than the interruption.
+
+8. **A draft is only ever retired by a completed projection.** An autosave with
+   no known head does not flush at all (there is nothing to compare against),
+   and a rejected `headMoved` write leaves the draft dirty. Discarding local
+   text before something has replaced it is the one outcome worse than a stale
+   save.
+
+5. **`documents.updateMarkdown` takes an optional `expectedHeadNodeId`.** It
+   stays as the sub-node draft saver (it persists text between node commits and
+   derives the title), but its stale-`updatedAt` retry loop would otherwise
+   republish one device's draft on top of whichever branch won a divergence,
+   leaving `documents.markdown` detached from `documents.currentNodeId`. When
+   the head has moved it returns `{stale: true, headMoved: true}` and writes
+   nothing; the client stops retrying and lets pointer adoption re-seed. The
+   argument is optional so a client deployed before this ADR keeps working.
+
+`documents.updateCurrentNodeId` stays for pointer-only moves — undo, redo,
+branch switch — which create no node.
+
+Size limits are measured in **UTF-8 bytes**, and a `docNodes` row is measured as
+patch + snapshot together: Convex counts encoded bytes for the whole document,
+so `"漢".repeat(400_000)` is 400k characters and 1.2 MB.
+
+### Deployment window
+
+For as long as a tab loaded from the previous deploy stays open, that tab sends
+no `expectedHeadNodeId` and still moves the pointer through last-write-wins
+`updateCurrentNodeId`. It can therefore still write markdown under a head
+another device has moved on from — the exact case the compare-and-set exists to
+stop. The guard cannot be enforced until every client sends the argument, and
+making the argument required would break those tabs outright.
+
+What makes that window survivable is **provenance**, not the guard.
+`documents.markdownHeadNodeId` records which head the stored markdown was
+written against; a headless legacy save CLEARS it. So other devices can tell the
+two cases apart:
+
+| `markdownHeadNodeId` | What the reader may do |
+|---|---|
+| equals the head, `updatedAt` newer than the reader's baseline | trust it: a draft saved ahead of the last node, project it and let the writer's next edit turn it into a child node |
+| absent (legacy headless save) or naming a different head | distrust it: project `materialize(head)` instead and never promote that text into the DAG |
+
+Without the stamp, a projection could take text a legacy tab left under someone
+else's branch and commit it as a child of the current head — inventing history
+that never happened. With it, the worst a legacy tab can do is leave
+`documents.markdown` temporarily describing a head it does not belong to, which
+the next projection overwrites and which the `docNodes` DAG never reflects.
+
+Once the new client has been deployed for a week, `updateMarkdown` should reject
+headless saves outright. That is a follow-up, deliberately not in this change.
+
+### Alternatives rejected
+
+- **Keep three writes, order them client-side.** Rejected — ordering promises
+  across three fire-and-forget calls is exactly what failed, and it gives the
+  native outbox nothing to retry against.
+- **Adopt the server pointer only if it is not an ancestor of the local one.**
+  Clock-free and tempting, but it silently breaks cross-device undo: a genuine
+  remote undo moves the pointer to an ancestor and would be ignored forever.
+- **Version the pointer with a Lamport counter.** More machinery than the
+  problem needs; `expectedHeadNodeId` already names the causal predecessor.
+
+### Consequences
+
+- One mutation per commit instead of two, and the pointer is no longer debounced
+  — a commit is already a ~500 ms grouping boundary, so this removes writes
+  rather than adding them.
+- `documents.lastCommit` is an additive optional field; rows written before this
+  ADR have none and take the normal path.
+- The native offline outbox has a single call to replay, with a defined answer
+  for "someone else moved the head while I was away".
+- A client that decides to adopt a remote pointer may not be able to apply it
+  yet — the writer is mid-sentence, or the node has not synced. It must QUEUE
+  it and reconcile at the next safe moment (blur, or a commit coming back
+  diverged). Dropping it was survivable before; with the head check it is not,
+  because a focused writer would then diverge on every commit with no way back.
+- A device that loses a head divergence stands down from autosave entirely
+  until the projection lands: its editor still holds ITS text, so passing the
+  compare-and-set would write that text under the winner's branch. The head the
+  autosave compares against is therefore tied to what the editor and controller
+  actually hold, and only a completed projection moves it.
+- A projection prefers `documents.markdown` over `materialize(head)` when the
+  two differ at the same head. That difference IS another device's autosaved
+  draft, sitting ahead of its last node and existing nowhere else; projecting
+  the node's text would erase it. The grouping controller stays on the node, so
+  the writer's next keystroke turns that draft into an ordinary child node.
+- A projection may also fire when the pointer has NOT moved: another device
+  saving a newer trusted draft against the same head is a change this device
+  must show. Treating an unchanged pointer as "nothing to do" left the writer
+  looking at stale text with no event that would ever correct it.
+- Rescued remote text is held as an OPEN grouping draft, not as silent editor
+  content. Every path that leaves the state — undo, branch switch, version tag,
+  mode switch — flushes first, so the draft becomes a real node instead of being
+  discarded by the navigation that follows.
+- A surface that cannot hold text (the preview lens, whose `seed` is a no-op)
+  must DEFER a projection rather than complete one. Advancing the pointer
+  against it would leave the tree asserting a projection no editor received.
+- **First open goes through the same rule.** The sync hook seeds a recovered
+  localStorage draft (this writer's own unsaved work always wins) but not plain
+  server markdown: it has no DAG, so it cannot tell a trustworthy draft from a
+  legacy body. Hydration decides, once, with the tree in hand — local input,
+  then a stamped same-head draft as an OPEN grouping draft, then the head's
+  materialization. Skipping this let an unstamped body sit in the editor over a
+  controller rooted at the materialization, so the next edit committed it as a
+  child of a head it never belonged to.
+- **"What the editor shows" is not the compare-and-set token.** The CAS token
+  advances when a remote update is DEFERRED, so a later save can still land.
+  Reading it as the projection baseline made a deferred update look
+  already-seen, and the retry then projected the node text over the draft it
+  had been deferring. They are separate refs.
+- Deferred: same-head last-writer-wins between two devices' drafts. Two writers
+  typing past the same node still overwrite each other's `documents.markdown`;
+  that wants a per-device draft model, not a bigger guard here.
+- Deferred: a bounded reconciliation-failure state with a "keep local branch"
+  recovery, for a client that can never project (no writable lens for a long
+  period, or a node that never syncs). Today it retries indefinitely and holds
+  autosave; that is safe but silent. Worth doing once legacy clients age out.
+- Deferred: a pending-conflict indicator. A writer whose autosave has stood
+  down currently sees only the "unsynced" status. Their text is safe and the
+  projection recovers it, but they are not told why saving paused.
+- Deferred: pre-hydration keystrokes that `use-document-sync`'s seed overwrites
+  are still lost (the pre-existing early-input papercut). The undo tree stays
+  consistent with the editor — nothing is committed that the writer cannot see
+  — but the honest fix is for the seed to stand down once local input exists.
+- Deferred: `commitEdit` does not yet verify that `applyPatch(head, node.patch)`
+  equals the submitted `markdown`. It cannot while `updateMarkdown` may leave
+  `documents.markdown` ahead of `currentNodeId`'s materialization. Once the web
+  is fully off `updateMarkdown`, that check makes the server authoritative over
+  DAG integrity.
+
+### References
+
+- [`07-undo-tree.md`](./07-undo-tree.md) §5.1, §7 · [`10-sync-persistence.md`](./10-sync-persistence.md) · [`03-data-model.md`](./03-data-model.md)
+- [`../../plans/022-undo-pointer-race.md`](../../plans/022-undo-pointer-race.md) · [`../../plans/023-native-apple-apps.md`](../../plans/023-native-apple-apps.md) §4.1
+- [ADR-10](#adr-10--cloud-persisted-undo-tree-is-tractable-because-docnodes-are-append-onlyimmutable) — the append-only DAG and LWW pointer this makes explicit.
 
 ---
 

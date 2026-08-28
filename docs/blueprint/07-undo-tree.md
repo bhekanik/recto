@@ -183,13 +183,26 @@ async function navigateTo(documentId: Id<"documents">, nodeId: string): Promise<
   // 1) Update the canonical in-memory model (the MDAST bus — see 05-lossless-bridge.md).
   setCanonicalMarkdown(markdown);
 
-  // 2) Move the pointer (debounced, last-write-wins persistence — see 10-sync-persistence.md).
+  // 2) Move the pointer (last-write-wins persistence — see 10-sync-persistence.md).
   updateCurrentNodeId(documentId, nodeId);
 
   // 3) Restore the caret/selection captured on the node.
   if (node.selection) restoreSelectionAcrossLenses(node.selection);
 }
 ```
+
+> **Two write paths, not one (ADR-19).** A *pointer move* — undo, redo, branch
+> switch, restore — creates no node and persists through
+> `documents.updateCurrentNodeId`, as above. A *new edit* persists through
+> `documents.commitEdit`, which writes the `docNodes` row, `currentNodeId`,
+> `markdown`, `wordCount` and `updatedAt` in **one transaction** and names the
+> head it expects (`expectedHeadNodeId`). Appending the node and moving the
+> pointer used to be separate, independently debounced writes; the window
+> between them let a client mistake its own unpublished pointer move for a
+> remote one and walk the pointer backwards onto an ancestor
+> ([`../../plans/022-undo-pointer-race.md`](../../plans/022-undo-pointer-race.md)).
+> `documents.updateMarkdown` still saves draft text between node commits, so
+> `documents.markdown` can briefly run ahead of `currentNodeId`'s materialization.
 
 ### 5.2 Re-projecting into BOTH editor engines
 
