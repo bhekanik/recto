@@ -1,7 +1,7 @@
 # 20-autolinks
 
 ## rich
-<https://example.com>⏎    19.0 | 19.0 link | 19.0
+·https://example.com·⏎    19.0 link
 ⏎    —
 www.example.org⏎    19.0 link
 
@@ -11,6 +11,6 @@ www.example.org⏎    19.0 link
 www.example.org⏎    17.5 mono
 
 ## preview
-<https://example.com>⏎    19.0 | 19.0 link | 19.0
+·https://example.com·⏎    19.0 link
 ⏎    —
 www.example.org⏎    19.0 link

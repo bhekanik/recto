@@ -1,8 +1,8 @@
 # 13-hard-break-backslash-and-trailing-spaces
 
 ## rich
-Line one\⏎    19.0
-Line two  ⏎    19.0
+Line one·⏎    19.0
+Line two··⏎    19.0
 Line three⏎    19.0
 
 ## raw
@@ -11,6 +11,6 @@ Line two  ⏎    17.5 mono
 Line three⏎    17.5 mono
 
 ## preview
-Line one\⏎    19.0
-Line two  ⏎    19.0
+Line one·⏎    19.0
+Line two··⏎    19.0
 Line three⏎    19.0

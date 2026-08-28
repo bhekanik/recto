@@ -57,7 +57,7 @@ seam.caretRect()
 | `Presentation` | `.rich`, `.raw`, `.preview`. `.vim` is reserved until the N0c spike reports. |
 | `MarkdownStyler` | Recto's opinion in one value; `engineConfiguration()` turns it into the engine's `MarkdownEditorConfiguration`. Nothing else should build one by hand. |
 | `RectoTypography` | The design plan's two scales: prose (Source Serif 4, 19 pt) and source (JetBrains Mono, 17.5 pt), both at 1.6 line height, headings 1.7/1.42/1.22/1.08/1/1 em at 700, tracking −0.015 em. `scale` is the reader's text-size control, clamped 0.8–2.0. |
-| `RectoEditorTheme` | Semantic colour slots — `canvas`, `sheet`, `raised`, `ink`/`ink2`/`ink3`, `line`, `accent`, `accent2`, `selection`, `caret` — with Twilight (dark) and Paper (light) defaults converted from the design plan's OKLCH values. When `packages/design-tokens` ships `RectoTokens.swift`, the Mac app maps those into this and the defaults become the fallback for tests and previews. |
+| `RectoEditorTheme` | Semantic colour slots — `canvas`, `sheet`, `raised`, `ink`/`ink2`/`ink3`, `line`, `accent`, `accent2`, `selection`, `caret` — with Twilight (dark) and Paper (light) defaults converted from `packages/design-tokens/tokens.json`. The Mac app maps that package's `Colors.xcassets` in instead, so the system resolves light/dark; these defaults serve tests and previews, and a test holds the OKLCH conversion to the same sRGB bytes the token pipeline generates. |
 | `RectoTextStorage` | One open document: the string, the frontmatter, the edit path, and (through the engine) one `NSTextContentStorage`. One instance per document, not per view — two windows on the same document share it. |
 | `RectoTextView` | The AppKit seam. A facade over the engine's `MarkdownEditorController`, not an `NSTextView` subclass: the engine builds and owns the text view because it needs its own TextKit 2 stack and layout-fragment subclass. |
 | `RectoEditorView` | The SwiftUI view. Composes the engine's `NativeTextViewWrapper` (which is the `NSViewRepresentable`) rather than re-implementing it. |
@@ -90,12 +90,10 @@ RECTO_UPDATE_SNAPSHOTS=1 swift test --filter Corpus   # re-record the snapshots
 RECTO_RUN_PERF=1 swift test --filter Perf -c release  # measure
 ```
 
-`Tests/RectoEditorTests/Corpus/` holds the 24 canonical dialect cases from
-`lib/markdown/corpus/cases.ts`, written out by
-`Tools/make-corpus.ts` (`bun apple/Packages/RectoEditor/Tools/make-corpus.ts`).
-Regenerate them whenever a case changes. When
-`packages/editor-fixtures/markdown-corpus.json` (W3) lands, point the script at
-that instead; the output contract stays.
+`Tests/RectoEditorTests/Corpus/` holds the 24 canonical dialect cases, written
+out from `packages/editor-fixtures/markdown-corpus.json` by
+`Tools/make-corpus.ts` (`bun apple/Packages/RectoEditor/Tools/make-corpus.ts`) —
+the same fixture the JS parity tests read. Regenerate whenever a case changes.
 
 `Tests/RectoEditorTests/Snapshots/` holds, per case, what the reader actually
 sees in each presentation: `·` for a character the styler hid, `⏎` for a
@@ -107,6 +105,39 @@ The perf suite is opt-in on purpose. Wall-clock thresholds are a property of the
 machine, and a shared runner would make them flaky enough to teach people to
 ignore red. It measures parse → style → apply, not keystroke-to-pixels; the N0b
 spike measured the drawing half end to end and is the reference for it.
+
+## The dialect
+
+`docs/blueprint/06-markdown-dialect.md` defines what Recto's Markdown is, and
+`packages/editor-fixtures/markdown-corpus.json` is its 24-case corpus. All 24
+now render:
+
+| | |
+| --- | --- |
+| Headings | ATX and setext. A setext underline hides and its line collapses, so `Title` / `===` reads as one H1 line. |
+| Lists | CommonMark content-column nesting (not `spaces / 2`), tab-aware. Bullets, ordered numbers and task boxes are drawn in the layout fragment; the authored characters stay in the string. |
+| Ordered numbers | Renumbered visually only — the string keeps what the writer typed. |
+| Tables | Cached bitmap over collapsed source; the pipes come back when the caret enters. |
+| Code | Fenced with ``` or `~~~`, and four-column indented. |
+| Frontmatter | Collapsed out of the body entirely; `Frontmatter.parse` gives the header its fields. |
+| Links | Inline with titles, reference (full, collapsed, shortcut) with their definition lines hidden, and autolinks with the angle brackets hidden. |
+| Images | `![alt](url)` with the URL and title hidden. Rendering with a caption is stage 2. |
+| Footnotes | `[^id]` as a superscript carrying a `.footnoteID` attribute; `[^id]: …` as a definition block. |
+| Emphasis | Full CommonMark delimiter runs including the multiple-of-three rule. |
+| Strikethrough | `~~x~~`, through the engine's extension seam. |
+| Hard breaks | A trailing `\` or two trailing spaces hide. |
+| Thematic breaks | `***`, `___`, `---`, and the spaced forms `- - -`. |
+| Raw HTML | Stays literal text, which is what an editor should show. |
+
+Two things the engine renders differently from what the design plan first
+assumed, both accepted by plan 023 §0b: tables are cached bitmaps rather than
+overlay views, and focus dimming will need a fragment transparency layer rather
+than `setRenderingAttributes`.
+
+Not yet applied: the design's −0.015 em tracking. The knob exists in the engine
+(`ParagraphStyle.trackingEm`) and `RectoTypography.tracking` carries the value,
+but wiring it changes every measured width — including the table bitmaps — so it
+belongs with stage 2's visual pass rather than in a plumbing change.
 
 ## Engine behaviour worth knowing
 
@@ -143,6 +174,21 @@ spike measured the drawing half end to end and is the reference for it.
 - **TextKit 2 returns estimated fragment heights** for content it has not laid
   out, so any scroll target computed from geometry above the caret needs settle
   passes (`layoutViewport()`, re-measure, up to three times).
+- **`lists.helpersEnabled` is misleadingly named.** It reads as an editing
+  switch (auto-continue, auto-indent, marker conversion) but also gates the
+  drawn bullets, numbers and task boxes. Tying it to "editable" leaves preview
+  showing raw `-` markers. `MarkdownStyler` ties it to "not raw" instead, and a
+  test renders every corpus case as both rich and preview and requires them
+  identical.
+- **A whole-line marker needs its line height collapsed, not just its font.** A
+  newline starts a new line fragment whatever font it is set in, so shrinking
+  the characters of a frontmatter block or a setext underline would leave the
+  empty lines behind. The engine collapses those lines' paragraph style too.
+- **A paragraph abutting a fenced code block with no blank line costs ~3x per
+  keystroke** — 4.4 ms vs 13.4 ms on an M3 Max, anywhere in the document, at the
+  same length and fragment count. Canonical Markdown always writes the blank
+  line, so a normalised document never has this shape, but one being typed does.
+  Unexplained; `PerfTests.fenceAdjacencyCost` records it for stage 2.
 - **Focus dimming cannot use `setRenderingAttributes`.** Task boxes, ordered
   numbers and table bitmaps are drawn by the fragment; a colour attribute cannot
   recolour them. Stage 2 wraps the fragment draw in a CGContext transparency
