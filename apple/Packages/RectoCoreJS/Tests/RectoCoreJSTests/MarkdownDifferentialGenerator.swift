@@ -14,8 +14,10 @@ struct DifferentialDocument {
 
 enum MarkdownDifferentialGenerator {
     static let seed: UInt64 = 0x5EED_C0DE_2026_0828
-    static let documentCount = 384
-    static let mutatedDocumentCount = documentCount / 4
+    private static let seededDocumentCount = 384
+    static let documentCount =
+        seededDocumentCount + delimiterRunDocuments.count + tablePrecedenceDocuments.count
+    static let mutatedDocumentCount = seededDocumentCount / 4
     static let maximumDocumentCharacters = 2_048
 
     static func documents(unicodeCases: [CorpusCase]) -> [DifferentialDocument] {
@@ -27,7 +29,7 @@ enum MarkdownDifferentialGenerator {
 
         var random = SplitMix64(seed: seed)
         let unicodeFragments = unicodeCases.map(\.input)
-        while documents.count < documentCount {
+        while documents.count < seededDocumentCount {
             let documentIndex = documents.count
             let blockCount = 2 + random.index(upperBound: 6)
             var blocks: [String] = []
@@ -55,7 +57,7 @@ enum MarkdownDifferentialGenerator {
             documents.append(
                 DifferentialDocument(name: "seeded \(documentIndex)", markdown: markdown))
         }
-        return applyingMutations(to: documents)
+        return applyingMutations(to: documents) + delimiterRunDocuments + tablePrecedenceDocuments
     }
 
     /// Every mutation kind runs twice under LF, CRLF, and lone CR. Keeping the
@@ -67,7 +69,7 @@ enum MarkdownDifferentialGenerator {
         let kinds = NearMissMutation.allCases
         let lineEndings = [(name: "LF", value: "\n"), (name: "CRLF", value: "\r\n"),
             (name: "CR", value: "\r")]
-        let stride = documentCount / mutatedDocumentCount
+        let stride = seededDocumentCount / mutatedDocumentCount
         let offset = Int(seed % UInt64(stride))
 
         return documents.enumerated().map { index, document in
@@ -93,6 +95,47 @@ enum MarkdownDifferentialGenerator {
             inlineFragments[random.index(upperBound: inlineFragments.count)]
         }.joined(separator: " ")
     }
+
+    private static let delimiterRunDocuments: [DifferentialDocument] = {
+        var documents: [DifferentialDocument] = []
+        for character in ["*", "_", "~"] {
+            for openerLength in 1...3 {
+                for closerLength in 1...3 {
+                    let opener = String(repeating: character, count: openerLength)
+                    let closer = String(repeating: character, count: closerLength)
+                    let runName = "\(character) \(openerLength)x\(closerLength)"
+                    documents.append(
+                        DifferentialDocument(
+                            name: "intraword delimiter runs, \(runName)",
+                            markdown: "# a\(opener)b\(closer)c\n"))
+                    documents.append(
+                        DifferentialDocument(
+                            name: "inter-word delimiter runs, \(runName)",
+                            markdown: "# a \(opener)b\(closer) c\n"))
+                }
+            }
+        }
+        return documents
+    }()
+
+    private static let tablePrecedenceDocuments: [DifferentialDocument] = {
+        let lineEndings = [(name: "LF", value: "\n"), (name: "CRLF", value: "\r\n"),
+            (name: "CR", value: "\r")]
+        let delimiterRows = [
+            (name: "valid no-leading-pipe table", value: "--- | ---"),
+            (name: "list marker", value: "- | -"),
+            (name: "indented list marker", value: "   - | -"),
+            (name: "colon prevents list marker", value: "-: | -"),
+        ]
+        return lineEndings.flatMap { lineEnding in
+            delimiterRows.map { row in
+                DifferentialDocument(
+                    name: "\(row.name), \(lineEnding.name)",
+                    markdown: ["a | b", row.value, "x | y", ""].joined(
+                        separator: lineEnding.value))
+            }
+        }
+    }()
 
     private static let coverageDocuments: [DifferentialDocument] = [
         DifferentialDocument(

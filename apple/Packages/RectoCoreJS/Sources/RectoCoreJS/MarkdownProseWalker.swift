@@ -1008,6 +1008,9 @@ private struct BlockScanner {
     /// Checks the GFM alignment row shape. Pipes separate cells, optional colons
     /// set alignment, and the hyphens are syntax rather than prose.
     private func isTableDelimiter(_ line: SourceLine) -> Bool {
+        // A bullet marker starts a list before the table extension can claim
+        // the preceding paragraph as its header.
+        guard listItem(in: line) == nil else { return false }
         let cells = tableCells(in: line)
         guard !cells.isEmpty else { return false }
         return cells.allSatisfy { range in
@@ -1194,13 +1197,28 @@ private struct InlineScanner {
     let footnoteDefinitionLabels: Set<String>
 
     /// A possible emphasis or deletion delimiter. Its token index lets the
-    /// pairing pass replace matched syntax while preserving unmatched literals.
+    /// processing pass replace matched syntax while preserving unmatched literals.
     private struct Delimiter {
         let tokenIndex: Int
         let character: UInt16
-        let length: Int
+        var length: Int
         let canOpen: Bool
         let canClose: Bool
+        var isActive = true
+    }
+
+    /// The parts of one delimiter run consumed by inline syntax. Openers use
+    /// the end of a run and closers use the start, so a run can retain literal
+    /// markers between two nested matches.
+    private struct DelimiterConsumption {
+        var prefix = 0
+        var suffix = 0
+    }
+
+    private struct OpenersBottomKey: Hashable {
+        let character: UInt16
+        let lengthModuloThree: Int
+        let canOpen: Bool
     }
 
     /// A delayed inline emission. The cases preserve the distinction between
@@ -1364,7 +1382,7 @@ private struct InlineScanner {
             cursor = textEnd
         }
 
-        let paired = pairedDelimiterTokenIndices(delimiters)
+        let consumedDelimiters = delimiterConsumptions(delimiters)
         var prose: [UInt16] = []
         var flattened: [UInt16] = []
         for (index, token) in tokens.enumerated() {
@@ -1378,23 +1396,20 @@ private struct InlineScanner {
                 prose.append(ASCII.space)
                 flattened.append(contentsOf: value)
             case .delimiter(let text):
-                if paired.contains(index) {
-                    prose.append(ASCII.space)
-                } else {
-                    prose.append(contentsOf: text)
-                    flattened.append(contentsOf: text)
+                let consumption = consumedDelimiters[index] ?? DelimiterConsumption()
+                if consumption.prefix > 0 { prose.append(ASCII.space) }
+                let literalEnd = text.count - consumption.suffix
+                if consumption.prefix < literalEnd {
+                    let literal = text[consumption.prefix..<literalEnd]
+                    prose.append(contentsOf: literal)
+                    flattened.append(contentsOf: literal)
                 }
+                if consumption.suffix > 0 { prose.append(ASCII.space) }
             }
         }
         return InlineResult(prose: prose, flattened: flattened)
     }
 
-    /// Finds delimiter runs that become syntax instead of prose.
-    ///
-    /// Treating every `*` or `_` as a separator would corrupt ordinary text:
-    /// `foo_bar_baz` must remain one word, `2 * 3 * 4` must retain its two
-    /// asterisk tokens, and `2**3` must remain one word. The pairing pass keeps
-    /// unmatched runs literal while removing paired emphasis syntax.
     /// Where a link ends, or nil when the brackets are not a link at all.
     ///
     /// `[text](dest)` always is. `[text][ref]`, `[text][]` and a bare `[text]`
@@ -1434,25 +1449,89 @@ private struct InlineScanner {
             ? close + 1 : nil
     }
 
-    private func pairedDelimiterTokenIndices(_ delimiters: [Delimiter]) -> Set<Int> {
-        var openers: [Delimiter] = []
-        var paired: Set<Int> = []
-        for delimiter in delimiters {
-            var didClose = false
-            if delimiter.canClose,
-                let openerIndex = openers.lastIndex(where: {
-                    $0.character == delimiter.character
-                        && canPair($0, delimiter)
-                })
-            {
-                let opener = openers.remove(at: openerIndex)
-                paired.insert(opener.tokenIndex)
-                paired.insert(delimiter.tokenIndex)
-                didClose = true
+    /// Which code units of each delimiter run became syntax rather than prose.
+    ///
+    /// Treating every `*` or `_` as a separator would corrupt ordinary text:
+    /// `foo_bar_baz` must remain one word, `2 * 3 * 4` must retain its two
+    /// asterisk tokens, and `2**3` must remain one word.
+    ///
+    /// Pairing whole runs is not enough either, because CommonMark consumes them
+    /// **partially**: on `a**b*c a**b*c` the two `**` runs give up one delimiter
+    /// each to a single emphasis span and the `*` between them survives as
+    /// literal text, which is why this returns consumed prefixes and suffixes
+    /// rather than a set of paired runs. That is
+    /// [process emphasis](https://spec.commonmark.org/0.31.2/#process-emphasis),
+    /// openers-bottom and all; a last-compatible-run stack counted 6 words where
+    /// the authority counts 4.
+    private func delimiterConsumptions(_ delimiters: [Delimiter]) ->
+        [Int: DelimiterConsumption]
+    {
+        var stack = delimiters
+        var consumed: [Int: DelimiterConsumption] = [:]
+        var openersBottom: [OpenersBottomKey: Int] = [:]
+        var currentPosition = 0
+
+        while currentPosition < stack.count {
+            guard stack[currentPosition].isActive, stack[currentPosition].canClose else {
+                currentPosition += 1
+                continue
             }
-            if delimiter.canOpen, !didClose { openers.append(delimiter) }
+
+            let closer = stack[currentPosition]
+            let key = OpenersBottomKey(
+                character: closer.character,
+                lengthModuloThree: closer.length % 3,
+                canOpen: closer.canOpen)
+            let lowerBound = openersBottom[key] ?? 0
+            var openerPosition = currentPosition - 1
+            var matchingOpener: Int?
+            while openerPosition >= lowerBound {
+                if stack[openerPosition].isActive, stack[openerPosition].canOpen,
+                    canPair(stack[openerPosition], closer)
+                {
+                    matchingOpener = openerPosition
+                    break
+                }
+                openerPosition -= 1
+            }
+
+            guard let matchingOpener else {
+                openersBottom[key] = currentPosition
+                if !stack[currentPosition].canOpen { stack[currentPosition].isActive = false }
+                currentPosition += 1
+                continue
+            }
+
+            let useCount: Int
+            if closer.character == ASCII.tilde {
+                useCount = closer.length
+            } else {
+                useCount = min(stack[matchingOpener].length, closer.length) >= 2 ? 2 : 1
+            }
+
+            for position in (matchingOpener + 1)..<currentPosition {
+                stack[position].isActive = false
+            }
+
+            let openerTokenIndex = stack[matchingOpener].tokenIndex
+            var openerConsumption = consumed[openerTokenIndex] ?? DelimiterConsumption()
+            openerConsumption.suffix += useCount
+            consumed[openerTokenIndex] = openerConsumption
+            stack[matchingOpener].length -= useCount
+            if stack[matchingOpener].length == 0 { stack[matchingOpener].isActive = false }
+
+            let closerTokenIndex = stack[currentPosition].tokenIndex
+            var closerConsumption = consumed[closerTokenIndex] ?? DelimiterConsumption()
+            closerConsumption.prefix += useCount
+            consumed[closerTokenIndex] = closerConsumption
+            stack[currentPosition].length -= useCount
+            if stack[currentPosition].length == 0 {
+                stack[currentPosition].isActive = false
+                currentPosition += 1
+            }
         }
-        return paired
+
+        return consumed
     }
 
     /// Applies CommonMark's "rule of three" to runs that can both open and
@@ -1460,7 +1539,12 @@ private struct InlineScanner {
     /// their delimiter characters match. Tilde runs must also have equal width.
     private func canPair(_ opener: Delimiter, _ closer: Delimiter) -> Bool {
         guard opener.character == closer.character else { return false }
-        if opener.character == ASCII.tilde { return opener.length == closer.length }
+        if opener.character == ASCII.tilde {
+            // GFM strikethrough is one or two tildes; a longer run is literal,
+            // which the three-character cross-products in the differential
+            // generator are there to hold.
+            return opener.length <= 2 && opener.length == closer.length
+        }
         if opener.canClose || closer.canOpen {
             let sum = opener.length + closer.length
             if sum.isMultiple(of: 3),

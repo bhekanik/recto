@@ -5,7 +5,7 @@ import Testing
 
 @Suite("Swift ports, generated differential")
 struct SwiftPortDifferentialTests {
-    @Test("384 seeded documents agree with the JS core")
+    @Test("450 seeded documents agree with the JS core")
     func generatedDocumentsAgreeWithCore() async throws {
         let corpus = try Fixtures.load(Corpus.self, "markdown-corpus.json")
         let documents = MarkdownDifferentialGenerator.documents(unicodeCases: corpus.unicode)
