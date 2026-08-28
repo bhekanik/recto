@@ -213,6 +213,14 @@ export const updateCurrentNodeId = mutation({
 		markdown: v.string(),
 		wordCount: v.number(),
 		updatedAt: v.number(),
+		/**
+		 * The pointerRevision the caller last observed. When given, the move is a
+		 * compare-and-set on the server's revision counter instead of the
+		 * wall-clock `updatedAt` rule: client clocks race server timestamps
+		 * (an earlier queued markdown write can assign `doc.updatedAt` after the
+		 * caller captured `Date.now()`), revisions cannot. Old clients omit it.
+		 */
+		expectedPointerRevision: v.optional(v.number()),
 	},
 	handler: async (ctx, args) => {
 		requireId(args.currentNodeId, "currentNodeId");
@@ -238,7 +246,11 @@ export const updateCurrentNodeId = mutation({
 		}
 
 		const pointerRevision = (doc.pointerRevision ?? 0) + 1;
-		if (args.updatedAt < doc.updatedAt) {
+		const rejected =
+			args.expectedPointerRevision !== undefined
+				? args.expectedPointerRevision !== (doc.pointerRevision ?? 0)
+				: args.updatedAt < doc.updatedAt;
+		if (rejected) {
 			// Rejected: hand back the head that won, so the caller can queue it
 			// instead of guessing.
 			return {
