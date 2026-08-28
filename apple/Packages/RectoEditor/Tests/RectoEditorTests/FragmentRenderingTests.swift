@@ -23,8 +23,8 @@ import Testing
 @testable import RectoEditor
 
 @MainActor
-// AppKit windows are process-global; these must not run concurrently.
-@Suite("Layout-fragment drawing", .serialized)
+extension RealWindowTests {
+@Suite("Layout-fragment drawing")
 struct FragmentRenderingTests {
 
     private func mount(_ markdown: String,
@@ -232,4 +232,5 @@ struct FragmentRenderingTests {
         #expect(abs(harness.inkCoverage(in: line) - hidden) < 0.005,
                 "preview revealed markers for a selection")
     }
+}
 }

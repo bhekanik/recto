@@ -72,9 +72,12 @@ jobs:
       - name: Build
         working-directory: apple/Packages/RectoEditor
         run: swift build
+      # Three times: the suite mounts real AppKit windows, and window-backed
+      # tests are where flakiness hides. A run that only passes sometimes must
+      # fail here rather than in someone's afternoon.
       - name: Test
         working-directory: apple/Packages/RectoEditor
-        run: swift test
+        run: for i in 1 2 3; do swift test || exit 1; done
 
   # Browser smoke suite (plan 021). Non-blocking (continue-on-error) for the
   # first iteration — flip it to blocking once it has been stable ~2 weeks.

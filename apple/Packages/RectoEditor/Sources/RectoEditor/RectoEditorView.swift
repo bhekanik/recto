@@ -24,10 +24,20 @@ public struct RectoEditorView: View {
     private let styler: MarkdownStyler
     private let placeholder: String?
 
-    public init(storage: RectoTextStorage, styler: MarkdownStyler, placeholder: String? = nil) {
+    private let onAttach: ((RectoTextView?) -> Void)?
+
+    /// - Parameter onAttach: Called with a handle bound to THIS view when it
+    ///   appears, and `nil` when it goes. Find, a vim key layer, typewriter
+    ///   scrolling and focus dimming all act on the window the reader is in, so
+    ///   they need this rather than `storage.textView`, which resolves to
+    ///   whichever view attached last.
+    public init(storage: RectoTextStorage, styler: MarkdownStyler,
+                placeholder: String? = nil,
+                onAttach: ((RectoTextView?) -> Void)? = nil) {
         self.storage = storage
         self.styler = styler
         self.placeholder = placeholder
+        self.onAttach = onAttach
     }
 
     public var body: some View {
@@ -69,6 +79,17 @@ public struct RectoEditorView: View {
             onTextMutation: { storage.editorDidMutate($0) },
             placeholder: placeholderText
         )
+        .onAppear { announceAttachment() }
+        .onDisappear { onAttach?(nil) }
+    }
+
+    /// The engine attaches its text view during `makeNSView`, which SwiftUI
+    /// runs before `onAppear`, so by here there is a view to bind to.
+    private func announceAttachment() {
+        guard let onAttach else { return }
+        onAttach(storage.controller.textView.map {
+            RectoTextView(controller: storage.controller, view: $0)
+        })
     }
 
     private var placeholderText: NSAttributedString? {
@@ -80,8 +101,17 @@ public struct RectoEditorView: View {
     }
 }
 
-/// The AppKit seam for a document — hand this to anything that needs the real
-/// text view (find, vim, typewriter, a caret-anchored popover).
 public extension RectoTextStorage {
+    /// The AppKit seam for the document's CURRENT view.
+    ///
+    /// Right when the document is open in one window. When it is open in
+    /// several, anything acting on "the window the reader is in" — find, a vim
+    /// key layer, typewriter scrolling, focus dimming — must take the
+    /// view-bound handle `RectoEditorView` hands it through `onAttach` instead.
     var textView: RectoTextView { RectoTextView(controller: controller) }
+
+    /// A seam bound to one specific view of this document.
+    func textView(for view: NSTextView) -> RectoTextView {
+        RectoTextView(controller: controller, view: view)
+    }
 }

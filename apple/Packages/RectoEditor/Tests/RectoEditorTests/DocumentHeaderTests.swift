@@ -15,9 +15,8 @@ import Testing
 @testable import RectoEditor
 
 @MainActor
-// AppKit windows are process-global; running these concurrently crashes the
-// runner.
-@Suite("Document header renders", .serialized)
+extension RealWindowTests {
+@Suite("Document header renders")
 struct DocumentHeaderTests {
 
     private static func document(title: String = "The Varve Record") -> String {
@@ -104,4 +103,5 @@ struct DocumentHeaderTests {
         defer { harness.tearDown() }
         #expect(harness.editorTextView?.string == Self.document())
     }
+}
 }
