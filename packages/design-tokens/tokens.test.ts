@@ -65,39 +65,69 @@ describe("generated outputs are in sync with tokens.json", () => {
 
 /**
  * WCAG ratios are measured, never inferred from OKLCH lightness (design system
- * §2.5). The one exemption — `line-strong` — is a skipped test rather than an
- * omission, so the reporter names it on every run.
+ * §2.5), and measured on EVERY layer a token is used on — not just the canvas.
+ * The status bar and the command palette sit on `bg-raised`, dialogs and popovers
+ * on `bg-overlay`, and those are the layers that bind: a token can clear 4.5:1 on
+ * `bg-app` and still fail where it is actually read.
+ *
+ * The one exemption — `line-strong` — is a skipped test rather than an omission,
+ * so the reporter names it on every run.
  */
 describe("contrast", () => {
-	const ratio = (fg: string, bg: string) =>
-		Math.round(wcagContrast(fg, bg) * 100) / 100;
+	/** Every background a token can be read on, worst-case first in practice. */
+	const LAYERS = ["bg-app", "bg-surface", "bg-raised", "bg-overlay"] as const;
 
-	for (const [name, colors, onAccentFloor] of [
-		// Dark's floor is 3, not 4.5: on-accent on the accent-muted fill measures
-		// 3.15:1 today, and clearing AA would mean darkening accent-muted in all four
-		// dark palettes. Ruled pre-existing and out of scope in plan 023 review round
-		// 1, and tracked as a follow-up. Paper is new, so it gets the real bar.
-		["Twilight (dark)", twilight, 3],
-		["Paper (light)", paper, 4.5],
+	/**
+	 * Aurora, Dawn and Moonlit override only part of Twilight, exactly as their
+	 * CSS blocks do; the palette a user actually sees is the merge. Asserting the
+	 * override sets alone would miss every inherited token.
+	 */
+	const effectiveDark = (overrides: Colors): Colors => ({
+		...twilight,
+		...overrides,
+	});
+
+	/**
+	 * Compares the RAW ratio. Rounding first would let 4.496 pass a 4.5 floor;
+	 * the rounded number appears only in the failure message.
+	 */
+	function assertRatio(fg: string, bg: string, floor: number, label: string) {
+		const raw = wcagContrast(fg, bg);
+		expect(
+			raw,
+			`${label} measures ${raw.toFixed(2)}:1, needs ${floor}:1`,
+		).toBeGreaterThanOrEqual(floor);
+	}
+
+	for (const [name, colors] of [
+		["Twilight (dark)", twilight],
+		["Aurora (dark)", effectiveDark(tokens.palette.aurora.color)],
+		["Dawn (dark)", effectiveDark(tokens.palette.dawn.color)],
+		["Moonlit (dark)", effectiveDark(tokens.palette.moonlit.color)],
+		["Paper (light)", paper],
 	] as const) {
 		describe(name, () => {
 			const v = (token: string) => tokenValue(colors, token);
-			const app = v("bg-app");
-			const surface = v("bg-surface");
 
-			it("ink-primary clears AAA body text (7:1) on canvas and sheet", () => {
-				expect(ratio(v("ink-primary"), app)).toBeGreaterThanOrEqual(7);
-				expect(ratio(v("ink-primary"), surface)).toBeGreaterThanOrEqual(7);
+			/** Asserts one foreground against every background layer. */
+			const onEveryLayer = (token: string, floor: number) => {
+				for (const layer of LAYERS) {
+					assertRatio(v(token), v(layer), floor, `${token} on ${layer}`);
+				}
+			};
+
+			it("ink-primary clears AAA body text (7:1) on every layer", () => {
+				onEveryLayer("ink-primary", 7);
 			});
 
-			it("ink-secondary clears AA (4.5:1)", () => {
-				expect(ratio(v("ink-secondary"), app)).toBeGreaterThanOrEqual(4.5);
-				expect(ratio(v("ink-secondary"), surface)).toBeGreaterThanOrEqual(4.5);
+			it("ink-secondary clears AA (4.5:1) on every layer", () => {
+				onEveryLayer("ink-secondary", 4.5);
 			});
 
-			it("ink-tertiary clears non-text (3:1) — and in fact AA", () => {
-				expect(ratio(v("ink-tertiary"), app)).toBeGreaterThanOrEqual(3);
-				expect(ratio(v("ink-tertiary"), surface)).toBeGreaterThanOrEqual(4.5);
+			it("ink-tertiary clears AA (4.5:1) on every layer", () => {
+				// "Muted" never means "below threshold" — and the at-rest word count,
+				// placeholders and palette hints all live on raised/overlay.
+				onEveryLayer("ink-tertiary", 4.5);
 			});
 
 			/**
@@ -108,24 +138,17 @@ describe("contrast", () => {
 			 * carried by `focus-ring` in the test below instead. Holding this token
 			 * to 3:1 would put a heavy grey rule on paper AND change Twilight, whose
 			 * values plan 023 locks. Skipped, not deleted: if `line-strong` ever
-			 * becomes load-bearing for state, un-skip this and retune both palettes.
+			 * becomes load-bearing for state, un-skip this and retune every palette.
 			 */
 			it.skip("line-strong clears non-text contrast (3:1) — EXEMPT", () => {
-				expect(ratio(v("line-strong"), app)).toBeGreaterThanOrEqual(3);
+				onEveryLayer("line-strong", 3);
 			});
 
 			it("focus-ring clears non-text contrast (3:1) on every layer", () => {
-				for (const layer of [
-					"bg-app",
-					"bg-surface",
-					"bg-raised",
-					"bg-overlay",
-				]) {
-					expect(ratio(v("focus-ring"), v(layer))).toBeGreaterThanOrEqual(3);
-				}
+				onEveryLayer("focus-ring", 3);
 			});
 
-			it("semantic status colours are legible as text (4.5:1)", () => {
+			it("status and accent text clears AA (4.5:1) on every layer", () => {
 				for (const token of [
 					"success",
 					"warning",
@@ -133,13 +156,18 @@ describe("contrast", () => {
 					"accent",
 					"accent-2",
 				]) {
-					expect(ratio(v(token), app), token).toBeGreaterThanOrEqual(4.5);
+					onEveryLayer(token, 4.5);
 				}
 			});
 
-			it("on-accent is legible on the accent fill (shadcn --primary)", () => {
-				expect(ratio(v("on-accent"), v("accent-muted"))).toBeGreaterThanOrEqual(
-					onAccentFloor,
+			it("on-accent clears AA (4.5:1) on the accent fill", () => {
+				// shadcn --primary / --accent / --sidebar-primary are all the
+				// accent-muted fill, and the default button label sits on it.
+				assertRatio(
+					v("on-accent"),
+					v("accent-muted"),
+					4.5,
+					"on-accent on accent-muted",
 				);
 			});
 
@@ -151,7 +179,7 @@ describe("contrast", () => {
 					"lint-adverb",
 					"lint-weasel",
 				]) {
-					expect(ratio(v(token), surface), token).toBeGreaterThanOrEqual(3);
+					onEveryLayer(token, 3);
 				}
 			});
 		});

@@ -35,7 +35,7 @@ The token names below are the **canonical names** — use these everywhere, exac
 |-------|------|
 | `--color-bg-app` `--color-bg-surface` `--color-bg-raised` `--color-bg-overlay` `--color-bg-hover` | The four background layers plus the hover fill (§2.2) |
 | `--color-ink-primary` `--color-ink-secondary` `--color-ink-tertiary` | The three ink levels (§2.3) |
-| `--color-on-accent` | Text/icon on an accent or danger **fill** — not the same as ink-primary in light |
+| `--color-on-accent` | Text/icon on an accent **fill** (shadcn `--primary`). Per-palette, and never an alias of ink-primary: light ink on the mid-lightness accent fill fails AA in every dark palette |
 | `--color-line` `--color-line-strong` | Hairlines; `-strong` marks the focused pane |
 | `--color-accent` `--color-accent-muted` `--color-accent-2` `--color-accent-wash` | The one live affordance, its fill, links, and the selected-row wash |
 | `--color-success` `--color-warning` `--color-danger` | Status meaning only, never decoration (§2.4) |
@@ -89,12 +89,14 @@ Contrast is a hard constraint, not a preference (P6, §8). Ink levels are tuned 
 | Semantic colors as text/icon on their layer | ≥ 4.5:1 | Status must be legible, not just present. |
 | `--color-focus-ring` against adjacent surfaces | ≥ 3:1 (WCAG non-text) | Focus indication must clear the non-text contrast minimum. |
 
-These are measured, not assumed: OKLCH lightness is perceptually uniform but is not a WCAG contrast ratio. `packages/design-tokens/tokens.test.ts` asserts every row above for **both** Twilight and Paper with `culori`, so a token change that breaks a ratio fails the build.
+These are measured, not assumed: OKLCH lightness is perceptually uniform but is not a WCAG contrast ratio. `packages/design-tokens/tokens.test.ts` asserts every row above with `culori`, on the **raw** ratio (rounding first would let 4.496 pass a 4.5 floor), so a token change that breaks a ratio fails the build. Two things make the assertions bind:
 
-Two deliberate exclusions, both recorded there:
+- **Every layer, not just the canvas.** A token is measured against all four backgrounds it can be read on. The status bar and command palette sit on `bg-raised` and dialogs on `bg-overlay`, so `bg-app` is usually *not* the binding layer — Paper's `ink-tertiary` cleared 4.53:1 on `bg-app` while measuring 3.96:1 on `bg-overlay`.
+- **Every palette a writer can actually see.** Aurora, Dawn and Moonlit override only part of Twilight, so the suite merges each override set over Twilight and asserts the result. Testing the override sets alone would skip every inherited token — which is how three palettes shipped a default button label at 2.36–2.93:1.
 
-- **`--color-line-strong` is not held to 3:1.** It is a decorative hairline, which WCAG 1.4.11 exempts; the 3:1 non-text obligation is carried by `--color-focus-ring`, which is asserted against all four layers. The exemption is a **skipped test**, not an omission, so the reporter names it on every run — un-skip it and retune both palettes if `line-strong` ever becomes load-bearing for state.
-- **`--color-on-accent` on `--color-accent-muted` clears 4.5:1 on Paper but measures 3.15:1 on Twilight.** Pre-existing; fixing it means darkening `accent-muted` in all four dark palettes, which is a separate change.
+One deliberate exclusion, recorded there:
+
+- **`--color-line-strong` is not held to 3:1.** It is a decorative hairline, which WCAG 1.4.11 exempts; the 3:1 non-text obligation is carried by `--color-focus-ring`, which is asserted against all four layers. The exemption is a **skipped test**, not an omission, so the reporter names it on every run — un-skip it and retune every palette if `line-strong` ever becomes load-bearing for state.
 
 ---
 

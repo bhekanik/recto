@@ -6,7 +6,18 @@ import {
 	DARK_QUERY,
 	resolveAppearance,
 	SETTINGS_STORAGE_KEY,
+	THEME_COLOR,
 } from "./appearance";
+
+/** Clears the head so each case starts with no `theme-color` tag. */
+function clearThemeColorMeta(): void {
+	for (const m of document.querySelectorAll('meta[name="theme-color"]')) {
+		m.remove();
+	}
+}
+
+const themeColorOf = () =>
+	document.querySelector('meta[name="theme-color"]')?.getAttribute("content");
 
 describe("resolveAppearance", () => {
 	it("follows the OS when set to system", () => {
@@ -26,6 +37,23 @@ describe("applyAppearance", () => {
 		expect(document.documentElement.classList.contains("dark")).toBe(true);
 		applyAppearance("light");
 		expect(document.documentElement.classList.contains("dark")).toBe(false);
+	});
+
+	it("retunes theme-color, so a stored override beats the OS", () => {
+		clearThemeColorMeta();
+		applyAppearance("light");
+		expect(themeColorOf()).toBe(THEME_COLOR.light);
+		applyAppearance("dark");
+		expect(themeColorOf()).toBe(THEME_COLOR.dark);
+	});
+
+	it("creates the meta tag when it is absent, and never duplicates it", () => {
+		document.querySelector('meta[name="theme-color"]')?.remove();
+		applyAppearance("light");
+		applyAppearance("dark");
+		const tags = document.querySelectorAll('meta[name="theme-color"]');
+		expect(tags).toHaveLength(1);
+		expect(themeColorOf()).toBe(THEME_COLOR.dark);
 	});
 });
 
@@ -49,6 +77,7 @@ describe("APPEARANCE_SCRIPT", () => {
 		// it runs with the first two shadowed by stand-ins and the real happy-dom
 		// document, which is what makes the resulting class observable.
 		const run = (stored: string | null, prefersDark: boolean) => {
+			clearThemeColorMeta();
 			const matchMedia = () => ({
 				matches: prefersDark,
 				addEventListener: () => {},
@@ -68,7 +97,11 @@ describe("APPEARANCE_SCRIPT", () => {
 		};
 
 		expect(run("dark", false)).toBe("dark");
+		// The script owns the meta tag too — a stored Dark on a light OS must not
+		// leave the browser chrome painted with the Paper canvas.
+		expect(themeColorOf()).toBe(THEME_COLOR.dark);
 		expect(run("light", true)).toBe("light");
+		expect(themeColorOf()).toBe(THEME_COLOR.light);
 		expect(run("system", true)).toBe("dark");
 		expect(run("system", false)).toBe("light");
 		// No stored settings, or junk in them, falls back to following the OS.

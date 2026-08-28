@@ -28,10 +28,10 @@ public extension Color {
 	/// oklch(0.79 0.016 284) (dark) · oklch(0.42 0.02 285) (light)
 	static let rectoInk2 = Color("RectoInk2", bundle: .module)
 
-	/// oklch(0.665 0.018 283) (dark) · oklch(0.55 0.02 285) (light)
+	/// oklch(0.665 0.018 283) (dark) · oklch(0.51 0.02 285) (light)
 	static let rectoInk3 = Color("RectoInk3", bundle: .module)
 
-	/// oklch(0.94 0.012 285) (dark) · oklch(0.99 0.004 285) (light)
+	/// oklch(0.18 0.028 280) (dark) · oklch(0.99 0.004 285) (light)
 	static let rectoOnAccent = Color("RectoOnAccent", bundle: .module)
 
 	/// oklch(0.33 0.025 282) (dark) · oklch(0.88 0.01 285) (light)
@@ -52,10 +52,10 @@ public extension Color {
 	/// oklch(0.74 0.13 288 / 0.15) (dark) · oklch(0.52 0.15 288 / 0.1) (light)
 	static let rectoAccentWash = Color("RectoAccentWash", bundle: .module)
 
-	/// oklch(0.8 0.095 155) (dark) · oklch(0.53 0.11 155) (light)
+	/// oklch(0.8 0.095 155) (dark) · oklch(0.5 0.11 155) (light)
 	static let rectoOk = Color("RectoOk", bundle: .module)
 
-	/// oklch(0.84 0.1 85) (dark) · oklch(0.55 0.11 70) (light)
+	/// oklch(0.84 0.1 85) (dark) · oklch(0.51 0.11 70) (light)
 	static let rectoWarn = Color("RectoWarn", bundle: .module)
 
 	/// oklch(0.7 0.16 20) (dark) · oklch(0.52 0.19 25) (light)
@@ -64,7 +64,7 @@ public extension Color {
 	/// oklch(0.74 0.1 290) (dark) · oklch(0.5 0.14 290) (light)
 	static let rectoLintPassive = Color("RectoLintPassive", bundle: .module)
 
-	/// oklch(0.84 0.1 85) (dark) · oklch(0.55 0.11 70) (light)
+	/// oklch(0.84 0.1 85) (dark) · oklch(0.51 0.11 70) (light)
 	static let rectoLintReadability = Color("RectoLintReadability", bundle: .module)
 
 	/// oklch(0.78 0.08 250) (dark) · oklch(0.52 0.12 250) (light)

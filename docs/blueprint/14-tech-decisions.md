@@ -787,7 +787,7 @@ Both palettes come from one source, [`packages/design-tokens/tokens.json`](../..
 
 - `app/layout.tsx` no longer forces `dark`; it injects the appearance script and `suppressHydrationWarning`.
 - Anything authored as "dark-only" is now a token: panel and toolbar shadows (`--elevation-*`), the reduced-transparency scrim (`--scrim-opaque`), and the film grain's blend mode and opacity (`--grain-*`), which is `multiply` on paper because `soft-light` is invisible at 0.99 L.
-- A new token, `--color-on-accent`, carries text on an accent fill: dark keeps ink-primary, light needs near-white. shadcn's `--primary-foreground` / `--accent-foreground` map to it.
+- A new token, `--color-on-accent`, carries text on an accent fill, authored **per palette**: light ink over the mid-lightness `accent-muted` fill measures 2.36–3.15:1 across the four dark palettes, so each one uses its own canvas colour (5.02–6.96:1) and Paper uses near-white (7.92:1). shadcn's `--primary-foreground` / `--accent-foreground` / `--sidebar-primary-foreground` map to it.
 - Clerk's widgets follow the resolved appearance from the generated hex table; the stale coral palette is gone.
 - Every future palette change goes through `tokens.json` + `bun run tokens:build`, never by editing `globals.css`.
 - The design system's P4 ("dark only") is retired; §2.5 contrast targets now apply to both appearances.

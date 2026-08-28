@@ -11,7 +11,7 @@
 	--color-ink-primary: oklch(0.94 0.012 285);
 	--color-ink-secondary: oklch(0.79 0.016 284);
 	--color-ink-tertiary: oklch(0.665 0.018 283);
-	--color-on-accent: oklch(0.94 0.012 285);
+	--color-on-accent: oklch(0.18 0.028 280);
 	--color-line: oklch(0.33 0.025 282);
 	--color-line-strong: oklch(0.45 0.03 282);
 	--color-accent: oklch(0.74 0.13 288);
@@ -51,7 +51,7 @@
 	--color-ink-primary: oklch(0.94 0.012 200);
 	--color-ink-secondary: oklch(0.79 0.016 200);
 	--color-ink-tertiary: oklch(0.665 0.018 200);
-	--color-on-accent: oklch(0.94 0.012 200);
+	--color-on-accent: oklch(0.18 0.022 202);
 	--color-line: oklch(0.33 0.022 200);
 	--color-line-strong: oklch(0.45 0.026 200);
 	--color-accent: oklch(0.78 0.115 178);
@@ -76,7 +76,7 @@
 	--color-ink-primary: oklch(0.94 0.01 330);
 	--color-ink-secondary: oklch(0.79 0.014 330);
 	--color-ink-tertiary: oklch(0.665 0.016 330);
-	--color-on-accent: oklch(0.94 0.01 330);
+	--color-on-accent: oklch(0.185 0.016 330);
 	--color-line: oklch(0.33 0.018 330);
 	--color-line-strong: oklch(0.45 0.022 330);
 	--color-accent: oklch(0.78 0.09 350);
@@ -101,7 +101,7 @@
 	--color-ink-primary: oklch(0.94 0.01 250);
 	--color-ink-secondary: oklch(0.79 0.014 250);
 	--color-ink-tertiary: oklch(0.66 0.016 250);
-	--color-on-accent: oklch(0.94 0.01 250);
+	--color-on-accent: oklch(0.155 0.014 250);
 	--color-line: oklch(0.31 0.018 250);
 	--color-line-strong: oklch(0.43 0.022 250);
 	--color-accent: oklch(0.82 0.08 210);
@@ -127,7 +127,7 @@
 	--color-bg-hover: oklch(0.945 0.012 85);
 	--color-ink-primary: oklch(0.22 0.02 285);
 	--color-ink-secondary: oklch(0.42 0.02 285);
-	--color-ink-tertiary: oklch(0.55 0.02 285);
+	--color-ink-tertiary: oklch(0.51 0.02 285);
 	--color-on-accent: oklch(0.99 0.004 285);
 	--color-line: oklch(0.88 0.01 285);
 	--color-line-strong: oklch(0.78 0.014 285);
@@ -135,11 +135,11 @@
 	--color-accent-muted: oklch(0.44 0.13 288);
 	--color-accent-2: oklch(0.5 0.12 250);
 	--color-accent-wash: oklch(0.52 0.15 288 / 0.1);
-	--color-success: oklch(0.53 0.11 155);
-	--color-warning: oklch(0.55 0.11 70);
+	--color-success: oklch(0.5 0.11 155);
+	--color-warning: oklch(0.51 0.11 70);
 	--color-danger: oklch(0.52 0.19 25);
 	--color-lint-passive: oklch(0.5 0.14 290);
-	--color-lint-readability: oklch(0.55 0.11 70);
+	--color-lint-readability: oklch(0.51 0.11 70);
 	--color-lint-adverb: oklch(0.52 0.12 250);
 	--color-lint-weasel: oklch(0.5 0.13 330);
 	--color-comment: oklch(0.54 0.09 195);
