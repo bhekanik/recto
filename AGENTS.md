@@ -13,6 +13,7 @@
 - Aurora/Dawn/Moonlit are dark-only and only offered while the appearance resolves to dark.
 - The palette source is `packages/design-tokens/tokens.json`. Never hand-edit colours in `app/globals.css` — change the JSON and run `bun run tokens:build` (a test fails if the committed outputs are stale).
 - Anything appearance-dependent is a token: `--elevation-*`, `--scrim-opaque`, `--grain-*`, `--color-on-accent`. No raw `oklch(0 0 0 / …)` shadows.
+- **Tailwind colour keys are shared with shadcn.** `app/globals.css` has two `@theme` blocks (the generated palette, then shadcn's `@theme inline`); a key in both silently resolves to the last one. shadcn's accent is namespaced `--color-ui-accent` / `--color-ui-accent-foreground` for exactly this reason — a primitive added by `bunx shadcn add` that uses `bg-accent` or `text-accent-foreground` must be rewritten to `bg-ui-accent` / `text-ui-accent-foreground`, or it will pick up Recto's live accent. Guarded by `packages/design-tokens/tokens.test.ts` and `bun run tokens:cascade`.
 
 ## Canonical markdown
 

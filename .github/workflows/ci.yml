@@ -38,6 +38,22 @@ jobs:
       - run: bun run core:build
       - run: bun run core:parity
 
+  # Design-token cascade check (follow-up F1). Needs a browser: the bug it
+  # guards against is only visible once a CSS engine has resolved the cascade,
+  # and the blocking `ci` job above deliberately stays browser-free. Compiles
+  # app/globals.css with the app's own PostCSS pipeline, so it does not depend
+  # on `next build`.
+  design-tokens:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - run: bunx playwright install --with-deps chromium
+      - run: bun run tokens:cascade
+
   # Browser smoke suite (plan 021). Non-blocking (continue-on-error) for the
   # first iteration — flip it to blocking once it has been stable ~2 weeks.
   #
