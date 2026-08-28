@@ -1,0 +1,220 @@
+/**
+ * `bun run core:parity` — checks `dist/recto-core.js` against the fixtures and,
+ * on macOS, against the same fixtures inside a real `JSContext`.
+ *
+ * Three things are proved here:
+ *  1. The bundle produces exactly what `lib/` produces (it IS `lib/`, but the
+ *     bundler picks package entry points, so this catches a wrong one).
+ *  2. Nothing on any API path touches a DOM global — the realm has none.
+ *  3. The numbers: bundle size, load time, per-call latency on a ~950 kB doc.
+ */
+
+import { writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { $ } from "bun";
+import { analyze } from "@/lib/lint/analyze";
+import type { LintOptions } from "@/lib/lint/types";
+import { markdownFromHtml } from "@/lib/markdown/from-html";
+import { renderPreviewHtml } from "@/lib/preview/render";
+import { currentStreak } from "@/lib/stats/streak";
+import corpus from "@/packages/editor-fixtures/markdown-corpus.json";
+import outlineFixture from "@/packages/editor-fixtures/outline.json";
+import wordCountFixture from "@/packages/editor-fixtures/word-count.json";
+
+import { BUNDLE_PATH, loadCore } from "./bare-realm";
+
+const packageDir = dirname(fileURLToPath(import.meta.url));
+const corpusPath = join(
+	packageDir,
+	"..",
+	"editor-fixtures",
+	"markdown-corpus.json",
+);
+
+const failures: string[] = [];
+function expect(actual: unknown, expected: unknown, what: string): void {
+	const a = JSON.stringify(actual);
+	const b = JSON.stringify(expected);
+	if (a !== b) failures.push(`${what}\n    got      ${a}\n    expected ${b}`);
+}
+
+const core = await loadCore();
+const bundleBytes = Bun.file(BUNDLE_PATH).size;
+console.log(
+	`bundle   ${(bundleBytes / 1024).toFixed(0)} kB, RectoCore ${core.version}`,
+);
+
+for (const testCase of corpus.cases) {
+	const where = `corpus case ${testCase.id} (${testCase.name})`;
+	expect(
+		core.normalize(testCase.input),
+		testCase.normalized,
+		`${where}: normalize`,
+	);
+	expect(
+		core.normalize(testCase.normalized),
+		testCase.normalized,
+		`${where}: normalize is idempotent`,
+	);
+	expect(
+		core.countWords(testCase.input),
+		testCase.words,
+		`${where}: countWords`,
+	);
+	expect(
+		core.parseOutline(testCase.input),
+		testCase.outline,
+		`${where}: parseOutline`,
+	);
+}
+for (const testCase of wordCountFixture.cases) {
+	expect(
+		core.countWords(testCase.markdown),
+		testCase.words,
+		`word-count "${testCase.name}"`,
+	);
+}
+for (const testCase of outlineFixture.cases) {
+	expect(
+		core.parseOutline(testCase.markdown),
+		testCase.outline,
+		`outline "${testCase.name}"`,
+	);
+}
+
+// No fixture file covers these three, so compare the bundle against `lib/`
+// directly — same contract, and it also proves they run without a DOM.
+const richHtml = "<h1>Title</h1><p>Some <b>bold</b> text<br>and a break.</p>";
+const markdownSample = corpus.cases.map((c) => c.normalized).join("\n");
+expect(
+	core.htmlFromMarkdown(markdownSample),
+	renderPreviewHtml(markdownSample),
+	"htmlFromMarkdown matches lib/preview/render",
+);
+expect(
+	core.markdownFromHtml(richHtml),
+	markdownFromHtml(richHtml),
+	"markdownFromHtml matches lib/markdown/from-html",
+);
+const lintSample =
+	"The report was written by the committee. It was very clearly quite good.";
+const everyCategory: LintOptions = {
+	passive: true,
+	readability: true,
+	adverb: true,
+	weasel: true,
+};
+expect(
+	await core.lint(lintSample),
+	await analyze(lintSample, everyCategory),
+	"lint matches lib/lint/analyze",
+);
+const days = [
+	{ date: "2026-08-25", words: 100 },
+	{ date: "2026-08-26", words: 100 },
+	{ date: "2026-08-27", words: 0 },
+];
+expect(
+	core.streak(days, "2026-08-27"),
+	currentStreak(days, "2026-08-27"),
+	"streak matches lib/stats/streak",
+);
+
+/**
+ * Two ~950 kB documents, because they behave very differently: ordinary prose is
+ * what a writer actually has open, while the corpus concatenation is adversarial
+ * (thousands of duplicate footnote and link-reference definitions, which remark
+ * resolves super-linearly). Both are written next to the bundle so the Swift
+ * spike times the exact same bytes.
+ */
+function benchDocuments(): { name: string; markdown: string }[] {
+	const vocabulary =
+		"the quick brown fox jumps over a lazy dog while writing prose about rivers valleys storms and the quiet hum of an old machine".split(
+			" ",
+		);
+	// Deterministic pseudo-random word picks (mulberry32) so timings are comparable
+	// run to run and between the two runtimes.
+	let seed = 0x9e3779b9;
+	const next = () => {
+		seed = (seed + 0x6d2b79f5) | 0;
+		let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+		t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+	};
+	let prose = "";
+	for (let i = 0; prose.length < 950_000; i++) {
+		if (i % 12 === 0) prose += `## Section ${i}\n\n`;
+		const length = 40 + Math.floor(next() * 50);
+		const words = Array.from(
+			{ length },
+			() => vocabulary[Math.floor(next() * vocabulary.length)],
+		);
+		prose += `${words.join(" ")}.\n\n`;
+	}
+	// A quarter the size on purpose: this document is about shape, not scale, and
+	// at 950 kB it costs ~25 s per call in JSC — too slow to run on every push.
+	let adversarial = "";
+	while (adversarial.length < 250_000) {
+		for (const testCase of corpus.cases) adversarial += `${testCase.input}\n`;
+	}
+	return [
+		{ name: "bench-prose.md", markdown: prose },
+		{ name: "bench-corpus.md", markdown: adversarial },
+	];
+}
+
+/**
+ * One run per document: at ~950 kB a single call already takes seconds, so
+ * repeating it buys noise reduction CI does not need. The numbers quoted in the
+ * README are best-of-3 from a quiet machine.
+ */
+function bestMs(run: () => void, runs: number): number {
+	let best = Number.POSITIVE_INFINITY;
+	for (let i = 0; i < runs; i++) {
+		const start = performance.now();
+		run();
+		best = Math.min(best, performance.now() - start);
+	}
+	return best;
+}
+
+const documents = benchDocuments();
+const documentPaths: string[] = [];
+for (const { name, markdown } of documents) {
+	const path = join(packageDir, "dist", name);
+	await writeFile(path, markdown);
+	documentPaths.push(path);
+	const label = `${name} (${(markdown.length / 1024).toFixed(0)} kB)`.padEnd(
+		34,
+	);
+	console.log(
+		`call     ${label} normalize ${bestMs(() => core.normalize(markdown), 1)
+			.toFixed(3)
+			.padStart(8)} ms · ` +
+			`countWords ${bestMs(() => core.countWords(markdown), 1)
+				.toFixed(3)
+				.padStart(8)} ms · ` +
+			`parseOutline ${bestMs(() => core.parseOutline(markdown), 1)
+				.toFixed(3)
+				.padStart(8)} ms (bun)`,
+	);
+}
+
+if (failures.length > 0) {
+	console.error(`\n${failures.length} parity failure(s):`);
+	for (const failure of failures) console.error(`  ${failure}`);
+	process.exit(1);
+}
+console.log(
+	`parity   ${corpus.cases.length}/${corpus.cases.length} corpus cases + idempotence sweep, ` +
+		`${wordCountFixture.cases.length} word-count, ${outlineFixture.cases.length} outline, ` +
+		"and all 7 globals green in a DOM-free realm",
+);
+
+if (process.platform !== "darwin") {
+	console.log("jsc      skipped — JavaScriptCore parity needs macOS");
+	process.exit(0);
+}
+console.log("");
+await $`swift run --package-path ${join(packageDir, "jsc")} -c release recto-core-parity ${BUNDLE_PATH} ${corpusPath} ${documentPaths}`;
