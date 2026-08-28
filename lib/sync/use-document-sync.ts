@@ -63,6 +63,14 @@ type UseDocumentSyncResult = {
 	getRecoveredDraft: () => RecoveredDraft | null;
 	/** Report a recovered draft the history hook has put on screen (unsaved). */
 	adoptRecoveredDraft: (markdown: string) => void;
+	/** A local transition is on screen but the server has not taken it yet. */
+	markLocalProjectionPending: (markdown: string) => void;
+	/** That transition was accepted (or refused) by the server. */
+	settleLocalProjection: (settled: {
+		markdown: string;
+		serverUpdatedAt: number;
+		ok: boolean;
+	}) => void;
 };
 
 /** Whether a reactive query update is from a remote writer (not this client's echo). */
@@ -347,6 +355,44 @@ export function useDocumentSync({
 	const getRecoveredDraft = useCallback(() => recoveredRef.current, []);
 
 	/**
+	 * A local transition (an AI accept, a version restore, an undo) is showing,
+	 * but the server has not acknowledged it. Programmatic seeds never reach
+	 * `handleEditorChange`, so without this nothing would mark them dirty: a
+	 * rejected commit would lose the text on reload, with no recovery copy and a
+	 * status still reading "saved".
+	 */
+	const markLocalProjectionPending = useCallback(
+		(markdown: string) => {
+			setWordCount(countWords(markdown));
+			pendingMarkdownRef.current = markdown;
+			if (documentId) saveDraft(documentId, markdown);
+			setSyncStatus("unsynced");
+		},
+		[documentId],
+	);
+
+	/** The server took it (or did not). Only success may retire the draft. */
+	const settleLocalProjection = useCallback(
+		(settled: { markdown: string; serverUpdatedAt: number; ok: boolean }) => {
+			if (!settled.ok) return; // stays dirty, stays recoverable
+			lastFlushedMarkdownRef.current = settled.markdown;
+			if (settled.serverUpdatedAt > 0) {
+				expectedUpdatedAtRef.current = settled.serverUpdatedAt;
+				lastWrittenUpdatedAtRef.current = settled.serverUpdatedAt;
+				lastHandledServerUpdatedAtRef.current = settled.serverUpdatedAt;
+				projectedBaselineUpdatedAtRef.current = settled.serverUpdatedAt;
+			}
+			// The writer may have typed past this transition while it was in
+			// flight; that newer text is still unsaved, so leave it dirty.
+			if (pendingMarkdownRef.current !== settled.markdown) return;
+			pendingMarkdownRef.current = null;
+			if (documentId) clearDraft(documentId);
+			setSyncStatus("saved");
+		},
+		[documentId],
+	);
+
+	/**
 	 * The history hook has projected a recovered local draft. It is UNSAVED — the
 	 * server has never seen it — so it must be reported dirty and its storage
 	 * copy kept until a write actually succeeds. Treating it as flushed lost the
@@ -474,5 +520,7 @@ export function useDocumentSync({
 		getBaselineUpdatedAt,
 		getRecoveredDraft,
 		adoptRecoveredDraft,
+		markLocalProjectionPending,
+		settleLocalProjection,
 	};
 }

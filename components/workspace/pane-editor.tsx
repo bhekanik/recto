@@ -145,7 +145,10 @@ export function PaneEditor({
 	const meta = documents?.find((d) => d._id === documentId);
 	const title = meta?.title ?? "Untitled";
 
-	const paneMarkdown = activePaneSnapshot(paneSnapshot, sync?.markdown ?? null);
+	const paneMarkdown = activePaneSnapshot(
+		paneSnapshot,
+		sync?.projectionGeneration ?? 0,
+	);
 	const markdown = paneMarkdown ?? sync?.markdown ?? "";
 	const bridgeSession = useBridgeSession(documentId, markdown);
 
@@ -465,7 +468,7 @@ export function PaneEditor({
 			const caret = outgoing?.exportCaret() ?? null;
 			setPaneSnapshot({
 				markdown: liveMarkdown,
-				basis: sync?.markdown ?? null,
+				basisGeneration: sync?.projectionGeneration ?? 0,
 			});
 			setPendingCaret(caret);
 			actions.setPaneMode(leaf.paneId, to);

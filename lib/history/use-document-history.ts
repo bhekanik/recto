@@ -79,6 +79,9 @@ const AUTO_VERSION_MS = 120_000; // tag an auto version ~2min after activity set
 const EDITOR_IDLE_MS = 2_000;
 /** How often to look for a writable editor while a projection is waiting. */
 const HANDLE_RETRY_MS = 250;
+/** Automatic ensureRoot attempts before the writer is asked to retry. */
+const ENSURE_ROOT_MAX_ATTEMPTS = 4;
+const ENSURE_ROOT_BASE_DELAY_MS = 400;
 
 /**
  * This client's own most recent pointer move, tracked until the server echoes it
@@ -92,6 +95,8 @@ export type LocalPointerMove = {
 	nodeId: string;
 	/** `documents.pointerRevision` our write produced, or null while in flight. */
 	appliedRevision: number | null;
+	/** The text published for this move, so its acknowledgement can name it. */
+	markdown: string;
 };
 
 /** A remote pointer we have decided to adopt but could not project yet. */
@@ -213,6 +218,15 @@ export function useDocumentHistory(args: {
 		/** Where the text came from, which decides whether it counts as saved. */
 		source: "server" | "recovered-draft" | "local";
 	}) => void;
+	/**
+	 * A local projection has been accepted or refused by the server. Until this
+	 * says `ok`, the text it names is unsaved and must stay recoverable.
+	 */
+	onProjectionSettled?: (settled: {
+		markdown: string;
+		serverUpdatedAt: number;
+		ok: boolean;
+	}) => void;
 	/** A draft restored from storage on open, resolved without an editor. */
 	getRecoveredDraft?: () => { present: boolean; markdown: string } | null;
 }): HistoryController {
@@ -228,6 +242,7 @@ export function useDocumentHistory(args: {
 		enabled,
 		origin,
 		onProjection,
+		onProjectionSettled,
 		getRecoveredDraft,
 	} = args;
 
@@ -253,6 +268,11 @@ export function useDocumentHistory(args: {
 	// re-seeding the editor and toasting on every document open.
 	const currentNodeIdRef = useRef<string | null>(null);
 	const ensureRootSentRef = useRef(false);
+	const ensureRootAttemptsRef = useRef(0);
+	const ensureRootTimerRef = useRef<number | null>(null);
+	// Set once the automatic attempts are spent, so the failure is reported once
+	// rather than on every retry.
+	const [rootFailed, setRootFailed] = useState(false);
 	const localMoveRef = useRef<LocalPointerMove | null>(null);
 	const moveTokenRef = useRef(0);
 	// A remote pointer we have decided to adopt but cannot project yet — the
@@ -269,6 +289,8 @@ export function useDocumentHistory(args: {
 	const editorIdleRef = useRef(true);
 	const onProjectionRef = useRef(onProjection);
 	onProjectionRef.current = onProjection;
+	const onProjectionSettledRef = useRef(onProjectionSettled);
+	onProjectionSettledRef.current = onProjectionSettled;
 	// Bumped whenever something happens that could unblock a queued adoption
 	// (a local move settles, the editor blurs). The reconciliation lives in an
 	// effect, so it needs a state dependency to re-run on.
@@ -288,6 +310,12 @@ export function useDocumentHistory(args: {
 		controllerRef.current = null;
 		hydratedRef.current = false;
 		ensureRootSentRef.current = false;
+		ensureRootAttemptsRef.current = 0;
+		if (ensureRootTimerRef.current !== null) {
+			window.clearTimeout(ensureRootTimerRef.current);
+			ensureRootTimerRef.current = null;
+		}
+		setRootFailed(false);
 		lastAutoNodeIdRef.current = null;
 		localMoveRef.current = null;
 		pendingRemotePointerRef.current = null;
@@ -321,16 +349,20 @@ export function useDocumentHistory(args: {
 	}, []);
 
 	/** Claim the pointer for a move this client is about to write. */
-	const startLocalMove = useCallback((nodeId: string): number => {
-		moveTokenRef.current += 1;
-		localMoveRef.current = {
-			token: moveTokenRef.current,
-			nodeId,
-			appliedRevision: null,
-		};
-		headNodeIdRef.current = nodeId;
-		return moveTokenRef.current;
-	}, []);
+	const startLocalMove = useCallback(
+		(nodeId: string, markdown: string): number => {
+			moveTokenRef.current += 1;
+			localMoveRef.current = {
+				token: moveTokenRef.current,
+				nodeId,
+				appliedRevision: null,
+				markdown,
+			};
+			headNodeIdRef.current = nodeId;
+			return moveTokenRef.current;
+		},
+		[],
+	);
 
 	/**
 	 * Record what became of a pointer move this client started. `appliedAt` is
@@ -343,10 +375,21 @@ export function useDocumentHistory(args: {
 	 * nothing else would re-run the reconciliation for it.
 	 */
 	const settleLocalMove = useCallback(
-		(token: number, appliedRevision: number | null) => {
-			if (localMoveRef.current?.token !== token) return;
+		(token: number, appliedRevision: number | null, serverUpdatedAt = 0) => {
+			const move = localMoveRef.current;
+			if (move?.token !== token) return;
+			// A local transition is only SAVED once the server has taken it. Until
+			// then its text must stay recoverable: a programmatic seed (AI accept,
+			// version restore) never goes through the editor's change handler, so
+			// nothing else would mark it dirty, and a rejected commit would lose it
+			// on reload.
+			onProjectionSettledRef.current?.({
+				markdown: move.markdown,
+				serverUpdatedAt,
+				ok: appliedRevision !== null,
+			});
 			if (appliedRevision === null) localMoveRef.current = null;
-			else localMoveRef.current.appliedRevision = appliedRevision;
+			else move.appliedRevision = appliedRevision;
 			setReconcileTick((tick) => tick + 1);
 		},
 		[],
@@ -426,7 +469,7 @@ export function useDocumentHistory(args: {
 			);
 			setPointer(commit.nodeId);
 			publishProjection(commit.markdown, "local");
-			const moveToken = startLocalMove(commit.nodeId);
+			const moveToken = startLocalMove(commit.nodeId, commit.markdown);
 
 			// One transaction: the node, the pointer, the markdown. See the
 			// documents.commitEdit doc comment for why these can't be separate.
@@ -448,7 +491,11 @@ export function useDocumentHistory(args: {
 			})
 				.then((result) => {
 					if (result.committed) {
-						settleLocalMove(moveToken, result.pointerRevision);
+						settleLocalMove(
+							moveToken,
+							result.pointerRevision,
+							result.updatedAt,
+						);
 						return;
 					}
 					// Another writer owns the head. Queue theirs so the next safe
@@ -485,15 +532,30 @@ export function useDocumentHistory(args: {
 
 		// Legacy document with no nodes yet — create a root lazily (ADR-17 #1).
 		if (dagRows.length === 0) {
-			if (!ensureRootSentRef.current) {
+			// A legacy document with no root cannot hydrate, so the pane stays in
+			// loading and nothing typed can be committed — this call has to be
+			// retried. Bounded, backing off, and reported once: an unbounded loop
+			// hammered the server and raised a toast on every attempt.
+			if (!ensureRootSentRef.current && !rootFailed) {
 				ensureRootSentRef.current = true;
 				void ensureRoot({ documentId }).catch(() => {
-					// Release the latch, or one failed call strands this document with
-					// no root: hydration never runs, so the pane never leaves loading
-					// and nothing the writer types can be committed.
 					ensureRootSentRef.current = false;
-					toast("Couldn't open this document's history — retrying", "error");
-					setReconcileTick((tick) => tick + 1);
+					ensureRootAttemptsRef.current += 1;
+					if (ensureRootAttemptsRef.current >= ENSURE_ROOT_MAX_ATTEMPTS) {
+						setRootFailed(true);
+						toast(
+							"Couldn't open this document's history. Reload to try again.",
+							"error",
+						);
+						return;
+					}
+					const delay =
+						ENSURE_ROOT_BASE_DELAY_MS *
+						2 ** (ensureRootAttemptsRef.current - 1);
+					ensureRootTimerRef.current = window.setTimeout(() => {
+						ensureRootTimerRef.current = null;
+						setReconcileTick((tick) => tick + 1);
+					}, delay);
 				});
 			}
 			return; // wait for the query to refetch with the root
@@ -562,6 +624,7 @@ export function useDocumentHistory(args: {
 		documentId,
 		dagRows,
 		reconcileTick,
+		rootFailed,
 		serverCurrentNodeId,
 		serverMarkdown,
 		serverMarkdownHeadNodeId,
@@ -639,7 +702,7 @@ export function useDocumentHistory(args: {
 			window.setTimeout(() => {
 				navigatingRef.current = false;
 			}, 200);
-			const moveToken = startLocalMove(nodeId);
+			const moveToken = startLocalMove(nodeId, markdown);
 			void updatePointer({
 				documentId,
 				currentNodeId: nodeId,
@@ -653,7 +716,11 @@ export function useDocumentHistory(args: {
 						// before the write would drop a remote head this move never
 						// managed to overwrite.
 						pendingRemotePointerRef.current = null;
-						settleLocalMove(moveToken, result.pointerRevision);
+						settleLocalMove(
+							moveToken,
+							result.pointerRevision,
+							result.updatedAt,
+						);
 						return;
 					}
 					// Rejected: the server told us which head won — keep it.
@@ -986,6 +1053,14 @@ export function useDocumentHistory(args: {
 		}, HANDLE_RETRY_MS);
 		return () => window.clearInterval(timer);
 	}, [reconcileTick, serverCurrentNodeId, serverPointerRevision]);
+
+	useEffect(() => {
+		return () => {
+			if (ensureRootTimerRef.current === null) return;
+			window.clearTimeout(ensureRootTimerRef.current);
+			ensureRootTimerRef.current = null;
+		};
+	}, []);
 
 	// Leaving the editor is an extra chance to reconcile, on top of the idle
 	// timer. `focusout` bubbles where `blur` does not, so one window listener

@@ -40,6 +40,8 @@ export type DocumentSyncState = {
 	pendingConflict: boolean;
 	/** Null until the history hook has decided what this document shows. */
 	markdown: string | null;
+	/** Bumped by every publication; panes key their mode snapshot on it. */
+	projectionGeneration: number;
 	handleEditorChange: () => void;
 	flushMarkdown: (markdown: string) => Promise<void>;
 	recordHistory: (opts?: { structural?: boolean }) => void;
@@ -183,8 +185,14 @@ function OwnerSyncHost({
 	const [projectedMarkdown, setProjectedMarkdown] = useState<string | null>(
 		null,
 	);
+	// Monotonic: every publication supersedes the last. Panes key their
+	// mode-switch snapshot on this rather than on the text, because an undo can
+	// republish markdown a superseded snapshot was keyed on.
+	const [projectionGeneration, setProjectionGeneration] = useState(0);
 	const acceptRemoteProjection = sync.acceptRemoteProjection;
 	const adoptRecoveredDraft = sync.adoptRecoveredDraft;
+	const markLocalProjectionPending = sync.markLocalProjectionPending;
+	const settleLocalProjection = sync.settleLocalProjection;
 	const onProjection = useCallback(
 		(projection: {
 			markdown: string;
@@ -194,15 +202,20 @@ function OwnerSyncHost({
 			// Publish first: this is how the text reaches a preview-only pane, and
 			// nothing may be treated as accepted before it has.
 			setProjectedMarkdown(projection.markdown);
+			setProjectionGeneration((generation) => generation + 1);
 			if (projection.source === "server") {
 				acceptRemoteProjection(projection.markdown, projection.serverUpdatedAt);
 			} else if (projection.source === "recovered-draft") {
 				adoptRecoveredDraft(projection.markdown);
+			} else {
+				// A programmatic seed (AI accept, version restore) never reaches
+				// handleEditorChange, and a pointer move changes no text at all, so
+				// nothing else would mark either dirty. They stay unsaved — and
+				// recoverable — until the server acknowledges them.
+				markLocalProjectionPending(projection.markdown);
 			}
-			// "local": the sync hook already tracks this text's dirty state through
-			// handleEditorChange; publishing is only for the panes.
 		},
-		[acceptRemoteProjection, adoptRecoveredDraft],
+		[acceptRemoteProjection, adoptRecoveredDraft, markLocalProjectionPending],
 	);
 
 	const history = useDocumentHistory({
@@ -217,6 +230,7 @@ function OwnerSyncHost({
 		enabled,
 		origin: getDeviceOrigin(),
 		onProjection,
+		onProjectionSettled: settleLocalProjection,
 		getRecoveredDraft: sync.getRecoveredDraft,
 	});
 	historyApiRef.current = history;
@@ -254,6 +268,7 @@ function OwnerSyncHost({
 		syncStatus: sync.syncStatus,
 		pendingConflict: sync.pendingConflict,
 		markdown: projectedMarkdown,
+		projectionGeneration,
 		handleEditorChange,
 		flushMarkdown: sync.flushMarkdown,
 		recordHistory: history.recordChange,
@@ -278,6 +293,7 @@ function OwnerSyncHost({
 		// at the same word count — never touched the raw field, so it never
 		// reached the store and a preview pane stayed on the previous node.
 		projectedMarkdown,
+		projectionGeneration,
 		onSyncUpdate,
 	]);
 
@@ -391,6 +407,7 @@ function ReviewerSyncHost({
 		syncStatus: "saved",
 		pendingConflict: false,
 		markdown: shared?.markdown ?? "",
+		projectionGeneration: 0,
 		handleEditorChange,
 		// No owner write path for a grantee — flushing markdown is a no-op.
 		flushMarkdown: async () => {},
