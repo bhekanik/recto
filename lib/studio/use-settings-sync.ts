@@ -36,13 +36,11 @@ import {
  *     signing in on a new machine adopts the writer's settings rather than
  *     pushing this machine's defaults over them.
  *  3. **Every push is compare-and-set, and nothing is lost when it fails.** The
- *     hook tracks which settings THIS device changed and has not had accepted.
- *     A failed save (offline, a rejected transaction) keeps them dirty and
- *     retries; a lost CAS takes the winner's values for everything else and
- *     keeps the writer's own change, then writes again on top of the winner's
- *     stamp. The alternative — an unconditional whole-object write — is how a
- *     tab left open overnight silently reverts a week of settings from another
- *     device the moment someone toggles one thing in it.
+ *     hook tracks which settings THIS device changed and has not had accepted,
+ *     each with the revision it was at when the request went out. A failed save
+ *     (offline, a rejected transaction) keeps them dirty and retries; a lost
+ *     CAS takes the winner's values for everything else and keeps the writer's
+ *     own change, then writes again on top of the winner's stamp.
  *  4. **Settings this build does not know about are carried through untouched**
  *     (`pickUnknown`), so an older web client cannot delete a newer native
  *     client's settings by writing back "the whole object".
@@ -58,14 +56,55 @@ export const SETTINGS_SAVE_DEBOUNCE_MS = 800;
 /** Backoff floor for a retry after a failed save; doubles per attempt. */
 export const SETTINGS_RETRY_BASE_MS = 2000;
 
-/** Give up re-sending after this many consecutive failures. */
+/**
+ * After this many consecutive failures the timer stops — but the work does not
+ * go away. A local change or the browser coming back online resets the count
+ * and sends again; a retry loop that gives up permanently is how a laptop that
+ * was offline at bedtime is still holding the change at breakfast.
+ */
 const MAX_RETRY_ATTEMPTS = 6;
+
+/** Where the unsent-key set survives a reload. */
+export const SETTINGS_DIRTY_STORAGE_KEY = "recto:settings-dirty";
 
 function writeLocalStorage(settings: StudioSettings): void {
 	try {
 		window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
 	} catch {
 		// Private mode / quota — settings simply won't persist on this device.
+	}
+}
+
+const SYNCED_KEY_SET = new Set<string>(SYNCED_KEYS);
+
+function readDirtyKeys(): SyncedKey[] {
+	try {
+		const raw = window.localStorage.getItem(SETTINGS_DIRTY_STORAGE_KEY);
+		if (!raw) return [];
+		const parsed: unknown = JSON.parse(raw);
+		if (!Array.isArray(parsed)) return [];
+		return parsed.filter((key): key is SyncedKey =>
+			typeof key === "string" ? SYNCED_KEY_SET.has(key) : false,
+		);
+	} catch {
+		return [];
+	}
+}
+
+function writeDirtyKeys(keys: Iterable<SyncedKey>): void {
+	try {
+		const list = [...keys];
+		if (list.length === 0) {
+			window.localStorage.removeItem(SETTINGS_DIRTY_STORAGE_KEY);
+		} else {
+			window.localStorage.setItem(
+				SETTINGS_DIRTY_STORAGE_KEY,
+				JSON.stringify(list),
+			);
+		}
+	} catch {
+		// Same posture as the settings blob itself: unavailable storage costs
+		// durability across a reload, not correctness in this session.
 	}
 }
 
@@ -93,8 +132,18 @@ export function useSettingsSync(
 	 */
 	const serverJsonRef = useRef<string | null>(null);
 	const serverStampRef = useRef<number | null>(null);
-	/** Settings this device changed that the server has not accepted yet. */
-	const dirtyRef = useRef(new Set<SyncedKey>());
+	/**
+	 * Settings this device changed that the server has not accepted yet, each
+	 * mapped to the revision it was last touched at.
+	 *
+	 * The revision is the whole point. A save carries a snapshot of the values
+	 * at the moment it was sent; if the writer changes one of those keys while
+	 * the request is in flight, the acknowledgement covers the OLD value and
+	 * clearing the key outright would mark the newer one saved. Comparing
+	 * revisions clears only what the server actually received.
+	 */
+	const dirtyRef = useRef(new Map<SyncedKey, number>());
+	const revisionRef = useRef(0);
 	/** Properties in the stored object this build does not know about. */
 	const unknownRef = useRef<Record<string, unknown>>({});
 	/** True from the moment a save is sent until it settles. */
@@ -107,19 +156,41 @@ export function useSettingsSync(
 	const [attempts, setAttempts] = useState(0);
 	const settingsRef = useRef(settings);
 	settingsRef.current = settings;
+	/**
+	 * Indirection so `flush` can schedule its own follow-up without depending on
+	 * the debounced callback that wraps it.
+	 */
+	const resendRef = useRef<() => void>(() => {});
+
+	const markDirty = useCallback((keys: Iterable<SyncedKey>) => {
+		revisionRef.current += 1;
+		for (const key of keys) dirtyRef.current.set(key, revisionRef.current);
+		writeDirtyKeys(dirtyRef.current.keys());
+	}, []);
 
 	useEffect(() => {
 		writeLocalStorage(settings);
 	}, [settings]);
+
+	// Unsent work from a previous session. Restored before the first push so a
+	// reload mid-outage does not quietly drop the change.
+	useEffect(() => {
+		const restored = readDirtyKeys();
+		if (restored.length > 0) markDirty(restored);
+	}, [markDirty]);
 
 	const flush = useCallback(async (): Promise<void> => {
 		if (savingRef.current) return;
 		const json = serializeSynced(settingsRef.current, unknownRef.current);
 		if (json === serverJsonRef.current) {
 			dirtyRef.current.clear();
+			writeDirtyKeys([]);
 			return;
 		}
 
+		// What this request is answering for. Anything touched after this point
+		// keeps its newer revision and stays dirty.
+		const sent = new Map(dirtyRef.current);
 		savingRef.current = true;
 		try {
 			const stamp = serverStampRef.current;
@@ -133,8 +204,17 @@ export function useSettingsSync(
 			if (result.saved) {
 				serverJsonRef.current = json;
 				serverStampRef.current = result.updatedAt;
-				dirtyRef.current.clear();
+				for (const [key, revision] of sent) {
+					if (dirtyRef.current.get(key) === revision) {
+						dirtyRef.current.delete(key);
+					}
+				}
+				writeDirtyKeys(dirtyRef.current.keys());
 				setAttempts((count) => (count === 0 ? count : 0));
+				// Keys the writer changed while this request was in flight are still
+				// dirty. Nothing else will notice — there is no new change to react
+				// to and no failure to retry — so the follow-up is arranged here.
+				if (dirtyRef.current.size > 0) resendRef.current();
 				return;
 			}
 
@@ -148,13 +228,12 @@ export function useSettingsSync(
 			} else {
 				serverJsonRef.current = winner;
 				unknownRef.current = pickUnknown(winner);
-				setSettings((current) =>
-					mergeSyncedJson(current, winner, dirtyRef.current),
-				);
+				const held = new Set(dirtyRef.current.keys());
+				setSettings((current) => mergeSyncedJson(current, winner, held));
 			}
 			setAttempts((count) => (count === 0 ? count : 0));
 		} catch {
-			// Offline, or the transaction was rejected. The dirty set is untouched,
+			// Offline, or the transaction was rejected. The dirty map is untouched,
 			// so nothing is lost; localStorage already holds the change.
 			setAttempts((count) => count + 1);
 		} finally {
@@ -165,6 +244,7 @@ export function useSettingsSync(
 	const push = useDebouncedCallback(() => {
 		void flush();
 	}, SETTINGS_SAVE_DEBOUNCE_MS);
+	resendRef.current = push;
 
 	// Hydrate once, then adopt changes made on other devices.
 	useEffect(() => {
@@ -174,10 +254,10 @@ export function useSettingsSync(
 			setHydrated(true);
 			if (remote === null) {
 				// First run on this account: this device's settings become the
-				// starting point rather than being reset to defaults.
-				// The whole object is this device's to establish, so every synced
-				// key counts as unsent work until the seed is accepted.
-				for (const key of SYNCED_KEYS) dirtyRef.current.add(key);
+				// starting point rather than being reset to defaults. The whole
+				// object is this device's to establish, so every synced key counts
+				// as unsent work until the seed is accepted.
+				markDirty(SYNCED_KEYS);
 				serverJsonRef.current = null;
 				serverStampRef.current = null;
 				push();
@@ -195,23 +275,20 @@ export function useSettingsSync(
 		// Our own write coming back, or one we are about to overwrite.
 		if (remote.json === serverJsonRef.current) return;
 		serverStampRef.current = remote.updatedAt;
+		serverJsonRef.current = remote.json;
+		unknownRef.current = pickUnknown(remote.json);
 		if (savingRef.current || dirtyRef.current.size > 0) {
 			// Another device wrote while this one has unsent work. Take the new
 			// stamp so the next attempt compare-and-sets against it, adopt the
 			// settings this device is not holding, and let the flush re-send the
 			// rest.
-			serverJsonRef.current = remote.json;
-			unknownRef.current = pickUnknown(remote.json);
-			setSettings((current) =>
-				mergeSyncedJson(current, remote.json, dirtyRef.current),
-			);
+			const held = new Set(dirtyRef.current.keys());
+			setSettings((current) => mergeSyncedJson(current, remote.json, held));
 			push();
 			return;
 		}
-		serverJsonRef.current = remote.json;
-		unknownRef.current = pickUnknown(remote.json);
 		setSettings((current) => mergeSyncedJson(current, remote.json));
-	}, [isAuthenticated, remote, hydrated, push, setSettings]);
+	}, [isAuthenticated, remote, hydrated, push, setSettings, markDirty]);
 
 	// Track local changes and schedule a push. Device-local settings change this
 	// object too and must not cost a mutation, so the comparison is over the
@@ -222,17 +299,16 @@ export function useSettingsSync(
 		previousRef.current = settings;
 		if (!isAuthenticated || !hydrated) return;
 
-		for (const key of changedSyncedKeys(previous, settings)) {
-			dirtyRef.current.add(key);
-		}
-		if (dirtyRef.current.size === 0) return;
+		const changed = changedSyncedKeys(previous, settings);
+		if (changed.length === 0) return;
+		markDirty(changed);
+		// A new change is new information: whatever made the last attempt fail is
+		// worth trying again for, so the backoff starts over.
 		setAttempts((count) => (count === 0 ? count : 0));
 		push();
-	}, [isAuthenticated, settings, hydrated, push]);
+	}, [isAuthenticated, settings, hydrated, push, markDirty]);
 
-	// Retry unsent work. Re-armed by its own completion rather than by a change,
-	// because the thing it is waiting for — the network coming back — produces
-	// no change of its own.
+	// Retry unsent work with backoff.
 	useEffect(() => {
 		if (!isAuthenticated || !hydrated) return;
 		if (attempts === 0 || attempts > MAX_RETRY_ATTEMPTS) return;
@@ -242,6 +318,18 @@ export function useSettingsSync(
 		}, delay);
 		return () => clearTimeout(timer);
 	}, [isAuthenticated, hydrated, flush, attempts]);
+
+	// Coming back online is the event the backoff was waiting for, and the one
+	// case where giving up after six tries would strand a change indefinitely.
+	useEffect(() => {
+		const onOnline = () => {
+			if (dirtyRef.current.size === 0) return;
+			setAttempts(0);
+			void flush();
+		};
+		window.addEventListener("online", onOnline);
+		return () => window.removeEventListener("online", onOnline);
+	}, [flush]);
 
 	// A toggle flipped in the last 800 ms would otherwise be lost on navigation.
 	useEffect(() => {
