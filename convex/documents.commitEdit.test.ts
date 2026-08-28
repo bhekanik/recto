@@ -11,6 +11,7 @@ const modules: Record<string, () => Promise<unknown>> = {
 	"./schema.ts": () => import("./schema"),
 	"./documents.ts": () => import("./documents"),
 	"./docNodes.ts": () => import("./docNodes"),
+	"./review.ts": () => import("./review"),
 	"./_generated/api.js": () => import("./_generated/api"),
 	"./_generated/server.js": () => import("./_generated/server"),
 };
@@ -479,6 +480,127 @@ describe("documents.commitEdit", () => {
 		expect(
 			(await owner.query(api.documents.get, { documentId }))?.currentNodeId,
 		).toBe(rootNodeId);
+	});
+
+	it("moves the pointer by revision compare-and-set, ignoring a slow client clock", async () => {
+		const t = convexTest(schema, modules);
+		const { owner, documentId, rootNodeId } = await newDocument(t);
+
+		const committed = await owner.mutation(api.documents.commitEdit, {
+			documentId,
+			node: nodeFor("node-1", rootNodeId, "", "one"),
+			markdown: "one",
+			wordCount: 1,
+			expectedHeadNodeId: rootNodeId,
+			clientMutationId: "commit-1",
+		});
+		if (!committed.committed) throw new Error("commit failed");
+
+		// A client whose clock is behind the server would lose the wall-clock
+		// rule; the revision CAS makes the move land anyway.
+		const moved = await owner.mutation(api.documents.updateCurrentNodeId, {
+			documentId,
+			currentNodeId: rootNodeId,
+			markdown: "",
+			wordCount: 0,
+			updatedAt: committed.updatedAt - 60_000,
+			expectedPointerRevision: committed.pointerRevision,
+		});
+		expect(moved).toMatchObject({
+			applied: true,
+			currentNodeId: rootNodeId,
+			pointerRevision: committed.pointerRevision + 1,
+		});
+	});
+
+	it("rejects a pointer move whose expected revision is stale", async () => {
+		const t = convexTest(schema, modules);
+		const { owner, documentId, rootNodeId } = await newDocument(t);
+
+		const committed = await owner.mutation(api.documents.commitEdit, {
+			documentId,
+			node: nodeFor("node-1", rootNodeId, "", "one"),
+			markdown: "one",
+			wordCount: 1,
+			expectedHeadNodeId: rootNodeId,
+			clientMutationId: "commit-1",
+		});
+		if (!committed.committed) throw new Error("commit failed");
+
+		const stale = await owner.mutation(api.documents.updateCurrentNodeId, {
+			documentId,
+			currentNodeId: rootNodeId,
+			markdown: "",
+			wordCount: 0,
+			updatedAt: Date.now() + 60_000,
+			expectedPointerRevision: committed.pointerRevision - 1,
+		});
+		expect(stale).toMatchObject({
+			applied: false,
+			currentNodeId: "node-1",
+			pointerRevision: committed.pointerRevision,
+		});
+		expect(
+			(await owner.query(api.documents.get, { documentId }))?.currentNodeId,
+		).toBe("node-1");
+	});
+
+	it("a review accept bumps the pointer revision, so a pre-accept CAS move is rejected", async () => {
+		const t = convexTest(schema, modules);
+		const { owner, documentId, rootNodeId } = await newDocument(t);
+
+		const committed = await owner.mutation(api.documents.commitEdit, {
+			documentId,
+			node: nodeFor("node-1", rootNodeId, "", "one"),
+			markdown: "one",
+			wordCount: 1,
+			expectedHeadNodeId: rootNodeId,
+			clientMutationId: "commit-1",
+		});
+		if (!committed.committed) throw new Error("commit failed");
+
+		// A reviewer branch off node-1 whose head the owner then accepts.
+		await t.run(async (ctx) => {
+			await ctx.db.insert("docNodes", {
+				documentId,
+				...nodeFor("review-head", "node-1", "one", "one reviewed"),
+				origin: "review:reviewer-1",
+			});
+		});
+		const branchId = await t.run(async (ctx) =>
+			ctx.db.insert("reviewBranches", {
+				documentId,
+				reviewerUserId: "reviewer-1",
+				baseNodeId: "node-1",
+				headNodeId: "review-head",
+				status: "open",
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+			}),
+		);
+		const accepted = await owner.mutation(api.review.acceptBranch, {
+			documentId,
+			branchId,
+		});
+
+		const doc = await owner.query(api.documents.get, { documentId });
+		expect(doc?.currentNodeId).toBe(accepted.newNodeId);
+		expect(doc?.pointerRevision).toBe(committed.pointerRevision + 1);
+		expect(doc?.markdownHeadNodeId).toBe(accepted.newNodeId);
+
+		// A client still holding the pre-accept revision must not win.
+		const stale = await owner.mutation(api.documents.updateCurrentNodeId, {
+			documentId,
+			currentNodeId: rootNodeId,
+			markdown: "",
+			wordCount: 0,
+			updatedAt: Date.now() + 60_000,
+			expectedPointerRevision: committed.pointerRevision,
+		});
+		expect(stale).toMatchObject({
+			applied: false,
+			currentNodeId: accepted.newNodeId,
+		});
 	});
 
 	it("refuses to point the head at a node that does not exist", async () => {
