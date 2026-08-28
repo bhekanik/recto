@@ -28,6 +28,7 @@ import { countWords } from "@/lib/markdown/count-words";
 import { normalizeMarkdown } from "@/lib/markdown/normalize";
 import { parseMarkdown } from "@/lib/markdown/parse";
 import { extractOutline, type OutlineHeading } from "@/lib/outline/extract";
+import { currentStreak } from "@/lib/stats/streak";
 
 import {
 	DIFF_CASES,
@@ -36,6 +37,7 @@ import {
 	type MaterializeSpec,
 	OUTLINE_CASES,
 	PATCH_CASES,
+	STREAK_CASES,
 	WORD_COUNT_CASES,
 } from "./src/cases";
 
@@ -233,6 +235,28 @@ function buildDiffRuns() {
 	};
 }
 
+function buildStreak() {
+	return {
+		$source: "lib/stats/streak.ts",
+		$contract:
+			"a run of consecutive written days (words > 0) counting back from " +
+			"`today`, except an unwritten `today` does not reset it",
+		cases: STREAK_CASES.map((testCase) => {
+			const streak = currentStreak(testCase.days, testCase.today);
+			check(
+				testCase.expectStreak === streak,
+				`streak "${testCase.name}": expected ${testCase.expectStreak}, lib returned ${streak}`,
+			);
+			return {
+				name: testCase.name,
+				days: testCase.days,
+				today: testCase.today,
+				streak,
+			};
+		}),
+	};
+}
+
 /** Every fixture file, keyed by filename — the generator's whole output. */
 export function generateFixtures() {
 	return {
@@ -241,6 +265,7 @@ export function generateFixtures() {
 		"outline.json": buildOutline(),
 		"history-patches.json": buildHistoryPatches(),
 		"diff-runs.json": buildDiffRuns(),
+		"streak.json": buildStreak(),
 	};
 }
 

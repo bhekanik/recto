@@ -22,6 +22,7 @@ changed".
 | `markdown-corpus.json` | `lib/markdown/corpus/cases.ts` + `lib/markdown` | 24 round-trip cases with `normalized`, `words`, `outline` and the frontmatter bytes. `normalize(input) === normalized` and `normalize(normalized) === normalized` (the 25th corpus gate). |
 | `word-count.json` | `lib/markdown/count-words.ts` | markdown in, prose word count out |
 | `outline.json` | `lib/outline/extract.ts` | markdown in, `{depth, text, offset, index}[]` out |
+| `streak.json` | `lib/stats/streak.ts` | `{date, words}[]` plus a local `"YYYY-MM-DD"` `today`, and the streak length. `today` is a calendar key, so a port must step back a calendar day rather than subtract 86,400,000 ms from an instant — the month-boundary case catches that. |
 | `history-patches.json` | `lib/history/{patch,materialize}.ts` | `computePatch`/`encodePatch`/`applyPatch` round trips, and `materialize` chains including snapshot boundaries. `snapshotEveryN` is the production cadence. |
 | `diff-runs.json` | `lib/history/diff.ts` (mirrored in `convex/history.ts`) | runs, hunk grouping and the merged markdown for accepted-hunk subsets, at both granularities |
 

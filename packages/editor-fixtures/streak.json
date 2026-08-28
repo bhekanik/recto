@@ -1,0 +1,125 @@
+{
+	"$source": "lib/stats/streak.ts",
+	"$contract": "a run of consecutive written days (words > 0) counting back from `today`, except an unwritten `today` does not reset it",
+	"cases": [
+		{
+			"name": "empty list",
+			"days": [],
+			"today": "2026-06-17",
+			"streak": 0
+		},
+		{
+			"name": "wrote today only",
+			"days": [
+				{
+					"date": "2026-06-17",
+					"words": 120
+				}
+			],
+			"today": "2026-06-17",
+			"streak": 1
+		},
+		{
+			"name": "three consecutive days including today",
+			"days": [
+				{
+					"date": "2026-06-15",
+					"words": 200
+				},
+				{
+					"date": "2026-06-16",
+					"words": 200
+				},
+				{
+					"date": "2026-06-17",
+					"words": 200
+				}
+			],
+			"today": "2026-06-17",
+			"streak": 3
+		},
+		{
+			"name": "wrote yesterday but not yet today (no break-shame)",
+			"days": [
+				{
+					"date": "2026-06-15",
+					"words": 200
+				},
+				{
+					"date": "2026-06-16",
+					"words": 200
+				}
+			],
+			"today": "2026-06-17",
+			"streak": 2
+		},
+		{
+			"name": "a skipped day ends the backward walk",
+			"days": [
+				{
+					"date": "2026-06-14",
+					"words": 200
+				},
+				{
+					"date": "2026-06-17",
+					"words": 200
+				}
+			],
+			"today": "2026-06-17",
+			"streak": 1
+		},
+		{
+			"name": "a zero-word day counts as unwritten",
+			"days": [
+				{
+					"date": "2026-06-15",
+					"words": 200
+				},
+				{
+					"date": "2026-06-16",
+					"words": 0
+				},
+				{
+					"date": "2026-06-17",
+					"words": 200
+				}
+			],
+			"today": "2026-06-17",
+			"streak": 1
+		},
+		{
+			"name": "duplicate date entries do not double-count",
+			"days": [
+				{
+					"date": "2026-06-16",
+					"words": 200
+				},
+				{
+					"date": "2026-06-16",
+					"words": 50
+				},
+				{
+					"date": "2026-06-17",
+					"words": 200
+				}
+			],
+			"today": "2026-06-17",
+			"streak": 2
+		},
+		{
+			"name": "rolls over a month boundary",
+			"days": [
+				{
+					"date": "2026-05-31",
+					"words": 200
+				},
+				{
+					"date": "2026-06-01",
+					"words": 200
+				}
+			],
+			"today": "2026-06-01",
+			"streak": 2
+		}
+	]
+}

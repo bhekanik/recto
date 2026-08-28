@@ -243,3 +243,84 @@ export const DIFF_CASES: DiffCase[] = [
 ];
 
 export const DIFF_GRANULARITIES: DiffGranularity[] = ["word", "line"];
+
+export type StreakCase = {
+	name: string;
+	days: { date: string; words: number }[];
+	today: string;
+	/** From `lib/stats/streak.test.ts`. */
+	expectStreak: number;
+};
+
+/**
+ * Lifted from `lib/stats/streak.test.ts` (`currentStreak` only — `goalProgress`
+ * is not part of the core API). `today` is a local "YYYY-MM-DD" key, so a port
+ * has to do calendar arithmetic rather than subtracting 86_400_000 from a UTC
+ * instant; the month-boundary case is what catches that.
+ */
+export const STREAK_CASES: StreakCase[] = [
+	{ name: "empty list", days: [], today: "2026-06-17", expectStreak: 0 },
+	{
+		name: "wrote today only",
+		days: [{ date: "2026-06-17", words: 120 }],
+		today: "2026-06-17",
+		expectStreak: 1,
+	},
+	{
+		name: "three consecutive days including today",
+		days: [
+			{ date: "2026-06-15", words: 200 },
+			{ date: "2026-06-16", words: 200 },
+			{ date: "2026-06-17", words: 200 },
+		],
+		today: "2026-06-17",
+		expectStreak: 3,
+	},
+	{
+		name: "wrote yesterday but not yet today (no break-shame)",
+		days: [
+			{ date: "2026-06-15", words: 200 },
+			{ date: "2026-06-16", words: 200 },
+		],
+		today: "2026-06-17",
+		expectStreak: 2,
+	},
+	{
+		name: "a skipped day ends the backward walk",
+		days: [
+			{ date: "2026-06-14", words: 200 },
+			{ date: "2026-06-17", words: 200 },
+		],
+		today: "2026-06-17",
+		expectStreak: 1,
+	},
+	{
+		name: "a zero-word day counts as unwritten",
+		days: [
+			{ date: "2026-06-15", words: 200 },
+			{ date: "2026-06-16", words: 0 },
+			{ date: "2026-06-17", words: 200 },
+		],
+		today: "2026-06-17",
+		expectStreak: 1,
+	},
+	{
+		name: "duplicate date entries do not double-count",
+		days: [
+			{ date: "2026-06-16", words: 200 },
+			{ date: "2026-06-16", words: 50 },
+			{ date: "2026-06-17", words: 200 },
+		],
+		today: "2026-06-17",
+		expectStreak: 2,
+	},
+	{
+		name: "rolls over a month boundary",
+		days: [
+			{ date: "2026-05-31", words: 200 },
+			{ date: "2026-06-01", words: 200 },
+		],
+		today: "2026-06-01",
+		expectStreak: 2,
+	},
+];

@@ -22,12 +22,14 @@ import { applyPatch, computePatch, encodePatch } from "@/lib/history/patch";
 import { countWords } from "@/lib/markdown/count-words";
 import { normalizeMarkdown } from "@/lib/markdown/normalize";
 import { extractOutline } from "@/lib/outline/extract";
+import { currentStreak } from "@/lib/stats/streak";
 
 import { generateFixtures, serializeFixture } from "./build";
 import diffFixture from "./diff-runs.json";
 import historyFixture from "./history-patches.json";
 import corpus from "./markdown-corpus.json";
 import outlineFixture from "./outline.json";
+import streakFixture from "./streak.json";
 import wordCountFixture from "./word-count.json";
 
 const fixturesDir = dirname(fileURLToPath(import.meta.url));
@@ -74,6 +76,16 @@ describe("outline.json", () => {
 	for (const testCase of outlineFixture.cases) {
 		it(testCase.name, () => {
 			expect(extractOutline(testCase.markdown)).toEqual(testCase.outline);
+		});
+	}
+});
+
+describe("streak.json", () => {
+	for (const testCase of streakFixture.cases) {
+		it(testCase.name, () => {
+			expect(currentStreak(testCase.days, testCase.today)).toBe(
+				testCase.streak,
+			);
 		});
 	}
 });
