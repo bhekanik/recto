@@ -607,6 +607,464 @@
 			"mergedEven": "# Title\n\nFirst para edited.\n\nSecond para.\n"
 		},
 		{
+			"current": "alpha\n\nbeta\n",
+			"branch": "alpha\n\ninserted\n\nbeta\n",
+			"granularity": "word",
+			"runs": [
+				{
+					"type": "same",
+					"text": "alpha\n\n"
+				},
+				{
+					"type": "add",
+					"text": "inserted\n\n"
+				},
+				{
+					"type": "same",
+					"text": "beta\n"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1
+					]
+				}
+			],
+			"mergedNone": "alpha\n\nbeta\n",
+			"mergedAll": "alpha\n\ninserted\n\nbeta\n",
+			"mergedEven": "alpha\n\ninserted\n\nbeta\n"
+		},
+		{
+			"current": "alpha\n\nbeta\n",
+			"branch": "alpha\n\ninserted\n\nbeta\n",
+			"granularity": "line",
+			"runs": [
+				{
+					"type": "same",
+					"text": "alpha\n\n"
+				},
+				{
+					"type": "add",
+					"text": "inserted\n\n"
+				},
+				{
+					"type": "same",
+					"text": "beta\n"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1
+					]
+				}
+			],
+			"mergedNone": "alpha\n\nbeta\n",
+			"mergedAll": "alpha\n\ninserted\n\nbeta\n",
+			"mergedEven": "alpha\n\ninserted\n\nbeta\n"
+		},
+		{
+			"current": "alpha\n\nbeta\n\ngamma\n",
+			"branch": "alpha\n\ngamma\n",
+			"granularity": "word",
+			"runs": [
+				{
+					"type": "same",
+					"text": "alpha\n\n"
+				},
+				{
+					"type": "del",
+					"text": "beta\n\n"
+				},
+				{
+					"type": "same",
+					"text": "gamma\n"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1
+					]
+				}
+			],
+			"mergedNone": "alpha\n\nbeta\n\ngamma\n",
+			"mergedAll": "alpha\n\ngamma\n",
+			"mergedEven": "alpha\n\ngamma\n"
+		},
+		{
+			"current": "alpha\n\nbeta\n\ngamma\n",
+			"branch": "alpha\n\ngamma\n",
+			"granularity": "line",
+			"runs": [
+				{
+					"type": "same",
+					"text": "alpha\n\n"
+				},
+				{
+					"type": "del",
+					"text": "beta\n\n"
+				},
+				{
+					"type": "same",
+					"text": "gamma\n"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1
+					]
+				}
+			],
+			"mergedNone": "alpha\n\nbeta\n\ngamma\n",
+			"mergedAll": "alpha\n\ngamma\n",
+			"mergedEven": "alpha\n\ngamma\n"
+		},
+		{
+			"current": "The quiet river wound its way through the valley before the storm.",
+			"branch": "The quiet river wound its way slowly through the valley before the storm.",
+			"granularity": "word",
+			"runs": [
+				{
+					"type": "same",
+					"text": "The quiet river wound its way "
+				},
+				{
+					"type": "add",
+					"text": "slowly "
+				},
+				{
+					"type": "same",
+					"text": "through the valley before the storm."
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1
+					]
+				}
+			],
+			"mergedNone": "The quiet river wound its way through the valley before the storm.",
+			"mergedAll": "The quiet river wound its way slowly through the valley before the storm.",
+			"mergedEven": "The quiet river wound its way slowly through the valley before the storm."
+		},
+		{
+			"current": "The quiet river wound its way through the valley before the storm.",
+			"branch": "The quiet river wound its way slowly through the valley before the storm.",
+			"granularity": "line",
+			"runs": [
+				{
+					"type": "del",
+					"text": "The quiet river wound its way through the valley before the storm."
+				},
+				{
+					"type": "add",
+					"text": "The quiet river wound its way slowly through the valley before the storm."
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0,
+						1
+					]
+				}
+			],
+			"mergedNone": "The quiet river wound its way through the valley before the storm.",
+			"mergedAll": "The quiet river wound its way slowly through the valley before the storm.",
+			"mergedEven": "The quiet river wound its way slowly through the valley before the storm."
+		},
+		{
+			"current": "line a\nline b\nline c",
+			"branch": "line a\nLINE B\nline c",
+			"granularity": "word",
+			"runs": [
+				{
+					"type": "same",
+					"text": "line a\n"
+				},
+				{
+					"type": "del",
+					"text": "line"
+				},
+				{
+					"type": "add",
+					"text": "LINE"
+				},
+				{
+					"type": "same",
+					"text": " "
+				},
+				{
+					"type": "del",
+					"text": "b"
+				},
+				{
+					"type": "add",
+					"text": "B"
+				},
+				{
+					"type": "same",
+					"text": "\nline c"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1,
+						2
+					]
+				},
+				{
+					"index": 1,
+					"runIndices": [
+						4,
+						5
+					]
+				}
+			],
+			"mergedNone": "line a\nline b\nline c",
+			"mergedAll": "line a\nLINE B\nline c",
+			"mergedEven": "line a\nLINE b\nline c"
+		},
+		{
+			"current": "line a\nline b\nline c",
+			"branch": "line a\nLINE B\nline c",
+			"granularity": "line",
+			"runs": [
+				{
+					"type": "same",
+					"text": "line a\n"
+				},
+				{
+					"type": "del",
+					"text": "line b\n"
+				},
+				{
+					"type": "add",
+					"text": "LINE B\n"
+				},
+				{
+					"type": "same",
+					"text": "line c"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1,
+						2
+					]
+				}
+			],
+			"mergedNone": "line a\nline b\nline c",
+			"mergedAll": "line a\nLINE B\nline c",
+			"mergedEven": "line a\nLINE B\nline c"
+		},
+		{
+			"current": "completely different here",
+			"branch": "nothing matches now",
+			"granularity": "word",
+			"runs": [
+				{
+					"type": "del",
+					"text": "completely"
+				},
+				{
+					"type": "add",
+					"text": "nothing"
+				},
+				{
+					"type": "same",
+					"text": " "
+				},
+				{
+					"type": "del",
+					"text": "different"
+				},
+				{
+					"type": "add",
+					"text": "matches"
+				},
+				{
+					"type": "same",
+					"text": " "
+				},
+				{
+					"type": "del",
+					"text": "here"
+				},
+				{
+					"type": "add",
+					"text": "now"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0,
+						1
+					]
+				},
+				{
+					"index": 1,
+					"runIndices": [
+						3,
+						4
+					]
+				},
+				{
+					"index": 2,
+					"runIndices": [
+						6,
+						7
+					]
+				}
+			],
+			"mergedNone": "completely different here",
+			"mergedAll": "nothing matches now",
+			"mergedEven": "nothing different now"
+		},
+		{
+			"current": "completely different here",
+			"branch": "nothing matches now",
+			"granularity": "line",
+			"runs": [
+				{
+					"type": "del",
+					"text": "completely different here"
+				},
+				{
+					"type": "add",
+					"text": "nothing matches now"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0,
+						1
+					]
+				}
+			],
+			"mergedNone": "completely different here",
+			"mergedAll": "nothing matches now",
+			"mergedEven": "nothing matches now"
+		},
+		{
+			"current": "a x b y c z d",
+			"branch": "a 1 b 2 c 3 d",
+			"granularity": "word",
+			"runs": [
+				{
+					"type": "same",
+					"text": "a "
+				},
+				{
+					"type": "del",
+					"text": "x"
+				},
+				{
+					"type": "add",
+					"text": "1"
+				},
+				{
+					"type": "same",
+					"text": " b "
+				},
+				{
+					"type": "del",
+					"text": "y"
+				},
+				{
+					"type": "add",
+					"text": "2"
+				},
+				{
+					"type": "same",
+					"text": " c "
+				},
+				{
+					"type": "del",
+					"text": "z"
+				},
+				{
+					"type": "add",
+					"text": "3"
+				},
+				{
+					"type": "same",
+					"text": " d"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1,
+						2
+					]
+				},
+				{
+					"index": 1,
+					"runIndices": [
+						4,
+						5
+					]
+				},
+				{
+					"index": 2,
+					"runIndices": [
+						7,
+						8
+					]
+				}
+			],
+			"mergedNone": "a x b y c z d",
+			"mergedAll": "a 1 b 2 c 3 d",
+			"mergedEven": "a 1 b y c 3 d"
+		},
+		{
+			"current": "a x b y c z d",
+			"branch": "a 1 b 2 c 3 d",
+			"granularity": "line",
+			"runs": [
+				{
+					"type": "del",
+					"text": "a x b y c z d"
+				},
+				{
+					"type": "add",
+					"text": "a 1 b 2 c 3 d"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0,
+						1
+					]
+				}
+			],
+			"mergedNone": "a x b y c z d",
+			"mergedAll": "a 1 b 2 c 3 d",
+			"mergedEven": "a 1 b 2 c 3 d"
+		},
+		{
 			"current": "a\nb\nc\n",
 			"branch": "a\nB\nc\n",
 			"granularity": "word",
@@ -1386,6 +1844,130 @@
 				{
 					"type": "same",
 					"text": ""
+				}
+			]
+		},
+		{
+			"current": "alpha\n\nbeta\n",
+			"branch": "alpha\n\ninserted\n\nbeta\n",
+			"lines": [
+				{
+					"type": "same",
+					"text": "alpha"
+				},
+				{
+					"type": "same",
+					"text": ""
+				},
+				{
+					"type": "add",
+					"text": "inserted"
+				},
+				{
+					"type": "add",
+					"text": ""
+				},
+				{
+					"type": "same",
+					"text": "beta"
+				},
+				{
+					"type": "same",
+					"text": ""
+				}
+			]
+		},
+		{
+			"current": "alpha\n\nbeta\n\ngamma\n",
+			"branch": "alpha\n\ngamma\n",
+			"lines": [
+				{
+					"type": "same",
+					"text": "alpha"
+				},
+				{
+					"type": "same",
+					"text": ""
+				},
+				{
+					"type": "del",
+					"text": "beta"
+				},
+				{
+					"type": "del",
+					"text": ""
+				},
+				{
+					"type": "same",
+					"text": "gamma"
+				},
+				{
+					"type": "same",
+					"text": ""
+				}
+			]
+		},
+		{
+			"current": "The quiet river wound its way through the valley before the storm.",
+			"branch": "The quiet river wound its way slowly through the valley before the storm.",
+			"lines": [
+				{
+					"type": "del",
+					"text": "The quiet river wound its way through the valley before the storm."
+				},
+				{
+					"type": "add",
+					"text": "The quiet river wound its way slowly through the valley before the storm."
+				}
+			]
+		},
+		{
+			"current": "line a\nline b\nline c",
+			"branch": "line a\nLINE B\nline c",
+			"lines": [
+				{
+					"type": "same",
+					"text": "line a"
+				},
+				{
+					"type": "del",
+					"text": "line b"
+				},
+				{
+					"type": "add",
+					"text": "LINE B"
+				},
+				{
+					"type": "same",
+					"text": "line c"
+				}
+			]
+		},
+		{
+			"current": "completely different here",
+			"branch": "nothing matches now",
+			"lines": [
+				{
+					"type": "del",
+					"text": "completely different here"
+				},
+				{
+					"type": "add",
+					"text": "nothing matches now"
+				}
+			]
+		},
+		{
+			"current": "a x b y c z d",
+			"branch": "a 1 b 2 c 3 d",
+			"lines": [
+				{
+					"type": "del",
+					"text": "a x b y c z d"
+				},
+				{
+					"type": "add",
+					"text": "a 1 b 2 c 3 d"
 				}
 			]
 		},

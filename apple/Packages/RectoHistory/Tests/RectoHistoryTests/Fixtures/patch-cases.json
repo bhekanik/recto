@@ -2,6 +2,62 @@
 	"cases": [
 		{
 			"parent": "",
+			"next": "hello",
+			"patch": "{\"from\":0,\"to\":0,\"insert\":\"hello\"}",
+			"applied": "hello",
+			"label": "Added 5 chars"
+		},
+		{
+			"parent": "hello world",
+			"next": "hello brave world",
+			"patch": "{\"from\":6,\"to\":6,\"insert\":\"brave \"}",
+			"applied": "hello brave world",
+			"label": "Added 6 chars"
+		},
+		{
+			"parent": "# Title\n\nBody.\n",
+			"next": "# Title\n\nBody edited.\n",
+			"patch": "{\"from\":13,\"to\":13,\"insert\":\" edited\"}",
+			"applied": "# Title\n\nBody edited.\n",
+			"label": "Added 7 chars"
+		},
+		{
+			"parent": "abcdef",
+			"next": "abXYZef",
+			"patch": "{\"from\":2,\"to\":4,\"insert\":\"XYZ\"}",
+			"applied": "abXYZef",
+			"label": "Edited"
+		},
+		{
+			"parent": "keep this",
+			"next": "keep",
+			"patch": "{\"from\":4,\"to\":9,\"insert\":\"\"}",
+			"applied": "keep",
+			"label": "Removed 5 chars"
+		},
+		{
+			"parent": "identical",
+			"next": "identical",
+			"patch": "{\"from\":9,\"to\":9,\"insert\":\"\"}",
+			"applied": "identical",
+			"label": "Change"
+		},
+		{
+			"parent": "gone",
+			"next": "",
+			"patch": "{\"from\":0,\"to\":4,\"insert\":\"\"}",
+			"applied": "",
+			"label": "Removed 4 chars"
+		},
+		{
+			"parent": "a😀b",
+			"next": "a😀c",
+			"patch": "{\"from\":3,\"to\":4,\"insert\":\"c\"}",
+			"applied": "a😀c",
+			"label": "Edited"
+		},
+		{
+			"parent": "",
 			"next": "",
 			"patch": "{\"from\":0,\"to\":0,\"insert\":\"\"}",
 			"applied": "",

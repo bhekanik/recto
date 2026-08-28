@@ -7,16 +7,17 @@
  * this and diffs the result, so a change to `lib/` that nobody propagated fails
  * the build instead of leaving the Swift suite passing against stale answers.
  *
- * The input corpus is vendored below rather than read from
- * `packages/editor-fixtures/` (W3, branch `023/core-js`): that package is not on
- * `main` yet, and reading a file that may or may not exist would make the output
- * — and therefore the CI diff — depend on which branches happen to be merged.
- * The streak cases ARE W3's, copied verbatim; when `023/core-js` merges, point
- * `sharedCorpus` at the real directory and delete the copies.
+ * The corpus comes from `packages/editor-fixtures/` (W3) — the same cases the
+ * web and the JS core are held to — plus the Swift-specific ones below, which
+ * cover what a Swift port gets wrong and JavaScript cannot: surrogate pairs
+ * split by a patch boundary, canonical-equivalence traps in `String ==`, and
+ * calendar boundaries that a fixed-86_400_000-ms day step gets wrong. Reading
+ * the shared files is deliberate: if W3's corpus changes, this regenerates and
+ * CI's diff shows it.
  *
  *   bun run apple/tools/generate-history-fixtures.ts
  */
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
 	applyAcceptedHunks,
@@ -36,13 +37,24 @@ import {
 } from "../../lib/stats/streak";
 
 const repoRoot = join(import.meta.dir, "..", "..");
+const sharedCorpus = join(repoRoot, "packages/editor-fixtures");
+
+async function readShared<T>(name: string): Promise<T> {
+	return JSON.parse(await readFile(join(sharedCorpus, name), "utf8")) as T;
+}
+
 const outDir = join(
 	repoRoot,
 	"apple/Packages/RectoHistory/Tests/RectoHistoryTests/Fixtures",
 );
 
-/** Pairs that stress the patch algorithm, including the UTF-16 boundary cases. */
-const patchPairs: Array<[string, string]> = [
+/**
+ * Pairs the shared corpus does not cover. Every one of these is a case where a
+ * Swift port behaves differently from JavaScript unless it works in UTF-16 code
+ * units: a patch boundary inside a surrogate pair produces a lone surrogate that
+ * `Swift.String` cannot hold at all.
+ */
+const swiftPatchPairs: Array<[string, string]> = [
 	["", ""],
 	["", "hello"],
 	["hello", ""],
@@ -69,8 +81,8 @@ const patchPairs: Array<[string, string]> = [
 	["line\r\nend", "line\nend"],
 ];
 
-/** (current, branch) pairs for the diff parity table. */
-const diffPairs: Array<[string, string]> = [
+/** (current, branch) pairs beyond the shared corpus. */
+const swiftDiffPairs: Array<[string, string]> = [
 	["the quick brown fox", "the quick brown fox"],
 	["", ""],
 	["", "brand new document"],
@@ -104,7 +116,28 @@ async function write(name: string, value: unknown) {
 }
 
 async function patchFixtures() {
-	const cases = patchPairs.map(([parent, next]) => {
+	const shared = await readShared<{
+		patches: Array<{ parent: string; next: string; encoded: string }>;
+	}>("history-patches.json");
+	const pairs: Array<[string, string]> = [
+		...shared.patches.map(
+			({ parent, next }) => [parent, next] as [string, string],
+		),
+		...swiftPatchPairs,
+	];
+
+	// The shared corpus asserts its own encodings; if lib/ and W3 ever disagree,
+	// say so here rather than baking the disagreement into the Swift fixtures.
+	for (const patchCase of shared.patches) {
+		const encoded = encodePatch(computePatch(patchCase.parent, patchCase.next));
+		if (encoded !== patchCase.encoded) {
+			throw new Error(
+				`editor-fixtures history-patches disagrees with lib/history/patch.ts: ${encoded} vs ${patchCase.encoded}`,
+			);
+		}
+	}
+
+	const cases = pairs.map(([parent, next]) => {
 		const patch = encodePatch(computePatch(parent, next));
 		return {
 			parent,
@@ -290,6 +323,23 @@ async function groupingFixtures() {
 }
 
 async function diffFixtures() {
+	const shared = await readShared<{ cases: Array<{ a: string; b: string }> }>(
+		"diff-runs.json",
+	);
+	const seen = new Set<string>();
+	const diffPairs: Array<[string, string]> = [];
+	for (const [current, branch] of [
+		...shared.cases.map(({ a, b }) => [a, b] as [string, string]),
+		...swiftDiffPairs,
+	]) {
+		// The shared corpus lists each pair once per granularity; both are covered
+		// below, so keep one entry each.
+		const key = JSON.stringify([current, branch]);
+		if (seen.has(key)) continue;
+		seen.add(key);
+		diffPairs.push([current, branch]);
+	}
+
 	const cases = diffPairs.flatMap(([current, branch]) =>
 		(["word", "line"] as const).map((granularity) => {
 			const runs = diffRuns(current, branch, granularity);
@@ -326,77 +376,12 @@ type StreakCase = {
 };
 
 /**
- * `packages/editor-fixtures/streak.json` from W3, verbatim, plus the leap-day
- * and year boundaries it does not cover. Those two are what catch an
- * implementation that steps back by a fixed 86_400_000 ms instead of one
- * calendar day — which is what `lib/stats/streak.ts` itself does, and why the
- * Swift port deliberately differs (see RectoHistory/Streak.swift).
+ * Boundaries the shared corpus does not reach. Both catch an implementation that
+ * steps back a fixed 86_400_000 ms instead of one calendar day — which is what
+ * `lib/stats/streak.ts` itself does, and why the Swift port deliberately differs
+ * (see RectoHistory/Streak.swift).
  */
-const streakCases: StreakCase[] = [
-	{ name: "empty list", days: [], today: "2026-06-17", streak: 0 },
-	{
-		name: "wrote today only",
-		days: [{ date: "2026-06-17", words: 120 }],
-		today: "2026-06-17",
-		streak: 1,
-	},
-	{
-		name: "three consecutive days including today",
-		days: [
-			{ date: "2026-06-15", words: 200 },
-			{ date: "2026-06-16", words: 200 },
-			{ date: "2026-06-17", words: 200 },
-		],
-		today: "2026-06-17",
-		streak: 3,
-	},
-	{
-		name: "wrote yesterday but not yet today (no break-shame)",
-		days: [
-			{ date: "2026-06-15", words: 200 },
-			{ date: "2026-06-16", words: 200 },
-		],
-		today: "2026-06-17",
-		streak: 2,
-	},
-	{
-		name: "a skipped day ends the backward walk",
-		days: [
-			{ date: "2026-06-14", words: 200 },
-			{ date: "2026-06-17", words: 200 },
-		],
-		today: "2026-06-17",
-		streak: 1,
-	},
-	{
-		name: "a zero-word day counts as unwritten",
-		days: [
-			{ date: "2026-06-15", words: 200 },
-			{ date: "2026-06-16", words: 0 },
-			{ date: "2026-06-17", words: 200 },
-		],
-		today: "2026-06-17",
-		streak: 1,
-	},
-	{
-		name: "duplicate date entries do not double-count",
-		days: [
-			{ date: "2026-06-16", words: 200 },
-			{ date: "2026-06-16", words: 50 },
-			{ date: "2026-06-17", words: 200 },
-		],
-		today: "2026-06-17",
-		streak: 2,
-	},
-	{
-		name: "rolls over a month boundary",
-		days: [
-			{ date: "2026-05-31", words: 200 },
-			{ date: "2026-06-01", words: 200 },
-		],
-		today: "2026-06-01",
-		streak: 2,
-	},
+const swiftStreakCases: StreakCase[] = [
 	{
 		name: "leap-day boundary",
 		days: [
@@ -418,7 +403,8 @@ const streakCases: StreakCase[] = [
 ];
 
 async function streakFixtures() {
-	const streaks = streakCases.map((c) => {
+	const shared = await readShared<{ cases: StreakCase[] }>("streak.json");
+	const streaks = [...shared.cases, ...swiftStreakCases].map((c) => {
 		const computed = currentStreak(c.days, c.today);
 		// The asserted answer and the web implementation must agree. If they stop
 		// agreeing that is a web bug, and this script says so rather than baking
