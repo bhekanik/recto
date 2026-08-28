@@ -20,7 +20,7 @@ import { OutlinePanel } from "@/components/outline/outline-panel";
 import { CommentsPanel } from "@/components/review/comments-panel";
 import { ReviewSurface } from "@/components/review/review-surface";
 import { ShareDialog } from "@/components/share-dialog";
-import { StatusBar } from "@/components/status-bar";
+import { SyncStatusBar } from "@/components/sync/sync-status-bar";
 import { Toaster } from "@/components/toaster";
 import { TopFormatToolbar } from "@/components/top-format-toolbar";
 import { Button } from "@/components/ui/button";
@@ -724,10 +724,10 @@ function StudioWorkspace() {
 
 				{!showEmpty && statusVisible && activeSync && (
 					<div className={bottomChromeClass} {...chromeHoverProps}>
-						<StatusBar
+						<SyncStatusBar
+							sync={activeSync}
 							wordCount={activeSync.wordCount}
 							readingMinutes={readingTimeMinutes(activeSync.wordCount)}
-							syncStatus={activeSync.syncStatus}
 							mode={activeMode}
 							onModeChange={(m) => dispatchModeSwitch(m)}
 							theme={settings.theme}

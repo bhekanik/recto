@@ -39,5 +39,5 @@
 		".next/types/**/*.ts",
 		".next/dev/types/**/*.ts"
 	],
-	"exclude": ["node_modules", "**/*.bun.test.ts", "spikes"]
+	"exclude": ["node_modules", "spikes"]
 }

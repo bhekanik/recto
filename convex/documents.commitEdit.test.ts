@@ -1,7 +1,13 @@
+import { ConvexError } from "convex/values";
 import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
 import { api } from "./_generated/api";
-import { MARKDOWN_TOO_LARGE_MESSAGE, MAX_MARKDOWN_LENGTH } from "./documents";
+import {
+	MARKDOWN_TOO_LARGE_MESSAGE,
+	MAX_MARKDOWN_LENGTH,
+	type RefusalCode,
+	TERMINAL_REFUSAL_CODES,
+} from "./documents";
 import schema from "./schema";
 
 // Explicit module map for convex-test (mirrors convex/writingStats.test.ts).
@@ -11,6 +17,8 @@ const modules: Record<string, () => Promise<unknown>> = {
 	"./schema.ts": () => import("./schema"),
 	"./documents.ts": () => import("./documents"),
 	"./docNodes.ts": () => import("./docNodes"),
+	"./versions.ts": () => import("./versions"),
+	"./review.ts": () => import("./review"),
 	"./_generated/api.js": () => import("./_generated/api"),
 	"./_generated/server.js": () => import("./_generated/server"),
 };
@@ -479,6 +487,305 @@ describe("documents.commitEdit", () => {
 		expect(
 			(await owner.query(api.documents.get, { documentId }))?.currentNodeId,
 		).toBe(rootNodeId);
+	});
+
+	it("moves the pointer by revision compare-and-set, ignoring a slow client clock", async () => {
+		const t = convexTest(schema, modules);
+		const { owner, documentId, rootNodeId } = await newDocument(t);
+
+		const committed = await owner.mutation(api.documents.commitEdit, {
+			documentId,
+			node: nodeFor("node-1", rootNodeId, "", "one"),
+			markdown: "one",
+			wordCount: 1,
+			expectedHeadNodeId: rootNodeId,
+			clientMutationId: "commit-1",
+		});
+		if (!committed.committed) throw new Error("commit failed");
+
+		// A client whose clock is behind the server would lose the wall-clock
+		// rule; the revision CAS makes the move land anyway.
+		const moved = await owner.mutation(api.documents.updateCurrentNodeId, {
+			documentId,
+			currentNodeId: rootNodeId,
+			markdown: "",
+			wordCount: 0,
+			updatedAt: committed.updatedAt - 60_000,
+			expectedPointerRevision: committed.pointerRevision,
+		});
+		expect(moved).toMatchObject({
+			applied: true,
+			currentNodeId: rootNodeId,
+			pointerRevision: committed.pointerRevision + 1,
+		});
+	});
+
+	it("rejects a pointer move whose expected revision is stale", async () => {
+		const t = convexTest(schema, modules);
+		const { owner, documentId, rootNodeId } = await newDocument(t);
+
+		const committed = await owner.mutation(api.documents.commitEdit, {
+			documentId,
+			node: nodeFor("node-1", rootNodeId, "", "one"),
+			markdown: "one",
+			wordCount: 1,
+			expectedHeadNodeId: rootNodeId,
+			clientMutationId: "commit-1",
+		});
+		if (!committed.committed) throw new Error("commit failed");
+
+		const stale = await owner.mutation(api.documents.updateCurrentNodeId, {
+			documentId,
+			currentNodeId: rootNodeId,
+			markdown: "",
+			wordCount: 0,
+			updatedAt: Date.now() + 60_000,
+			expectedPointerRevision: committed.pointerRevision - 1,
+		});
+		expect(stale).toMatchObject({
+			applied: false,
+			currentNodeId: "node-1",
+			pointerRevision: committed.pointerRevision,
+		});
+		expect(
+			(await owner.query(api.documents.get, { documentId }))?.currentNodeId,
+		).toBe("node-1");
+	});
+
+	it("a review accept bumps the pointer revision, so a pre-accept CAS move is rejected", async () => {
+		const t = convexTest(schema, modules);
+		const { owner, documentId, rootNodeId } = await newDocument(t);
+
+		const committed = await owner.mutation(api.documents.commitEdit, {
+			documentId,
+			node: nodeFor("node-1", rootNodeId, "", "one"),
+			markdown: "one",
+			wordCount: 1,
+			expectedHeadNodeId: rootNodeId,
+			clientMutationId: "commit-1",
+		});
+		if (!committed.committed) throw new Error("commit failed");
+
+		// A reviewer branch off node-1 whose head the owner then accepts.
+		await t.run(async (ctx) => {
+			await ctx.db.insert("docNodes", {
+				documentId,
+				...nodeFor("review-head", "node-1", "one", "one reviewed"),
+				origin: "review:reviewer-1",
+			});
+		});
+		const branchId = await t.run(async (ctx) =>
+			ctx.db.insert("reviewBranches", {
+				documentId,
+				reviewerUserId: "reviewer-1",
+				baseNodeId: "node-1",
+				headNodeId: "review-head",
+				status: "open",
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+			}),
+		);
+		const accepted = await owner.mutation(api.review.acceptBranch, {
+			documentId,
+			branchId,
+		});
+
+		const doc = await owner.query(api.documents.get, { documentId });
+		expect(doc?.currentNodeId).toBe(accepted.newNodeId);
+		expect(doc?.pointerRevision).toBe(committed.pointerRevision + 1);
+		expect(doc?.markdownHeadNodeId).toBe(accepted.newNodeId);
+
+		// A client still holding the pre-accept revision must not win.
+		const stale = await owner.mutation(api.documents.updateCurrentNodeId, {
+			documentId,
+			currentNodeId: rootNodeId,
+			markdown: "",
+			wordCount: 0,
+			updatedAt: Date.now() + 60_000,
+			expectedPointerRevision: committed.pointerRevision,
+		});
+		expect(stale).toMatchObject({
+			applied: false,
+			currentNodeId: accepted.newNodeId,
+		});
+	});
+
+	it("codes every client-reachable refusal from history mutations", async () => {
+		const t = convexTest(schema, modules);
+		const { owner, documentId, rootNodeId } = await newDocument(t);
+		const other = t.withIdentity(OTHER);
+		const oversized = "x".repeat(MAX_MARKDOWN_LENGTH + 1);
+		const validCommit = {
+			documentId,
+			node: nodeFor("node-1", rootNodeId, "", "hello"),
+			markdown: "hello",
+			wordCount: 1,
+			expectedHeadNodeId: rootNodeId,
+			clientMutationId: "commit-1",
+		};
+		const validPointer = {
+			documentId,
+			currentNodeId: rootNodeId,
+			markdown: "",
+			wordCount: 0,
+			updatedAt: Date.now(),
+		};
+		const validVersion = {
+			documentId,
+			nodeId: rootNodeId,
+			label: "v1",
+			kind: "manual" as const,
+		};
+
+		const cases: Array<{
+			label: string;
+			code: RefusalCode;
+			message: string;
+			run: () => Promise<unknown>;
+		}> = [
+			{
+				label: "commitEdit invalid argument",
+				code: "invalid_argument",
+				message: "Invalid node.nodeId",
+				run: () =>
+					owner.mutation(api.documents.commitEdit, {
+						...validCommit,
+						node: { ...validCommit.node, nodeId: "" },
+					}),
+			},
+			{
+				label: "commitEdit unauthenticated",
+				code: "unauthenticated",
+				message: "Unauthenticated",
+				run: () => t.mutation(api.documents.commitEdit, validCommit),
+			},
+			{
+				label: "commitEdit not found",
+				code: "not_found",
+				message: "Document not found",
+				run: () => other.mutation(api.documents.commitEdit, validCommit),
+			},
+			{
+				label: "commitEdit too large",
+				code: "too_large",
+				message: MARKDOWN_TOO_LARGE_MESSAGE,
+				run: () =>
+					owner.mutation(api.documents.commitEdit, {
+						...validCommit,
+						node: nodeFor("node-large", rootNodeId, "", oversized),
+						markdown: oversized,
+						clientMutationId: "commit-large",
+					}),
+			},
+			{
+				label: "commitEdit parent mismatch",
+				code: "parent_mismatch",
+				message: "commitEdit: node.parentNodeId must equal expectedHeadNodeId",
+				run: () =>
+					owner.mutation(api.documents.commitEdit, {
+						...validCommit,
+						node: nodeFor("node-parent", "elsewhere", "", "hello"),
+						clientMutationId: "commit-parent",
+					}),
+			},
+			{
+				label: "updateCurrentNodeId invalid argument",
+				code: "invalid_argument",
+				message: "Invalid currentNodeId",
+				run: () =>
+					owner.mutation(api.documents.updateCurrentNodeId, {
+						...validPointer,
+						currentNodeId: "",
+					}),
+			},
+			{
+				label: "updateCurrentNodeId unauthenticated",
+				code: "unauthenticated",
+				message: "Unauthenticated",
+				run: () => t.mutation(api.documents.updateCurrentNodeId, validPointer),
+			},
+			{
+				label: "updateCurrentNodeId not found",
+				code: "not_found",
+				message: "Document not found",
+				run: () =>
+					other.mutation(api.documents.updateCurrentNodeId, validPointer),
+			},
+			{
+				label: "updateCurrentNodeId unknown node",
+				code: "unknown_node",
+				message: "Unknown currentNodeId",
+				run: () =>
+					owner.mutation(api.documents.updateCurrentNodeId, {
+						...validPointer,
+						currentNodeId: "never-created",
+					}),
+			},
+			{
+				label: "updateCurrentNodeId too large",
+				code: "too_large",
+				message: MARKDOWN_TOO_LARGE_MESSAGE,
+				run: () =>
+					owner.mutation(api.documents.updateCurrentNodeId, {
+						...validPointer,
+						markdown: oversized,
+					}),
+			},
+			{
+				label: "ensureRoot unauthenticated",
+				code: "unauthenticated",
+				message: "Unauthenticated",
+				run: () => t.mutation(api.docNodes.ensureRoot, { documentId }),
+			},
+			{
+				label: "ensureRoot not found",
+				code: "not_found",
+				message: "Document not found",
+				run: () => other.mutation(api.docNodes.ensureRoot, { documentId }),
+			},
+			{
+				label: "versions.create unauthenticated",
+				code: "unauthenticated",
+				message: "Unauthenticated",
+				run: () => t.mutation(api.versions.create, validVersion),
+			},
+			{
+				label: "versions.create not found",
+				code: "not_found",
+				message: "Document not found",
+				run: () => other.mutation(api.versions.create, validVersion),
+			},
+			{
+				label: "versions.create unknown node",
+				code: "unknown_node",
+				message: "Node not found",
+				run: () =>
+					owner.mutation(api.versions.create, {
+						...validVersion,
+						nodeId: "never-created",
+					}),
+			},
+		];
+
+		for (const refusal of cases) {
+			let caught: unknown;
+			try {
+				await refusal.run();
+			} catch (error) {
+				caught = error;
+			}
+			expect(caught, refusal.label).toBeInstanceOf(ConvexError);
+			const data = (
+				caught as ConvexError<{ code: RefusalCode; message: string }>
+			).data;
+			expect(data.code, refusal.label).toBe(refusal.code);
+			expect(data.message, refusal.label).toBe(refusal.message);
+			expect((caught as Error).message, refusal.label).toContain(
+				refusal.message,
+			);
+		}
+
+		expect(TERMINAL_REFUSAL_CODES.has("unauthenticated")).toBe(false);
 	});
 
 	it("refuses to point the head at a node that does not exist", async () => {

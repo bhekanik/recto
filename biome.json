@@ -8,7 +8,8 @@
 			"!convex/_generated",
 			"!.next",
 			"!packages/editor-fixtures/*.json",
-			"!packages/design-tokens/generated"
+			"!packages/design-tokens/generated",
+			"!apple/Spikes/**/*.js"
 		]
 	},
 	"formatter": { "enabled": true, "indentStyle": "tab" },

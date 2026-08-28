@@ -151,6 +151,12 @@ SwiftUI app (windows, scenes, navigation, sheets, settings, commands)
 
 ### 1.3 The editor engine (RectoEditor)
 
+- **Multi-window (decided 2026-08-28, orchestration §0b):** one attached view
+  per editor controller/storage; a second window on the same document is a
+  second controller kept in sync by `DocumentSession` patches. TextKit 2
+  rendering attributes cannot collapse marker advances, so two presentations
+  over one storage are not achievable; D-N1's "one storage" means one storage
+  per window and one document model per document.
 - Base: evaluate forking `swift-markdown-engine` (Apache-2.0) for macOS in
   N0; keep its approach either way: markers stay in the string, inactive
   markers are shrunk to a tiny font size (not deleted), the active block

@@ -1,5 +1,5 @@
 import type { GenericMutationCtx, GenericQueryCtx } from "convex/server";
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internalQuery, mutation, query } from "./_generated/server";
 import { assertNotDeleting } from "./accountGuard";
@@ -38,9 +38,40 @@ export const MARKDOWN_TOO_LARGE_MESSAGE =
  */
 const MAX_ID_LENGTH = 64;
 
+/**
+ * Refusal codes for errors the server decides deterministically. Clients use
+ * the code (not the message) to tell "retrying the same call can never
+ * succeed" apart from transient rejections such as an exhausted OCC retry,
+ * which Convex surfaces as plain errors and which are safe to retry.
+ */
+export type RefusalCode =
+	| "invalid_argument"
+	| "unauthenticated"
+	| "not_found"
+	| "unknown_node"
+	| "too_large"
+	| "parent_mismatch";
+
+/**
+ * Codes a client may treat as terminal (retrying the identical call can never
+ * succeed). `unauthenticated` is deliberately absent: a 60-second Clerk token
+ * can expire between queued jobs, so an outbox re-authenticates and retries.
+ */
+export const TERMINAL_REFUSAL_CODES: ReadonlySet<RefusalCode> = new Set([
+	"invalid_argument",
+	"not_found",
+	"unknown_node",
+	"too_large",
+	"parent_mismatch",
+]);
+
+export function refuse(code: RefusalCode, message: string): never {
+	throw new ConvexError({ code, message });
+}
+
 function requireId(value: string, field: string): string {
 	if (value.length === 0 || value.length > MAX_ID_LENGTH) {
-		throw new Error(`Invalid ${field}`);
+		refuse("invalid_argument", `Invalid ${field}`);
 	}
 	return value;
 }
@@ -57,7 +88,7 @@ export async function requireUserId(
 ): Promise<string> {
 	const identity = await ctx.auth.getUserIdentity();
 	if (!identity) {
-		throw new Error("Unauthenticated");
+		refuse("unauthenticated", "Unauthenticated");
 	}
 	await assertNotDeleting(ctx, identity.subject);
 	return identity.subject;
@@ -71,7 +102,7 @@ export async function requireOwnedDocument(
 	const userId = await requireUserId(ctx);
 	const doc = await ctx.db.get(documentId);
 	if (!doc || doc.userId !== userId) {
-		throw new Error("Document not found");
+		refuse("not_found", "Document not found");
 	}
 	return doc;
 }
@@ -278,6 +309,14 @@ export const updateCurrentNodeId = mutation({
 		markdown: v.string(),
 		wordCount: v.number(),
 		updatedAt: v.number(),
+		/**
+		 * The pointerRevision the caller last observed. When given, the move is a
+		 * compare-and-set on the server's revision counter instead of the
+		 * wall-clock `updatedAt` rule: client clocks race server timestamps
+		 * (an earlier queued markdown write can assign `doc.updatedAt` after the
+		 * caller captured `Date.now()`), revisions cannot. Old clients omit it.
+		 */
+		expectedPointerRevision: v.optional(v.number()),
 	},
 	handler: async (ctx, args) => {
 		requireId(args.currentNodeId, "currentNodeId");
@@ -294,16 +333,20 @@ export const updateCurrentNodeId = mutation({
 				q.eq("documentId", args.documentId).eq("nodeId", args.currentNodeId),
 			)
 			.unique();
-		if (!target) throw new Error("Unknown currentNodeId");
+		if (!target) refuse("unknown_node", "Unknown currentNodeId");
 
 		// Same ~1 MiB guard as updateMarkdown — the materialized markdown is stored
 		// on the documents row here too.
 		if (utf8Length(args.markdown) > MAX_MARKDOWN_LENGTH) {
-			throw new Error(MARKDOWN_TOO_LARGE_MESSAGE);
+			refuse("too_large", MARKDOWN_TOO_LARGE_MESSAGE);
 		}
 
 		const pointerRevision = (doc.pointerRevision ?? 0) + 1;
-		if (args.updatedAt < doc.updatedAt) {
+		const rejected =
+			args.expectedPointerRevision !== undefined
+				? args.expectedPointerRevision !== (doc.pointerRevision ?? 0)
+				: args.updatedAt < doc.updatedAt;
+		if (rejected) {
 			// Rejected: hand back the head that won, so the caller can queue it
 			// instead of guessing.
 			return {
@@ -406,7 +449,8 @@ export const commitEdit = mutation({
 		}
 		// An empty patch cannot be applied, so it would poison every
 		// materialization that walks through this node.
-		if (args.node.patch.length === 0) throw new Error("Invalid node.patch");
+		if (args.node.patch.length === 0)
+			refuse("invalid_argument", "Invalid node.patch");
 
 		const doc = await requireOwnedDocument(ctx, args.documentId);
 
@@ -433,14 +477,15 @@ export const commitEdit = mutation({
 			utf8Length(args.markdown) > MAX_MARKDOWN_LENGTH ||
 			nodeRowBytes > MAX_MARKDOWN_LENGTH
 		) {
-			throw new Error(MARKDOWN_TOO_LARGE_MESSAGE);
+			refuse("too_large", MARKDOWN_TOO_LARGE_MESSAGE);
 		}
 
 		// A node's parent IS the head it was committed onto; a caller that names
 		// one head and parents the node on another would leave the DAG
 		// mis-parented or detached, so refuse before anything is written.
 		if (args.node.parentNodeId !== args.expectedHeadNodeId) {
-			throw new Error(
+			refuse(
+				"parent_mismatch",
 				"commitEdit: node.parentNodeId must equal expectedHeadNodeId",
 			);
 		}
@@ -560,7 +605,7 @@ export const updateMarkdown = mutation({
 		// manuscripts are an explicit non-goal; fail loudly rather than let Convex
 		// reject the whole mutation opaquely. The editor keeps the text locally.
 		if (utf8Length(args.markdown) > MAX_MARKDOWN_LENGTH) {
-			throw new Error(MARKDOWN_TOO_LARGE_MESSAGE);
+			refuse("too_large", MARKDOWN_TOO_LARGE_MESSAGE);
 		}
 
 		// A diverged head is NOT retryable: the stale-updatedAt retry loop below

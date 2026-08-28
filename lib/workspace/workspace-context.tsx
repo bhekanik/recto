@@ -18,11 +18,13 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { BridgeSession } from "@/lib/bridge/coordinator";
 import { getDeviceOrigin } from "@/lib/history/origin";
 import {
+	type BlockedWrite,
 	type HistoryController,
 	useDocumentHistory,
 } from "@/lib/history/use-document-history";
 import { deriveTitleFromMarkdown } from "@/lib/markdown";
 import { useReviewerHistory } from "@/lib/review/use-reviewer-history";
+import type { ProjectionKind } from "@/lib/sync/draft-buffer";
 import { type SyncStatus, useDocumentSync } from "@/lib/sync/use-document-sync";
 import { DocumentModelRegistry } from "./document-registry";
 import { openDocumentIdsFromTree } from "./queries";
@@ -38,11 +40,23 @@ export type DocumentSyncState = {
 	wordCount: number;
 	syncStatus: SyncStatus;
 	pendingConflict: boolean;
-	markdown: string;
+	/** Null until the history hook has decided what this document shows. */
+	markdown: string | null;
+	/**
+	 * Identifies the current publication, scoped to the host instance and the
+	 * document. Panes key their mode snapshot on it.
+	 */
+	projectionGeneration: string;
+	/** Work the server has not confirmed yet — queued or in flight. */
+	hasPendingWrites: boolean;
+	/** The write the queue is stuck on, refused or unclassified. */
+	blockedWrite: BlockedWrite | null;
+	/** Send the stuck write again, unchanged. Non-destructive. */
+	retryBlockedWrite: () => void;
+	/** Discard the stuck write and everything behind it, keeping the text. */
+	resolveBlockedWrite: () => void;
 	handleEditorChange: () => void;
 	flushMarkdown: (markdown: string) => Promise<void>;
-	useDraft: () => void;
-	useServer: () => void;
 	recordHistory: (opts?: { structural?: boolean }) => void;
 	flushHistory: () => void;
 };
@@ -144,15 +158,112 @@ function OwnerSyncHost({
 
 	const enabled = editorReady && document !== undefined && document !== null;
 
+	// The two hooks are mutually dependent: sync needs history's head and its
+	// projection, history needs to tell sync when a projection has landed. The
+	// sync hook is declared first, so its side of the contract goes through a ref
+	// this render keeps current. Every getter reads a ref INSIDE the history hook
+	// that advances synchronously on commit/navigate, so a mode switch that
+	// flushes history and markdown in one tick sees the new head (R5).
+	const historyApiRef = useRef<HistoryController | null>(null);
+	const getCurrentHeadNodeId = useCallback(
+		() => historyApiRef.current?.getHeadNodeId() ?? null,
+		[],
+	);
+	const getHasPendingDraft = useCallback(
+		() => historyApiRef.current?.hasPendingDraft() ?? false,
+		[],
+	);
+	const reconcileRemote = useCallback(
+		() => historyApiRef.current?.reconcileRemote() ?? false,
+		[],
+	);
+
 	const sync = useDocumentSync({
 		documentId,
 		getEditorHandle,
 		serverMarkdown: document?.markdown,
 		serverUpdatedAt: document?.updatedAt,
+		serverCurrentNodeId: document?.currentNodeId,
 		enabled,
 		deriveTitle: deriveTitleFromMarkdown,
 		isManualTitle: registry.isManuallyRenamed(documentId),
+		getCurrentHeadNodeId,
+		getHasPendingDraft,
+		reconcileRemote,
 	});
+
+	// V2: what the panes render. NOT documents.markdown — that value has no
+	// provenance, so a preview pane would show a legacy body and a switch to raw
+	// would flush it back under the current head, stamping it. Null until the
+	// history hook has made its first decision; panes treat that as loading.
+	const [projectedMarkdown, setProjectedMarkdown] = useState<string | null>(
+		null,
+	);
+	// Every publication supersedes the last. Panes key their mode-switch
+	// snapshot on this rather than on the text, because an undo can republish
+	// markdown a superseded snapshot was keyed on.
+	//
+	// It is a STRING scoped to this host instance and this document, not a bare
+	// counter: a counter restarts at 0 for every host and every document, so a
+	// snapshot taken in document A — or by a host that has since remounted —
+	// matched document B's first publication and flushed A's text under B.
+	const hostInstanceIdRef = useRef<string>("");
+	if (hostInstanceIdRef.current === "") {
+		hostInstanceIdRef.current = crypto.randomUUID();
+	}
+	const projectionCountRef = useRef(0);
+	const [projectionGeneration, setProjectionGeneration] = useState(
+		() => `${hostInstanceIdRef.current}:${documentId}:0`,
+	);
+	const acceptRemoteProjection = sync.acceptRemoteProjection;
+	const adoptRecoveredDraft = sync.adoptRecoveredDraft;
+	const markLocalProjectionPending = sync.markLocalProjectionPending;
+	const settleLocalProjection = sync.settleLocalProjection;
+	const onProjection = useCallback(
+		(projection: {
+			markdown: string;
+			serverUpdatedAt: number;
+			source: "server" | "recovered-draft" | "local";
+			projectionId?: string;
+			kind?: ProjectionKind;
+			pointerNodeId?: string;
+			resolvedProjectionId?: string;
+		}) => {
+			// Publish first: this is how the text reaches a preview-only pane, and
+			// nothing may be treated as accepted before it has.
+			setProjectedMarkdown(projection.markdown);
+			projectionCountRef.current += 1;
+			setProjectionGeneration(
+				`${hostInstanceIdRef.current}:${documentId}:${projectionCountRef.current}`,
+			);
+			if (projection.source === "server") {
+				acceptRemoteProjection(
+					projection.markdown,
+					projection.serverUpdatedAt,
+					projection.resolvedProjectionId,
+				);
+			} else if (projection.source === "recovered-draft") {
+				adoptRecoveredDraft(projection.markdown, projection.kind);
+			} else {
+				// A programmatic seed (AI accept, version restore) never reaches
+				// handleEditorChange, and a pointer move changes no text at all, so
+				// nothing else would mark either dirty. They stay unsaved — and
+				// recoverable — until the server acknowledges them.
+				markLocalProjectionPending(
+					projection.markdown,
+					projection.projectionId ?? crypto.randomUUID(),
+					projection.kind ?? "draft",
+					projection.pointerNodeId,
+				);
+			}
+		},
+		[
+			acceptRemoteProjection,
+			adoptRecoveredDraft,
+			documentId,
+			markLocalProjectionPending,
+		],
+	);
 
 	const history = useDocumentHistory({
 		documentId,
@@ -160,9 +271,26 @@ function OwnerSyncHost({
 		serverCurrentNodeId: document?.currentNodeId,
 		serverMarkdown: document?.markdown,
 		serverUpdatedAt: document?.updatedAt,
+		serverPointerRevision: document?.pointerRevision,
+		serverMarkdownHeadNodeId: document?.markdownHeadNodeId,
+		getBaselineUpdatedAt: sync.getBaselineUpdatedAt,
 		enabled,
 		origin: getDeviceOrigin(),
+		onProjection,
+		onProjectionSettled: settleLocalProjection,
+		getPendingProjectionId: sync.getPendingProjectionId,
+		getRecoveredDraft: sync.getRecoveredDraft,
 	});
+	historyApiRef.current = history;
+
+	// R1: autosave holds the draft while the head is unknown. Flush once history
+	// hydrates and the compare-and-set can actually be satisfied.
+	const headKnown = history.currentNodeId !== null;
+	const flushSync = sync.flushSync;
+	useEffect(() => {
+		if (!headKnown) return;
+		void flushSync();
+	}, [headKnown, flushSync]);
 
 	// One change handler feeds both the autosave and the undo-tree grouping.
 	const syncChange = sync.handleEditorChange;
@@ -187,11 +315,14 @@ function OwnerSyncHost({
 		wordCount: sync.wordCount,
 		syncStatus: sync.syncStatus,
 		pendingConflict: sync.pendingConflict,
-		markdown: document?.markdown ?? "",
+		markdown: projectedMarkdown,
+		projectionGeneration,
+		hasPendingWrites: history.hasPendingWrites,
+		blockedWrite: history.blockedWrite,
+		retryBlockedWrite: history.retryBlockedWrite,
+		resolveBlockedWrite: history.resolveBlockedWrite,
 		handleEditorChange,
 		flushMarkdown: sync.flushMarkdown,
-		useDraft: sync.useDraft,
-		useServer: sync.useServer,
 		recordHistory: history.recordChange,
 		flushHistory: history.flush,
 	};
@@ -209,7 +340,14 @@ function OwnerSyncHost({
 		sync.wordCount,
 		sync.syncStatus,
 		sync.pendingConflict,
-		document?.markdown,
+		history.hasPendingWrites,
+		history.blockedWrite,
+		// The PROJECTION, not documents.markdown: a change that only moves what
+		// the panes should render — an undo, a branch switch, a remote projection
+		// at the same word count — never touched the raw field, so it never
+		// reached the store and a preview pane stayed on the previous node.
+		projectedMarkdown,
+		projectionGeneration,
 		onSyncUpdate,
 	]);
 
@@ -314,6 +452,7 @@ function ReviewerSyncHost({
 	}, [canSuggest, recordHistory]);
 	const noopRecord = useCallback(() => {}, []);
 	const noopFlush = useCallback(() => {}, []);
+	const noopResolveBlocked = useCallback(() => {}, []);
 
 	const stateRef = useRef<DocumentSyncState | null>(null);
 	stateRef.current = {
@@ -323,11 +462,14 @@ function ReviewerSyncHost({
 		syncStatus: "saved",
 		pendingConflict: false,
 		markdown: shared?.markdown ?? "",
+		projectionGeneration: "reviewer",
+		hasPendingWrites: false,
+		blockedWrite: null,
+		retryBlockedWrite: noopResolveBlocked,
+		resolveBlockedWrite: noopResolveBlocked,
 		handleEditorChange,
 		// No owner write path for a grantee — flushing markdown is a no-op.
 		flushMarkdown: async () => {},
-		useDraft: () => {},
-		useServer: () => {},
 		recordHistory: canSuggest ? history.recordChange : noopRecord,
 		flushHistory: canSuggest ? history.flush : noopFlush,
 	};
@@ -403,7 +545,12 @@ export function WorkspaceProvider({
 				prev.wordCount !== state.wordCount ||
 				prev.syncStatus !== state.syncStatus ||
 				prev.pendingConflict !== state.pendingConflict ||
-				prev.markdown !== state.markdown
+				prev.markdown !== state.markdown ||
+				// An undo can republish identical text; without this the panes never
+				// learn that their mode snapshot has been superseded.
+				prev.projectionGeneration !== state.projectionGeneration ||
+				prev.hasPendingWrites !== state.hasPendingWrites ||
+				prev.blockedWrite !== state.blockedWrite
 			) {
 				setSyncVersion((v) => v + 1);
 			}

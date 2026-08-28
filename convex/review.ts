@@ -682,6 +682,11 @@ export const acceptBranch = mutation({
 			markdown,
 			wordCount: roughWordCount(markdown),
 			updatedAt: now,
+			// A pointer move: bump the revision so a client holding the pre-accept
+			// revision cannot pass the CAS and overwrite the accepted head, and
+			// stamp the body as the materialization of the new head.
+			pointerRevision: (doc.pointerRevision ?? 0) + 1,
+			markdownHeadNodeId: newNodeId,
 		});
 		await syncBlobReferences(ctx, doc.userId, "document", args.documentId, [
 			markdown,
@@ -823,6 +828,8 @@ export const acceptHunks = mutation({
 			markdown: merged,
 			wordCount: roughWordCount(merged),
 			updatedAt: now,
+			pointerRevision: (doc.pointerRevision ?? 0) + 1,
+			markdownHeadNodeId: newNodeId,
 		});
 		await syncBlobReferences(ctx, doc.userId, "document", args.documentId, [
 			merged,
