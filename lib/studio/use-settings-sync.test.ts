@@ -391,7 +391,7 @@ describe("useSettingsSync", () => {
 		expect(latest.readingFont).toBe("serif");
 	});
 
-	it("re-sends on top of the winner's stamp after losing", async () => {
+	it("re-sends when the winner changed only the same held key", async () => {
 		state.remote = { json: serializeSynced(DEFAULTS), updatedAt: 1 };
 		render(DEFAULTS);
 		flushDebounce();
@@ -399,7 +399,7 @@ describe("useSettingsSync", () => {
 		saveMock.mockResolvedValueOnce({
 			saved: false,
 			conflict: true,
-			json: serializeSynced({ ...DEFAULTS, readingFont: "serif" }),
+			json: serializeSynced({ ...DEFAULTS, theme: "dawn" }),
 			updatedAt: 99,
 		});
 

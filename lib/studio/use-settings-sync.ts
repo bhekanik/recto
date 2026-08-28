@@ -232,6 +232,7 @@ export function useSettingsSync(
 				setSettings((current) => mergeSyncedJson(current, winner, held));
 			}
 			setAttempts((count) => (count === 0 ? count : 0));
+			if (dirtyRef.current.size > 0) resendRef.current();
 		} catch {
 			// Offline, or the transaction was rejected. The dirty map is untouched,
 			// so nothing is lost; localStorage already holds the change.
