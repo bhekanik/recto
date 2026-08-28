@@ -271,6 +271,14 @@ export function useReviewerHistory(args: {
 	const noopTag = useCallback(async () => {}, []);
 	const noopCommitProgrammatic = useCallback(() => null, []);
 
+	// A reviewer edits their own shadow branch through review.reviewerAppend, not
+	// commitEdit, so there is no head compare-and-set and no remote pointer to
+	// reconcile against. Reporting "nothing pending, nothing to project" keeps
+	// the sync hook on its own seeding path for this surface.
+	const getHeadNodeId = useCallback(() => currentNodeIdRef.current, []);
+	const noPendingDraft = useCallback(() => false, []);
+	const noRemoteToReconcile = useCallback(() => true, []);
+
 	return {
 		nodes,
 		currentNodeId,
@@ -285,5 +293,8 @@ export function useReviewerHistory(args: {
 		flush,
 		tagVersion: noopTag,
 		materializeAt,
+		getHeadNodeId,
+		hasPendingDraft: noPendingDraft,
+		reconcileRemote: noRemoteToReconcile,
 	};
 }

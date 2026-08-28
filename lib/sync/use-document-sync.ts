@@ -34,6 +34,14 @@ type UseDocumentSyncArgs = {
 	 * `documents.currentNodeId` (ADR-19).
 	 */
 	getCurrentHeadNodeId?: () => string | null;
+	/** Local keystrokes the undo tree has not captured yet (history hook). */
+	getHasPendingDraft?: () => boolean;
+	/**
+	 * Ask the history hook to project the server's undo-tree state into the
+	 * editor. Returns false when it deferred, in which case this hook must not
+	 * mark the revision handled — the projection is retried.
+	 */
+	reconcileRemote?: () => boolean;
 };
 
 type UseDocumentSyncResult = {
@@ -46,6 +54,8 @@ type UseDocumentSyncResult = {
 	flushSync: () => Promise<void>;
 	flushMarkdown: (markdown: string) => Promise<void>;
 	getCurrentMarkdown: () => string;
+	/** Called by the history hook once it has projected remote state (R3). */
+	acceptRemoteProjection: (markdown: string, serverUpdatedAt: number) => void;
 };
 
 /** Whether a reactive query update is from a remote writer (not this client's echo). */
@@ -69,6 +79,8 @@ export function useDocumentSync({
 	deriveTitle,
 	isManualTitle = false,
 	getCurrentHeadNodeId,
+	getHasPendingDraft,
+	reconcileRemote,
 }: UseDocumentSyncArgs): UseDocumentSyncResult {
 	const updateMarkdown = useMutation(api.documents.updateMarkdown);
 
@@ -116,6 +128,14 @@ export function useDocumentSync({
 			const expected = expectedUpdatedAtRef.current;
 			if (expected === 0) return "skipped";
 
+			// R1: without a head there is no compare-and-set, and a headless write
+			// would land under whichever branch currently owns the document. The
+			// draft stays dirty; workspace-context re-flushes once history hydrates.
+			if (getCurrentHeadNodeId && getCurrentHeadNodeId() === null) {
+				setSyncStatus("unsynced");
+				return "skipped";
+			}
+
 			if (markdown === lastFlushedMarkdownRef.current) {
 				pendingMarkdownRef.current = null;
 				clearDraft(documentId);
@@ -140,10 +160,11 @@ export function useDocumentSync({
 				if (result.headMoved) {
 					// Another device owns the head now. Retrying would republish this
 					// draft on top of their branch, detaching documents.markdown from
-					// documents.currentNodeId. Stand down and let the history hook's
-					// pointer adoption re-seed; the text is not lost — it is in the
-					// local draft buffer and in the node commitEdit stored anyway.
-					pendingMarkdownRef.current = null;
+					// documents.currentNodeId.
+					//
+					// The draft deliberately stays DIRTY. Only a completed projection
+					// clears it (acceptRemoteProjection): dropping it here would
+					// discard the writer's text before anything had replaced it.
 					setSyncStatus("unsynced");
 					return "done";
 				}
@@ -317,9 +338,24 @@ export function useDocumentSync({
 		// a remote write landing in that window would otherwise overwrite the typed-
 		// but-unflushed text. `pendingMarkdownRef` is null only after a successful
 		// flush, so it's the precise "no unsaved local edits" signal.
-		if (editorRef.isFocused() || pendingMarkdownRef.current !== null) {
-			// Keep local edits; adopt server version for the next save attempt.
+		// Don't re-seed over keystrokes the undo tree has not captured. This asks
+		// the history hook rather than checking `pendingMarkdownRef`: that ref
+		// stays dirty until a projection completes (R2), so using it here would
+		// deadlock — the thing that clears it is the thing it would be blocking.
+		if (getHasPendingDraft?.()) {
 			expectedUpdatedAtRef.current = serverUpdatedAt;
+			return;
+		}
+
+		// Projection is the history hook's job — it owns the DAG, and editor text,
+		// grouping controller and pointer have to move together (R3). This hook
+		// used to seed on its own, which is how the pointer and the visible text
+		// drifted apart. If it defers, the revision is NOT marked handled.
+		if (reconcileRemote) {
+			if (!reconcileRemote()) {
+				expectedUpdatedAtRef.current = serverUpdatedAt;
+				return;
+			}
 			lastHandledServerUpdatedAtRef.current = serverUpdatedAt;
 			return;
 		}
@@ -332,7 +368,34 @@ export function useDocumentSync({
 		lastFlushedMarkdownRef.current = serverMarkdown;
 		clearDraft(documentId);
 		setSyncStatus("saved");
-	}, [enabled, documentId, serverMarkdown, serverUpdatedAt]);
+	}, [
+		enabled,
+		documentId,
+		getHasPendingDraft,
+		reconcileRemote,
+		serverMarkdown,
+		serverUpdatedAt,
+	]);
+
+	/**
+	 * The history hook has just projected remote state into the editor. Accept it
+	 * as the new baseline — otherwise the next flush would push the projected
+	 * text back up as though the writer had typed it — and only now retire the
+	 * dirty draft, since something has finally replaced it.
+	 */
+	const acceptRemoteProjection = useCallback(
+		(markdown: string, serverRevisionUpdatedAt: number) => {
+			setWordCount(countWords(markdown));
+			expectedUpdatedAtRef.current = serverRevisionUpdatedAt;
+			lastWrittenUpdatedAtRef.current = serverRevisionUpdatedAt;
+			lastHandledServerUpdatedAtRef.current = serverRevisionUpdatedAt;
+			lastFlushedMarkdownRef.current = markdown;
+			pendingMarkdownRef.current = null;
+			if (documentId) clearDraft(documentId);
+			setSyncStatus("saved");
+		},
+		[documentId],
+	);
 
 	const useDraft = useCallback(() => {
 		if (!documentId) return;
@@ -380,5 +443,6 @@ export function useDocumentSync({
 		flushSync,
 		flushMarkdown,
 		getCurrentMarkdown,
+		acceptRemoteProjection,
 	};
 }

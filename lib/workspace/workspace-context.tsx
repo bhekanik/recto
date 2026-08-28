@@ -144,10 +144,25 @@ function OwnerSyncHost({
 
 	const enabled = editorReady && document !== undefined && document !== null;
 
-	// The sync hook is declared first but needs the history hook's head, so the
-	// head is read through a ref that this render keeps current (see below).
-	const historyHeadRef = useRef<string | null>(null);
-	const getCurrentHeadNodeId = useCallback(() => historyHeadRef.current, []);
+	// The two hooks are mutually dependent: sync needs history's head and its
+	// projection, history needs to tell sync when a projection has landed. The
+	// sync hook is declared first, so its side of the contract goes through a ref
+	// this render keeps current. Every getter reads a ref INSIDE the history hook
+	// that advances synchronously on commit/navigate, so a mode switch that
+	// flushes history and markdown in one tick sees the new head (R5).
+	const historyApiRef = useRef<HistoryController | null>(null);
+	const getCurrentHeadNodeId = useCallback(
+		() => historyApiRef.current?.getHeadNodeId() ?? null,
+		[],
+	);
+	const getHasPendingDraft = useCallback(
+		() => historyApiRef.current?.hasPendingDraft() ?? false,
+		[],
+	);
+	const reconcileRemote = useCallback(
+		() => historyApiRef.current?.reconcileRemote() ?? false,
+		[],
+	);
 
 	const sync = useDocumentSync({
 		documentId,
@@ -158,7 +173,11 @@ function OwnerSyncHost({
 		deriveTitle: deriveTitleFromMarkdown,
 		isManualTitle: registry.isManuallyRenamed(documentId),
 		getCurrentHeadNodeId,
+		getHasPendingDraft,
+		reconcileRemote,
 	});
+
+	const acceptRemoteProjection = sync.acceptRemoteProjection;
 
 	const history = useDocumentHistory({
 		documentId,
@@ -166,10 +185,21 @@ function OwnerSyncHost({
 		serverCurrentNodeId: document?.currentNodeId,
 		serverMarkdown: document?.markdown,
 		serverUpdatedAt: document?.updatedAt,
+		serverPointerRevision: document?.pointerRevision,
 		enabled,
 		origin: getDeviceOrigin(),
+		onRemoteProjection: acceptRemoteProjection,
 	});
-	historyHeadRef.current = history.currentNodeId;
+	historyApiRef.current = history;
+
+	// R1: autosave holds the draft while the head is unknown. Flush once history
+	// hydrates and the compare-and-set can actually be satisfied.
+	const headKnown = history.currentNodeId !== null;
+	const flushSync = sync.flushSync;
+	useEffect(() => {
+		if (!headKnown) return;
+		void flushSync();
+	}, [headKnown, flushSync]);
 
 	// One change handler feeds both the autosave and the undo-tree grouping.
 	const syncChange = sync.handleEditorChange;

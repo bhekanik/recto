@@ -7,6 +7,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import type { EditorHandle } from "@/lib/editor/handle";
 import { countWords } from "@/lib/markdown";
+import { caretAtOffset } from "@/lib/modes/caret";
 import { toast } from "@/lib/ui/toast";
 
 import {
@@ -54,9 +55,28 @@ export type HistoryController = {
 	flush: () => void;
 	tagVersion: (label: string, kind?: "auto" | "manual") => Promise<void>;
 	materializeAt: (nodeId: string) => string | null;
+	/**
+	 * The head this device is committing onto, read from a ref that advances
+	 * synchronously on commit and navigate. Rendered state lags a synchronous
+	 * `flushHistory()` immediately followed by `flushMarkdown()` (mode switch),
+	 * which would send the autosave CAS the previous head.
+	 */
+	getHeadNodeId: () => string | null;
+	/** Local input the tree has not captured yet — see GroupingController. */
+	hasPendingDraft: () => boolean;
+	/**
+	 * Project the server's current undo-tree state into the editor, the grouping
+	 * controller and the pointer together, if that is safe right now. Returns
+	 * false when it was deferred (uncommitted local text, editor still active, or
+	 * the node has not synced), in which case the caller must NOT treat the
+	 * remote revision as handled — reconciliation is retried automatically.
+	 */
+	reconcileRemote: () => boolean;
 };
 
 const AUTO_VERSION_MS = 120_000; // tag an auto version ~2min after activity settles
+/** How long the editor must be quiet before remote state may be projected. */
+const EDITOR_IDLE_MS = 2_000;
 
 /**
  * This client's own most recent pointer move, tracked until the server echoes it
@@ -68,8 +88,12 @@ const AUTO_VERSION_MS = 120_000; // tag an auto version ~2min after activity set
 export type LocalPointerMove = {
 	token: number;
 	nodeId: string;
-	appliedAt: number | null;
+	/** `documents.pointerRevision` our write produced, or null while in flight. */
+	appliedRevision: number | null;
 };
+
+/** A remote pointer we have decided to adopt but could not project yet. */
+export type QueuedRemotePointer = { nodeId: string; revision: number };
 
 /** What to do with a `documents.currentNodeId` value the client just observed. */
 export type PointerDecision = "adopt" | "ignore" | "settled";
@@ -88,20 +112,21 @@ export type PointerDecision = "adopt" | "ignore" | "settled";
  */
 export function decideServerPointer(args: {
 	serverCurrentNodeId: string;
-	serverUpdatedAt: number;
+	/** `documents.pointerRevision` of the observation being judged. */
+	serverPointerRevision: number;
 	localMove: LocalPointerMove | null;
 }): PointerDecision {
-	const { serverCurrentNodeId, serverUpdatedAt, localMove } = args;
+	const { serverCurrentNodeId, serverPointerRevision, localMove } = args;
 	if (!localMove) return "adopt";
 	// The server caught up with us; there is nothing left to reconcile.
 	if (serverCurrentNodeId === localMove.nodeId) return "settled";
 	// Our move has not reached the server, so everything we see predates it.
-	if (localMove.appliedAt === null) return "ignore";
-	// The write landed but this query result was produced before it. Strictly
-	// earlier: an equal timestamp on a DIFFERENT node means a remote write
-	// executed after ours inside the same millisecond, and our own echo has
-	// already been taken by the `settled` branch above.
-	if (serverUpdatedAt < localMove.appliedAt) return "ignore";
+	if (localMove.appliedRevision === null) return "ignore";
+	// Strictly older observations are echoes of the state we moved off. An EQUAL
+	// revision naming a different node cannot happen — one revision is one
+	// pointer write — so treating it as adoptable is the safe direction: the
+	// failure being fixed is ignoring real remote moves, never adopting too eagerly.
+	if (serverPointerRevision < localMove.appliedRevision) return "ignore";
 	return "adopt";
 }
 
@@ -118,8 +143,16 @@ export function useDocumentHistory(args: {
 	serverCurrentNodeId: string | undefined;
 	serverMarkdown: string | undefined;
 	serverUpdatedAt: number | undefined;
+	/** `documents.pointerRevision`; orders pointer observations (ADR-19). */
+	serverPointerRevision: number | undefined;
 	enabled: boolean;
 	origin: string;
+	/**
+	 * Called after remote state has been projected into the editor, so the sync
+	 * hook can accept the text as the new baseline instead of flushing it back
+	 * as a local edit. Projection is the ONLY thing that clears a dirty draft.
+	 */
+	onRemoteProjection?: (markdown: string, serverUpdatedAt: number) => void;
 }): HistoryController {
 	const {
 		documentId,
@@ -127,8 +160,10 @@ export function useDocumentHistory(args: {
 		serverCurrentNodeId,
 		serverMarkdown,
 		serverUpdatedAt,
+		serverPointerRevision,
 		enabled,
 		origin,
+		onRemoteProjection,
 	} = args;
 
 	const dagRows = useQuery(
@@ -147,15 +182,28 @@ export function useDocumentHistory(args: {
 	const hydratedRef = useRef(false);
 	const getHandleRef = useRef(getEditorHandle);
 	getHandleRef.current = getEditorHandle;
+	// Written through setPointer, NOT during render. An effect that runs in the
+	// same commit as a pointer change has to see the new value: reading a
+	// render-lagged ref made the hook treat its own hydration as a remote move,
+	// re-seeding the editor and toasting on every document open.
 	const currentNodeIdRef = useRef<string | null>(null);
-	currentNodeIdRef.current = currentNodeId;
 	const ensureRootSentRef = useRef(false);
 	const localMoveRef = useRef<LocalPointerMove | null>(null);
 	const moveTokenRef = useRef(0);
 	// A remote pointer we have decided to adopt but cannot project yet — the
 	// writer is mid-sentence, or the node has not reached this client's DAG.
 	// Held until the next safe moment instead of being dropped.
-	const pendingRemotePointerRef = useRef<string | null>(null);
+	const pendingRemotePointerRef = useRef<QueuedRemotePointer | null>(null);
+	// The head autosave commits against. A ref, not rendered state: a mode switch
+	// flushes history and markdown in the same tick, and state would still hold
+	// the previous head (R5).
+	const headNodeIdRef = useRef<string | null>(null);
+	// Whether the editor has settled. Remote state is projected on idle rather
+	// than on blur: in vim and full-screen the editor never loses DOM focus, so
+	// a focus-gated adoption would never fire at all (R4).
+	const editorIdleRef = useRef(true);
+	const onRemoteProjectionRef = useRef(onRemoteProjection);
+	onRemoteProjectionRef.current = onRemoteProjection;
 	// Bumped whenever something happens that could unblock a queued adoption
 	// (a local move settles, the editor blurs). The reconciliation lives in an
 	// effect, so it needs a state dependency to re-run on.
@@ -179,9 +227,18 @@ export function useDocumentHistory(args: {
 		localMoveRef.current = null;
 		pendingRemotePointerRef.current = null;
 		pendingRecordRef.current = null;
+		headNodeIdRef.current = null;
+		editorIdleRef.current = true;
 		setLocalNodes([]);
+		currentNodeIdRef.current = null;
 		setCurrentNodeId(null);
 	}, [documentId]);
+
+	/** Move the pointer, keeping the ref and the rendered state in step. */
+	const setPointer = useCallback((nodeId: string | null) => {
+		currentNodeIdRef.current = nodeId;
+		setCurrentNodeId(nodeId);
+	}, []);
 
 	/** Claim the pointer for a move this client is about to write. */
 	const startLocalMove = useCallback((nodeId: string): number => {
@@ -189,8 +246,9 @@ export function useDocumentHistory(args: {
 		localMoveRef.current = {
 			token: moveTokenRef.current,
 			nodeId,
-			appliedAt: null,
+			appliedRevision: null,
 		};
+		headNodeIdRef.current = nodeId;
 		return moveTokenRef.current;
 	}, []);
 
@@ -205,14 +263,29 @@ export function useDocumentHistory(args: {
 	 * nothing else would re-run the reconciliation for it.
 	 */
 	const settleLocalMove = useCallback(
-		(token: number, appliedAt: number | null) => {
+		(token: number, appliedRevision: number | null) => {
 			if (localMoveRef.current?.token !== token) return;
-			if (appliedAt === null) localMoveRef.current = null;
-			else localMoveRef.current.appliedAt = appliedAt;
+			if (appliedRevision === null) localMoveRef.current = null;
+			else localMoveRef.current.appliedRevision = appliedRevision;
 			setReconcileTick((tick) => tick + 1);
 		},
 		[],
 	);
+
+	// The editor counts as settled 2s after the last change. Adoption keys off
+	// this rather than DOM focus, which never leaves in vim or full-screen.
+	const markEditorIdle = useDebouncedCallback(() => {
+		editorIdleRef.current = true;
+		if (pendingRemotePointerRef.current === null) return;
+		setReconcileTick((tick) => tick + 1);
+	}, EDITOR_IDLE_MS);
+
+	/** Queue a remote head, keeping the newest observation of it. */
+	const queueRemotePointer = useCallback((next: QueuedRemotePointer) => {
+		const queued = pendingRemotePointerRef.current;
+		if (queued && queued.revision > next.revision) return;
+		pendingRemotePointerRef.current = next;
+	}, []);
 
 	// Merge the reactive DAG with any optimistically-appended local nodes.
 	const nodes = useMemo<HistoryNode[]>(() => {
@@ -262,7 +335,7 @@ export function useDocumentHistory(args: {
 				createdAt: Date.now(),
 			};
 			setLocalNodes((prev) => [...prev, node]);
-			setCurrentNodeId(commit.nodeId);
+			setPointer(commit.nodeId);
 			const moveToken = startLocalMove(commit.nodeId);
 
 			// One transaction: the node, the pointer, the markdown. See the
@@ -284,16 +357,19 @@ export function useDocumentHistory(args: {
 				clientMutationId: ulid(),
 			})
 				.then((result) => {
-					if (!result.committed) {
-						// Another writer owns the head. Queue theirs so the next safe
-						// moment adopts it; the writer is probably still typing, and
-						// re-projecting under their caret is not an option.
-						pendingRemotePointerRef.current = result.remoteHeadNodeId;
+					if (result.committed) {
+						settleLocalMove(moveToken, result.pointerRevision);
+						return;
 					}
-					settleLocalMove(
-						moveToken,
-						result.committed ? result.updatedAt : null,
-					);
+					// Another writer owns the head. Queue theirs so the next safe
+					// moment adopts it; the writer is probably still mid-sentence,
+					// and re-projecting under their caret is not an option.
+					queueRemotePointer({
+						nodeId: result.remoteHeadNodeId,
+						revision: result.remotePointerRevision,
+					});
+					headNodeIdRef.current = result.remoteHeadNodeId;
+					settleLocalMove(moveToken, null);
 				})
 				.catch(() => settleLocalMove(moveToken, null));
 			debouncedAutoVersion();
@@ -303,6 +379,8 @@ export function useDocumentHistory(args: {
 			debouncedAutoVersion,
 			documentId,
 			origin,
+			queueRemotePointer,
+			setPointer,
 			settleLocalMove,
 			startLocalMove,
 		],
@@ -334,7 +412,8 @@ export function useDocumentHistory(args: {
 			onCommit,
 		});
 		controllerRef.current = controller;
-		setCurrentNodeId(serverCurrentNodeId);
+		setPointer(serverCurrentNodeId);
+		headNodeIdRef.current = serverCurrentNodeId;
 		hydratedRef.current = true;
 
 		// Replay anything typed before the DAG query resolved, as one node.
@@ -360,30 +439,36 @@ export function useDocumentHistory(args: {
 		serverMarkdown,
 		ensureRoot,
 		onCommit,
+		setPointer,
 	]);
 
 	// Suppress grouping while a navigation re-projects state into the editor, so
 	// undo/redo/branch-switch never grow the tree (they are pointer moves).
 	const navigatingRef = useRef(false);
 
-	const recordChange = useCallback((opts?: { structural?: boolean }) => {
-		if (navigatingRef.current) return;
-		try {
-			const handle = getHandleRef.current();
-			if (!handle) return;
-			const markdown = handle.getCanonicalMarkdown();
-			const caret = handle.exportCaret();
-			const selection = { anchor: caret.anchor, head: caret.head };
-			const controller = controllerRef.current;
-			if (!controller) {
-				pendingRecordRef.current = { markdown, selection };
-				return;
+	const recordChange = useCallback(
+		(opts?: { structural?: boolean }) => {
+			if (navigatingRef.current) return;
+			editorIdleRef.current = false;
+			markEditorIdle();
+			try {
+				const handle = getHandleRef.current();
+				if (!handle) return;
+				const markdown = handle.getCanonicalMarkdown();
+				const caret = handle.exportCaret();
+				const selection = { anchor: caret.anchor, head: caret.head };
+				const controller = controllerRef.current;
+				if (!controller) {
+					pendingRecordRef.current = { markdown, selection };
+					return;
+				}
+				controller.record(markdown, selection, opts);
+			} catch {
+				// History is additive — never disturb the edit path.
 			}
-			controller.record(markdown, selection, opts);
-		} catch {
-			// History is additive — never disturb the edit path.
-		}
-	}, []);
+		},
+		[markEditorIdle],
+	);
 
 	const flush = useCallback(() => {
 		controllerRef.current?.flush();
@@ -417,8 +502,7 @@ export function useDocumentHistory(args: {
 				});
 			}
 			controller?.setCurrent(nodeId, markdown);
-			setCurrentNodeId(nodeId);
-			pendingRemotePointerRef.current = null;
+			setPointer(nodeId);
 			// Release the guard after the async re-seed cascade (idle-rehydrate, etc.).
 			window.setTimeout(() => {
 				navigatingRef.current = false;
@@ -431,15 +515,37 @@ export function useDocumentHistory(args: {
 				wordCount: countWords(markdown),
 				updatedAt: Date.now(),
 			})
-				.then((result) =>
-					settleLocalMove(moveToken, result.applied ? result.updatedAt : null),
-				)
+				.then((result) => {
+					if (result.applied) {
+						// Only now is the queue known to be superseded. Clearing it
+						// before the write would drop a remote head this move never
+						// managed to overwrite.
+						pendingRemotePointerRef.current = null;
+						settleLocalMove(moveToken, result.pointerRevision);
+						return;
+					}
+					// Rejected: the server told us which head won — keep it.
+					queueRemotePointer({
+						nodeId: result.currentNodeId,
+						revision: result.pointerRevision,
+					});
+					headNodeIdRef.current = result.currentNodeId;
+					settleLocalMove(moveToken, null);
+				})
 				.catch(() => {
 					settleLocalMove(moveToken, null);
 					toast("Couldn't sync undo position", "error");
 				});
 		},
-		[documentId, nodesById, settleLocalMove, startLocalMove, updatePointer],
+		[
+			documentId,
+			nodesById,
+			queueRemotePointer,
+			setPointer,
+			settleLocalMove,
+			startLocalMove,
+			updatePointer,
+		],
 	);
 
 	const undo = useCallback(() => {
@@ -520,6 +626,12 @@ export function useDocumentHistory(args: {
 		[],
 	);
 
+	const getHeadNodeId = useCallback(() => headNodeIdRef.current, []);
+	const hasPendingDraft = useCallback(
+		() => controllerRef.current?.hasPendingDraft ?? false,
+		[],
+	);
+
 	const materializeAt = useCallback(
 		(nodeId: string) => {
 			if (!nodesById.has(nodeId)) return null;
@@ -543,24 +655,76 @@ export function useDocumentHistory(args: {
 		return Boolean(children && children.length > 0);
 	}, [currentNodeId, nodes]);
 
-	// Adopt a remote pointer move (cross-device LWW) at the next safe moment.
+	/**
+	 * Project the queued remote state into the editor, the grouping controller
+	 * and the pointer TOGETHER, or defer. One function so those three can never
+	 * disagree: adoption used to move the pointer while leaving the editor
+	 * showing the old text, and the sync hook re-seeded on a separate path.
+	 *
+	 * Returns false when it deferred, which is the caller's signal NOT to mark
+	 * the remote revision handled.
+	 */
+	const reconcileRemote = useCallback((): boolean => {
+		const target = pendingRemotePointerRef.current;
+		if (target === null) return true; // nothing outstanding
+		if (target.nodeId === currentNodeIdRef.current) {
+			pendingRemotePointerRef.current = null;
+			return true;
+		}
+		// Never re-project over text the tree has not captured: those keystrokes
+		// exist nowhere else yet.
+		if (controllerRef.current?.hasPendingDraft) return false;
+		// Idle, not unfocused. In vim and full-screen the editor keeps DOM focus
+		// forever, so a focus gate would defer this indefinitely.
+		if (!editorIdleRef.current) return false;
+		if (!nodesById.has(target.nodeId)) return false; // node not synced yet
+
+		let markdown: string;
+		try {
+			markdown = materialize(target.nodeId, nodesById);
+		} catch {
+			return false;
+		}
+
+		const handle = getHandleRef.current();
+		const caretBefore = handle?.exportCaret().head ?? 0;
+		navigatingRef.current = true;
+		handle?.seed(markdown, { programmatic: true });
+		// The remote text is a different document; the old offset may not exist in
+		// it, so clamp rather than dropping the caret to the top.
+		handle?.importCaret(caretAtOffset(caretBefore, markdown.length));
+		controllerRef.current?.setCurrent(target.nodeId, markdown);
+		setPointer(target.nodeId);
+		headNodeIdRef.current = target.nodeId;
+		pendingRemotePointerRef.current = null;
+		window.setTimeout(() => {
+			navigatingRef.current = false;
+		}, 200);
+
+		// The sync hook must accept this as the new baseline, or it will flush the
+		// projected text straight back as though the writer had typed it.
+		onRemoteProjectionRef.current?.(markdown, serverUpdatedAt ?? 0);
+		toast("Updated from another device", "info");
+		return true;
+	}, [nodesById, serverUpdatedAt, setPointer]);
+
+	// Decide what the latest server observation means, then try to apply it.
 	//
-	// Deciding to adopt and being able to adopt are separate: a writer mid-
-	// sentence must not have state re-projected under their caret, and the node
-	// may not have reached this client's DAG yet. Whatever cannot be applied now
-	// is QUEUED rather than dropped — this effect only re-runs on its own
-	// dependencies, so a pointer skipped once used to be skipped forever, and
-	// with commitEdit's head check that would leave a focused writer diverging
-	// on every commit with no way back.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: reconcileTick is a re-run signal, not a value the body reads — settling a move or blurring the editor bumps it so a queued pointer is reconsidered
+	// Deciding to adopt and being able to adopt are separate: uncommitted local
+	// text, an active writer, or a node that has not synced all defer the
+	// projection. Whatever cannot be applied now is QUEUED rather than dropped —
+	// this effect only re-runs on its own dependencies, so a pointer skipped once
+	// used to be skipped forever, and with commitEdit's head check that would
+	// leave a writer diverging on every commit with no way back.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: reconcileTick is a re-run signal, not a value the body reads — settling a move, idling, or blurring bumps it so a queued pointer is reconsidered
 	useEffect(() => {
 		if (!hydratedRef.current) return;
 		if (serverCurrentNodeId === undefined) return;
-		if (serverUpdatedAt === undefined) return;
+		if (serverPointerRevision === undefined) return;
 
 		const decision = decideServerPointer({
 			serverCurrentNodeId,
-			serverUpdatedAt,
+			serverPointerRevision,
 			localMove: localMoveRef.current,
 		});
 		// Our own move is still resolving; it decides the pointer, not the server.
@@ -572,34 +736,28 @@ export function useDocumentHistory(args: {
 			return;
 		}
 		if (serverCurrentNodeId !== currentNodeIdRef.current) {
-			pendingRemotePointerRef.current = serverCurrentNodeId;
+			queueRemotePointer({
+				nodeId: serverCurrentNodeId,
+				revision: serverPointerRevision,
+			});
 		}
+		reconcileRemote();
+	}, [
+		serverCurrentNodeId,
+		serverPointerRevision,
+		nodesById,
+		queueRemotePointer,
+		reconcileRemote,
+		reconcileTick,
+	]);
 
-		const target = pendingRemotePointerRef.current;
-		if (target === null) return;
-		if (target === currentNodeIdRef.current) {
-			pendingRemotePointerRef.current = null;
-			return;
-		}
-		// Never re-project over text the writer is still producing. `isFocused`
-		// alone is not enough: a click on a panel blurs the editor while the last
-		// keystrokes are still uncommitted.
-		const handle = getHandleRef.current();
-		if (handle?.isFocused()) return;
-		if (controllerRef.current?.hasPendingDraft) return;
-		if (!nodesById.has(target)) return; // wait for the node to sync
-
-		pendingRemotePointerRef.current = null;
-		controllerRef.current?.setCurrent(target, materialize(target, nodesById));
-		setCurrentNodeId(target);
-	}, [serverCurrentNodeId, serverUpdatedAt, nodesById, reconcileTick]);
-
-	// The writer leaving the editor is the moment a queued adoption becomes safe.
-	// `focusout` bubbles where `blur` does not, so one window listener covers
-	// every lens; the ref check keeps unrelated focus changes free.
+	// Leaving the editor is an extra chance to reconcile, on top of the idle
+	// timer. `focusout` bubbles where `blur` does not, so one window listener
+	// covers every lens; the ref check keeps unrelated focus changes free.
 	useEffect(() => {
 		const onFocusOut = () => {
 			if (pendingRemotePointerRef.current === null) return;
+			editorIdleRef.current = true;
 			setReconcileTick((tick) => tick + 1);
 		};
 		window.addEventListener("focusout", onFocusOut);
@@ -620,5 +778,8 @@ export function useDocumentHistory(args: {
 		flush,
 		tagVersion,
 		materializeAt,
+		getHeadNodeId,
+		hasPendingDraft,
+		reconcileRemote,
 	};
 }
