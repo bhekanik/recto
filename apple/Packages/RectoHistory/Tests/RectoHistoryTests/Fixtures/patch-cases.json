@@ -1,0 +1,131 @@
+{
+	"source": "builtin",
+	"cases": [
+		{
+			"parent": "",
+			"next": "",
+			"patch": "{\"from\":0,\"to\":0,\"insert\":\"\"}",
+			"applied": "",
+			"label": "Change"
+		},
+		{
+			"parent": "",
+			"next": "hello",
+			"patch": "{\"from\":0,\"to\":0,\"insert\":\"hello\"}",
+			"applied": "hello",
+			"label": "Added 5 chars"
+		},
+		{
+			"parent": "hello",
+			"next": "",
+			"patch": "{\"from\":0,\"to\":5,\"insert\":\"\"}",
+			"applied": "",
+			"label": "Removed 5 chars"
+		},
+		{
+			"parent": "hello world",
+			"next": "hello brave world",
+			"patch": "{\"from\":6,\"to\":6,\"insert\":\"brave \"}",
+			"applied": "hello brave world",
+			"label": "Added 6 chars"
+		},
+		{
+			"parent": "hello world",
+			"next": "hello",
+			"patch": "{\"from\":5,\"to\":11,\"insert\":\"\"}",
+			"applied": "hello",
+			"label": "Removed 6 chars"
+		},
+		{
+			"parent": "abc",
+			"next": "abd",
+			"patch": "{\"from\":2,\"to\":3,\"insert\":\"d\"}",
+			"applied": "abd",
+			"label": "Edited"
+		},
+		{
+			"parent": "# Title\n\nBody.\n",
+			"next": "# Title\n\nBody edited.\n",
+			"patch": "{\"from\":13,\"to\":13,\"insert\":\" edited\"}",
+			"applied": "# Title\n\nBody edited.\n",
+			"label": "Added 7 chars"
+		},
+		{
+			"parent": "one\ntwo\nthree\n",
+			"next": "one\nthree\n",
+			"patch": "{\"from\":5,\"to\":9,\"insert\":\"\"}",
+			"applied": "one\nthree\n",
+			"label": "Removed 4 chars"
+		},
+		{
+			"parent": "prefix same suffix",
+			"next": "prefix CHANGED suffix",
+			"patch": "{\"from\":7,\"to\":11,\"insert\":\"CHANGED\"}",
+			"applied": "prefix CHANGED suffix",
+			"label": "Edited"
+		},
+		{
+			"parent": "😀",
+			"next": "😁",
+			"patch": "{\"from\":1,\"to\":2,\"insert\":\"\\ude01\"}",
+			"applied": "😁",
+			"label": "Edited"
+		},
+		{
+			"parent": "a😀b",
+			"next": "a😁b",
+			"patch": "{\"from\":2,\"to\":3,\"insert\":\"\\ude01\"}",
+			"applied": "a😁b",
+			"label": "Edited"
+		},
+		{
+			"parent": "😀😁",
+			"next": "😀😂",
+			"patch": "{\"from\":3,\"to\":4,\"insert\":\"\\ude02\"}",
+			"applied": "😀😂",
+			"label": "Edited"
+		},
+		{
+			"parent": "café time",
+			"next": "café time",
+			"patch": "{\"from\":3,\"to\":5,\"insert\":\"é\"}",
+			"applied": "café time",
+			"label": "Edited"
+		},
+		{
+			"parent": "family 👨‍👩‍👧 here",
+			"next": "family 👨‍👩‍👦 here",
+			"patch": "{\"from\":14,\"to\":15,\"insert\":\"\\udc66\"}",
+			"applied": "family 👨‍👩‍👦 here",
+			"label": "Edited"
+		},
+		{
+			"parent": "🇿🇦",
+			"next": "🇺🇸",
+			"patch": "{\"from\":1,\"to\":4,\"insert\":\"\\uddfa🇸\"}",
+			"applied": "🇺🇸",
+			"label": "Edited"
+		},
+		{
+			"parent": "नमस्ते",
+			"next": "नमस्कार",
+			"patch": "{\"from\":4,\"to\":6,\"insert\":\"कार\"}",
+			"applied": "नमस्कार",
+			"label": "Edited"
+		},
+		{
+			"parent": "tab\there",
+			"next": "tab here",
+			"patch": "{\"from\":3,\"to\":4,\"insert\":\" \"}",
+			"applied": "tab here",
+			"label": "Edited"
+		},
+		{
+			"parent": "line\r\nend",
+			"next": "line\nend",
+			"patch": "{\"from\":4,\"to\":5,\"insert\":\"\"}",
+			"applied": "line\nend",
+			"label": "Removed 1 char"
+		}
+	]
+}

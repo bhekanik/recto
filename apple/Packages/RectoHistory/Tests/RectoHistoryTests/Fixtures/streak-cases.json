@@ -1,0 +1,161 @@
+{
+	"streaks": [
+		{
+			"stats": [],
+			"today": "2026-08-28",
+			"streak": 0
+		},
+		{
+			"stats": [
+				{
+					"date": "2026-08-28",
+					"words": 120
+				}
+			],
+			"today": "2026-08-28",
+			"streak": 1
+		},
+		{
+			"stats": [
+				{
+					"date": "2026-08-27",
+					"words": 120
+				}
+			],
+			"today": "2026-08-28",
+			"streak": 1
+		},
+		{
+			"stats": [
+				{
+					"date": "2026-08-26",
+					"words": 10
+				},
+				{
+					"date": "2026-08-27",
+					"words": 10
+				},
+				{
+					"date": "2026-08-28",
+					"words": 10
+				}
+			],
+			"today": "2026-08-28",
+			"streak": 3
+		},
+		{
+			"stats": [
+				{
+					"date": "2026-08-25",
+					"words": 10
+				},
+				{
+					"date": "2026-08-27",
+					"words": 10
+				}
+			],
+			"today": "2026-08-28",
+			"streak": 1
+		},
+		{
+			"stats": [
+				{
+					"date": "2026-08-28",
+					"words": 0
+				}
+			],
+			"today": "2026-08-28",
+			"streak": 0
+		},
+		{
+			"stats": [
+				{
+					"date": "2026-07-31",
+					"words": 5
+				},
+				{
+					"date": "2026-08-01",
+					"words": 5
+				}
+			],
+			"today": "2026-08-01",
+			"streak": 2
+		},
+		{
+			"stats": [
+				{
+					"date": "2028-02-28",
+					"words": 5
+				},
+				{
+					"date": "2028-02-29",
+					"words": 5
+				}
+			],
+			"today": "2028-02-29",
+			"streak": 2
+		}
+	],
+	"goals": [
+		{
+			"words": 0,
+			"target": 500,
+			"kind": "at-least",
+			"progress": {
+				"ratio": 0,
+				"met": false,
+				"remaining": 500
+			}
+		},
+		{
+			"words": 500,
+			"target": 500,
+			"kind": "at-least",
+			"progress": {
+				"ratio": 1,
+				"met": true,
+				"remaining": 0
+			}
+		},
+		{
+			"words": 460,
+			"target": 500,
+			"kind": "about",
+			"progress": {
+				"ratio": 0.92,
+				"met": true,
+				"remaining": 40
+			}
+		},
+		{
+			"words": 400,
+			"target": 500,
+			"kind": "about",
+			"progress": {
+				"ratio": 0.8,
+				"met": false,
+				"remaining": 100
+			}
+		},
+		{
+			"words": 550,
+			"target": 500,
+			"kind": "at-most",
+			"progress": {
+				"ratio": 1,
+				"met": false,
+				"remaining": 0
+			}
+		},
+		{
+			"words": 10,
+			"target": 0,
+			"kind": "at-least",
+			"progress": {
+				"ratio": 0,
+				"met": false,
+				"remaining": 0
+			}
+		}
+	]
+}

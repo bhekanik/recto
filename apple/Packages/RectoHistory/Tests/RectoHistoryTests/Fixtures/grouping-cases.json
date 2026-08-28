@@ -1,0 +1,216 @@
+{
+	"steps": [
+		{
+			"markdown": "h",
+			"selection": {
+				"anchor": 1,
+				"head": 1
+			},
+			"structural": false,
+			"now": 50,
+			"kind": "record"
+		},
+		{
+			"markdown": "he",
+			"selection": {
+				"anchor": 2,
+				"head": 2
+			},
+			"structural": false,
+			"now": 100,
+			"kind": "record"
+		},
+		{
+			"markdown": "hel",
+			"selection": {
+				"anchor": 3,
+				"head": 3
+			},
+			"structural": false,
+			"now": 150,
+			"kind": "record"
+		},
+		{
+			"markdown": "hell",
+			"selection": {
+				"anchor": 4,
+				"head": 4
+			},
+			"structural": false,
+			"now": 200,
+			"kind": "record"
+		},
+		{
+			"markdown": "hello",
+			"selection": {
+				"anchor": 5,
+				"head": 5
+			},
+			"structural": false,
+			"now": 250,
+			"kind": "record"
+		},
+		{
+			"markdown": "hello ",
+			"selection": {
+				"anchor": 6,
+				"head": 6
+			},
+			"structural": false,
+			"now": 1150,
+			"kind": "record"
+		},
+		{
+			"markdown": "hello w",
+			"selection": {
+				"anchor": 7,
+				"head": 7
+			},
+			"structural": false,
+			"now": 1200,
+			"kind": "record"
+		},
+		{
+			"markdown": "hello wo",
+			"selection": {
+				"anchor": 8,
+				"head": 8
+			},
+			"structural": false,
+			"now": 1250,
+			"kind": "record"
+		},
+		{
+			"markdown": "hello wo",
+			"selection": {
+				"anchor": 0,
+				"head": 0
+			},
+			"structural": false,
+			"now": 1260,
+			"kind": "record"
+		},
+		{
+			"markdown": "Xhello wo",
+			"selection": {
+				"anchor": 9,
+				"head": 9
+			},
+			"structural": false,
+			"now": 1310,
+			"kind": "record"
+		},
+		{
+			"markdown": "Xhello wo\n\n## Pasted heading\n",
+			"selection": {
+				"anchor": 29,
+				"head": 29
+			},
+			"structural": true,
+			"now": 1340,
+			"kind": "record"
+		},
+		{
+			"markdown": "Xhello wo\n\n## Pasted heading 😀\n",
+			"selection": {
+				"anchor": 32,
+				"head": 32
+			},
+			"structural": false,
+			"now": 1390,
+			"kind": "record"
+		},
+		{
+			"markdown": "",
+			"selection": null,
+			"structural": false,
+			"now": 1990,
+			"kind": "tick"
+		},
+		{
+			"markdown": "Xhello wo\n\n## Pasted heading 😁\n",
+			"selection": {
+				"anchor": 32,
+				"head": 32
+			},
+			"structural": false,
+			"now": 2040,
+			"kind": "record"
+		},
+		{
+			"markdown": "",
+			"selection": null,
+			"structural": false,
+			"now": 2050,
+			"kind": "flush"
+		}
+	],
+	"commits": [
+		{
+			"sequence": 1,
+			"parentNodeId": "root",
+			"patch": "{\"from\":0,\"to\":0,\"insert\":\"hello\"}",
+			"snapshot": null,
+			"selection": {
+				"anchor": 5,
+				"head": 5
+			},
+			"markdown": "hello"
+		},
+		{
+			"sequence": 2,
+			"parentNodeId": "01M132JR3ADDYZNV1ECZHTBK0Y",
+			"patch": "{\"from\":5,\"to\":5,\"insert\":\" wo\"}",
+			"snapshot": null,
+			"selection": {
+				"anchor": 0,
+				"head": 0
+			},
+			"markdown": "hello wo"
+		},
+		{
+			"sequence": 3,
+			"parentNodeId": "01M132JR3BEP8411EB0TYAFQTY",
+			"patch": "{\"from\":0,\"to\":0,\"insert\":\"X\"}",
+			"snapshot": null,
+			"selection": {
+				"anchor": 9,
+				"head": 9
+			},
+			"markdown": "Xhello wo"
+		},
+		{
+			"sequence": 4,
+			"parentNodeId": "01M132JR3BQDTMRZ79CD7FQNSG",
+			"patch": "{\"from\":9,\"to\":9,\"insert\":\"\\n\\n## Pasted heading\\n\"}",
+			"snapshot": null,
+			"selection": {
+				"anchor": 29,
+				"head": 29
+			},
+			"markdown": "Xhello wo\n\n## Pasted heading\n"
+		},
+		{
+			"sequence": 5,
+			"parentNodeId": "01M132JR3B3XNYQSYHQ185Q6KB",
+			"patch": "{\"from\":28,\"to\":28,\"insert\":\" 😀\"}",
+			"snapshot": null,
+			"selection": {
+				"anchor": 32,
+				"head": 32
+			},
+			"markdown": "Xhello wo\n\n## Pasted heading 😀\n"
+		},
+		{
+			"sequence": 6,
+			"parentNodeId": "01M132JR3BFWVGTJE6K1S1NGSK",
+			"patch": "{\"from\":30,\"to\":31,\"insert\":\"\\ude01\"}",
+			"snapshot": null,
+			"selection": {
+				"anchor": 32,
+				"head": 32
+			},
+			"markdown": "Xhello wo\n\n## Pasted heading 😁\n"
+		}
+	]
+}
