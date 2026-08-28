@@ -21,6 +21,17 @@
 | Palettes at launch | Twilight (dark) + Paper (light) only | Aurora/Dawn/Moonlit later with designed light twins. |
 | iPhone raw lens | Allowed under "More" | Already in the matrix; no reason to remove. |
 
+## 0b. Orchestrator decisions on W4's open questions (2026-08-28)
+
+| Question | Decision |
+|---|---|
+| Tables: engine's cached bitmaps vs overlay views | Keep the engine's approach (collapsed source + pipes revealed on caret entry) for v1; overlay views only if cell editing proves unusable. Plan 023 §1.3 / design §4.2 amended. |
+| Upstream dialect work | Fork branch `recto` is the source of truth; upstream general pieces (setext, footnotes, hard breaks, link titles) as separate PRs later, low priority. |
+| Extension/directive seams | Keep the extension seam (strikethrough rides it); delete directives, wiki-links, LaTeX, scroll-away header, embedded-images-by-name. |
+| Focus dim | Fragment-level transparency layer (Edmund), not `setRenderingAttributes`. |
+| 8 ms typing target | Applies to M1-class as written; W4's derating (≈9 ms p50 on M1) is accepted for now, re-measured on an M1 iPad in N8 before it becomes a STOP. |
+| N5 split | W9a = fork plumbing (applyPatch, undo flags, text-view seam, platform-neutral services, Swift 6 mode, drop unused deps) + dialect + `RectoEditor` package skeleton with corpus snapshot tests; W9b = blocks/features/undo-tree/typewriter/find. |
+
 ## 1. Phase dependency map
 
 ```
@@ -134,6 +145,10 @@ in-flight workers are producing (§4).
 
 ## 5. Learnings log (append; newest first)
 
+- 2026-08-28 (W4, N0b GO): `swift-markdown-engine` @ `08ff3c07` (fork `bhekanik/swift-markdown-engine`): typing p50 5.3 ms / reveal 2.5 ms / scroll p95 1.8 ms on M3 Max Release, 10k words; caret stable across 160 reveal cycles; all 24 corpus cases byte-identical from storage. M1 derating ≈ 9 ms p50 typing (accepted; re-measure on iPad in N8). Dialect gaps: frontmatter, footnotes, setext, link titles, reference links, hard breaks, tilde fences, indented code, `- - -`, autolink brackets; list indent is `spaces/2`. External text patches force a full rebuild that drops the caret to 0 (fix first). Engine never calls `registerUndo`; internal edits go through `shouldChangeText → replaceCharacters → didChangeText` and report via `onTextMutation` in UTF-16 (our feed). Tables are cached bitmaps over collapsed source with pipes revealed on caret entry (accepted for v1 instead of overlay views). Focus dim via `setRenderingAttributes` will not work with cached decoration bitmaps; use Edmund's fragment transparency layer. `scrollRangeToVisible` kills the process on large TK2 docs; TK2 returns estimated heights above the caret, so typewriter centring needs settle passes; reserve overscroll via `textContainerInset` not `contentInsets`. UIKit port ≈ 8.9k lines rewrite (all of `TextView/`), service protocols return AppKit types (make platform-neutral first). Engine is Swift 5 mode, mutable static caches; pre-1.0 at ~3 commits/day: pin and expect divergence. Full assessment + 18-item fork change list: PR #2 body §3.
+- 2026-08-28 (W4): measurement gotchas: wrap synthetic keystroke loops in `autoreleasepool` (else footprint climbs to 1 GB and reads as a leak); `phys_footprint` right after load catches a transient (peak 258 MB, steady 29 MB; use `vmmap`); the engine lays out the whole document on open (114 ms open, most of the peak; re-measure at 950 kB); `MD_PERF` trace is DEBUG-only. Source Serif 4 is NOT installed on this Mac (spike measured with Times); bundle the OFL fonts. `gh repo fork --org bhekanik` fails (user, not org). `bun` prints a spurious `Cannot read file "/Users/bhekanik/": ENOENT` on stderr after succeeding.
+- 2026-08-28 (W4/W1): the corpus has **24** cases, not 25; the 25th "case" is the idempotence sweep in `corpus.test.ts`. Plans 023 and this file said 25.
+- 2026-08-28 (W1, N1a/N0e): `traceable` works in the Convex DEFAULT runtime (run id readable inside the traced call; `awaitPendingTraceBatches()` warns rather than throws on an unreachable endpoint). Root cause of 022: the remote-pointer-adoption effect re-triggers on every local commit via `nodesById` identity and adopts the not-yet-published server pointer. `bunx convex codegen` uploads for typechecking but does not deploy (`convex dev --once` does). `api.x.y` is a fresh proxy per access; use `getFunctionName()` for identity in tests. Convex proxies outbound fetch; failures read `tunnel error: proxy authorization required`. A React hook can be driven under vitest with `react-dom/client` + React 19 `act` as a `.ts` test.
 - 2026-08-28 (orchestrator): **Vercel Git-triggered production deploys have been BLOCKED since July** (`readyStateReason: commit author does not have contributing access`, `seatBlock: TEAM_ACCESS_REQUIRED`): the GitHub user `bhekanik` (id 4772279) resolves to a Vercel user that is not a member of team `planetaryescape`. Until BK fixes it in the Vercel dashboard (link that GitHub account to the team member, or add the seat), deploy with `vercel deploy --prod --yes` from the main checkout; it runs `npx convex deploy --cmd 'bun run build'` remotely (prod Convex = `careful-capybara-416`) and aliases `recto-dusky.vercel.app`. Verified 2026-08-28 with `681dcde`.
 - 2026-08-28 (orchestrator): the main checkout had no `.env.local`; recreated it with `bunx convex dev --once --configure existing --team bhekani-khumalo --project recto --dev-deployment cloud`. Worktrees do not get it (gitignored): copy it. Clerk publishable key derived from the Convex `CLERK_JWT_ISSUER_DOMAIN` (`pk_test_` = base64 of `<frontend-api-host>$`); **prod Convex also trusts the dev Clerk instance** `musical-flounder-88.clerk.accounts.dev`. `CLERK_SECRET_KEY` exists only in Vercel (sensitive, not pullable) and GitHub secrets; needed for e2e (`@clerk/testing`). Secrets for workers live in the session scratchpad `secrets/` dir, never in the repo.
 - 2026-08-28 (orchestrator): one shared cloud dev deployment; only one worker per wave may run `convex dev` / push functions (W1 in wave 1). Consider Convex preview deployments per worker for wave 2+.
@@ -160,15 +175,16 @@ in-flight workers are producing (§4).
 
 | Worker | Phase | Branch | Status | PR | Reviews (Claude / Codex) | Deployed |
 |---|---|---|---|---|---|---|
-| W1 history-commit | N1a + N0e | 023/history-commit | in progress (launched 2026-08-28 02:30) | | | |
+| W1 history-commit | N1a + N0e | 023/history-commit | in review (round 1 sent; e2e proof blocked on CLERK_SECRET_KEY) | #1 | Claude r1 / Codex running | |
 | W2 light-theme | N1c | 023/light-theme | in progress (launched 02:30, resumed after API drop) | | | |
 | W3 core-js | N1d + N0d | 023/core-js | in progress (launched 02:30) | | | |
-| W4 editor-spike | N0b | spike/editor-engine | in progress (launched 02:30) | | | n/a |
+| W4 editor-spike | N0b | spike/editor-engine | **done: GO** (fork @ 08ff3c07) | #2 (draft, not merged) | n/a | n/a |
 | W5 native-spike | N0a | spike/native-core | in progress (launched 02:30) | | | n/a |
 | W6 vim-spike | N0c | spike/vim-jsc | in progress (launched 02:30, resumed after API drop) | | | n/a |
 | W7 settings-workspaces-deletion | N1b | 023/settings | blocked on W1 | | | |
 | W8 js-cores | N3 | 023/js-cores | blocked on W3 | | | |
-| W9 editor-engine | N5 | 023/editor-engine | blocked on W4 | | | |
+| W9a editor-engine stage 1 (fork plumbing + dialect + RectoEditor skeleton) | N5 | 023/editor-engine | launched 2026-08-28 | | | |
+| W9b editor-engine stage 2 (blocks, features, undo-tree, typewriter) | N5 | 023/editor-engine-2 | blocked on W9a | | | |
 | W10 native-core | N4 | 023/native-core | blocked on W5 (transport on W1 deploy) | | | |
 | W11 ai-on-convex | N2 | 023/ai-convex | blocked on W7 | | | |
 | W12 mac-alpha | N6 | 023/mac-alpha | blocked on W9, W10, W8, W2 | | | |
