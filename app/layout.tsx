@@ -47,12 +47,6 @@ export const viewport: Viewport = {
 	// Shrink the layout (100dvh) when the on-screen keyboard opens instead of
 	// letting it overlay the editor and status bar.
 	interactiveWidget: "resizes-content",
-	// Matches --color-bg-app in each appearance, so the browser chrome (mobile
-	// address bar, PWA splash) never fights the page.
-	themeColor: [
-		{ media: "(prefers-color-scheme: light)", color: "#f9f6f1" },
-		{ media: "(prefers-color-scheme: dark)", color: "#0f101e" },
-	],
 };
 
 export default function RootLayout({
@@ -68,8 +62,10 @@ export default function RootLayout({
 		>
 			<head>
 				{/* Resolves light/dark onto <html> before the first paint, so there is
-				    no flash of the wrong appearance. `suppressHydrationWarning` above
-				    is required: this script mutates the class React is about to
+				    no flash of the wrong appearance, and creates the single
+				    `theme-color` meta so the browser chrome follows the writer's
+				    stored override rather than the OS. `suppressHydrationWarning`
+				    above is required: this script mutates the class React is about to
 				    reconcile. */}
 				{/* biome-ignore lint/security/noDangerouslySetInnerHtml: a blocking
 				    inline script is the only way to beat the first paint; the content
