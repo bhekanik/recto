@@ -31,6 +31,10 @@ public actor SyncEngine {
   /// `start()` has been called. Until then `requestDrain()` only records that
   /// work is waiting: an engine nobody started must not reach the network.
   private var isRunning = false
+  /// Documents a window has open. Held separately from the subscription tasks
+  /// so `stop()` / `resume()` can tear the sockets down and bring the same set
+  /// back up.
+  private var openDocumentIds: Set<String> = []
   private var nodeSubscriptions: [String: Task<Void, Never>] = [:]
   private var libraryTask: Task<Void, Never>?
   private var retryTasks: [Int64: Task<Void, Never>] = [:]
@@ -81,11 +85,14 @@ public actor SyncEngine {
     isRunning = true
     libraryTask?.cancel()
     libraryTask = Task { [weak self] in await self?.runLibrarySubscription() }
+    for localId in openDocumentIds { subscribeToNodes(localId: localId) }
     requestDrain()
   }
 
   /// Tear down every subscription. The outbox is untouched — that is the point
   /// of it.
+  /// Tear down every socket. `openDocumentIds` and the outbox survive — that is
+  /// what lets `resume()` bring the same documents back after a suspend.
   public func stop() {
     isRunning = false
     libraryTask?.cancel()
@@ -103,10 +110,10 @@ public actor SyncEngine {
   /// foreground.
   public func resume() async {
     _ = await transport.loginFromCache()
-    let openDocuments = Array(nodeSubscriptions.keys)
+    // `stop()` keeps `openDocumentIds`, so `start()` brings the same documents
+    // back up on the new socket.
     stop()
     start()
-    for localId in openDocuments { await openDocument(localId: localId) }
   }
 
   // MARK: - Library subscription
@@ -179,16 +186,27 @@ public actor SyncEngine {
   // MARK: - Per-document node subscription
 
   /// Mirror this document's nodes while it is open.
+  ///
+  /// Like `requestDrain()`, this only records the intent until `start()` has been
+  /// called: an engine nobody started must not open a socket. That also makes a
+  /// test that drives `reconcileHead` / `drainNow` by hand deterministic, instead
+  /// of racing a subscription tick it never asked for.
   public func openDocument(localId: String) async {
-    guard nodeSubscriptions[localId] == nil else { return }
-    nodeSubscriptions[localId] = Task { [weak self] in
-      await self?.runNodeSubscription(localId: localId)
-    }
+    openDocumentIds.insert(localId)
+    subscribeToNodes(localId: localId)
   }
 
   public func closeDocument(localId: String) {
+    openDocumentIds.remove(localId)
     nodeSubscriptions[localId]?.cancel()
     nodeSubscriptions[localId] = nil
+  }
+
+  private func subscribeToNodes(localId: String) {
+    guard isRunning, nodeSubscriptions[localId] == nil else { return }
+    nodeSubscriptions[localId] = Task { [weak self] in
+      await self?.runNodeSubscription(localId: localId)
+    }
   }
 
   private func runNodeSubscription(localId: String) async {
@@ -216,7 +234,10 @@ public actor SyncEngine {
   }
 
   /// Compare the local head with the server's and apply §4.4.
-  public func reconcileHead(localId: String) async throws {
+  ///
+  /// `pullMissingNodes` is false on the second pass, after a pull, so a server
+  /// head that stays unreachable cannot recurse forever.
+  public func reconcileHead(localId: String, pullMissingNodes: Bool = true) async throws {
     guard let document = try await store.document(localId: localId),
       let convexId = document.convexId,
       let remote = try await transport.getDocument(documentId: convexId)
@@ -227,26 +248,49 @@ public actor SyncEngine {
       || document.draftMarkdown != nil
     let nodesById = indexNodes(try await store.nodes(documentLocalId: localId).map(\.docNode))
 
+    // A reconcile must never clear `.failed`. The failure is about the outbox,
+    // not about where the heads are, and a node subscription tick arriving after
+    // a failed drain would otherwise reset the badge to "pending" and hide a
+    // stuck queue. The queue itself is asked, immediately before each write —
+    // `document` was read before several awaits and its `syncState` is already
+    // stale by the time we get here.
+    func settled(_ candidate: SyncState) async -> SyncState {
+      let failing = (try? await store.hasFailedJobs(documentLocalId: localId)) ?? false
+      return failing ? .failed : candidate
+    }
+
     switch ConflictResolver.resolve(
       localHead: document.localHeadNodeId, remoteHead: remote.currentNodeId,
       nodesById: nodesById, hasPendingWork: hasPendingWork)
     {
     case .inSync:
       try await store.setSyncState(
-        documentLocalId: localId, hasPendingWork ? .pending : .synced,
+        documentLocalId: localId, await settled(hasPendingWork ? .pending : .synced),
         remoteHeadNodeId: remote.currentNodeId, remoteUpdatedAt: remote.updatedAt,
         divergedRemoteHeadNodeId: .some(nil))
 
     case .awaitingNodes(let remoteHead):
-      // The remote head is not in our DAG yet; the subscription will bring it.
-      logger.debug(
-        "awaiting node \(remoteHead, privacy: .public) for \(localId, privacy: .public)")
+      // Fetch the missing branch rather than waiting for the subscription to
+      // deliver it. A Convex subscription that hit a server error is a completed
+      // publisher that never returns (N0a), so a document whose convergence
+      // depended on one would simply stop converging.
+      guard pullMissingNodes else {
+        logger.error(
+          "remote head \(remoteHead, privacy: .public) is still unreachable for \(localId, privacy: .public)"
+        )
+        return
+      }
+      let missing = try await transport.listNodes(documentId: convexId, sinceCreatedAt: nil)
+      try await store.mergeRemoteNodes(
+        documentLocalId: localId, nodes: missing.map { $0.record(documentLocalId: localId) })
+      try await reconcileHead(localId: localId, pullMissingNodes: false)
 
     case .uploadAncestors:
       // The server is behind us; the outbox already holds the work. Nothing to
       // adopt and nothing to overwrite.
       try await store.setSyncState(
-        documentLocalId: localId, .pending, remoteHeadNodeId: remote.currentNodeId,
+        documentLocalId: localId, await settled(.pending),
+        remoteHeadNodeId: remote.currentNodeId,
         remoteUpdatedAt: remote.updatedAt)
 
     case .adoptRemote(let headNodeId, let whenIdle):
@@ -254,7 +298,8 @@ public actor SyncEngine {
         // The user is mid-edit. Record where the server is and adopt once the
         // outbox drains; moving the caret now is plan 022 in a new costume.
         try await store.setSyncState(
-        documentLocalId: localId, .pending, remoteHeadNodeId: headNodeId, remoteUpdatedAt: remote.updatedAt)
+          documentLocalId: localId, await settled(.pending), remoteHeadNodeId: headNodeId,
+          remoteUpdatedAt: remote.updatedAt)
         return
       }
       let markdown = try await store.materializedMarkdown(

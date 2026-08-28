@@ -10,10 +10,10 @@ import Testing
 
 /// Live tests against the dev Convex deployment.
 ///
-/// Skipped — loudly, with the reason — unless the environment supplies a
-/// deployment and a Clerk publishable key. Sign-in uses Clerk's `+clerk_test`
-/// address and the fixed `424242` code, which needs no mailbox and no
-/// `CLERK_SECRET_KEY`.
+/// The suite is *skipped*, not failed, unless the environment supplies a
+/// deployment and a Clerk publishable key — a plain `swift test` on this package
+/// has to stay green. Sign-in uses Clerk's `+clerk_test` address and the fixed
+/// `424242` code, which needs no mailbox and no `CLERK_SECRET_KEY`.
 ///
 ///   RECTO_CONVEX_URL=https://<deployment>.convex.cloud \
 ///   RECTO_CLERK_PUBLISHABLE_KEY=pk_test_… \
@@ -38,6 +38,11 @@ struct LiveConfig {
       email: environment["RECTO_TEST_EMAIL"] ?? "recto-e2e+clerk_test@example.com",
       code: environment["RECTO_TEST_CODE"] ?? "424242")
   }
+}
+
+/// Gate for the suite's `.enabled(if:)` trait.
+enum LiveConvexEnvironment {
+  static var isConfigured: Bool { LiveConfig.fromEnvironment() != nil }
 }
 
 /// One signed-in client, shared by every test in the suite: Clerk refuses to be
@@ -80,18 +85,15 @@ actor LiveClient {
   enum LiveError: Error { case convexLoginFailed }
 }
 
-@Suite("LiveConvex", .serialized)
+@Suite(
+  "LiveConvex", .serialized,
+  .enabled(
+    if: LiveConvexEnvironment.isConfigured,
+    "set RECTO_CONVEX_URL and RECTO_CLERK_PUBLISHABLE_KEY to run the live Convex tests"))
 struct LiveConvexTests {
   @Test("create, commit, undo and delete a document against the dev deployment")
   func roundTrip() async throws {
-    guard let config = LiveConfig.fromEnvironment() else {
-      Issue.record(
-        """
-        skipped: set RECTO_CONVEX_URL and RECTO_CLERK_PUBLISHABLE_KEY to run the \
-        live Convex tests (see LiveConvexTests.swift).
-        """)
-      return
-    }
+    let config = try #require(LiveConfig.fromEnvironment())
 
     let directory = URL(fileURLWithPath: NSTemporaryDirectory())
       .appending(path: "recto-live-\(UUID().uuidString)")
@@ -145,10 +147,7 @@ struct LiveConvexTests {
 
   @Test("a stale expectedHeadNodeId is answered with a divergence, not a lost node")
   func divergenceAgainstTheRealServer() async throws {
-    guard let config = LiveConfig.fromEnvironment() else {
-      Issue.record("skipped: RECTO_CONVEX_URL / RECTO_CLERK_PUBLISHABLE_KEY not set")
-      return
-    }
+    let config = try #require(LiveConfig.fromEnvironment())
 
     let directory = URL(fileURLWithPath: NSTemporaryDirectory())
       .appending(path: "recto-live-\(UUID().uuidString)")

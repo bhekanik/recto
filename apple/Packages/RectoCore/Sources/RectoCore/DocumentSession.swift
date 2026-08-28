@@ -75,6 +75,13 @@ public actor DocumentSession {
   private var draftTask: Task<Void, Never>?
   private var eventTask: Task<Void, Never>?
   private var openCount = 0
+  /// A navigation or divergence resolution is part-way through repositioning the
+  /// grouping controller. Actor methods interleave at every `await`, so without
+  /// this the sync event handler can re-seed the controller between the head
+  /// move and the commit that follows it — and the commit then reads as a
+  /// selection-only change and is silently dropped. This is the native shape of
+  /// the web's `navigatingRef` guard.
+  private var isRepositioning = false
 
   /// How many windows currently hold this session.
   var holderCount: Int { openCount }
@@ -109,9 +116,17 @@ public actor DocumentSession {
   /// Idempotent: a second window on the same document just increments the count.
   public func open() async throws {
     openCount += 1
-    guard controller == nil else { return }
 
+    // Always re-read, even when a window already has this session open. The sync
+    // engine writes head moves and divergences from its own actor and this
+    // session only learns about them through an event, so a second window that
+    // opened between the write and the event would render a stale snapshot.
     try await reload()
+    guard controller == nil else {
+      publish()
+      return
+    }
+
     guard let document else { throw SessionError.documentMissing(documentLocalId) }
 
     let markdown = try await store.materializedMarkdown(
@@ -304,6 +319,8 @@ public actor DocumentSession {
   /// Jump anywhere in the DAG. A pointer move: it never grows the tree.
   public func navigate(to nodeId: String) async throws {
     guard controller != nil, nodesById[nodeId] != nil else { return }
+    isRepositioning = true
+    defer { isRepositioning = false }
     // Commit any pending draft first, so we branch from a real node rather than
     // mid-edit text that would be lost.
     if let document, let commit = controller?.flush() {
@@ -344,6 +361,8 @@ public actor DocumentSession {
   /// Keep the local branch: re-commit the local head's text onto the remote head
   /// so the server's pointer catches up. Both branches stay in the DAG.
   public func resolveDivergenceKeepingLocal() async throws {
+    isRepositioning = true
+    defer { isRepositioning = false }
     // The divergence is written by the sync engine on its own actor; the
     // session hears about it through an event that may not have arrived yet.
     try await reload()
@@ -372,6 +391,8 @@ public actor DocumentSession {
   /// Take the server's branch. The local branch stays reachable in the history
   /// panel — nothing is deleted.
   public func resolveDivergenceKeepingRemote() async throws {
+    isRepositioning = true
+    defer { isRepositioning = false }
     try await reload()
     guard let document, let remoteHead = document.divergedRemoteHeadNodeId,
       nodesById[remoteHead] != nil
@@ -408,7 +429,7 @@ public actor DocumentSession {
     }
     // A remote head adoption re-materialized the head under us; the controller
     // has to be repositioned or the next commit would patch against stale text.
-    if let document, controller?.currentNodeId != document.localHeadNodeId,
+    if !isRepositioning, let document, controller?.currentNodeId != document.localHeadNodeId,
       controller?.hasPendingDraft == false
     {
       let markdown = (try? await store.materializedMarkdown(

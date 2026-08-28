@@ -433,6 +433,20 @@ public actor RectoStore {
     }
   }
 
+  /// Does this document have a queued job that has already failed at least once?
+  ///
+  /// `SyncState.failed` is derived from this rather than owned as an independent
+  /// flag: a reconcile that decided "nothing to do" from a snapshot taken before
+  /// a drain failed would otherwise reset the badge and hide a stuck queue.
+  public func hasFailedJobs(documentLocalId: String) throws -> Bool {
+    try writer.read { db in
+      try OutboxJob
+        .filter(Column("documentLocalId") == documentLocalId)
+        .filter(Column("lastError") != nil)
+        .fetchCount(db) > 0
+    }
+  }
+
   public func pendingJobCount() throws -> Int {
     try writer.read { try OutboxJob.fetchCount($0) }
   }

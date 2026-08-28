@@ -338,3 +338,25 @@ struct RectoStoreTests {
     #expect(job.payload == "payload")
   }
 }
+
+@Suite("outbox failure state")
+struct OutboxFailureTests {
+  @Test("hasFailedJobs reflects whether a queued job has already errored")
+  func hasFailedJobs() async throws {
+    let store = try RectoStore.inMemory()
+    _ = try await seedDocument(store)
+    #expect(try await store.hasFailedJobs(documentLocalId: "doc-1") == false)
+
+    let job = try await store.enqueue(
+      OutboxJob(
+        documentLocalId: "doc-1", kind: .commitEdit, clientMutationId: ulid(), payload: "1",
+        createdAt: 0))
+    #expect(try await store.hasFailedJobs(documentLocalId: "doc-1") == false)
+
+    try await store.failJob(id: try #require(job.id), error: "boom", retryAfter: 0, now: 0)
+    #expect(try await store.hasFailedJobs(documentLocalId: "doc-1") == true)
+
+    try await store.completeJob(id: try #require(job.id))
+    #expect(try await store.hasFailedJobs(documentLocalId: "doc-1") == false)
+  }
+}

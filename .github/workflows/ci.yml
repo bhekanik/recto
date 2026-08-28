@@ -67,8 +67,17 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-      - run: sudo xcode-select -s /Applications/Xcode_26.app/Contents/Developer
-      - run: swift --version
+      # The macos-26 image already defaults to Xcode 26 (W3's core-js job builds
+      # Swift on it without selecting one); this only pins it if a differently
+      # named Xcode is ever the default. The versions are printed either way so
+      # the log says which SDK ran.
+      - name: Toolchain
+        run: |
+          if [ -d /Applications/Xcode_26.app ]; then
+            sudo xcode-select -s /Applications/Xcode_26.app/Contents/Developer
+          fi
+          xcodebuild -version
+          swift --version
       - run: bun install --frozen-lockfile
       # The Swift history ports must agree with lib/ byte-for-byte. Regenerating
       # the fixtures from the web implementations and diffing catches the case
@@ -83,8 +92,9 @@ jobs:
           set -euo pipefail
           for package in RectoHistory RectoStore RectoAuth RectoSync RectoCore; do
             echo "::group::$package"
-            swift test --package-path "apple/Packages/$package" \
-              --skip RectoIntegrationTests
+            # No --skip: the LiveConvex suite gates itself on RECTO_CONVEX_URL,
+            # which CI deliberately does not set, and reports as skipped.
+            swift test --package-path "apple/Packages/$package"
             echo "::endgroup::"
           done
 
