@@ -201,7 +201,7 @@ in-flight workers are producing (§4).
 | W14 ios-engine-ipad | N8 | 023/ios-ipad | blocked on W9, W12 | | | |
 | W15 iphone | N9 | 023/iphone | blocked on W14 | | | |
 | W16 release | N10 | 023/release | blocked on W13, W15 | | | |
-| F1 accent-token-rename (follow-up: `--color-accent` collides with shadcn `@theme inline`; Twilight accent renders muted on main) | N1c follow-up | 023/accent-token | blocked on W2 merge | | | |
+| F1 accent-token-rename (`--color-accent` collides with shadcn `@theme inline`; Twilight accent renders muted on prod) | N1c follow-up | 023/accent-token | launched 2026-08-28 (W2 agent) | | | |
 
 ## 7. Review protocol (orchestrator)
 
