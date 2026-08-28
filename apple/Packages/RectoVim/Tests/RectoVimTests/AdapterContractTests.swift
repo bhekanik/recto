@@ -212,6 +212,80 @@ struct AdapterContractTests {
         #expect(try harness.engine.state().primarySelection.head == 1)
     }
 
+    @Test("an insert session is one undo step, not one per keystroke")
+    func insertSessionIsOneUndoStep() throws {
+        // Vim's undo unit is one command, and an insert session is one command.
+        // Every bridge edit used to open and close its own undo group, so this
+        // produced `abtail` — `u` removed the `c` and nothing else.
+        let harness = try TextViewHarness("tail\n")
+        harness.press("iabc")
+        harness.press("<Esc>")
+        #expect(harness.textView.string == "abctail\n")
+
+        harness.press("u")
+        #expect(harness.textView.string == "tail\n")
+        #expect(try harness.engine.state().primarySelection.head == 0)
+        #expect(sameCodeUnits(harness.engine.text(), harness.textView.string))
+    }
+
+    @Test("two insert sessions are two undo steps")
+    func separateSessionsUndoSeparately() throws {
+        // The group has to *close* as well as open, or the second session joins
+        // the first and one `u` throws away both.
+        let harness = try TextViewHarness("tail\n")
+        harness.press("iab")
+        harness.press("<Esc>")
+        harness.press("A")
+        harness.press("X")
+        harness.press("<Esc>")
+        #expect(harness.textView.string == "abtailX\n")
+
+        harness.press("u")
+        #expect(harness.textView.string == "abtail\n")
+        harness.press("u")
+        #expect(harness.textView.string == "tail\n")
+    }
+
+    @Test("a normal-mode command in the middle closes the session")
+    func normalModeCommandEndsTheGroup() throws {
+        let harness = try TextViewHarness("one two\n")
+        harness.press("iX")
+        harness.press("<Esc>")
+        harness.press("dw")
+        #expect(harness.textView.string == "two\n")
+        harness.press("u")
+        #expect(harness.textView.string == "Xone two\n")
+        harness.press("u")
+        #expect(harness.textView.string == "one two\n")
+    }
+
+    @Test("an external edit does not steal a vim edit's caret")
+    func externalEditKeepsItsOwnUndoEntry() throws {
+        // A side stack keyed only by order handed the external edit's undo step
+        // the caret belonging to the vim edit before it. The caret action is
+        // registered inside its own transaction now, so an entry that has none
+        // falls back to the restored selection rather than borrowing one.
+        let harness = try TextViewHarness("one two three\n")
+        harness.press("dw")
+        #expect(harness.textView.string == "two three\n")
+
+        // Something else edits the document and registers its own undo step.
+        harness.textView.shouldChangeText(
+            in: NSRange(location: 0, length: 0), replacementString: "Z")
+        harness.textView.textStorage?.replaceCharacters(
+            in: NSRange(location: 0, length: 0), with: "Z")
+        harness.textView.didChangeText()
+        #expect(harness.textView.string == "Ztwo three\n")
+
+        harness.press("u")
+        #expect(harness.textView.string == "two three\n")
+        // The vim patch that follows must still report its own start.
+        harness.press("u")
+        #expect(harness.textView.string == "one two three\n")
+        #expect(try harness.engine.state().primarySelection.head == 0)
+        #expect(sameCodeUnits(harness.engine.text(), harness.textView.string))
+    }
+
     @Test("redo puts the caret at the patch too")
     func redoCaret() throws {
         let harness = try TextViewHarness("one\ntwo\nthree\n")

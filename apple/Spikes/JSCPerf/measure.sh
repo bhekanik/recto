@@ -15,7 +15,7 @@
 # why a single fixed-order sample per size measures the engine tiering up rather
 # than the document.
 #
-# Requires `bun run core:build` first.
+# Builds and stages the bundle itself; nothing to do first.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -24,10 +24,9 @@ bundle="$repo/packages/recto-core-js/dist/recto-core.js"
 jsc="/System/Library/Frameworks/JavaScriptCore.framework/Versions/A/Helpers/jsc"
 processes="${1:-3}"
 
-[ -f "$bundle" ] || {
-	echo "error: $bundle is missing — run \`bun run core:build\`" >&2
-	exit 1
-}
+# Build and stage the bundle rather than asking the caller to remember. The
+# copy script checks it against its manifest and scans it on the way through.
+"$repo/apple/scripts/copy-js-bundles.sh" >/dev/null
 
 swift build -c release --package-path "$here" >/dev/null
 binary="$here/.build/release/jsc-perf"

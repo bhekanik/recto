@@ -33,10 +33,13 @@ import Foundation
 /// a short way for such a pair gives a start position that is certainly a
 /// boundary, and the walk only has to cover the window from there.
 public enum GraphemeClamp {
-    /// How far back to look for a provable boundary before giving up and
-    /// starting from the beginning of the string. Long enough to clear any
-    /// cluster that occurs in real text by orders of magnitude.
-    private static let contextWindow = 256
+    /// How far back a lookup expects to scan before it finds a provable
+    /// boundary. **Not a correctness bound** — it only describes the cost of the
+    /// normal case. The scan below keeps going past it when it has to, because
+    /// stopping early meant returning a position that was not a boundary at all:
+    /// on `"a" + "e" + 400 combining marks + "b"`, `clusterStart(offset: 300)`
+    /// returned 44, splitting a cluster that starts at 1.
+    private static let expectedContext = 256
 
     /// The start of the cluster containing `offset`, clamped to the string.
     public static func clusterStart(in text: NSString, offset: Int) -> Int {
@@ -82,30 +85,10 @@ public enum GraphemeClamp {
         return result
     }
 
-    /// The cluster containing `offset`, found by walking `Character`s from a
-    /// position that is provably a boundary.
+    /// The cluster containing `offset`, walked from a position that is
+    /// **proven** to be a boundary — never from a guess.
     private static func cluster(in text: NSString, containing offset: Int) -> NSRange {
         let start = provableBoundary(in: text, atOrBefore: offset)
-        let windowLength = min(text.length - start, contextWindow + (offset - start) + 1)
-        let window = text.substring(with: NSRange(location: start, length: windowLength))
-
-        var at = start
-        for character in window {
-            let width = character.utf16.count
-            if offset < at + width {
-                return NSRange(location: at, length: width)
-            }
-            at += width
-        }
-        // The window ended inside the cluster containing `offset`, which only
-        // happens for a cluster longer than the window. Fall back to the whole
-        // tail rather than guessing.
-        return clusterByFullWalk(in: text, containing: offset, from: start)
-    }
-
-    private static func clusterByFullWalk(
-        in text: NSString, containing offset: Int, from start: Int
-    ) -> NSRange {
         var at = start
         for character in text.substring(from: start) {
             let width = character.utf16.count
@@ -117,20 +100,35 @@ public enum GraphemeClamp {
         return NSRange(location: offset, length: 0)
     }
 
-    /// The largest offset at or before `offset` that is certainly a cluster
-    /// boundary, or 0 if none is found within `contextWindow`.
+    /// The largest offset at or before `offset` that is **certainly** a cluster
+    /// boundary.
+    ///
+    /// Three things prove one, all cheap to check and none of them requiring a
+    /// property table:
+    ///
+    /// - offset 0, which is a boundary by definition (GB1);
+    /// - a position right after a line feed, or after a carriage return that is
+    ///   not followed by a line feed (GB4 breaks after Control/CR/LF, and GB3 is
+    ///   the CRLF exception);
+    /// - a position between two ASCII printables, which are all
+    ///   Grapheme_Cluster_Break=Other and none of them Extended_Pictographic, so
+    ///   GB999 breaks between them.
+    ///
+    /// In markdown one of the last two turns up within a few units, which is
+    /// what keeps a lookup local. When neither does — a very long combining run,
+    /// or a line of nothing but CJK — this walks back to 0 rather than returning
+    /// a position it cannot vouch for. Slower, and right.
     private static func provableBoundary(in text: NSString, atOrBefore offset: Int) -> Int {
         var candidate = offset
-        let floor = max(0, offset - contextWindow)
-        while candidate > floor {
-            if isASCIIPrintable(text.character(at: candidate - 1)),
-                isASCIIPrintable(text.character(at: candidate))
-            {
-                return candidate
-            }
+        while candidate > 0 {
+            let previous = text.character(at: candidate - 1)
+            let current = text.character(at: candidate)
+            if previous == 0x0A { return candidate }
+            if previous == 0x0D && current != 0x0A { return candidate }
+            if isASCIIPrintable(previous), isASCIIPrintable(current) { return candidate }
             candidate -= 1
         }
-        return floor == 0 ? 0 : floor
+        return 0
     }
 
     /// Space through tilde: all Grapheme_Cluster_Break=Other, so two of them in

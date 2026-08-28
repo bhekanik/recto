@@ -33,6 +33,10 @@ packages/recto-vim-js/manifest.json
 # drift from the source it was built from.
 apple/Packages/RectoCoreJS/Sources/RectoCoreJS/JS/*.js
 apple/Packages/RectoVim/Sources/RectoVim/JS/*.js
+# Same bundle again, staged for the device perf spike. It was committed once and
+# was immediately stale — the version string carries the git sha, so a committed
+# copy names a commit that is no longer HEAD and a device run would measure it.
+apple/Spikes/JSCPerf/Tests/JSCPerfTests/JS/*.js
 .build
 .swiftpm
 

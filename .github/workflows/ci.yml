@@ -66,6 +66,18 @@ jobs:
       - run: ./apple/scripts/scan-samples.sh
       - run: swift test --package-path apple/Packages/RectoCoreJS
       - run: swift test --package-path apple/Packages/RectoVim
+      # The device perf spike is not run here — its numbers depend on the
+      # signing of the process — but it must keep compiling, for macOS and for
+      # iOS. It stopped compiling once and nothing noticed until a review.
+      - run: swift build --package-path apple/Spikes/JSCPerf
+      - run: |
+          set -o pipefail
+          xcodebuild build-for-testing \
+            -scheme JSCPerf \
+            -destination 'generic/platform=iOS Simulator' \
+            -skipPackagePluginValidation \
+            | tail -20
+        working-directory: apple/Spikes/JSCPerf
       # The UIKit adapter is `#if canImport(UIKit)` and never compiles on the
       # macOS test run, so build it for the simulator to keep it honest.
       - name: build RectoVim for iOS (compile-checks the UIKit adapter)

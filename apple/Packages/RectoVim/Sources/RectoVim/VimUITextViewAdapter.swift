@@ -33,9 +33,14 @@ public final class VimUITextViewAdapter: NSObject, VimGeometryProvider, VimHisto
 
     private var applyingEdits = false
 
-    /// See `VimTextViewAdapter`: the undo caret is read from the patch, not
-    /// inferred from the platform's restored selection.
-    private let patches = VimUndoPatchLog()
+    /// Same contract as `VimTextViewAdapter`: an insert session is one undo
+    /// group, and the caret travels inside the transaction rather than beside it.
+    private var openInsertGroup: InsertGroup?
+    private var restoredPatchStart: Int?
+
+    private struct InsertGroup {
+        var patchStart: Int
+    }
     private static let log = Logger(subsystem: "com.bhekani.recto", category: "RectoVim")
 
     public init(textView: UITextView, engine: VimEngine, host: VimHost) {
@@ -117,6 +122,7 @@ public final class VimUITextViewAdapter: NSObject, VimGeometryProvider, VimHisto
 
     public func syncFromTextView() throws {
         guard !applyingEdits else { return }
+        closeInsertGroup()
         let string = (textView.text ?? "") as NSString
         let selection = GraphemeClamp.range(in: string, textView.selectedRange)
         try apply(
@@ -128,7 +134,7 @@ public final class VimUITextViewAdapter: NSObject, VimGeometryProvider, VimHisto
 
     private func apply(_ result: VimResult) throws {
         if !result.edits.isEmpty && !result.resynced {
-            if let failure = applyEdits(result.edits) {
+            if let failure = applyEdits(result.edits, insertMode: result.insertMode) {
                 // The engine committed these to its mirror before handing them
                 // over, so a partial replay leaves the two disagreeing and every
                 // later journal range pointing at the wrong text.
@@ -138,12 +144,15 @@ public final class VimUITextViewAdapter: NSObject, VimGeometryProvider, VimHisto
                 return
             }
         }
+        // Leaving insert mode ends the command, and so ends the undo group.
+        if !result.insertMode { closeInsertGroup() }
         applySelection(result)
         if let scroll = result.scroll { applyScroll(scroll) }
         onStatusChange?(VimStatus(result: result))
     }
 
     private func resyncFromStorage() throws {
+        closeInsertGroup()
         let text = textView.text ?? ""
         let selection = GraphemeClamp.range(in: text as NSString, textView.selectedRange)
         applyingEdits = true
@@ -154,11 +163,13 @@ public final class VimUITextViewAdapter: NSObject, VimGeometryProvider, VimHisto
 
     /// Returns nil on success, or the first failure — at which point replay has
     /// stopped and the caller must resync.
-    private func applyEdits(_ edits: [VimEdit]) -> VimReplayFailure? {
+    private func applyEdits(_ edits: [VimEdit], insertMode: Bool) -> VimReplayFailure? {
         applyingEdits = true
         defer { applyingEdits = false }
-        textView.undoManager?.beginUndoGrouping()
-        defer { textView.undoManager?.endUndoGrouping() }
+
+        if !insertMode { closeInsertGroup() }
+        openGroupIfNeeded()
+        defer { if !insertMode { closeInsertGroup() } }
 
         var applied: [NSRange] = []
         for edit in edits {
@@ -181,8 +192,37 @@ public final class VimUITextViewAdapter: NSObject, VimGeometryProvider, VimHisto
             applied.append(
                 NSRange(location: edit.range.location, length: edit.insert.utf16.count))
         }
-        patches.record(applied)
+        if var group = openInsertGroup {
+            for range in applied { group.patchStart = min(group.patchStart, range.location) }
+            openInsertGroup = group
+        }
         return nil
+    }
+
+    private func openGroupIfNeeded() {
+        guard openInsertGroup == nil else { return }
+        textView.undoManager?.beginUndoGrouping()
+        openInsertGroup = InsertGroup(patchStart: Int.max)
+    }
+
+    /// Registers the caret **inside** the group, so an external edit's undo step
+    /// cannot consume a caret that belongs to a vim edit before it.
+    private func closeInsertGroup() {
+        guard let group = openInsertGroup else { return }
+        openInsertGroup = nil
+        let undoManager = textView.undoManager
+        if group.patchStart != Int.max {
+            registerCaret(group.patchStart, on: undoManager)
+        }
+        undoManager?.endUndoGrouping()
+    }
+
+    private func registerCaret(_ start: Int, on undoManager: UndoManager?) {
+        guard let undoManager else { return }
+        undoManager.registerUndo(withTarget: self) { adapter in
+            adapter.restoredPatchStart = start
+            adapter.registerCaret(start, on: undoManager)
+        }
     }
 
     private func applySelection(_ result: VimResult) {
@@ -285,9 +325,11 @@ public final class VimUITextViewAdapter: NSObject, VimGeometryProvider, VimHisto
     /// Same contract as the AppKit adapter: vim's caret, read from the patch.
     public func performHistory(_ kind: String) -> VimHistoryResult? {
         guard let undoManager = textView.undoManager else { return nil }
+        closeInsertGroup()
         applyingEdits = true
         defer { applyingEdits = false }
 
+        restoredPatchStart = nil
         if kind == "undo" {
             guard undoManager.canUndo else { return nil }
             undoManager.undo()
@@ -296,10 +338,11 @@ public final class VimUITextViewAdapter: NSObject, VimGeometryProvider, VimHisto
             undoManager.redo()
         }
         let after = (textView.text ?? "") as NSString
-        let recorded = patches.take(kind)?.location ?? textView.selectedRange.location
+        let recorded = restoredPatchStart ?? textView.selectedRange.location
         return VimHistoryResult(
             text: after as String,
-            patchStart: GraphemeClamp.caret(in: after, offset: recorded))
+            patchStart: GraphemeClamp.caret(
+                in: after, offset: min(max(recorded, 0), after.length)))
     }
 }
 #endif

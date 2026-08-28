@@ -31,11 +31,24 @@ public final class VimTextViewAdapter: NSObject, VimGeometryProvider, VimHistory
     /// own change notifications do not bounce back into JS as external edits.
     private var applyingEdits = false
 
-    /// What each undo step will restore, so `u` can put the caret where vim
-    /// does. `NSUndoManager` reports that an undo happened and not what it
-    /// touched, and comparing the two full strings cannot recover the location
-    /// when the surrounding text repeats.
-    private let patches = VimUndoPatchLog()
+    /// The undo group currently open across keystrokes, if any.
+    ///
+    /// Vim's undo unit is one *command*, and an insert session is one command:
+    /// `iabc<Esc>` then `u` removes `abc`, not just the `c`. Each bridge edit
+    /// used to open and close its own group, so `u` removed one character.
+    private var openInsertGroup: InsertGroup?
+
+    /// Set by the undo action registered alongside each group when that group is
+    /// undone or redone. Nil means the step was not one of ours — an external
+    /// edit — and the text view's own restored selection is the best answer.
+    private var restoredPatchStart: Int?
+
+    private struct InsertGroup {
+        /// Start of the union of everything the session has written so far.
+        var patchStart: Int
+        /// What `groupsByEvent` was before the session opened.
+        let previousGroupsByEvent: Bool
+    }
 
     private static let log = Logger(subsystem: "com.bhekani.recto", category: "RectoVim")
 
@@ -140,6 +153,9 @@ public final class VimTextViewAdapter: NSObject, VimGeometryProvider, VimHistory
     /// a click can land mid-cluster where the engine's own offsets never do.
     public func syncFromTextView() throws {
         guard !applyingEdits else { return }
+        // Someone else changed the document, so whatever command was in progress
+        // is over as far as undo is concerned.
+        closeInsertGroup()
         let string = textView.string as NSString
         let selection = GraphemeClamp.range(in: string, textView.selectedRange())
         try apply(
@@ -153,7 +169,7 @@ public final class VimTextViewAdapter: NSObject, VimGeometryProvider, VimHistory
 
     private func apply(_ result: VimResult) throws {
         if !result.edits.isEmpty && !result.resynced {
-            if let failure = applyEdits(result.edits) {
+            if let failure = applyEdits(result.edits, insertMode: result.insertMode) {
                 // The engine committed these edits to its mirror before handing
                 // them over, so a partial replay leaves the two disagreeing and
                 // every later journal range pointing at the wrong text. Take the
@@ -164,6 +180,9 @@ public final class VimTextViewAdapter: NSObject, VimGeometryProvider, VimHistory
                 return
             }
         }
+        // Leaving insert mode ends the command, and so ends the undo group,
+        // even on a keystroke that wrote nothing (`<Esc>` itself).
+        if !result.insertMode { closeInsertGroup() }
         applySelection(result)
         applyCaretShape(result)
         if let scroll = result.scroll { applyScroll(scroll) }
@@ -172,6 +191,7 @@ public final class VimTextViewAdapter: NSObject, VimGeometryProvider, VimHistory
 
     /// Hand the storage back to the engine as the source of truth.
     private func resyncFromStorage() throws {
+        closeInsertGroup()
         let string = textView.string as NSString
         let selection = GraphemeClamp.range(in: string, textView.selectedRange())
         applyingEdits = true
@@ -195,33 +215,20 @@ public final class VimTextViewAdapter: NSObject, VimGeometryProvider, VimHistory
     /// `assertClampIsIdentity` states that invariant where a debug build checks it.
     /// Returns nil on success, or the first failure — at which point replay has
     /// stopped and the caller must resync.
-    private func applyEdits(_ edits: [VimEdit]) -> VimReplayFailure? {
+    ///
+    /// `insertMode` decides the undo granularity. In insert mode the group stays
+    /// open across keystrokes so the whole session undoes as one command; every
+    /// other command is a group of its own.
+    private func applyEdits(_ edits: [VimEdit], insertMode: Bool) -> VimReplayFailure? {
         guard let storage = textView.textStorage else {
             return .noTextStorage
         }
         applyingEdits = true
         defer { applyingEdits = false }
 
-        // Vim's undo granularity is one command, not one run-loop pass, so the
-        // batch below is one explicit group with event grouping off.
-        //
-        // Off only for the duration of the batch, though. Leaving it off breaks
-        // IME: `setMarkedText` reaches `-[NSUndoManager _prepareEventGrouping]`
-        // through AppKit's coalescing path, which raises when event grouping is
-        // disabled. Leaving it *on* is no good either — with no run loop turning
-        // AppKit swallows a whole session into one group, and one `u` undid
-        // everything. Scoping it to our own writes is what satisfies both.
-        let undoManager = textView.undoManager
-        let groupsByEvent = undoManager?.groupsByEvent ?? true
-        undoManager?.groupsByEvent = false
-        undoManager?.beginUndoGrouping()
-        defer {
-            undoManager?.endUndoGrouping()
-            undoManager?.groupsByEvent = groupsByEvent
-            // NSTextView coalesces consecutive typing into one undo group, which
-            // would make a single `u` throw away a whole editing session.
-            textView.breakUndoCoalescing()
-        }
+        if !insertMode { closeInsertGroup() }
+        openGroupIfNeeded()
+        defer { if !insertMode { closeInsertGroup() } }
 
         var applied: [NSRange] = []
         for edit in edits {
@@ -247,8 +254,62 @@ public final class VimTextViewAdapter: NSObject, VimGeometryProvider, VimHistory
             applied.append(
                 NSRange(location: edit.range.location, length: edit.insert.utf16.count))
         }
-        patches.record(applied)
+        extendOpenGroup(with: applied)
         return nil
+    }
+
+    /// Opens an undo group if one is not already open, and turns off event
+    /// grouping for its duration.
+    ///
+    /// Off only while our own writes are happening. Leaving it off breaks IME:
+    /// `setMarkedText` reaches `-[NSUndoManager _prepareEventGrouping]` through
+    /// AppKit's coalescing path, which raises when event grouping is disabled.
+    /// Leaving it *on* is no good either — with no run loop turning, AppKit
+    /// swallows a whole session into one group and one `u` undid everything.
+    private func openGroupIfNeeded() {
+        guard openInsertGroup == nil else { return }
+        let undoManager = textView.undoManager
+        let previous = undoManager?.groupsByEvent ?? true
+        undoManager?.groupsByEvent = false
+        undoManager?.beginUndoGrouping()
+        openInsertGroup = InsertGroup(patchStart: Int.max, previousGroupsByEvent: previous)
+    }
+
+    private func extendOpenGroup(with ranges: [NSRange]) {
+        guard var group = openInsertGroup else { return }
+        for range in ranges { group.patchStart = min(group.patchStart, range.location) }
+        openInsertGroup = group
+    }
+
+    /// Closes the open group, registering the caret **inside** it so the two
+    /// travel together.
+    ///
+    /// This is the whole reason there is no parallel stack any more: an external
+    /// edit adds its own undo entry, and a side-stack keyed only by order would
+    /// hand that entry the caret belonging to the vim edit before it. An action
+    /// registered in the group is consumed exactly when that group is undone.
+    private func closeInsertGroup() {
+        guard let group = openInsertGroup else { return }
+        openInsertGroup = nil
+        let undoManager = textView.undoManager
+        if group.patchStart != Int.max {
+            registerCaret(group.patchStart, on: undoManager)
+        }
+        undoManager?.endUndoGrouping()
+        undoManager?.groupsByEvent = group.previousGroupsByEvent
+        // NSTextView coalesces consecutive typing into one undo group, which
+        // would make a single `u` throw away a whole editing session.
+        textView.breakUndoCoalescing()
+    }
+
+    /// Registers an action that reports `start` when this transaction is undone,
+    /// and re-registers itself so redo reports it too.
+    private func registerCaret(_ start: Int, on undoManager: UndoManager?) {
+        guard let undoManager else { return }
+        undoManager.registerUndo(withTarget: self) { adapter in
+            adapter.restoredPatchStart = start
+            adapter.registerCaret(start, on: undoManager)
+        }
     }
 
     private func applySelection(_ result: VimResult) {
@@ -505,9 +566,14 @@ public final class VimTextViewAdapter: NSObject, VimGeometryProvider, VimHistory
     /// do with its own patch.
     public func performHistory(_ kind: String) -> VimHistoryResult? {
         guard let undoManager = textView.undoManager else { return nil }
+        closeInsertGroup()
         applyingEdits = true
         defer { applyingEdits = false }
 
+        // Nil unless one of our own transactions reports its patch. An external
+        // edit's undo step has no caret action, and the text view's restored
+        // selection is then the only honest answer.
+        restoredPatchStart = nil
         if kind == "undo" {
             guard undoManager.canUndo else { return nil }
             undoManager.undo()
@@ -516,10 +582,11 @@ public final class VimTextViewAdapter: NSObject, VimGeometryProvider, VimHistory
             undoManager.redo()
         }
         let after = textView.string as NSString
-        let recorded = patches.take(kind)?.location ?? textView.selectedRange().location
+        let recorded = restoredPatchStart ?? textView.selectedRange().location
         return VimHistoryResult(
             text: after as String,
-            patchStart: GraphemeClamp.caret(in: after, offset: recorded))
+            patchStart: GraphemeClamp.caret(
+                in: after, offset: min(max(recorded, 0), after.length)))
     }
 }
 #endif

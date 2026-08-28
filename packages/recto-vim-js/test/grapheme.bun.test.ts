@@ -227,6 +227,25 @@ describe("cluster boundaries", () => {
 	}
 });
 
+test("a cluster longer than any plausible window resolves at every offset", () => {
+	// `Intl.Segmenter` has no window, so this side was never at risk — but the
+	// Swift clamp scans back for a provable boundary and did stop early, turning
+	// `clusterStart(300)` into 44 on exactly this string. Both sides carry the
+	// case so the pair cannot drift apart on it.
+	const cluster = `e${"\u0301".repeat(400)}`;
+	const text = `a${cluster}b`;
+	const end = 1 + cluster.length;
+	const wrong: number[] = [];
+	for (let offset = 1; offset < end; offset++) {
+		if (clusterStart(text, offset) !== 1) wrong.push(offset);
+		if (clusterEnd(text, offset) !== (offset === 1 ? 1 : end))
+			wrong.push(-offset);
+	}
+	expect(wrong).toEqual([]);
+	expect(nextCluster(text, 1)).toBe(end);
+	expect(previousCluster(text, end)).toBe(1);
+});
+
 test("ASCII steps one code unit at a time", () => {
 	expect(nextCluster("abc", 0)).toBe(1);
 	expect(previousCluster("abc", 2)).toBe(1);

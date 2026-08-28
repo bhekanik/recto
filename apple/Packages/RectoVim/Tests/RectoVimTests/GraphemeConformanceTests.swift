@@ -143,15 +143,41 @@ struct GraphemeConformanceTests {
         #expect(failures.isEmpty, "\(failures.count):\n\(failures.prefix(20).joined(separator: "\n"))")
     }
 
-    @Test("a cluster longer than the context window still resolves")
+    @Test("a cluster longer than the scan window still resolves, at every offset")
     func longCluster() {
-        // The windowed lookup falls back to a full walk rather than guessing.
-        // 400 combining acutes is well past the 256-unit window.
+        // 400 combining acutes is well past the 256-unit expected context. The
+        // previous version stopped scanning there and reported whatever position
+        // it had reached: `clusterStart(offset: 300)` returned 44, inventing a
+        // boundary in the middle of a cluster that starts at 1. Checking one
+        // offset was how that survived — this checks all of them.
         let cluster = "e" + String(repeating: "\u{0301}", count: 400)
         let text = "a\(cluster)b" as NSString
-        #expect(GraphemeClamp.clusterStart(in: text, offset: 200) == 1)
-        #expect(GraphemeClamp.clusterEnd(in: text, offset: 200) == 1 + cluster.utf16.count)
-        #expect(GraphemeClamp.isBoundary(in: text, offset: 1 + cluster.utf16.count))
+        let end = 1 + cluster.utf16.count
+        #expect(cluster.count == 1, "the sample is not one Character")
+
+        var wrong: [Int] = []
+        for offset in 1..<end {
+            if GraphemeClamp.clusterStart(in: text, offset: offset) != 1 { wrong.append(offset) }
+            let wantedEnd = offset == 1 ? 1 : end
+            if GraphemeClamp.clusterEnd(in: text, offset: offset) != wantedEnd {
+                wrong.append(-offset)
+            }
+        }
+        #expect(wrong.isEmpty, "\(wrong.count) offsets resolved wrongly, e.g. \(wrong.prefix(5))")
+        #expect(GraphemeClamp.isBoundary(in: text, offset: end))
+        #expect(
+            GraphemeClamp.range(in: text, NSRange(location: 300, length: 1))
+                == NSRange(location: 1, length: cluster.utf16.count))
+    }
+
+    @Test("a long run with no ASCII or line ending anywhere before it")
+    func longClusterWithNoAnchor() {
+        // Nothing in this string proves a boundary except offset 0, so the scan
+        // has to walk all the way back rather than stopping at its window.
+        let cluster = "\u{1100}" + String(repeating: "\u{0301}", count: 400)
+        let text = cluster as NSString
+        #expect(GraphemeClamp.clusterStart(in: text, offset: 300) == 0)
+        #expect(GraphemeClamp.clusterEnd(in: text, offset: 300) == text.length)
     }
 
     @Test(

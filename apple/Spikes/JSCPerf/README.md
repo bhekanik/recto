@@ -124,12 +124,15 @@ extrapolation and has to be measured.
 
 ### BK: the one command
 
-The bundle is a **test-target resource** now, staged by
+The bundle is a **test-target resource**, staged by
 `apple/scripts/copy-js-bundles.sh`, so nothing reads from the checkout at
-runtime and the target runs unmodified on a phone.
+runtime and the target runs unmodified on a phone. It is **not committed** — the
+version string carries the git sha, so a committed copy names a commit that is
+no longer HEAD and a device run would quietly measure it. Stage it first; the
+test fails with that exact instruction if you forget.
 
 ```sh
-apple/scripts/copy-js-bundles.sh
+apple/scripts/copy-js-bundles.sh                # builds and stages the bundle
 xcrun devicectl list devices                    # copy the identifier
 cd apple/Spikes/JSCPerf
 xcodebuild test -scheme JSCPerf \
