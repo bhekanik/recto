@@ -260,7 +260,7 @@ public actor RectoStore {
   public func markNodesSynced(documentLocalId: String, nodeIds: [String]) throws {
     guard !nodeIds.isEmpty else { return }
     try writer.write { db in
-      try DocNodeRecord
+      _ = try DocNodeRecord
         .filter(Column("documentLocalId") == documentLocalId)
         .filter(nodeIds.contains(Column("nodeId")))
         .updateAll(db, Column("synced").set(to: true))
@@ -538,7 +538,7 @@ public actor RectoStore {
   public func markWritingStatsClean(dates: [String]) throws {
     guard !dates.isEmpty else { return }
     try writer.write { db in
-      try WritingStatRecord.filter(dates.contains(Column("date")))
+      _ = try WritingStatRecord.filter(dates.contains(Column("date")))
         .updateAll(db, Column("dirty").set(to: false))
     }
   }
