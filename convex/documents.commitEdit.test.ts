@@ -481,6 +481,69 @@ describe("documents.commitEdit", () => {
 		).toBe(rootNodeId);
 	});
 
+	it("moves the pointer by revision compare-and-set, ignoring a slow client clock", async () => {
+		const t = convexTest(schema, modules);
+		const { owner, documentId, rootNodeId } = await newDocument(t);
+
+		const committed = await owner.mutation(api.documents.commitEdit, {
+			documentId,
+			node: nodeFor("node-1", rootNodeId, "", "one"),
+			markdown: "one",
+			wordCount: 1,
+			expectedHeadNodeId: rootNodeId,
+			clientMutationId: "commit-1",
+		});
+		if (!committed.committed) throw new Error("commit failed");
+
+		// A client whose clock is behind the server would lose the wall-clock
+		// rule; the revision CAS makes the move land anyway.
+		const moved = await owner.mutation(api.documents.updateCurrentNodeId, {
+			documentId,
+			currentNodeId: rootNodeId,
+			markdown: "",
+			wordCount: 0,
+			updatedAt: committed.updatedAt - 60_000,
+			expectedPointerRevision: committed.pointerRevision,
+		});
+		expect(moved).toMatchObject({
+			applied: true,
+			currentNodeId: rootNodeId,
+			pointerRevision: committed.pointerRevision + 1,
+		});
+	});
+
+	it("rejects a pointer move whose expected revision is stale", async () => {
+		const t = convexTest(schema, modules);
+		const { owner, documentId, rootNodeId } = await newDocument(t);
+
+		const committed = await owner.mutation(api.documents.commitEdit, {
+			documentId,
+			node: nodeFor("node-1", rootNodeId, "", "one"),
+			markdown: "one",
+			wordCount: 1,
+			expectedHeadNodeId: rootNodeId,
+			clientMutationId: "commit-1",
+		});
+		if (!committed.committed) throw new Error("commit failed");
+
+		const stale = await owner.mutation(api.documents.updateCurrentNodeId, {
+			documentId,
+			currentNodeId: rootNodeId,
+			markdown: "",
+			wordCount: 0,
+			updatedAt: Date.now() + 60_000,
+			expectedPointerRevision: committed.pointerRevision - 1,
+		});
+		expect(stale).toMatchObject({
+			applied: false,
+			currentNodeId: "node-1",
+			pointerRevision: committed.pointerRevision,
+		});
+		expect(
+			(await owner.query(api.documents.get, { documentId }))?.currentNodeId,
+		).toBe("node-1");
+	});
+
 	it("refuses to point the head at a node that does not exist", async () => {
 		const t = convexTest(schema, modules);
 		const { owner, documentId, rootNodeId } = await newDocument(t);
