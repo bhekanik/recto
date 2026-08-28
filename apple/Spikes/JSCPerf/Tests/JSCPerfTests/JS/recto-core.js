@@ -34529,7 +34529,7 @@ globalThis.console ||= { log(){}, info(){}, warn(){}, error(){}, debug(){} };
     };
   }
   var RectoCore = {
-    version: "0.1.0+69fff4b",
+    version: "0.1.0+6ff4bf2",
     normalize(markdown) {
       return normalizeMarkdown(requireString(markdown, "normalize", "markdown"));
     },
