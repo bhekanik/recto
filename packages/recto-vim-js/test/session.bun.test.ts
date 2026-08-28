@@ -158,3 +158,141 @@ test("external input is off by default so the suites keep driving keys", () => {
 	press("iX", host);
 	expect(api.getText()).toBe("Xab\n");
 });
+
+/* -- the host's own caret and text changes ------------------------------- */
+
+test("a cursor handoff keeps insert mode and moves the engine", () => {
+	// Through a real NSTextView an insert-mode `<Left>` is declined to AppKit,
+	// which moves the selection and left the engine two units behind: the next
+	// character then landed at the engine's offset (`abctail`, not `acbtail`).
+	const host = start("tail\n");
+	api.setExternalInput(true);
+	press("i", host);
+	api.insertText("a");
+	api.insertText("b");
+	expect(api.getText()).toBe("abtail\n");
+
+	const moved: VimResult = JSON.parse(api.moveCursorFromHost(1, 1));
+	expect(moved.insertMode).toBe(true);
+	expect(moved.mode).toBe("insert");
+	expect(moved.selections[moved.mainIndex]).toEqual({ anchor: 1, head: 1 });
+	// Vim starts a new undo block at a cursor key.
+	expect(moved.undoBreak).toBe(true);
+
+	api.insertText("c");
+	expect(api.getText()).toBe("acbtail\n");
+	api.setExternalInput(false);
+});
+
+test("a cursor handoff in normal mode does not ask for an undo break", () => {
+	const host = start("one two\n");
+	const moved: VimResult = JSON.parse(api.moveCursorFromHost(4, 4));
+	expect(moved.insertMode).toBe(false);
+	expect(moved.undoBreak).toBe(false);
+	press("x", host);
+	expect(api.getText()).toBe("one wo\n");
+});
+
+test("a cursor handoff clamps to the document", () => {
+	start("ab\n");
+	const moved: VimResult = JSON.parse(api.moveCursorFromHost(99, 99));
+	expect(moved.selections[moved.mainIndex]).toEqual({ anchor: 3, head: 3 });
+});
+
+test("a mouse selection through the handoff enters visual mode", () => {
+	// The core's own `handleExternalSelection` does this on the web; it only runs
+	// because the handoff signals cursor activity outside a vim operation.
+	start("one two three\n");
+	const dragged: VimResult = JSON.parse(api.moveCursorFromHost(0, 3));
+	expect(dragged.visualMode).toBe(true);
+	expect(dragged.mode).toBe("visual");
+});
+
+test("dot repeats only what was typed after a cursor handoff", () => {
+	// Stock vim: an arrow key ends the recorded insert, so `.` replays the tail.
+	const host = start("xy\n");
+	api.setExternalInput(true);
+	press("i", host);
+	api.insertText("a");
+	api.moveCursorFromHost(1, 1);
+	api.insertText("b");
+	press("<Esc>", host);
+	expect(api.getText()).toBe("abxy\n");
+	press("$.", host);
+	expect(api.getText()).toBe("abxby\n");
+	api.setExternalInput(false);
+});
+
+test("<C-g>U suppresses the undo break for exactly one movement", () => {
+	const host = start("tail\n");
+	api.setExternalInput(true);
+	press("i", host);
+	api.insertText("a");
+
+	// Both keys are swallowed: neither may reach the buffer as text.
+	const prefix = press("<C-g>", host);
+	expect(prefix.handled).toBe(true);
+	const join = press("U", host);
+	expect(join.handled).toBe(true);
+	expect(api.getText()).toBe("atail\n");
+
+	expect(JSON.parse(api.moveCursorFromHost(0, 0)).undoBreak).toBe(false);
+	// One movement only.
+	expect(JSON.parse(api.moveCursorFromHost(1, 1)).undoBreak).toBe(true);
+	api.setExternalInput(false);
+});
+
+test("<C-g> followed by anything else runs that key normally", () => {
+	const host = start("tail\n");
+	api.setExternalInput(true);
+	press("i", host);
+	press("<C-g>", host);
+	// `<Esc>` after the swallowed prefix still leaves insert mode.
+	const escaped = press("<Esc>", host);
+	expect(escaped.insertMode).toBe(false);
+	api.setExternalInput(false);
+});
+
+test("adopting composed text keeps insert mode and the following key types", () => {
+	// The first marked-text change used to arrive through `setText`, whose `<Esc>`
+	// dropped the engine into normal mode: after committing the composed
+	// character the next `y` ran as an operator instead of being inserted.
+	const host = start("tail\n");
+	api.setExternalInput(true);
+	press("i", host);
+	api.insertText("X");
+
+	const adopted: VimResult = JSON.parse(api.adoptText("X日tail\n", 2, 2));
+	expect(adopted.insertMode).toBe(true);
+	expect(adopted.mode).toBe("insert");
+	// The host already applied this; echoing the journal back would double it.
+	expect(adopted.edits).toEqual([]);
+	expect(api.getText()).toBe("X日tail\n");
+
+	api.insertText("y");
+	expect(api.getText()).toBe("X日ytail\n");
+	api.setExternalInput(false);
+});
+
+test("dot repeats a composed insert", () => {
+	const host = start("ab\n");
+	api.setExternalInput(true);
+	press("i", host);
+	api.adoptText("日ab\n", 1, 1);
+	press("<Esc>", host);
+	expect(api.getText()).toBe("日ab\n");
+	press("$.", host);
+	expect(api.getText()).toBe("日a日b\n");
+	api.setExternalInput(false);
+});
+
+test("adopting text that did not change is only a selection move", () => {
+	const host = start("ab\n");
+	api.setExternalInput(true);
+	press("i", host);
+	const adopted: VimResult = JSON.parse(api.adoptText("ab\n", 1, 1));
+	expect(adopted.edits).toEqual([]);
+	expect(adopted.insertMode).toBe(true);
+	expect(adopted.selections[adopted.mainIndex]).toEqual({ anchor: 1, head: 1 });
+	api.setExternalInput(false);
+});

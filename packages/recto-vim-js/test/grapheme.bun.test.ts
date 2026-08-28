@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
 import {
+	clusterAlignedDiff,
 	clusterBoundaries,
 	clusterEnd,
 	clusterStart,
@@ -268,4 +269,64 @@ test("clamping is total for out-of-range offsets", () => {
 	expect(clusterStart("ab", 99)).toBe(2);
 	expect(clusterEnd("ab", -5)).toBe(0);
 	expect(clusterEnd("ab", 99)).toBe(2);
+});
+
+describe("clusterAlignedDiff", () => {
+	/** Every case must be able to rebuild `after` from `before` plus the patch. */
+	function applied(before: string, after: string) {
+		const patch = clusterAlignedDiff(before, after);
+		return {
+			patch,
+			rebuilt:
+				before.slice(0, patch.from) + patch.insert + before.slice(patch.to),
+		};
+	}
+
+	test("an insertion is the inserted run and nothing else", () => {
+		const { patch, rebuilt } = applied("Xtail\n", "X\u{65E5}tail\n");
+		expect(patch).toEqual({ from: 1, to: 1, insert: "\u{65E5}" });
+		expect(rebuilt).toBe("X\u{65E5}tail\n");
+	});
+
+	test("two emoji sharing a high surrogate patch whole clusters", () => {
+		// A raw code-unit diff shares the leading D83C and produces a range that
+		// is half a surrogate pair — valid UTF-16, unusable as an edit.
+		const { patch, rebuilt } = applied("a\u{1F3A9}b", "a\u{1F3AA}b");
+		expect(patch).toEqual({ from: 1, to: 3, insert: "\u{1F3AA}" });
+		expect(rebuilt).toBe("a\u{1F3AA}b");
+	});
+
+	test("a combining mark takes its base letter with it", () => {
+		// NFD: the mark alone is not a cluster, so the patch covers `e` too.
+		const { patch, rebuilt } = applied("e", "e\u{0301}");
+		expect(patch).toEqual({ from: 0, to: 1, insert: "e\u{0301}" });
+		expect(rebuilt).toBe("e\u{0301}");
+	});
+
+	test("a marked run rewritten in place", () => {
+		const { patch, rebuilt } = applied("ni\u{3042}b", "\u{65E5}b");
+		expect(rebuilt).toBe("\u{65E5}b");
+		expect(patch.from).toBe(0);
+	});
+
+	test("identical strings produce an empty patch", () => {
+		expect(clusterAlignedDiff("abc", "abc")).toEqual({
+			from: 3,
+			to: 3,
+			insert: "",
+		});
+	});
+
+	test("a deletion at the end of the document", () => {
+		const { patch, rebuilt } = applied("abc\n", "ab\n");
+		expect(patch).toEqual({ from: 2, to: 3, insert: "" });
+		expect(rebuilt).toBe("ab\n");
+	});
+
+	test("CRLF is never cut in half", () => {
+		// ICU treats `\r\n` as one cluster, so a patch may not land between them.
+		const { patch, rebuilt } = applied("a\r\nb", "a\r\nXb");
+		expect(rebuilt).toBe("a\r\nXb");
+		expect(patch.from).not.toBe(2);
+	});
 });

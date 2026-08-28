@@ -36,6 +36,11 @@ export type VimResult = {
 	notification: { text: string } | null;
 	search: string | null;
 	resynced: boolean;
+	/**
+	 * The cursor handoff that produced this result has to start a new undo block.
+	 * Only `moveCursorFromHost` ever sets it; `<C-g>U` is what clears it.
+	 */
+	undoBreak: boolean;
 };
 
 export type RectoVimApi = {
@@ -61,6 +66,21 @@ export type RectoVimApi = {
 	setExternalInput: (enabled: boolean) => string;
 	/** Text the host's input system produced, as one transaction. */
 	insertText: (text: string, from?: number, to?: number) => string;
+	/**
+	 * The host's own input system moved the caret — an arrow key insert mode
+	 * declines, Home/End, a click. Keeps the mode, unlike `setText`.
+	 */
+	moveCursorFromHost: (anchor: number, head?: number) => string;
+	/**
+	 * Text the host's input system rewrote and has already applied to its own
+	 * storage — an IME composition. Keeps the mode and records the change for `.`.
+	 */
+	adoptText: (
+		text: string,
+		anchor?: number,
+		head?: number,
+		composing?: boolean,
+	) => string;
 	/** Registers and marks as JSON, for persistence across a relaunch. */
 	saveState: () => string;
 	restoreState: (json: string) => string;

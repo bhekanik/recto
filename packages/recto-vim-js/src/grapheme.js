@@ -148,3 +148,52 @@ export function clusterBoundaries(text) {
 	}
 	return boundaries;
 }
+
+/**
+ * The one range that turns `before` into `after`, widened to whole clusters.
+ *
+ * An input method rewrites its own text and hands back only the result, so the
+ * mirror has to work out what changed before it can record it as an edit. A raw
+ * code-unit diff is not enough: `🎩` and `🎪` share a high surrogate, so the
+ * naive range is half a surrogate pair, and `e` → `é` in NFD would record the
+ * combining mark on its own rather than the cluster it belongs to. Both ends are
+ * therefore pulled back to an offset that is a boundary in *both* strings, which
+ * is what keeps a composed change the same shape as a typed one.
+ *
+ * @param {string} before @param {string} after
+ * @returns {{from: number, to: number, insert: string}}
+ */
+export function clusterAlignedDiff(before, after) {
+	const shortest = Math.min(before.length, after.length);
+	let from = 0;
+	while (
+		from < shortest &&
+		before.charCodeAt(from) === after.charCodeAt(from)
+	) {
+		from++;
+	}
+	let tail = 0;
+	while (
+		tail < shortest - from &&
+		before.charCodeAt(before.length - 1 - tail) ===
+			after.charCodeAt(after.length - 1 - tail)
+	) {
+		tail++;
+	}
+	const isBoundary = (text, offset) => clusterStart(text, offset) === offset;
+	while (from > 0 && (!isBoundary(before, from) || !isBoundary(after, from))) {
+		from--;
+	}
+	while (
+		tail > 0 &&
+		(!isBoundary(before, before.length - tail) ||
+			!isBoundary(after, after.length - tail))
+	) {
+		tail--;
+	}
+	return {
+		from,
+		to: before.length - tail,
+		insert: after.slice(from, after.length - tail),
+	};
+}

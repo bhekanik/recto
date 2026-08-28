@@ -10,7 +10,12 @@
 import { RectoCM } from "./adapter.js";
 import { installDomShim } from "./dom-shim.js";
 import { initVim } from "./generated/vim-core.js";
-import { clusterStart, nextCluster, previousCluster } from "./grapheme.js";
+import {
+	clusterAlignedDiff,
+	clusterStart,
+	nextCluster,
+	previousCluster,
+} from "./grapheme.js";
 import { wrapHost } from "./host.js";
 import { Pos } from "./pos.js";
 
@@ -40,6 +45,16 @@ class VimSession {
 		 * input system produces `insertText:`. See `insertText` below.
 		 */
 		this.externalInput = false;
+
+		/**
+		 * `<C-g>U` state. Vim's insert-mode prefix for "the next cursor movement
+		 * does not break undo"; the core has no command for it, so the bridge
+		 * holds the flag and `moveCursorFromHost` consumes it.
+		 */
+		this.pendingUndoJoin = false;
+		this.suppressUndoBreak = false;
+		/** Set only by `moveCursorFromHost`; see `_result`. */
+		this.undoBreak = false;
 
 		this.cm.on("vim-mode-change", (e) => {
 			this.mode = e.mode;
@@ -85,6 +100,8 @@ class VimSession {
 		if (!vim) return this._result(false);
 		const vimKey = Vim.vimKeyFromEvent(event, vim);
 		if (!vimKey) return this._result(false);
+		if (vim.insertMode && this._handleUndoJoin(vimKey))
+			return this._result(true);
 
 		vim.status = (vim.status || "") + vimKey;
 		let handled = Vim.multiSelectHandleKey(this.cm, vimKey, "user");
@@ -200,6 +217,121 @@ class VimSession {
 		return this._result(true);
 	}
 
+	/**
+	 * `<C-g>U`, vim's insert-mode prefix for "the next cursor movement does not
+	 * break undo".
+	 *
+	 * The core has no command for it, so the two keys are consumed here and the
+	 * flag is read by `moveCursorFromHost`. Returns true when the key was
+	 * swallowed; a `<C-g>` followed by anything else runs that second key
+	 * normally, which is what vim does with an unknown `<C-g>` sequence.
+	 *
+	 * @param {string} vimKey
+	 */
+	_handleUndoJoin(vimKey) {
+		if (this.pendingUndoJoin) {
+			this.pendingUndoJoin = false;
+			if (vimKey === "U") {
+				this.suppressUndoBreak = true;
+				return true;
+			}
+			return false;
+		}
+		if (vimKey === "<C-g>") {
+			this.pendingUndoJoin = true;
+			return true;
+		}
+		return false;
+	}
+
+	/**
+	 * The host's own input system moved the caret: an arrow key or Home/End that
+	 * insert mode declines to vim, a click, a menu command.
+	 *
+	 * Deliberately **not** `setText`. That cancels through `<Esc>`, so through a
+	 * real `NSTextView` `iab<Left>` left the engine at offset 2 while the
+	 * selection was at 1, the next `c` landed at the engine's offset (`abctail`
+	 * rather than vim's `acbtail`), and `u` then removed all three characters.
+	 * Setting the selection on its own keeps the mode and lets the core's own
+	 * `onCursorActivity` do what it does on the web — reset the dot-repeat change
+	 * and move `insertEnd`, so `.` replays what was typed *after* the move.
+	 *
+	 * @param {number} anchor @param {number} [head] UTF-16 offsets
+	 */
+	moveCursorFromHost(anchor, head) {
+		const cm = this.cm;
+		// Vim starts a new undo block at a cursor key; `<C-g>U` is the documented
+		// exception, and the host reads the decision back off the result.
+		this.undoBreak = !!cm.state.vim?.insertMode && !this.suppressUndoBreak;
+		this.suppressUndoBreak = false;
+		cm.operation(() => {
+			cm.setSelection(
+				cm.posFromIndex(this._clampOffset(anchor)),
+				cm.posFromIndex(this._clampOffset(head ?? anchor)),
+			);
+		});
+		const result = this._result(true);
+		this.undoBreak = false;
+		return result;
+	}
+
+	/**
+	 * The host's input system rewrote the text itself and has already applied the
+	 * result to its own storage — an IME composition, which AppKit and UIKit own
+	 * from the first marked-text change to the commit.
+	 *
+	 * Unlike `setText` this keeps the mode. The composition used to arrive through
+	 * `setText`, whose `<Esc>` left the engine in normal mode, so after committing
+	 * `日` mid-insert the next `y` ran as an operator instead of being typed. The
+	 * change goes through the ordinary edit path so the core records it for `.`,
+	 * and the journal is dropped afterwards because the host is not waiting for it
+	 * — it is handing us text it already has.
+	 *
+	 * The change and the selection share one operation on purpose: the core only
+	 * skips its "the cursor moved on its own" reset when the cursor activity
+	 * arrives in the same operation as the change it belongs to, and that reset is
+	 * what would throw the composed text out of the dot-repeat record.
+	 *
+	 * `composing` is what keeps dot-repeat honest across a composition. Each
+	 * marked-text update rewrites the whole provisional run, so recording every
+	 * one of them would make `.` replay `ni日` rather than the `日` that was
+	 * committed. Provisional updates go in under an origin the core's `onChange`
+	 * ignores; the commit arrives with the marked run gone, is recorded, and its
+	 * range covers the provisional text it replaces.
+	 *
+	 * @param {string} text @param {number} [anchor] @param {number} [head]
+	 * @param {boolean} [composing] the host still has marked text up
+	 */
+	adoptText(text, anchor, head, composing) {
+		const cm = this.cm;
+		if (typeof text !== "string") return this._result(false);
+		const before = cm.getValue();
+		cm.operation(() => {
+			if (before !== text) {
+				const patch = clusterAlignedDiff(before, text);
+				cm.replaceRange(
+					patch.insert,
+					cm.posFromIndex(patch.from),
+					cm.posFromIndex(patch.to),
+					composing ? "+composition" : "+input",
+				);
+			}
+			cm.setSelection(
+				cm.posFromIndex(this._clampOffset(anchor)),
+				cm.posFromIndex(this._clampOffset(head ?? anchor)),
+			);
+		});
+		cm.takeEdits();
+		return this._result(true);
+	}
+
+	/** @param {unknown} offset @returns {number} */
+	_clampOffset(offset) {
+		const n =
+			typeof offset === "number" && Number.isFinite(offset) ? offset : 0;
+		return Math.max(0, Math.min(n, this.cm.doc.length));
+	}
+
 	/** Keys typed into an open `:`/`/` line, when the host routes them itself. */
 	promptKey(key, mods = 0) {
 		if (!this.cm.$prompt) return this._result(false);
@@ -272,6 +404,9 @@ class VimSession {
 			scroll: cm.$scrollRequest,
 			search: cm.searchOverlay ? cm.searchOverlay.source : null,
 			resynced: !!cm.$resynced,
+			// True only on the result of a `moveCursorFromHost` that has to start a
+			// new undo block; every other call leaves it false.
+			undoBreak: this.undoBreak,
 		};
 		this.modeChanged = false;
 		cm.$notification = null;
@@ -440,6 +575,10 @@ const RectoVim = {
 	insertText: (text, from, to) => session.insertText(text, from, to),
 	promptKey: (key, mods) => session.promptKey(key, mods),
 	setText: (text, anchor, head) => session.setText(text, anchor, head),
+	moveCursorFromHost: (anchor, head) =>
+		session.moveCursorFromHost(anchor, head),
+	adoptText: (text, anchor, head, composing) =>
+		session.adoptText(text, anchor, head, composing),
 
 	/** Whole-buffer read, for asserting in tests and for host resync. */
 	getText: () => session.cm.getValue(),

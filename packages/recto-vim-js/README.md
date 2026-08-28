@@ -190,15 +190,46 @@ bridge crossing of its own, so one string beats five property reads.
 
 `handleKey` returns JSON with `handled`, `edits[]`, `selections[]`, `mainIndex`,
 `mode`, `subMode`, `modeChanged`, `pending`, `insertMode`, `visualMode`,
-`prompt`, `notification`, `scroll`, `search`, `resynced`. Swift decodes it as
-`VimResult`. Every offset in it is already on a grapheme boundary.
+`prompt`, `notification`, `scroll`, `search`, `resynced`, `undoBreak`. Swift
+decodes it as `VimResult`. Every offset in it is already on a grapheme boundary.
 
-Two flags matter:
+Three flags matter:
 
 - **`handled`** — false means vim declined the key and the text view should have
   it (system shortcuts, IME, anything vim does not bind).
 - **`resynced`** — the host's own undo came back through JS. The edits were
   already applied by the host; replaying them would double-apply.
+- **`undoBreak`** — only ever set by `moveCursorFromHost`: the host must close
+  its current undo group, because vim starts a new undo block at a cursor key.
+  `<C-g>U` is what clears it.
+
+### When the host, not vim, changed something
+
+Three entry points, and picking the wrong one is how the engine and the storage
+drift apart:
+
+| Call | For | Keeps the mode? | Journals edits? |
+|---|---|---|---|
+| `setText(text, anchor, head)` | document-level sync: a file loaded, a remote patch, a lens switch | no — cancels through `<Esc>` | no |
+| `adoptText(text, anchor, head, composing)` | an IME composition the host has already applied | **yes** | no |
+| `moveCursorFromHost(anchor, head)` | the host's own caret move: a cursor key insert mode declined, a click | **yes** | no |
+
+`setText` cancels because swapping the buffer under a half-typed operator leaves
+the core holding state about a document that no longer exists. That cancellation
+is exactly wrong for a composition — it left the engine in normal mode after the
+*first* marked-text change, so committing `日` mid-insert made the next `y` an
+operator — and for a cursor key, where it desynchronised the caret.
+
+`adoptText`'s `composing` flag decides whether the change is recorded for
+dot-repeat. Every provisional marked-text update rewrites the whole run, so
+recording all of them would make `.` replay `ni日`; provisional updates go in
+under an origin the core's `onChange` ignores, and the commit — which arrives
+after the marked run is gone — is the one that gets recorded, with a range that
+covers the provisional text it replaces.
+
+`<C-g>U` is handled in `src/index.js` rather than in the core, which has no
+command for it: the two keys are swallowed in insert mode and the next
+`moveCursorFromHost` reports `undoBreak: false`.
 
 ## Undo
 
