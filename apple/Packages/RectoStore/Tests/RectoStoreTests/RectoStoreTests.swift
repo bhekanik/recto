@@ -639,8 +639,10 @@ struct MigrationTests {
     #expect(document.markdown == "body")
     #expect(document.draftMarkdown == "a draft")
     #expect(document.localHeadNodeId == "n2")
-    // New columns default rather than losing the row.
-    #expect(document.remotePointerRevision == nil)
+    // New columns default rather than losing the row. v4 normalises the
+    // baseline to 0: the wire decodes an absent revision as 0 too, so `nil`
+    // would make an unchanged legacy pointer look newer than itself.
+    #expect(document.remotePointerRevision == 0)
     #expect(document.remoteMarkdownHeadNodeId == nil)
     #expect(document.draftRevision == 0)
 
@@ -653,10 +655,57 @@ struct MigrationTests {
     let head = try await store.nextJob(documentLocalId: "doc-1", now: 1_000)
     #expect(head?.clientMutationId == "MUT-1")
 
-    // And the first remote observation fills the new column in.
+    // And a genuine advance is still recorded.
     try await store.setSyncState(
-      documentLocalId: "doc-1", .pending, remotePointerRevision: 0)
-    #expect(try await store.document(localId: "doc-1")?.remotePointerRevision == 0)
+      documentLocalId: "doc-1", .pending, remotePointerRevision: 3)
+    #expect(try await store.document(localId: "doc-1")?.remotePointerRevision == 3)
+  }
+}
+
+@Suite("v3 to v4 upgrade")
+struct V4MigrationTests {
+  @Test("an existing divergence keeps its barrier across the v4 upgrade")
+  func v3DivergenceKeepsItsBarrier() async throws {
+    let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appending(path: "recto-v4-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: directory) }
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let url = directory.appending(path: "recto.sqlite")
+
+    // A v3 database with an UNRESOLVED divergence and work queued behind it —
+    // exactly what an upgrading user can be holding.
+    do {
+      let pool = try RectoStore.openAtSchemaVersion(url: url, target: Migrations.v3)
+      try await pool.write { db in
+        try db.execute(
+          sql: """
+            INSERT INTO documents
+              (localId, convexId, title, markdown, wordCount, localHeadNodeId,
+               divergedRemoteHeadNodeId, syncState, updatedAt, createdAt, draftRevision)
+            VALUES ('doc-1', 'j57abc', 'native-spike', 'ours', 1, 'n1', 'theirs',
+                    'diverged', 5, 1, 0)
+            """)
+        try db.execute(
+          sql: """
+            INSERT INTO outbox
+              (documentLocalId, kind, clientMutationId, baseHeadNodeId, payload, attempts,
+               nextAttemptAt, createdAt)
+            VALUES ('doc-1', 'pointerMove', 'MUT-1', 'n1', '{}', 0, 0, 1)
+            """)
+      }
+      try pool.close()
+    }
+
+    let store = try RectoStore(url: url)
+
+    // Adding a nullable column without backfilling would make this row look
+    // drainable on the very next launch, and the pointer move behind the
+    // conflict would walk the server off the disputed branch.
+    let document = try #require(try await store.document(localId: "doc-1"))
+    #expect(document.syncState == .diverged)
+    #expect(document.queueBlockedReason == "diverged")
+    #expect(try await store.documentsWithPendingJobs().isEmpty, "the queue stays held")
+    #expect(try await store.pendingJobs(documentLocalId: "doc-1").count == 1, "nothing was lost")
   }
 }
 

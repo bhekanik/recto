@@ -928,6 +928,20 @@ public actor RectoStore {
     }
   }
 
+  /// Delete the job AND hold the document's queue, in one transaction.
+  ///
+  /// `completedAndBlock` promises both. Doing them separately leaves a window —
+  /// and a reconciliation that lands in it can decide the document is merely
+  /// `pending`, after which everything queued behind the conflict drains.
+  public func completeJobAndBlockQueue(id: Int64, documentLocalId: String, reason: String) throws {
+    try writer.write { db in
+      _ = try OutboxJob.deleteOne(db, key: id)
+      try db.execute(
+        sql: "UPDATE documents SET queueBlockedReason = ? WHERE localId = ?",
+        arguments: [reason, documentLocalId])
+    }
+  }
+
   public func completeJob(id: Int64) throws {
     _ = try writer.write { db in try OutboxJob.deleteOne(db, key: id) }
   }
@@ -1101,6 +1115,12 @@ public actor RectoStore {
     _ = try writer.write { db in try DocumentRecord.deleteOne(db, key: localId) }
   }
 
+  /// Close the database so every subsequent read fails — for the fail-closed
+  /// tests, which need a store that errors rather than one that is merely empty.
+  public func closeForTesting() throws {
+    try writer.close()
+  }
+
   /// Schema introspection, for the migration test.
   public func tableExists(_ name: String) throws -> Bool {
     try writer.read { try $0.tableExists(name) }
@@ -1115,6 +1135,31 @@ public actor RectoStore {
 
   public func mirrorOwner() throws -> String? {
     try setting(Self.mirrorOwnerKey)?.json
+  }
+
+  /// Purge every user-keyed row and record the new owner, in ONE transaction.
+  ///
+  /// Two `try?` calls could leave the rows in place while ownership moved on —
+  /// which is precisely how one account ends up reading another's documents.
+  /// Either both happen or neither does.
+  public func purgeAndSetMirrorOwner(_ userId: String?) throws {
+    try writer.write { db in
+      // documents cascades into doc_nodes/versions/comments/review_branches/ai_runs.
+      try db.execute(sql: "DELETE FROM documents")
+      try db.execute(sql: "DELETE FROM outbox")
+      try db.execute(sql: "DELETE FROM writing_stats")
+      try db.execute(sql: "DELETE FROM settings")
+      try db.execute(sql: "DELETE FROM window_state")
+      try db.execute(sql: "DELETE FROM ai_runs")
+      if let userId {
+        try SettingRecord(
+          key: Self.mirrorOwnerKey, json: userId,
+          updatedAt: Date().timeIntervalSince1970 * 1000, dirty: false
+        ).insert(db)
+      }
+    }
+    // Reclaim the pages so the deleted text is not still sitting in the file.
+    try writer.writeWithoutTransaction { try $0.execute(sql: "VACUUM") }
   }
 
   public func setMirrorOwner(_ userId: String?) throws {

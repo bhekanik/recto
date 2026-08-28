@@ -145,7 +145,13 @@ public actor DocumentSession {
   }
 
   private func performOpen() async throws {
+    // Counted only once the open has actually succeeded. Incrementing first and
+    // throwing leaves a holder nobody owns, and the next successful open then
+    // needs two releases to reach a final close.
+    var didCount = false
+    defer { if !didCount { openCount = max(openCount - 1, 0) } }
     openCount += 1
+    didCount = false
 
     // Always re-read, even when a window already has this session open. The sync
     // engine writes head moves and divergences from its own actor and this
@@ -153,6 +159,7 @@ public actor DocumentSession {
     // opened between the write and the event would render a stale snapshot.
     try await reload()
     guard controller == nil else {
+      didCount = true
       publish()
       return
     }
@@ -185,6 +192,7 @@ public actor DocumentSession {
         }
       }
     }
+    didCount = true
     publish()
   }
 

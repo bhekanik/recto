@@ -21,6 +21,13 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
   /// Holder counts live here, not behind an await on the session, so
   /// check-and-remove is never split across a suspension.
   private var holders: [String: Int] = [:]
+  /// Editing is refused registry-wide while sign-out decides.
+  ///
+  /// Freezing the sessions that happen to exist is not enough: a window opening
+  /// after the freeze got an unfrozen session and could write between the final
+  /// unsynced count and the purge. The flag is set before the first await, so
+  /// there is no window to slip through.
+  private var isFrozen = false
 
   public init(
     store: RectoStore,
@@ -50,10 +57,19 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
       sessions[documentLocalId] = session
     }
     holders[documentLocalId, default: 0] += 1
+    // Frozen BEFORE the first await, so a session created during a sign-out
+    // cannot accept an edit that the final unsynced count has already missed.
+    let freezeNewSession = isFrozen
     do {
+      if freezeNewSession { await session.freeze() }
       try await session.open()
     } catch {
-      releaseHolder(documentLocalId)
+      // A failed open must not leave a holder or a half-built session behind: a
+      // later successful open would then reach count two and its single release
+      // would never perform the final close.
+      if releaseHolder(documentLocalId), holders[documentLocalId] == nil {
+        sessions[documentLocalId] = nil
+      }
       throw error
     }
     return session
@@ -91,13 +107,20 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
   /// Stop accepting edits and flush. Sign-out cannot honestly count unsynced
   /// work while an open document can still write into the gap.
   public func freezeAndFlushAll() async {
+    // Registry-wide first and synchronously, so sessions opened during the
+    // awaits below are born frozen too.
+    isFrozen = true
     for session in sessions.values { await session.freeze() }
     for session in sessions.values { try? await session.flush() }
   }
 
   public func resumeAll() async {
+    isFrozen = false
     for session in sessions.values { await session.resume() }
   }
+
+  /// Whether new sessions are currently born frozen.
+  public var isFrozenForTesting: Bool { isFrozen }
 
   public var openDocumentIds: [String] { Array(sessions.keys) }
 }

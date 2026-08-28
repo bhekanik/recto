@@ -124,6 +124,10 @@ advanced — would be told `diverged` instead of getting its original answer.
   under continuous editing cannot starve the others.
 - **The backoff survives a relaunch.** `start()`, `resume()` and every completed
   drain schedule one wake for the persisted `earliestNextAttempt()`.
+- **Every `completedAndBlock` writes its barrier in the same transaction as the
+  job's deletion**, and reconciles *afterwards* — with the job still queued it
+  counts as pending work, and the adoption would defer forever behind its own
+  barrier.
 - **The barrier is persisted.** `documents.queueBlockedReason` is written in the
   same transaction as the divergence and enforced in the SQL that selects
   drainable documents, so backgrounding the app cannot drop it and let the
@@ -241,11 +245,38 @@ flush or call `signOut(discardingUnsynced: true)` as an explicit, user-visible
 decision. Sync is stopped before the purge either way, or a subscription tick
 re-inserts rows behind the delete.
 
+**One method owns every identity transition.** `claimMirror` is the only place
+that may delete anything, and it is reached before any purge — a cold start, an
+A→B switch, a revocation and an explicit discard all go through it. It fails
+**closed**: a store that cannot be read has not been shown to be empty, so the
+transition is refused rather than authorised, and the purge plus the ownership
+change happen in one transaction so the rows never outlive the marker.
+
 An owner mismatch on a mirror that still holds unsynced work does **not** purge:
 `status` becomes `.blockedByRetainedWork(owner:count:)` and the UI must offer
 either recovery as that owner or an explicit
-`discardRetainedWorkAndClaim(userId:)`. A revoked session's retained work would
+`discardRetainedWorkAndClaim()`. A revoked session's retained work would
 otherwise be deleted by the next person who signed in.
+
+### The W12 caller contract for `.blockedByRetainedWork(owner:count:)`
+
+The app is signed out, sync is stopped and editing is frozen. Offer exactly two
+ways out — there is no third, because anything else destroys the only copy of
+someone's work:
+
+1. **Recover it.** Sign in as `owner`. The normal sign-in path sees the mirror
+   already belongs to them, `claimMirror` returns immediately, and the retained
+   outbox drains as usual.
+2. **Discard it.** Get explicit confirmation naming `count`, then call
+   `discardRetainedWorkAndClaim()`. It takes no user id — the identity comes from
+   the active Clerk session, so a caller cannot claim the mirror for somebody who
+   is not signed in — and it completes the whole transition: purge, ownership,
+   `.signedIn`, sessions resumed, sync started. The UI does not have to do
+   anything else afterwards.
+
+Editing is frozen registry-wide, not per session: a window opened *during* a
+sign-out is born frozen, so it cannot write between the final unsynced count and
+the purge.
 
 An account switch stops sync, purges, and only **then** publishes the new
 `signedIn` status — a consumer reading the store in between would show the
@@ -266,6 +297,13 @@ session is published or sync is started, and a failure blocks the transition.
 Wire it all together with `RectoAuth.attach(sync:)` and
 `RectoAuth.attach(sessions:)`; `SyncEngine` conforms to `SyncControlling` and
 `DocumentSessionRegistry` to `EditSessionCoordinating`.
+
+**The auth bridge is replaced only when nothing can be calling it.** A
+foreground resume rebuilds sockets and does **not** log in again: `loginFromCache`
+swaps the FFI callback while the Rust worker may still be executing the previous
+one (convex-swift #26), and the existing bridge refreshes an expired token by
+itself. The one path that must replace it — auth-error recovery — stops every
+subscription first and awaits them.
 
 **One coordinator owns every Convex auth call.** `ConvexAuthCoordinator` is the
 single path for `login`/`logout` on the client — foreground resume, auth-error
@@ -288,10 +326,10 @@ also carries a lifecycle generation it re-checks after every external await.
 
 ```
 swift test --package-path apple/Packages/RectoHistory   # 37 — web parity
-swift test --package-path apple/Packages/RectoStore     # 26 — incl. a v1→v4 upgrade
-swift test --package-path apple/Packages/RectoAuth      # 20
-swift test --package-path apple/Packages/RectoSync      # 40 — server contract + live flows
-swift test --package-path apple/Packages/RectoCore      # 46 — acceptance, provenance, repros
+swift test --package-path apple/Packages/RectoStore     # 27 — incl. v1→v4 and v3→v4 upgrades
+swift test --package-path apple/Packages/RectoAuth      # 23
+swift test --package-path apple/Packages/RectoSync      # 42 — server contract + live flows
+swift test --package-path apple/Packages/RectoCore      # 52 — acceptance, provenance, repros
 ```
 
 SwiftPM has served a **stale cross-package module** here more than once: editing
@@ -324,3 +362,8 @@ swift test --package-path apple/Packages/RectoCore --filter LiveConvex
 They sign in with Clerk's `+clerk_test` address and the fixed `424242` code, so
 no `CLERK_SECRET_KEY` and no mailbox are needed. Documents they create are
 titled `native-spike-…` and deleted by the test.
+
+One live case is wrapped in `withKnownIssue`: `commitEdit`'s parent rule is on
+`main` but the **dev deployment is still running the pre-merge build** and
+accepts a mis-parented node. When dev is redeployed the wrapper reports an unmet
+known issue — that is the signal to delete it, not a new failure.

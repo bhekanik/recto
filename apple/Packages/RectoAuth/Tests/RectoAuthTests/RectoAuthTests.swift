@@ -348,7 +348,7 @@ struct Round4AuthTests {
         createdAt: 0))
 
     let auth = await RectoAuth(store: store)
-    #expect(await auth.discardRetainedWorkAndClaim(userId: "user_B"))
+    #expect(await auth.discardRetainedWorkAndClaimForTesting(userId: "user_B"))
     #expect(try await store.documents().isEmpty)
     #expect(try await store.mirrorOwner() == "user_B")
   }
@@ -366,5 +366,81 @@ struct Round4AuthTests {
     #expect(try await auth.claimMirrorForTesting(userId: "user_B"))
     #expect(try await store.documents().isEmpty)
     #expect(try await store.mirrorOwner() == "user_B")
+  }
+}
+
+@Suite("round-5 auth")
+struct Round5AuthTests {
+  private actor Coordinator: SyncControlling, EditSessionCoordinating {
+    private(set) var events: [String] = []
+    func stop() async { events.append("sync.stop") }
+    func start() async { events.append("sync.start") }
+    func freezeAndFlushAll() async { events.append("sessions.freeze") }
+    func resumeAll() async { events.append("sessions.resume") }
+  }
+
+  private func storeOwnedByA(withWork: Bool) async throws -> RectoStore {
+    let store = try RectoStore.inMemory()
+    try await store.setMirrorOwner("user_A")
+    try await store.save(
+      DocumentRecord(
+        localId: "doc-1", title: "A's work", markdown: "", wordCount: 0,
+        localHeadNodeId: "root", updatedAt: 0, createdAt: 0))
+    if withWork {
+      _ = try await store.enqueue(
+        OutboxJob(
+          documentLocalId: "doc-1", kind: .commitEdit, clientMutationId: "m1", payload: "{}",
+          createdAt: 0))
+    }
+    return store
+  }
+
+  @Test("a direct A-to-B switch checks ownership before deleting anything")
+  func directSwitchDoesNotPurgeBeforeChecking() async throws {
+    let store = try await storeOwnedByA(withWork: true)
+    let auth = await RectoAuth(store: store)
+    let coordinator = Coordinator()
+    await auth.attach(sync: coordinator)
+    await auth.attach(sessions: coordinator)
+
+    // Clerk hands us an active B while A is the published user. Purging here
+    // would give `claimMirror` a clean store and remove its chance to object.
+    await auth.handleSessionSwitchForTesting(from: "user_A", toUserId: "user_B")
+
+    #expect(try await store.pendingJobCount() == 1, "A's only copy survives the switch")
+    #expect(try await store.documents().count == 1)
+    #expect(try await store.mirrorOwner() == "user_A")
+    #expect(await auth.status == .blockedByRetainedWork(owner: "user_A", count: 1))
+  }
+
+  @Test("an explicit discard leaves the app signed in and running")
+  func explicitDiscardCompletesTheTransition() async throws {
+    let store = try await storeOwnedByA(withWork: true)
+    let auth = await RectoAuth(store: store)
+    let coordinator = Coordinator()
+    await auth.attach(sync: coordinator)
+    await auth.attach(sessions: coordinator)
+    #expect(try await auth.claimMirrorForTesting(userId: "user_B") == false)
+
+    #expect(await auth.discardRetainedWorkAndClaimForTesting(userId: "user_B"))
+
+    // Rows gone, ownership moved — and the app is actually usable again rather
+    // than blocked over a store that has already been emptied.
+    #expect(try await store.documents().isEmpty)
+    #expect(try await store.mirrorOwner() == "user_B")
+    #expect(await auth.status == .signedIn(userId: "user_B"))
+    #expect(await coordinator.events.contains("sessions.resume"))
+    #expect(await coordinator.events.contains("sync.start"))
+  }
+
+  @Test("a store that cannot be counted blocks rather than authorises a purge")
+  func countFailureFailsClosed() async throws {
+    let store = try await storeOwnedByA(withWork: true)
+    // Closing the database makes every read throw.
+    try await store.closeForTesting()
+
+    let auth = await RectoAuth(store: store)
+    #expect(try await auth.claimMirrorForTesting(userId: "user_B") == false)
+    #expect(await auth.status == .signedOut)
   }
 }

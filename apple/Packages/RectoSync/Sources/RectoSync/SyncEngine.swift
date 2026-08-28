@@ -139,12 +139,38 @@ public actor SyncEngine: SyncControlling {
 
   /// The socket reconnected, the network changed, or the app came to the
   /// foreground.
+  /// The socket reconnected, the network changed, or the app came to the
+  /// foreground.
+  ///
+  /// Deliberately does NOT log in again. `loginFromCache` replaces the FFI auth
+  /// bridge and its callback, and the Rust worker can be executing the previous
+  /// callback at that moment (convex-swift #26 — a use-after-free). The existing
+  /// bridge already refreshes an expired token through its own pull callback, so
+  /// a foreground resume needs sockets rebuilt, not credentials replaced.
   public func resume() async {
-    _ = await transport.loginFromCache()
     // `stop()` keeps `openDocumentIds`, so `start()` brings the same documents
     // back up on the new socket.
     await stop()
     start()
+  }
+
+  /// Replace the auth bridge, with every socket stopped first.
+  ///
+  /// The only safe moment to swap the FFI callback is when nothing can be
+  /// calling it. Used for auth-error recovery; ordinary expiry never comes
+  /// through here.
+  private func reauthenticateQuiesced() async {
+    let subscriptions = Array(nodeSubscriptions.values) + [libraryTask].compactMap { $0 }
+    libraryTask = nil
+    nodeSubscriptions.removeAll()
+    for task in subscriptions { task.cancel() }
+    for task in subscriptions { await task.value }
+
+    _ = await transport.loginFromCache()
+
+    guard isRunning else { return }
+    libraryTask = Task { [weak self] in await self?.runLibrarySubscription() }
+    for localId in openDocumentIds { subscribeToNodes(localId: localId) }
   }
 
   // MARK: - Library subscription
@@ -415,7 +441,9 @@ public actor SyncEngine: SyncControlling {
     // Compared against what we had observed BEFORE this fetch: a bumped
     // revision means the server's pointer position is newer than anything we
     // produced, so an ancestor head is a remote undo rather than server lag.
-    let remotePointerIsNewer = remote.pointerRevision > (document.remotePointerRevision ?? -1)
+    // The wire decodes an absent revision as 0 and v4 normalised local `nil` to
+    // 0, so both sides mean the same thing and equality means "already seen".
+    let remotePointerIsNewer = remote.pointerRevision > (document.remotePointerRevision ?? 0)
 
     switch ConflictResolver.resolve(
       localHead: document.localHeadNodeId, remoteHead: remote.currentNodeId,
@@ -624,7 +652,10 @@ public actor SyncEngine: SyncControlling {
     /// resolved or a reconciliation releases it. Everything behind the job
     /// belongs to the branch under dispute; sending it would push the server
     /// back to the branch the user is still deciding about.
-    case completedAndBlock
+    /// `reconcile` runs AFTER the job is gone and the barrier is written. The
+    /// queue has to be empty for `reconcileHead` to adopt rather than defer, and
+    /// while the job is still queued it counts as pending work.
+    case completedAndBlock(reason: String, reconcile: Bool = false)
     /// Leave the job queued and stop.
     case stop
   }
@@ -680,8 +711,11 @@ public actor SyncEngine: SyncControlling {
       case .completed:
         try await store.completeJob(id: jobId)
         return true
-      case .completedAndBlock:
-        try await store.completeJob(id: jobId)
+      case .completedAndBlock(let reason, let reconcile):
+        // One transaction: the job goes and the barrier lands together.
+        try await store.completeJobAndBlockQueue(
+          id: jobId, documentLocalId: localId, reason: reason)
+        if reconcile { try await reconcileHead(localId: localId) }
         return true
       case .stop:
         return false
@@ -808,8 +842,10 @@ public actor SyncEngine: SyncControlling {
         try await store.setSyncState(
           documentLocalId: document.localId, document.syncState,
           remotePointerRevision: remotePointerRevision)
-        try await resolveDivergence(document: document, remoteHeadNodeId: remoteHeadNodeId)
-        return .completedAndBlock
+        // The nodes have to be pulled before anything can be decided, and that
+        // is safe to do with the job still queued.
+        try await pullRemoteNodes(document: document)
+        return .completedAndBlock(reason: "diverged", reconcile: true)
       }
 
     case .appendNode:
@@ -831,19 +867,22 @@ public actor SyncEngine: SyncControlling {
         markdown: payload.markdown ?? "",
         wordCount: payload.wordCount ?? 0,
         updatedAt: payload.createdAt ?? job.createdAt)
+      guard response.applied else {
+        // Deliberately do NOT record the response's revision here. `reconcileHead`
+        // compares the freshly fetched revision against the one still on the
+        // row; storing it first turns "newer" into "equal" and a remote undo
+        // reads as server lag.
+        // The head that won is in the response. Acknowledging without looking
+        // would leave local and remote heads apart under a `synced` badge.
+        logger.info(
+          "pointer move rejected for \(document.localId, privacy: .public); server head is \(response.currentNodeId, privacy: .public)"
+        )
+        return .completedAndBlock(reason: "pointer-move-rejected", reconcile: true)
+      }
       try await store.setSyncState(
         documentLocalId: document.localId, document.syncState,
         remoteHeadNodeId: response.currentNodeId, remoteUpdatedAt: response.updatedAt,
         remotePointerRevision: response.pointerRevision)
-      guard response.applied else {
-        // Rejected: the head that won is in the response. Acknowledging without
-        // looking would leave local and remote heads apart under a `synced` badge.
-        logger.info(
-          "pointer move rejected for \(document.localId, privacy: .public); server head is \(response.currentNodeId, privacy: .public)"
-        )
-        try await reconcileHead(localId: document.localId)
-        return .completedAndBlock
-      }
       return .completed
 
     case .draftSave:
@@ -862,8 +901,7 @@ public actor SyncEngine: SyncControlling {
         // would leave `documents.markdown` detached from `currentNodeId`, and
         // retrying would do it again — so drop it and reconcile. No text is
         // lost: the draft row stays local and the next commit carries it.
-        try await reconcileHead(localId: document.localId)
-        return .completedAndBlock
+        return .completedAndBlock(reason: "draft-head-moved", reconcile: true)
       }
       // A merely stale `updatedAt` is not an error; the refreshed value is what
       // the next CAS uses.
@@ -878,7 +916,7 @@ public actor SyncEngine: SyncControlling {
       guard let convexId = document.convexId else { return .completed }
       try await transport.remove(documentId: convexId)
       try await store.deleteDocumentRow(localId: document.localId)
-      return .completedAndBlock
+      return .completedAndBlock(reason: "removed")
 
     case .writingStats:
       guard let date = payload.date, let words = payload.words else { return .completed }
@@ -935,16 +973,14 @@ public actor SyncEngine: SyncControlling {
       })
   }
 
-  private func resolveDivergence(document: DocumentRecord, remoteHeadNodeId: String) async throws {
+  /// Pull whatever the other client wrote. "Is their head above mine or beside
+  /// it?" cannot be answered without their nodes, and guessing loses a branch.
+  private func pullRemoteNodes(document: DocumentRecord) async throws {
     guard let convexId = document.convexId else { return }
-    // Pull whatever the other client wrote before deciding. "Is their head above
-    // mine or beside it?" cannot be answered without their nodes, and guessing
-    // loses a branch.
     let remoteNodes = try await transport.listNodes(documentId: convexId, sinceCreatedAt: nil)
     try await store.mergeRemoteNodes(
       documentLocalId: document.localId,
       nodes: remoteNodes.map { $0.record(documentLocalId: document.localId) })
-    try await reconcileHead(localId: document.localId)
   }
 
   private func handleSendFailure(job: OutboxJob, jobId: Int64, error: any Error) async {
@@ -955,7 +991,8 @@ public actor SyncEngine: SyncControlling {
     if description.localizedCaseInsensitiveContains("unauthenticated")
       || description.localizedCaseInsensitiveContains("auth")
     {
-      _ = await transport.loginFromCache()
+      // Sockets down first: this is the one path that replaces the bridge.
+      await reauthenticateQuiesced()
     }
 
     let delay = outboxBackoff(attempts: attempts)

@@ -92,7 +92,11 @@ struct LiveFlowTests {
     try await waitFor("the resubscribed client to catch up") {
       ((try? await store.document(localId: localId))?.markdown) == "missed this"
     }
-    #expect(await transport.loginCount >= 1, "resume re-authenticates too")
+    // And it did NOT replace the auth bridge to do it. `loginFromCache` swaps
+    // the FFI callback while the Rust worker may still be executing the old one
+    // (convex-swift #26); the existing bridge refreshes an expired token by
+    // itself, so a foreground resume needs sockets, not credentials.
+    #expect(await transport.loginCount == 0, "resume must not replace the auth bridge")
     await engine.stop()
   }
 

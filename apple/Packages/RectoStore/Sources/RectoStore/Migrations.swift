@@ -171,6 +171,16 @@ enum Migrations {
       try db.alter(table: "documents") { t in
         t.add(column: "queueBlockedReason", .text)
       }
+      // Backfill. A v3 database can already hold an unresolved divergence with
+      // work queued behind it; adding a nullable column would leave that row
+      // looking drainable on the very next launch.
+      try db.execute(
+        sql: "UPDATE documents SET queueBlockedReason = 'diverged' WHERE syncState = 'diverged'")
+      // A local `nil` pointer revision means "never observed", but the wire
+      // decodes an absent revision as 0 — so `0 > nil` would read an unchanged
+      // legacy pointer as newer than itself. Normalise the baseline.
+      try db.execute(
+        sql: "UPDATE documents SET remotePointerRevision = 0 WHERE remotePointerRevision IS NULL")
     }
 
     return migrator

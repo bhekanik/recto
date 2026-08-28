@@ -200,4 +200,93 @@ struct LiveConvexTests {
 
     try await transport.remove(documentId: created.documentId)
   }
+
+  @Test("the deployed server refuses a mis-parented node")
+  func liveMisparentedCommitIsRefused() async throws {
+    let config = try #require(LiveConfig.fromEnvironment())
+    let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appending(path: "recto-live-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let (_, _, transport) = try await LiveClient.shared.connect(config, directory: directory)
+
+    let title = "native-spike-\(UUID().uuidString.prefix(8))"
+    let created = try await transport.createDocument(title: title)
+    defer { Task { try? await transport.remove(documentId: created.documentId) } }
+
+    let first = CommitEditRequest(
+      documentId: created.documentId, nodeId: ulid(), parentNodeId: created.rootNodeId,
+      patch: computePatch("", "first").encoded, snapshot: nil, selection: nil,
+      origin: "integration-test", createdAt: Date().timeIntervalSince1970 * 1000,
+      markdown: "first", wordCount: 1, expectedHeadNodeId: created.rootNodeId,
+      clientMutationId: ulid())
+    #expect(try await transport.commitEdit(first).committed)
+
+    // Parent says root, expected head says the node that landed. PR #11 throws
+    // rather than inserting a node nothing could ever materialize.
+    let misparented = CommitEditRequest(
+      documentId: created.documentId, nodeId: ulid(), parentNodeId: created.rootNodeId,
+      patch: computePatch("", "confused").encoded, snapshot: nil, selection: nil,
+      origin: "integration-test", createdAt: Date().timeIntervalSince1970 * 1000,
+      markdown: "confused", wordCount: 1, expectedHeadNodeId: first.nodeId,
+      clientMutationId: ulid())
+    // The rule is on `main` (convex/documents.ts, "node.parentNodeId must equal
+    // expectedHeadNodeId") but the DEV DEPLOYMENT is still running the
+    // pre-merge build, so it accepts the node. Recorded as a known issue rather
+    // than asserted away: once dev is redeployed this block stops failing and
+    // Swift Testing reports the known issue as unmet, which is the signal to
+    // delete this wrapper.
+    await withKnownIssue("dev deployment predates PR #11's parent rule") {
+      await #expect(throws: (any Error).self) { _ = try await transport.commitEdit(misparented) }
+
+      let nodes = try await transport.listNodes(
+        documentId: created.documentId, sinceCreatedAt: nil)
+      #expect(!nodes.contains { $0.nodeId == misparented.nodeId })
+      #expect(nodes.count == 2)
+    }
+
+    try await transport.remove(documentId: created.documentId)
+  }
+
+  @Test("the deployed server replays an already-head commit as a success")
+  func liveAlreadyHeadReplay() async throws {
+    let config = try #require(LiveConfig.fromEnvironment())
+    let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appending(path: "recto-live-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let (_, _, transport) = try await LiveClient.shared.connect(config, directory: directory)
+
+    let title = "native-spike-\(UUID().uuidString.prefix(8))"
+    let created = try await transport.createDocument(title: title)
+    defer { Task { try? await transport.remove(documentId: created.documentId) } }
+
+    let commit = CommitEditRequest(
+      documentId: created.documentId, nodeId: ulid(), parentNodeId: created.rootNodeId,
+      patch: computePatch("", "landed").encoded, snapshot: nil, selection: nil,
+      origin: "integration-test", createdAt: Date().timeIntervalSince1970 * 1000,
+      markdown: "landed", wordCount: 1, expectedHeadNodeId: created.rootNodeId,
+      clientMutationId: ulid())
+    #expect(try await transport.commitEdit(commit).committed)
+
+    // A pointer move in between advances the revision without changing the head
+    // — the case that used to turn a lost answer into a spurious divergence.
+    let move = try await transport.updateCurrentNodeId(
+      documentId: created.documentId, currentNodeId: commit.nodeId, markdown: "landed",
+      wordCount: 1, updatedAt: Date().timeIntervalSince1970 * 1000)
+    #expect(move.applied)
+
+    let replay = try await transport.commitEdit(commit)
+    #expect(replay.committed, "a lost answer replays as the success it already was")
+    #expect(replay.headNodeId == commit.nodeId)
+
+    let nodes = try await transport.listNodes(
+      documentId: created.documentId, sinceCreatedAt: nil)
+    #expect(nodes.count == 2, "the replay did not duplicate the node")
+
+    // And the body's provenance is stamped with the node that committed it.
+    let document = try #require(try await transport.getDocument(documentId: created.documentId))
+    #expect(document.markdownHeadNodeId == commit.nodeId)
+    #expect(document.pointerRevision > 0)
+
+    try await transport.remove(documentId: created.documentId)
+  }
 }

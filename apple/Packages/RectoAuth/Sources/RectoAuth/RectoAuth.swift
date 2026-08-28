@@ -179,21 +179,29 @@ public final class RectoAuth {
     }
   }
 
-  /// Make sure the mirror belongs to `userId` before anything is published or
-  /// started. Returns false when the transition must not proceed.
+  /// The ONE path an owner transition takes.
+  ///
+  /// Every caller — cold start, account switch, revocation, explicit discard —
+  /// comes through here, because anything that purges before checking ownership
+  /// hands `claimMirror` a clean store and removes its only chance to object.
+  ///
+  /// Fails **closed**: if the store cannot be read the transition is refused
+  /// rather than authorised. A read error is not evidence that there is nothing
+  /// to lose.
   private func claimMirror(for userId: String?, discardingRetainedWork: Bool = false) async
     -> Bool
   {
     do {
       let owner = try await store.mirrorOwner()
+      guard owner != userId else { return true }
+
       switch (owner, userId) {
-      case (let owner?, let userId?) where owner != userId:
+      case (let owner?, let userId?):
         // Somebody else's documents are on this disk. A signed-in session
         // cannot proceed over them — but if the previous owner has work that
         // reached nowhere else (a revoked session retains exactly that), purging
         // to make room would destroy it without anyone consenting.
-        await sync?.stop()
-        let retained = (try? await store.unsyncedWorkCount()) ?? 0
+        let retained = try await store.unsyncedWorkCount()
         guard retained == 0 || discardingRetainedWork else {
           logger.error(
             "mirror belongs to \(owner, privacy: .public) and holds \(retained) unsynced change(s); refusing to sign in as another account"
@@ -202,17 +210,27 @@ public final class RectoAuth {
           status = .blockedByRetainedWork(owner: owner, count: retained)
           return false
         }
-        logger.error("mirror belongs to another account; purging before publishing the session")
-        try await store.purgeEverything()
-        try await store.setMirrorOwner(userId)
+        try await store.purgeAndSetMirrorOwner(userId)
         retainedUnsyncedWork = 0
+
       case (nil, let userId?):
+        // An unowned mirror. Anything already on disk predates ownership
+        // tracking, so it is not safely attributable to this user.
+        let stray = try await store.unsyncedWorkCount()
+        if stray > 0, !discardingRetainedWork {
+          logger.error("unowned mirror holds \(stray) unsynced change(s); refusing to claim it")
+          retainedUnsyncedWork = stray
+          status = .blockedByRetainedWork(owner: "an earlier session", count: stray)
+          return false
+        }
         try await store.setMirrorOwner(userId)
+
       case (let owner?, nil):
         // Signed out with data still on disk: leave it, it belongs to `owner`
         // and they may come back.
         _ = owner
-      default:
+
+      case (nil, nil):
         break
       }
       return true
@@ -226,18 +244,32 @@ public final class RectoAuth {
     }
   }
 
-  /// Test seam for the cold-start ownership check, which is otherwise only
-  /// reachable through `start()` and therefore through Clerk.
+  /// Test seam for the ownership check, otherwise only reachable through Clerk.
   func claimMirrorForTesting(userId: String?, discardingRetainedWork: Bool = false) async throws
     -> Bool
   {
     await claimMirror(for: userId, discardingRetainedWork: discardingRetainedWork)
   }
 
+  /// Test seam for a direct active-to-active session change.
+  func handleSessionSwitchForTesting(from previousUserId: String, toUserId: String) async {
+    status = .signedIn(userId: previousUserId)
+    await sessions?.freezeAndFlushAll()
+    await sync?.stop()
+    await switchOwner(to: toUserId)
+  }
+
   /// Test seam for a session Clerk revoked externally.
   func handleSessionRevokedForTesting(previousUserId: String) async {
     status = .signedIn(userId: previousUserId)
     await handleSessionChanged(nil)
+  }
+
+  /// Bring the app up for `userId` once the mirror is known to be theirs.
+  private func publishSignedIn(_ userId: String) async {
+    status = .signedIn(userId: userId)
+    await sessions?.resumeAll()
+    await sync?.start()
   }
 
   /// Status changes, for the UI and for `RectoSync` (which must re-subscribe on
@@ -310,7 +342,16 @@ public final class RectoAuth {
     await sync?.stop()
 
     if !discardingUnsynced {
-      let pending = (try? await store.unsyncedWorkCount()) ?? 0
+      // Fail closed: a store that cannot be counted has not been shown to be
+      // empty, and `try?` turning that into zero authorises the purge.
+      let pending: Int
+      do {
+        pending = try await store.unsyncedWorkCount()
+      } catch {
+        await sessions?.resumeAll()
+        await sync?.start()
+        throw error
+      }
       guard pending == 0 else {
         // Refused: put the app back the way it was.
         await sessions?.resumeAll()
@@ -328,14 +369,13 @@ public final class RectoAuth {
     } catch {
       logger.error("clerk sign-out failed: \(error.localizedDescription, privacy: .public)")
       // The text still has to go: a network error must not leave a signed-out
-      // user's drafts readable on a shared Mac.
-      try await store.purgeEverything()
-      try? await store.setMirrorOwner(nil)
+      // user's drafts readable on a shared Mac. One transaction, so ownership
+      // never moves without the rows going with it.
+      try await store.purgeAndSetMirrorOwner(nil)
       status = .signedOut
       throw error
     }
-    try await store.purgeEverything()
-    try? await store.setMirrorOwner(nil)
+    try await store.purgeAndSetMirrorOwner(nil)
     status = .signedOut
   }
 
@@ -346,13 +386,25 @@ public final class RectoAuth {
     let nextUserId = Self.activeUserId(of: session)
     guard previousUserId != nextUserId else { return }
 
+    // Stop everything that could still write BEFORE any decision is taken.
+    await sessions?.freezeAndFlushAll()
+    await sync?.stop()
+
     // Clerk revoked the session out from under us (another device signed out,
     // an admin ended it, the token was refused). We cannot ask for consent, and
     // deleting offline work without it is not ours to do.
-    if nextUserId == nil, previousUserId != nil {
-      await sessions?.freezeAndFlushAll()
-      await sync?.stop()
-      let pending = (try? await store.unsyncedWorkCount()) ?? 0
+    if nextUserId == nil {
+      let pending: Int
+      do {
+        pending = try await store.unsyncedWorkCount()
+      } catch {
+        // Unknown is not zero.
+        logger.error(
+          "could not count unsynced work after revocation; retaining the mirror: \(error.localizedDescription, privacy: .public)"
+        )
+        status = .signedOut
+        return
+      }
       if pending > 0 {
         // Retained, not deleted, and not readable: the data stays owned by the
         // previous account, so `claimMirror` refuses to open it under anyone
@@ -360,42 +412,25 @@ public final class RectoAuth {
         logger.error(
           "session revoked with \(pending) unsynced change(s); retaining them for the previous account"
         )
+        retainedUnsyncedWork = pending
         status = .signedOut
-        emitRetainedWork(count: pending)
         return
       }
-      try? await store.purgeEverything()
-      try? await store.setMirrorOwner(nil)
+      try? await store.purgeAndSetMirrorOwner(nil)
       status = .signedOut
       return
     }
 
-    // A different user on the same device must never see the previous one's
-    // documents. Stop sync, purge, and only THEN publish the new identity: a
-    // consumer that reads the store between those steps would show the old
-    // user's text under the new session.
-    if previousUserId != nil, nextUserId != previousUserId {
-      await sessions?.freezeAndFlushAll()
-      await sync?.stop()
-      do {
-        try await store.purgeEverything()
-      } catch {
-        // Blocking the transition is the safe failure: leaving the rows in place
-        // under a new identity is not.
-        logger.error(
-          "purge failed during account switch; refusing to publish the new session: \(error.localizedDescription, privacy: .public)"
-        )
-        status = .signedOut
-        return
-      }
-    }
+    guard let nextUserId else { return }
+    await switchOwner(to: nextUserId)
+  }
 
+  /// A direct A-to-B switch. NOTHING is deleted here: `claimMirror` owns that
+  /// decision, and purging first would hand it a clean store and remove its
+  /// only chance to object.
+  private func switchOwner(to nextUserId: String) async {
     guard await claimMirror(for: nextUserId) else { return }
-    status = nextUserId.map { AuthStatus.signedIn(userId: $0) } ?? .signedOut
-    if nextUserId != nil {
-      await sessions?.resumeAll()
-      await sync?.start()
-    }
+    await publishSignedIn(nextUserId)
   }
 
   /// Unsynced work that outlived a revoked session. The UI surfaces it on the
@@ -406,16 +441,40 @@ public final class RectoAuth {
     retainedUnsyncedWork = count
   }
 
-  /// The user chose to discard the previous account's retained work. Only then
-  /// may a different account take the mirror over.
-  public func discardRetainedWorkAndClaim(userId: String) async -> Bool {
-    await claimMirror(for: userId, discardingRetainedWork: true)
+  /// The user confirmed deletion of the previous account's retained work.
+  ///
+  /// Takes no user id on purpose: the identity comes from the active Clerk
+  /// session, so a caller cannot claim the mirror for somebody who is not
+  /// actually signed in. Completes the whole transition — purge, ownership,
+  /// published status, sessions resumed, sync started — so the UI is not left
+  /// blocked over a store that has already been emptied.
+  @discardableResult
+  public func discardRetainedWorkAndClaim() async -> Bool {
+    guard Self.isClerkConfigured, let userId = Self.activeUserId(of: Clerk.shared.session) else {
+      logger.error("refusing to discard retained work: no active Clerk session to claim it for")
+      return false
+    }
+    return await completeDiscard(userId: userId)
+  }
+
+  private func completeDiscard(userId: String) async -> Bool {
+    guard await claimMirror(for: userId, discardingRetainedWork: true) else { return false }
+    await publishSignedIn(userId)
+    return true
+  }
+
+  /// Test seam: the same completion without a live Clerk session.
+  func discardRetainedWorkAndClaimForTesting(userId: String) async -> Bool {
+    await completeDiscard(userId: userId)
   }
 
   private func handleAccountDeleted() async {
+    await sessions?.freezeAndFlushAll()
     await sync?.stop()
     do {
-      try await store.purgeEverything()
+      // The account is gone; there is nowhere left to sync to, so retaining is
+      // pointless and the rows must not outlive it.
+      try await store.purgeAndSetMirrorOwner(nil)
     } catch {
       logger.error(
         "purge after account deletion failed: \(error.localizedDescription, privacy: .public)")

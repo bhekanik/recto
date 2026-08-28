@@ -186,6 +186,9 @@ public final class ConvexTemplateAuthProvider: AuthProvider {
     let logger = self.logger
     await ConvexAuthCoordinator.shared.perform {
       if activeID != nil {
+        // A session becoming active replaces the bridge. `RectoAuth` has already
+        // stopped sync by the time this fires for a switch, and at first launch
+        // there are no sockets yet — the two moments where replacement is safe.
         logger.info("clerk session became active; logging Convex in from cache")
         _ = await client.loginFromCache()
       } else {

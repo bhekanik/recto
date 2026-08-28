@@ -123,6 +123,10 @@ public actor InMemoryTransport: RectoTransport {
     case documentNotFound
     /// `documents.updateCurrentNodeId` refuses a head that is not in the DAG.
     case unknownPointerTarget
+    /// `documents.commitEdit` refuses a node whose parent is not the head the
+    /// caller says it committed onto — a mis-parented node must never enter the
+    /// DAG, because nothing downstream could materialize it.
+    case misparentedNode
   }
 
   // MARK: - Seeding
@@ -219,6 +223,14 @@ public actor InMemoryTransport: RectoTransport {
     commitAttempts.append(request.clientMutationId)
     guard var document = documents[request.documentId] else { throw TransportFault.documentNotFound }
 
+    // The node's parent and the head the caller claims to have committed onto
+    // are the same fact stated twice. If they disagree the caller is confused,
+    // and inserting the node anyway would put an unmaterializable row in the DAG
+    // forever.
+    guard request.parentNodeId == request.expectedHeadNodeId else {
+      throw TransportFault.misparentedNode
+    }
+
     // Replay of an attempt already answered — same answer.
     if let last = document.lastCommit, last.clientMutationId == request.clientMutationId {
       return CommitEditResponse(
@@ -240,6 +252,14 @@ public actor InMemoryTransport: RectoTransport {
     }
 
     if document.currentNodeId == request.nodeId {
+      // Already the head — an earlier attempt got through and its answer was
+      // lost. Record THIS attempt's key so a further replay is still answered
+      // as a success, even if a pointer move has advanced the revision since.
+      document.lastCommit = (
+        request.clientMutationId, document.currentNodeId, document.updatedAt,
+        document.pointerRevision
+      )
+      documents[request.documentId] = document
       return CommitEditResponse(
         committed: true, headNodeId: document.currentNodeId, updatedAt: document.updatedAt,
         pointerRevision: document.pointerRevision)

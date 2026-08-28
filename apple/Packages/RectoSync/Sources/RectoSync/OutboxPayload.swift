@@ -83,6 +83,10 @@ public struct OutboxPayload: Codable, Sendable, Equatable {
       try require(markdown != nil, "markdown")
       try require(wordCount != nil, "wordCount")
       try require(!(baseHeadNodeId ?? "").isEmpty, "baseHeadNodeId")
+      // The server throws on a mismatch (a mis-parented node must never enter
+      // the DAG), so catch it here where the row can be parked instead of
+      // failing the drain forever.
+      try require(parentNodeId == baseHeadNodeId, "parentNodeId matching baseHeadNodeId")
     case .appendNode:
       try require(!(nodeId ?? "").isEmpty, "nodeId")
       try require(!(patch ?? "").isEmpty, "patch")

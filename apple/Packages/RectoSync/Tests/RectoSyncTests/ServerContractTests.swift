@@ -1,5 +1,6 @@
 import Foundation
 import RectoAuth
+import RectoHistory
 import RectoSyncTesting
 import Testing
 
@@ -231,5 +232,83 @@ struct FakeContractTests {
       documentId: seeded.documentId, markdown: "typed again", wordCount: 2,
       expectedUpdatedAt: after.updatedAt, expectedHeadNodeId: nil, title: nil)
     #expect(try await transport.getDocument(documentId: seeded.documentId)?.markdownHeadNodeId == nil)
+  }
+}
+
+@Suite("commitEdit parent contract")
+struct CommitParentContractTests {
+  private func request(
+    documentId: String, nodeId: String = ulid(), parentNodeId: String?, expectedHeadNodeId: String,
+    markdown: String, clientMutationId: String = ulid()
+  ) -> CommitEditRequest {
+    CommitEditRequest(
+      documentId: documentId, nodeId: nodeId, parentNodeId: parentNodeId,
+      patch: computePatch("", markdown).encoded, snapshot: nil, selection: nil, origin: "mac",
+      createdAt: Date().timeIntervalSince1970 * 1000, markdown: markdown, wordCount: 1,
+      expectedHeadNodeId: expectedHeadNodeId, clientMutationId: clientMutationId)
+  }
+
+  @Test("a node whose parent is not the expected head is refused outright")
+  func misparentedCommitThrows() async throws {
+    let transport = InMemoryTransport()
+    let seeded = await transport.seedDocument()
+    let landed = try await transport.commitFromOtherClient(
+      documentId: seeded.documentId, parentNodeId: seeded.rootNodeId, markdown: "first")
+
+    // Parent says root, expected head says the node that landed: the caller is
+    // confused, and a mis-parented node could never be materialized.
+    await #expect(throws: InMemoryTransport.TransportFault.misparentedNode) {
+      _ = try await transport.commitEdit(
+        request(
+          documentId: seeded.documentId, parentNodeId: seeded.rootNodeId,
+          expectedHeadNodeId: landed, markdown: "confused"))
+    }
+
+    let nodes = try await transport.listNodes(documentId: seeded.documentId, sinceCreatedAt: nil)
+    #expect(nodes.count == 2, "the refused node never entered the DAG")
+    #expect(
+      try await transport.getDocument(documentId: seeded.documentId)?.currentNodeId == landed)
+  }
+
+  @Test("a replay of a commit that is already the head is answered as success")
+  func alreadyHeadReplayIsSuccess() async throws {
+    let transport = InMemoryTransport()
+    let seeded = await transport.seedDocument()
+
+    let key = ulid()
+    let commit = request(
+      documentId: seeded.documentId, parentNodeId: seeded.rootNodeId,
+      expectedHeadNodeId: seeded.rootNodeId, markdown: "landed", clientMutationId: key)
+    #expect(try await transport.commitEdit(commit).committed)
+
+    // Another client commits — through `commitEdit`, so it really does overwrite
+    // the single `lastCommit` slot — and then undoes back to our node.
+    let theirCommit = request(
+      documentId: seeded.documentId, parentNodeId: commit.nodeId,
+      expectedHeadNodeId: commit.nodeId, markdown: "theirs")
+    #expect(try await transport.commitEdit(theirCommit).committed)
+    let theirs = theirCommit.nodeId
+    // Comfortably ahead of the transport's own clock, so the move wins the LWW
+    // check rather than being rejected as stale.
+    let laterThanAnything = Date().timeIntervalSince1970 * 1000 + 60_000
+    _ = try await transport.updateCurrentNodeId(
+      documentId: seeded.documentId, currentNodeId: commit.nodeId, markdown: "landed",
+      wordCount: 1, updatedAt: laterThanAnything)
+
+    // Our lost answer is retried. The already-head path answers success AND
+    // records this key.
+    #expect(try await transport.commitEdit(commit).committed)
+
+    // The head now moves away again. Because the key was recorded, a further
+    // replay is still the success it always was — not a spurious divergence.
+    _ = try await transport.updateCurrentNodeId(
+      documentId: seeded.documentId, currentNodeId: theirs, markdown: "theirs",
+      wordCount: 1, updatedAt: laterThanAnything + 1)
+    let replay = try await transport.commitEdit(commit)
+    #expect(replay.committed, "a recorded replay stays a success after the head moves on")
+    #expect(replay.headNodeId == commit.nodeId)
+
+    let nodes = try await transport.listNodes(documentId: seeded.documentId, sinceCreatedAt: nil)
+    #expect(nodes.count == 3, "replays never duplicate the node")
   }
 }
