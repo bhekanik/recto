@@ -2,6 +2,7 @@ import type { GenericMutationCtx, GenericQueryCtx } from "convex/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internalQuery, mutation, query } from "./_generated/server";
+import { assertNotDeleting } from "./accountGuard";
 
 type QueryCtx = GenericQueryCtx<import("./_generated/dataModel").DataModel>;
 type MutationCtx = GenericMutationCtx<
@@ -43,7 +44,13 @@ function requireId(value: string, field: string): string {
 	return value;
 }
 
-/** Resolve the authenticated Clerk user id (JWT subject) or throw. */
+/**
+ * Resolve the authenticated Clerk user id (JWT subject) or throw.
+ *
+ * In a MUTATION context this also refuses when the account is being deleted:
+ * a still-valid JWT outlives the Clerk user, so without it a stale tab or an
+ * offline outbox can write rows behind the purge (see `accountGuard.ts`).
+ */
 export async function requireUserId(
 	ctx: QueryCtx | MutationCtx,
 ): Promise<string> {
@@ -51,6 +58,7 @@ export async function requireUserId(
 	if (!identity) {
 		throw new Error("Unauthenticated");
 	}
+	await assertNotDeleting(ctx, identity.subject);
 	return identity.subject;
 }
 

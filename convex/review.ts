@@ -2,6 +2,7 @@ import type { GenericMutationCtx, GenericQueryCtx } from "convex/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
+import { assertNotDeleting } from "./accountGuard";
 import {
 	MARKDOWN_TOO_LARGE_MESSAGE,
 	MAX_MARKDOWN_LENGTH,
@@ -101,6 +102,14 @@ export async function requireDocumentAccess(
 
 	const doc = await ctx.db.get(documentId);
 	if (!doc) throw new Error("Document not found");
+
+	// This helper reads the identity itself rather than going through
+	// `documents.requireUserId`, so it needs its own deletion guard. Both sides
+	// matter: a reviewer whose account is being deleted must stop writing, and
+	// nobody may append to a document whose OWNER is being deleted (the purge
+	// would leave the new rows orphaned).
+	await assertNotDeleting(ctx, userId);
+	if (doc.userId !== userId) await assertNotDeleting(ctx, doc.userId);
 
 	if (doc.userId === userId) {
 		return { doc, role: "owner", userId };
@@ -422,6 +431,11 @@ export const reviewerAppend = mutation({
 				snapshot: args.snapshot,
 				selection: args.selection,
 				origin: `review:${userId}`,
+				// Indexed attribution, alongside the `review:<userId>` origin string
+				// the review surface already reads. Account deletion has to find one
+				// reviewer's suggestion nodes across every document they ever
+				// suggested on, and a prefix match is not an index (ADR-21).
+				authorUserId: userId,
 				createdAt: args.createdAt,
 			});
 		}

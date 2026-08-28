@@ -31,4 +31,14 @@ crons.daily(
 	{},
 );
 
+// Drop account-deletion tombstones past their retention window (ADR-21). Until
+// then the row is what makes a mutation from a not-yet-expired JWT fail, so
+// this deliberately runs long after the deletion itself.
+crons.daily(
+	"account deletion tombstone sweep",
+	{ hourUTC: 11, minuteUTC: 0 },
+	internal.account.sweepTombstones,
+	{},
+);
+
 export default crons;

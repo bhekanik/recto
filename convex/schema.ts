@@ -120,9 +120,17 @@ export default defineSchema({
 		),
 		origin: v.string(), // device/client id that created the node
 		createdAt: v.number(),
+		// Who authored this node, when that is someone other than the document's
+		// owner. Written by review.reviewerAppend; `origin` already carries
+		// `review:<userId>` but a string prefix is not an index, and account
+		// deletion has to find one reviewer's nodes across every document they
+		// ever suggested on. Absent on owner-authored nodes, and on reviewer
+		// nodes written before this field (see migrations.backfillNodeAuthors).
+		authorUserId: v.optional(v.string()),
 	})
 		.index("by_document", ["documentId"])
-		.index("by_document_node", ["documentId", "nodeId"]),
+		.index("by_document_node", ["documentId", "nodeId"])
+		.index("by_author_document", ["authorUserId", "documentId"]),
 
 	// Tagged versions — named references into docNodes (blueprint 03 §2, 08).
 	versions: defineTable({
@@ -228,4 +236,56 @@ export default defineSchema({
 	})
 		.index("by_user", ["userId"])
 		.index("by_user_date", ["userId", "date"]),
+
+	/**
+	 * Ownership for stored blobs (ADR-21). `_storage` rows carry no owner, so
+	 * without this the only way to attribute a file was "whose markdown mentions
+	 * its URL" — which deletes someone else's file the moment a URL is shared,
+	 * and misses files referenced only from history or never referenced in
+	 * markdown at all (a generated `.docx`). Written when an upload or an export
+	 * completes; pre-existing files are attributed by
+	 * `migrations.backfillBlobOwners`.
+	 */
+	blobs: defineTable({
+		storageId: v.id("_storage"),
+		ownerUserId: v.string(),
+		kind: v.union(v.literal("upload"), v.literal("export")),
+		createdAt: v.number(),
+	})
+		.index("by_owner", ["ownerUserId"])
+		.index("by_storage", ["storageId"]),
+
+	/**
+	 * An account deletion in flight (ADR-21). Its existence is what makes
+	 * deletion atomic across the many transactions it takes: every user-facing
+	 * mutation refuses while it is present, so a stale tab or an offline native
+	 * client holding a still-valid JWT cannot recreate rows behind the purge.
+	 *
+	 * It outlives the deletion itself by `TOMBSTONE_RETENTION_MS`, because a
+	 * Clerk session token stays valid for up to a minute after the user is gone
+	 * and a queued mutation can still land in that window.
+	 */
+	accountDeletions: defineTable({
+		userId: v.string(),
+		/** From the JWT at request time; the purge needs it after the user is gone. */
+		granteeEmail: v.optional(v.string()),
+		startedAt: v.number(),
+		updatedAt: v.number(),
+		/**
+		 * `blobs` -> `rows` -> `identity` -> `purged`. Also the answer to "is a
+		 * 404 from Clerk a wrong-instance secret or a legitimate retry?": only
+		 * from `identity` onward has this deployment actually asked Clerk to
+		 * delete the user.
+		 */
+		phase: v.union(
+			v.literal("blobs"),
+			v.literal("rows"),
+			v.literal("identity"),
+			v.literal("purged"),
+		),
+		/** When the tombstone may be swept. Set once the deletion finishes. */
+		expiresAt: v.optional(v.number()),
+	})
+		.index("by_user", ["userId"])
+		.index("by_expires", ["expiresAt"]),
 });

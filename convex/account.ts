@@ -1,22 +1,43 @@
+import type { GenericActionCtx } from "convex/server";
+import { v } from "convex/values";
 import { internal } from "./_generated/api";
-import { action } from "./_generated/server";
+import type { DataModel } from "./_generated/dataModel";
+import {
+	action,
+	internalAction,
+	internalMutation,
+	internalQuery,
+} from "./_generated/server";
+import { TOMBSTONE_RETENTION_MS } from "./accountGuard";
 
 /**
  * In-app account deletion (plan 023 §4.1(4); App Store guideline 5.1.1(v),
  * which requires an in-app path that deletes the account itself, not just its
  * data, and not a "email us to delete" link).
  *
- * Shape of the operation:
+ * The shape of the operation, and why it is in this order:
  *
- *  1. blobs the user's documents reference,
- *  2. every row keyed to the user, in bounded batches,
- *  3. the Clerk user, LAST.
+ *  0. **Verify Clerk first.** If the secret cannot reach this user, nothing is
+ *     deleted. A wrong-instance secret returns 404 for every call, and a
+ *     version of this that skipped the check happily purged the data and then
+ *     reported the Clerk user deleted when it had never existed to that key.
+ *  1. **Write a tombstone.** Deletion spans many transactions and an HTTP call;
+ *     the user's JWT stays valid throughout. Without the tombstone a stale tab
+ *     or an offline outbox recreates rows behind the purge — `settings.save`,
+ *     `workspaces.saveForDevice`, `documents.create` — and they end up owned by
+ *     an account nobody can reach. Every user-facing mutation refuses while it
+ *     exists (`accountGuard.ts`).
+ *  2. **Blobs, then rows**, each in bounded batches. Rows are not touched until
+ *     the blob phase reports itself finished.
+ *  3. **The Clerk user, last.** Every step before it is idempotent, so a
+ *     failure anywhere leaves an account that can still sign in and press the
+ *     button again. Deleting the identity first would strand the data with
+ *     nobody able to reach it.
+ *  4. **A final purge**, catching anything that landed between the last pass
+ *     and the identity going away.
  *
- * Clerk goes last on purpose. Every step before it is idempotent, so a failure
- * anywhere leaves an account that can still sign in and press the button again;
- * deleting the identity first would strand the data with nobody able to reach
- * it. The cost is that a caller who dies between step 2 and step 3 leaves an
- * empty-but-live account — recoverable, which the other order is not.
+ * The tombstone is kept for `TOMBSTONE_RETENTION_MS` afterwards and swept by a
+ * daily cron.
  */
 
 const CLERK_API_BASE = "https://api.clerk.com/v1";
@@ -24,8 +45,21 @@ const CLERK_API_BASE = "https://api.clerk.com/v1";
 /** Bound on purge rounds, so a bug cannot spin an action until it is killed. */
 const MAX_PURGE_PASSES = 500;
 
+/**
+ * How long after the client's call the server-owned resume job runs. Deletion
+ * does not depend on the caller staying connected: if the action is cut off
+ * mid-purge, this picks it up.
+ */
+const RESUME_DELAY_MS = 60 * 1000;
+
+/** How many times the resume job will re-arm itself before giving up. */
+const MAX_RESUME_ATTEMPTS = 10;
+
 export const ACCOUNT_DELETION_UNAVAILABLE_MESSAGE =
 	"Account deletion is not configured on this deployment (CLERK_SECRET_KEY is missing). No data was deleted.";
+
+export const CLERK_USER_UNREACHABLE_MESSAGE =
+	"Account deletion could not reach this user in Clerk, so nothing was deleted. This usually means the deployment's CLERK_SECRET_KEY belongs to a different Clerk instance.";
 
 /**
  * Sign in with Apple token revocation: DETECTED HERE, NOT PERFORMED. Read this
@@ -63,6 +97,14 @@ export type AppleRevocation =
 	| { status: "skipped"; reason: string }
 	| { status: "unknown"; reason: string };
 
+export type DeletionResult = {
+	userId: string;
+	rowsDeleted: number;
+	blobsDeleted: number;
+	clerkUserDeleted: boolean;
+	appleRevocation: AppleRevocation;
+};
+
 /**
  * Clerk spells Apple two ways: `oauth_apple` is the sign-in STRATEGY and the
  * path segment of the oauth-token endpoint, while `external_accounts[].provider`
@@ -77,6 +119,9 @@ const APPLE_PROVIDERS = new Set(["apple", "oauth_apple"]);
  * than the one `appleAccountPresent` reads.
  */
 const CLERK_API_VERSION = "2026-05-12";
+
+const MISSING_APPLE_CREDENTIALS =
+	"An Apple external account exists, but Apple-side revocation was not attempted: this deployment holds no Apple signing credentials (Team ID, Services ID, Key ID, .p8 key) and Clerk exposes no Apple refresh token, both of which TN3194's /auth/revoke call needs. Deleting the Clerk user does not revoke on Apple's side. Ask the user to remove the app under Settings > Apple Account > Sign in with Apple until this is wired up.";
 
 /**
  * Whether this Clerk user has an Apple external account — `null` when the
@@ -97,9 +142,6 @@ function appleAccountPresent(body: unknown): boolean | null {
 	});
 }
 
-const MISSING_APPLE_CREDENTIALS =
-	"An Apple external account exists, but Apple-side revocation was not attempted: this deployment holds no Apple signing credentials (Team ID, Services ID, Key ID, .p8 key) and Clerk exposes no Apple refresh token, both of which TN3194's /auth/revoke call needs. Deleting the Clerk user does not revoke on Apple's side. Ask the user to remove the app under Settings > Apple Account > Sign in with Apple until this is wired up.";
-
 async function clerkRequest(
 	secret: string,
 	path: string,
@@ -115,6 +157,234 @@ async function clerkRequest(
 			"Content-Type": "application/json",
 		},
 	});
+}
+
+function errorText(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Run one purge step until it reports nothing left. The pass bound is a
+ * stop-loss, not an expected outcome: `done: false` after this many rounds
+ * means a step is not making progress, and looping forever would burn the
+ * action's time budget instead of saying so.
+ */
+async function drain(
+	step: () => Promise<{ deleted: number; done: boolean }>,
+): Promise<{ deleted: number; done: boolean }> {
+	let deleted = 0;
+	for (let pass = 0; pass < MAX_PURGE_PASSES; pass += 1) {
+		const result = await step();
+		deleted += result.deleted;
+		if (result.done) return { deleted, done: true };
+	}
+	return { deleted, done: false };
+}
+
+// ---------------------------------------------------------------------------
+// Tombstone lifecycle
+// ---------------------------------------------------------------------------
+
+const phaseValidator = v.union(
+	v.literal("blobs"),
+	v.literal("rows"),
+	v.literal("identity"),
+	v.literal("purged"),
+);
+
+/**
+ * Create the tombstone, or return the existing one. Idempotent: a retry after
+ * a partial failure must resume the same deletion, not start a second one, and
+ * must not reset the phase that tells a Clerk 404 apart from a wrong-instance
+ * 404.
+ */
+export const beginDeletion = internalMutation({
+	args: { userId: v.string(), granteeEmail: v.optional(v.string()) },
+	handler: async (ctx, args) => {
+		const existing = await ctx.db
+			.query("accountDeletions")
+			.withIndex("by_user", (q) => q.eq("userId", args.userId))
+			.unique();
+		const now = Date.now();
+
+		if (existing) {
+			// Clear any expiry: this deletion is running again, so the tombstone
+			// must not be swept out from under it.
+			await ctx.db.patch(existing._id, {
+				updatedAt: now,
+				expiresAt: undefined,
+				granteeEmail: args.granteeEmail ?? existing.granteeEmail,
+			});
+			return { phase: existing.phase, resumed: true as const };
+		}
+
+		await ctx.db.insert("accountDeletions", {
+			userId: args.userId,
+			granteeEmail: args.granteeEmail,
+			startedAt: now,
+			updatedAt: now,
+			phase: "blobs",
+		});
+		return { phase: "blobs" as const, resumed: false as const };
+	},
+});
+
+export const setDeletionPhase = internalMutation({
+	args: { userId: v.string(), phase: phaseValidator },
+	handler: async (ctx, args) => {
+		const row = await ctx.db
+			.query("accountDeletions")
+			.withIndex("by_user", (q) => q.eq("userId", args.userId))
+			.unique();
+		if (!row) return;
+		const now = Date.now();
+		await ctx.db.patch(row._id, {
+			phase: args.phase,
+			updatedAt: now,
+			// The tombstone only becomes sweepable once the deletion is finished.
+			expiresAt:
+				args.phase === "purged" ? now + TOMBSTONE_RETENTION_MS : undefined,
+		});
+	},
+});
+
+export const getDeletion = internalQuery({
+	args: { userId: v.string() },
+	handler: async (ctx, args) => {
+		const row = await ctx.db
+			.query("accountDeletions")
+			.withIndex("by_user", (q) => q.eq("userId", args.userId))
+			.unique();
+		if (!row) return null;
+		return {
+			phase: row.phase,
+			granteeEmail: row.granteeEmail,
+			startedAt: row.startedAt,
+			expiresAt: row.expiresAt,
+		};
+	},
+});
+
+/**
+ * Drop tombstones whose retention window has passed. Run daily by cron — until
+ * then the row is what makes a late mutation from a not-yet-expired JWT fail.
+ */
+export const sweepTombstones = internalMutation({
+	args: { limit: v.optional(v.number()) },
+	handler: async (ctx, args) => {
+		const now = Date.now();
+		const expired = await ctx.db
+			.query("accountDeletions")
+			.withIndex("by_expires", (q) => q.lte("expiresAt", now))
+			.take(Math.max(1, Math.min(args.limit ?? 256, 256)));
+
+		let deleted = 0;
+		for (const row of expired) {
+			// The index range includes rows with no expiry (undefined sorts first),
+			// which are deletions still in flight.
+			if (row.expiresAt === undefined) continue;
+			await ctx.db.delete(row._id);
+			deleted += 1;
+		}
+		return { deleted };
+	},
+});
+
+// ---------------------------------------------------------------------------
+// The deletion itself
+// ---------------------------------------------------------------------------
+
+/**
+ * Everything after the tombstone exists. Shared by the user-facing action and
+ * the server-owned resume job so both take exactly the same path.
+ */
+async function runDeletion(
+	ctx: GenericActionCtx<DataModel>,
+	secret: string,
+	userId: string,
+	granteeEmail: string | undefined,
+	startPhase: "blobs" | "rows" | "identity" | "purged",
+): Promise<DeletionResult> {
+	let blobsDeleted = 0;
+	let rowsDeleted = 0;
+
+	if (startPhase === "blobs") {
+		const blobs = await drain(() =>
+			ctx.runMutation(internal.accountPurge.purgeBlobs, { userId }),
+		);
+		blobsDeleted += blobs.deleted;
+		if (!blobs.done) {
+			// Deliberately before the row purge and the Clerk delete: files the
+			// purge has not reached are still fetchable by anyone holding their
+			// bearer URL, and removing the identity now would leave nobody able to
+			// finish the job.
+			throw new Error(
+				`Blob purge did not finish in ${MAX_PURGE_PASSES} passes (${blobsDeleted} deleted). Run it again to continue.`,
+			);
+		}
+		await ctx.runMutation(internal.account.setDeletionPhase, {
+			userId,
+			phase: "rows",
+		});
+	}
+
+	if (startPhase === "blobs" || startPhase === "rows") {
+		const rows = await drain(() =>
+			ctx.runMutation(internal.accountPurge.purgeData, {
+				userId,
+				granteeEmail,
+			}),
+		);
+		rowsDeleted += rows.deleted;
+		if (!rows.done) {
+			throw new Error(
+				`Account data purge did not finish in ${MAX_PURGE_PASSES} passes (${rowsDeleted} rows deleted). Run it again to continue.`,
+			);
+		}
+		await ctx.runMutation(internal.account.setDeletionPhase, {
+			userId,
+			phase: "identity",
+		});
+	}
+
+	// Read Apple attribution before the user is deleted; after that there is
+	// nothing left to read it from.
+	const appleRevocation = await checkAppleRevocation(secret, userId);
+
+	const deleteResponse = await clerkRequest(secret, `/users/${userId}`, {
+		method: "DELETE",
+	});
+	// A 404 here is safe to accept: reaching this point means a GET for this
+	// user returned 200 on the deployment's own secret, so the instance is the
+	// right one and the user is simply already gone (this action running twice).
+	if (!deleteResponse.ok && deleteResponse.status !== 404) {
+		throw new Error(
+			`Data was deleted, but Clerk refused to delete the user (HTTP ${deleteResponse.status}). Sign in and try again.`,
+		);
+	}
+
+	// Anything that landed between the last pass and the identity going away.
+	const tail = await drain(() =>
+		ctx.runMutation(internal.accountPurge.purgeData, { userId, granteeEmail }),
+	);
+	rowsDeleted += tail.deleted;
+	const tailBlobs = await drain(() =>
+		ctx.runMutation(internal.accountPurge.purgeBlobs, { userId }),
+	);
+	blobsDeleted += tailBlobs.deleted;
+
+	await ctx.runMutation(internal.account.setDeletionPhase, {
+		userId,
+		phase: "purged",
+	});
+
+	return {
+		userId,
+		rowsDeleted,
+		blobsDeleted,
+		clerkUserDeleted: true,
+		appleRevocation,
+	};
 }
 
 /**
@@ -155,39 +425,9 @@ async function checkAppleRevocation(
 	return { status: "skipped", reason: MISSING_APPLE_CREDENTIALS };
 }
 
-function errorText(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
-}
-
-/**
- * Run one purge step until it reports nothing left. The pass bound is a
- * stop-loss, not an expected outcome: `done: false` after this many rounds
- * means a step is not making progress, and looping forever would burn the
- * action's time budget instead of saying so.
- */
-async function drain(
-	step: () => Promise<{ deleted: number; done: boolean }>,
-): Promise<{ deleted: number; done: boolean }> {
-	let deleted = 0;
-	for (let pass = 0; pass < MAX_PURGE_PASSES; pass += 1) {
-		const result = await step();
-		deleted += result.deleted;
-		if (result.done) return { deleted, done: true };
-	}
-	return { deleted, done: false };
-}
-
 export const deleteEverything = action({
 	args: {},
-	handler: async (
-		ctx,
-	): Promise<{
-		userId: string;
-		rowsDeleted: number;
-		blobsDeleted: number;
-		clerkUserDeleted: boolean;
-		appleRevocation: AppleRevocation;
-	}> => {
+	handler: async (ctx): Promise<DeletionResult> => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) throw new Error("Unauthenticated");
 
@@ -201,45 +441,80 @@ export const deleteEverything = action({
 		const granteeEmail =
 			typeof identity.email === "string" ? identity.email : undefined;
 
-		const blobs = await drain(() =>
-			ctx.runMutation(internal.accountPurge.purgeStorage, { userId }),
-		);
-		const blobsDeleted = blobs.deleted;
-
-		const rows = await drain(() =>
-			ctx.runMutation(internal.accountPurge.purgeData, {
-				userId,
-				granteeEmail,
-			}),
-		);
-		const rowsDeleted = rows.deleted;
-		if (!rows.done) {
-			// Deliberately before the Clerk delete: the account must stay reachable
-			// so the user (or support) can run this again and finish it.
-			throw new Error(
-				`Account data purge did not finish in ${MAX_PURGE_PASSES} passes (${rowsDeleted} rows deleted). Run it again to continue.`,
-			);
-		}
-
-		const appleRevocation = await checkAppleRevocation(secret, userId);
-
-		const deleteResponse = await clerkRequest(secret, `/users/${userId}`, {
-			method: "DELETE",
-		});
-		// 404 means a previous attempt already removed the user — that is this
-		// action succeeding twice, not failing.
-		if (!deleteResponse.ok && deleteResponse.status !== 404) {
-			throw new Error(
-				`Data was deleted, but Clerk refused to delete the user (HTTP ${deleteResponse.status}). Sign in and try again.`,
-			);
-		}
-
-		return {
+		const existing = await ctx.runQuery(internal.account.getDeletion, {
 			userId,
-			rowsDeleted,
-			blobsDeleted,
-			clerkUserDeleted: true,
-			appleRevocation,
-		};
+		});
+
+		// On a NEW deletion the secret must be able to SEE this user. A secret for
+		// the wrong Clerk instance answers 404 to every call, which is
+		// indistinguishable from "already deleted" unless you know whether this
+		// deployment has ever asked Clerk to delete them — which is exactly what
+		// the tombstone's phase records.
+		const alreadyAskedClerk =
+			existing?.phase === "identity" || existing?.phase === "purged";
+		if (!alreadyAskedClerk) {
+			const probe = await clerkRequest(secret, `/users/${userId}`);
+			if (!probe.ok) throw new Error(CLERK_USER_UNREACHABLE_MESSAGE);
+		}
+
+		const started = await ctx.runMutation(internal.account.beginDeletion, {
+			userId,
+			granteeEmail,
+		});
+
+		// A server-owned continuation, so finishing does not depend on the caller
+		// staying connected. It no-ops when this call completes the deletion.
+		await ctx.scheduler.runAfter(
+			RESUME_DELAY_MS,
+			internal.account.resumeDeletion,
+			{ userId, attempt: 1 },
+		);
+
+		return await runDeletion(
+			ctx,
+			secret,
+			userId,
+			existing?.granteeEmail ?? granteeEmail,
+			started.phase,
+		);
+	},
+});
+
+/**
+ * Finish a deletion the user-facing action did not. Re-arms itself while there
+ * is still work, so a client that closed its laptop mid-delete does not leave
+ * an account half gone.
+ */
+export const resumeDeletion = internalAction({
+	args: { userId: v.string(), attempt: v.number() },
+	handler: async (ctx, args): Promise<void> => {
+		const tombstone = await ctx.runQuery(internal.account.getDeletion, {
+			userId: args.userId,
+		});
+		if (!tombstone || tombstone.phase === "purged") return;
+
+		const secret = process.env.CLERK_SECRET_KEY;
+		if (!secret) return; // nothing this job can do; the tombstone stays
+
+		try {
+			await runDeletion(
+				ctx,
+				secret,
+				args.userId,
+				tombstone.granteeEmail,
+				tombstone.phase,
+			);
+		} catch {
+			// Swallowed on purpose: the tombstone still blocks writes, and
+			// rethrowing would only fill the logs with the same failure. Re-arm
+			// instead, with a bound so a permanently failing deletion stops.
+			if (args.attempt < MAX_RESUME_ATTEMPTS) {
+				await ctx.scheduler.runAfter(
+					RESUME_DELAY_MS * args.attempt,
+					internal.account.resumeDeletion,
+					{ userId: args.userId, attempt: args.attempt + 1 },
+				);
+			}
+		}
 	},
 });
