@@ -8,7 +8,7 @@ import type { Id } from "@/convex/_generated/dataModel";
 import type { EditorHandle } from "@/lib/editor/handle";
 import { countWords } from "@/lib/markdown";
 import { caretAtOffset } from "@/lib/modes/caret";
-import { newProjectionId } from "@/lib/sync/draft-buffer";
+import { newProjectionId, type ProjectionKind } from "@/lib/sync/draft-buffer";
 import { toast } from "@/lib/ui/toast";
 import {
 	type GroupCommit,
@@ -301,7 +301,7 @@ export function useDocumentHistory(args: {
 		/** Identity of the unsaved work, for anything but a server projection. */
 		projectionId?: string;
 		/** Whether this work is text the writer produced or a pointer move. */
-		kind?: "draft" | "commit" | "pointer";
+		kind?: ProjectionKind;
 		/** For pointer work: the node the move was trying to reach. */
 		pointerNodeId?: string;
 		/**
@@ -331,7 +331,7 @@ export function useDocumentHistory(args: {
 		present: boolean;
 		markdown: string;
 		projectionId?: string;
-		kind?: "draft" | "commit" | "pointer";
+		kind?: ProjectionKind;
 		pointerNodeId?: string;
 	} | null;
 	/** Unsaved local work the server has not answered yet (S2/S3). */
@@ -401,12 +401,19 @@ export function useDocumentHistory(args: {
 	// Queue depth, mirrored into state because it is what the status bar reads.
 	// A version tag publishes no projection of its own, so it was invisible to
 	// the sync status and a manual version could sit uncreated under "Saved".
-	const [pendingWrites, setPendingWrites] = useState(0);
+	const [pendingWriteCount, setPendingWriteCount] = useState(0);
 	// A write the server refused. Terminal — see BlockedWrite. Mirrored in a ref
 	// because the pump reads it synchronously: the rejection that sets it and the
 	// next enqueue can land in the same tick, before React has re-rendered.
 	const blockedRef = useRef<BlockedWrite | null>(null);
-	const [blockedWrite, setBlockedWrite] = useState<BlockedWrite | null>(null);
+	const [blockedWrite, setBlockedWriteState] = useState<BlockedWrite | null>(
+		null,
+	);
+	/** Ref and state together, so the two can never disagree. */
+	const setBlockedWrite = useCallback((next: BlockedWrite | null) => {
+		blockedRef.current = next;
+		setBlockedWriteState(next);
+	}, []);
 	// The `documents.pointerRevision` this client last observed or was told it
 	// produced. Pointer writes compare-and-set against it instead of racing a
 	// browser clock against server-generated timestamps.
@@ -472,8 +479,7 @@ export function useDocumentHistory(args: {
 		inFlightRef.current.clear();
 		outboxRef.current = [];
 		outboxActiveRef.current = null;
-		setPendingWrites(0);
-		blockedRef.current = null;
+		setPendingWriteCount(0);
 		setBlockedWrite(null);
 		observedPointerRevisionRef.current = 0;
 		pendingRemotePointerRef.current = null;
@@ -496,7 +502,7 @@ export function useDocumentHistory(args: {
 			serverUpdatedAt = 0,
 			projectionId?: string,
 			extra?: {
-				kind?: "draft" | "commit" | "pointer";
+				kind?: ProjectionKind;
 				pointerNodeId?: string;
 				resolvedProjectionId?: string;
 			},
@@ -602,7 +608,7 @@ export function useDocumentHistory(args: {
 	/** Queue a write and report the new depth, then try to send. */
 	const enqueue = useCallback((entry: OutboxEntry) => {
 		outboxRef.current.push(entry);
-		setPendingWrites(outboxRef.current.length);
+		setPendingWriteCount(outboxRef.current.length);
 		pumpOutboxRef.current();
 	}, []);
 
@@ -679,7 +685,7 @@ export function useDocumentHistory(args: {
 			release();
 			if (outboxRef.current[0] !== entry) return false;
 			outboxRef.current.shift();
-			setPendingWrites(outboxRef.current.length);
+			setPendingWriteCount(outboxRef.current.length);
 			return true;
 		};
 
@@ -695,11 +701,10 @@ export function useDocumentHistory(args: {
 		const onRefused = (kind: "commit" | "pointer", error: unknown) => {
 			release();
 			if (outboxRef.current[0] !== entry) return;
-			blockedRef.current = {
+			setBlockedWrite({
 				kind,
 				message: error instanceof Error ? error.message : String(error),
-			};
-			setBlockedWrite(blockedRef.current);
+			});
 			toast(
 				kind === "commit"
 					? "This change couldn't be saved. Your text is safe — see the status bar."
@@ -816,6 +821,7 @@ export function useDocumentHistory(args: {
 		createVersion,
 		documentId,
 		queueRemotePointer,
+		setBlockedWrite,
 		settleLocalMove,
 		updatePointer,
 	]);
@@ -934,6 +940,8 @@ export function useDocumentHistory(args: {
 			return; // wait for the query to refetch with the root
 		}
 
+		// SAFETY: docNodes rows carry createdAt/origin/selection; the query type
+		// is the narrower DocNode, so this widens to what the rows actually hold.
 		const map = indexNodes(dagRows as HistoryNode[]);
 		observedPointerRevisionRef.current = Math.max(
 			observedPointerRevisionRef.current,
@@ -1299,8 +1307,7 @@ export function useDocumentHistory(args: {
 		const discarded = outboxRef.current;
 		outboxRef.current = [];
 		outboxActiveRef.current = null;
-		setPendingWrites(0);
-		blockedRef.current = null;
+		setPendingWriteCount(0);
 		setBlockedWrite(null);
 		// Each discarded write's own work is reported refused, never accepted, so
 		// its text stays dirty and stays in the recovery record.
@@ -1327,7 +1334,7 @@ export function useDocumentHistory(args: {
 			getHandleRef.current()?.getCanonicalMarkdown() ?? materialized;
 		if (onScreen !== materialized) controller?.record(onScreen, null);
 		setReconcileTick((tick) => tick + 1);
-	}, [serverCurrentNodeId, setPointer, settleLocalMove]);
+	}, [serverCurrentNodeId, setBlockedWrite, setPointer, settleLocalMove]);
 
 	const materializeAt = useCallback(
 		(nodeId: string) => {
@@ -1606,7 +1613,7 @@ export function useDocumentHistory(args: {
 		tagVersion,
 		materializeAt,
 		getHeadNodeId,
-		hasPendingWrites: pendingWrites > 0,
+		hasPendingWrites: pendingWriteCount > 0,
 		blockedWrite,
 		resolveBlockedWrite,
 		hasPendingDraft,

@@ -8,6 +8,7 @@ import type { Id } from "@/convex/_generated/dataModel";
 import type { EditorHandle } from "@/lib/editor/handle";
 import { loadDraft } from "@/lib/sync/draft-buffer";
 import { displaySyncStatus } from "@/lib/sync/sync-indicator";
+import type { SyncStatus } from "@/lib/sync/use-document-sync";
 
 import type { HistoryController, HistoryNode } from "./use-document-history";
 
@@ -392,7 +393,7 @@ function mountStudio(handle: ReturnType<typeof fakeHandle>) {
 	let root: Root;
 	let history!: HistoryController;
 	let sync!: ReturnType<typeof useDocumentSync>;
-	let syncStatus = "";
+	let syncStatus: SyncStatus = "idle";
 	/** What workspace-context would hand the panes to render. */
 	let projectedMarkdown: string | null = null;
 	/** Every value published, so a test can assert a transition was announced. */
@@ -2311,7 +2312,7 @@ describe("studio sync + history contract", () => {
 		expect(s.syncStatus).not.toBe("saved");
 		expect(
 			displaySyncStatus({
-				status: s.syncStatus as never,
+				status: s.syncStatus,
 				hasPendingWrites: s.history.hasPendingWrites,
 				blocked: s.history.blockedWrite !== null,
 			}),
@@ -2400,7 +2401,7 @@ describe("studio sync + history contract", () => {
 
 		s.run(() => s.history.navigateTo(REMOTE));
 		const move = lastCallTo(NAMES.updatePointer);
-		expect((move?.args.updatedAt as number) < AHEAD.updatedAt).toBe(true);
+		expect(Number(move?.args.updatedAt)).toBeLessThan(AHEAD.updatedAt);
 		// The revision the client last observed, which is what the server now
 		// compares against instead.
 		expect(move?.args.expectedPointerRevision).toBe(4);
@@ -2478,7 +2479,7 @@ describe("studio sync + history contract", () => {
 		expect(move).toBeDefined();
 		// The markdown write moved `updatedAt` far past this client's clock; the
 		// revision it compares against is untouched by it.
-		expect((move?.args.updatedAt as number) < 8_000_000_000_000).toBe(true);
+		expect(Number(move?.args.updatedAt)).toBeLessThan(8_000_000_000_000);
 		expect(move?.args.expectedPointerRevision).toBe(4);
 		s.unmount();
 	});
@@ -2534,7 +2535,7 @@ describe("studio sync + history contract", () => {
 		expect(s.history.hasPendingWrites).toBe(true);
 		expect(
 			displaySyncStatus({
-				status: s.syncStatus as never,
+				status: s.syncStatus,
 				hasPendingWrites: s.history.hasPendingWrites,
 				blocked: s.history.blockedWrite !== null,
 			}),
@@ -2545,7 +2546,7 @@ describe("studio sync + history contract", () => {
 		expect(s.history.hasPendingWrites).toBe(false);
 		expect(
 			displaySyncStatus({
-				status: s.syncStatus as never,
+				status: s.syncStatus,
 				hasPendingWrites: s.history.hasPendingWrites,
 				blocked: s.history.blockedWrite !== null,
 			}),

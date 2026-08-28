@@ -13,6 +13,7 @@ import {
 	isOwnDraftOrigin,
 	loadDraft,
 	newProjectionId,
+	type ProjectionKind,
 	reconcileDraft,
 	saveDraft,
 } from "@/lib/sync/draft-buffer";
@@ -43,7 +44,7 @@ export type RecoveredDraft = {
 	 * move — reporting "Saved" for a pointer the server never took.
 	 */
 	projectionId?: string;
-	kind?: PendingProjection["kind"];
+	kind?: ProjectionKind;
 	/** For pointer work: the node the move was trying to reach. */
 	pointerNodeId?: string;
 };
@@ -58,7 +59,7 @@ export type PendingProjection = {
 	 * commit is a separate fact the server must confirm, and a pointer move
 	 * changes nothing a content match could speak for.
 	 */
-	kind: "draft" | "commit" | "pointer";
+	kind: ProjectionKind;
 	markdown: string;
 	/** For pointer work: the node the move was trying to reach. */
 	pointerNodeId?: string;
@@ -119,13 +120,13 @@ type UseDocumentSyncResult = {
 	/** Report a recovered draft the history hook has put on screen (unsaved). */
 	adoptRecoveredDraft: (
 		markdown: string,
-		kindOverride?: PendingProjection["kind"],
+		kindOverride?: ProjectionKind,
 	) => void;
 	/** A local transition is on screen but the server has not taken it yet. */
 	markLocalProjectionPending: (
 		markdown: string,
 		projectionId: string,
-		kind: "draft" | "commit" | "pointer",
+		kind: ProjectionKind,
 		pointerNodeId?: string,
 	) => void;
 	/** That transition was accepted (or refused) by the server. */
@@ -257,11 +258,15 @@ export function useDocumentSync({
 	 * retire. BOTH the in-memory record and the stored one must name it: the
 	 * stored copy is shared across hosts, so a host acknowledging its own old
 	 * write would otherwise delete a draft another host had written since.
+	 *
+	 * `retirable` is required rather than defaulting to "any kind", because the
+	 * permissive answer is the one that loses work: it is what let a markdown
+	 * save retire a pointer move the server had never taken.
 	 */
 	const retirePending = useCallback(
 		(
 			projectionId: string,
-			opts?: { onlyKinds: ReadonlyArray<PendingProjection["kind"]> },
+			retirable: ReadonlyArray<ProjectionKind>,
 		): boolean => {
 			if (!documentId) return false;
 			const pending = pendingProjectionRef.current;
@@ -272,7 +277,7 @@ export function useDocumentSync({
 			// pointer work carries the id the autosave then reuses — so without
 			// this the automatic save deleted the recovery record and reported
 			// "Saved" for a move the server never took.
-			if (opts && !opts.onlyKinds.includes(pending.kind)) return false;
+			if (!retirable.includes(pending.kind)) return false;
 			const stored = loadDraft(documentId);
 			if (!stored || stored.projectionId !== projectionId) return false;
 			pendingProjectionRef.current = null;
@@ -320,7 +325,7 @@ export function useDocumentSync({
 				// the tree gained a node — that an identical body says nothing about,
 				// and retiring it here reported an unsaved node as saved.
 				if (pending && pending.kind === "draft") {
-					retirePending(pending.id);
+					retirePending(pending.id, ["draft"]);
 				} else if (!pending) {
 					pendingMarkdownRef.current = null;
 					setSyncStatus("saved");
@@ -372,7 +377,7 @@ export function useDocumentSync({
 				// Only retire what this write actually carried, and only if what it
 				// carried was a plain text draft. The writer may have typed on while
 				// it was in flight, and that text is still unsaved.
-				retirePending(projectionId, { onlyKinds: ["draft"] });
+				retirePending(projectionId, ["draft"]);
 				return "done";
 			} catch {
 				setSyncStatus("unsynced");
@@ -559,7 +564,7 @@ export function useDocumentSync({
 		(
 			markdown: string,
 			projectionId: string,
-			kind: "draft" | "commit" | "pointer",
+			kind: ProjectionKind,
 			pointerNodeId?: string,
 		) => {
 			setWordCount(countWords(markdown));
@@ -591,7 +596,9 @@ export function useDocumentSync({
 		}) => {
 			if (!settled.ok) return; // stays dirty, stays recoverable
 			observeServerRevision(settled.serverUpdatedAt, settled.markdown);
-			retirePending(settled.projectionId);
+			// Whatever the write carried: this IS that write's own acknowledgement,
+			// which is the only thing entitled to speak for any of the three.
+			retirePending(settled.projectionId, ["draft", "commit", "pointer"]);
 		},
 		[observeServerRevision, retirePending],
 	);
@@ -723,7 +730,9 @@ export function useDocumentSync({
 			// the pane showed the server's head while the document stayed unsynced
 			// and storage still held the refused target.
 			if (resolvedProjectionId !== undefined) {
-				retirePending(resolvedProjectionId);
+				// The server refused that transition and kept this state instead,
+				// which resolves it whatever kind it was.
+				retirePending(resolvedProjectionId, ["draft", "commit", "pointer"]);
 				return;
 			}
 			// Anything else pending is work the server has not answered; remote

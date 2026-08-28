@@ -24,6 +24,7 @@ import {
 } from "@/lib/history/use-document-history";
 import { deriveTitleFromMarkdown } from "@/lib/markdown";
 import { useReviewerHistory } from "@/lib/review/use-reviewer-history";
+import type { ProjectionKind } from "@/lib/sync/draft-buffer";
 import { type SyncStatus, useDocumentSync } from "@/lib/sync/use-document-sync";
 import { DocumentModelRegistry } from "./document-registry";
 import { openDocumentIdsFromTree } from "./queries";
@@ -222,7 +223,7 @@ function OwnerSyncHost({
 			serverUpdatedAt: number;
 			source: "server" | "recovered-draft" | "local";
 			projectionId?: string;
-			kind?: "draft" | "commit" | "pointer";
+			kind?: ProjectionKind;
 			pointerNodeId?: string;
 			resolvedProjectionId?: string;
 		}) => {

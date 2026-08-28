@@ -1,6 +1,15 @@
 const DRAFT_PREFIX = "recto:draft:";
 const ORIGIN_KEY = "recto:client-origin";
 
+/**
+ * What a unit of unsaved work IS. The three are not interchangeable: matching
+ * content proves a `draft` was reverted, a `commit` is a node the server must
+ * separately confirm, and a `pointer` move changes no text at all, so nothing
+ * about the body can speak for it. Declared once — eight places have to agree
+ * on it, and they are spread across storage, both hooks and the workspace.
+ */
+export type ProjectionKind = "draft" | "commit" | "pointer";
+
 export type DraftRecord = {
 	markdown: string;
 	updatedAt: number;
@@ -19,7 +28,7 @@ export type DraftRecord = {
 	 * it the moment the body matched the server — losing an undo the server
 	 * had never accepted.
 	 */
-	projectionKind?: "draft" | "commit" | "pointer";
+	projectionKind?: ProjectionKind;
 	/** For pointer work: the node the move was trying to reach. */
 	pointerNodeId?: string;
 };
@@ -41,7 +50,7 @@ export function saveDraft(
 	markdown: string,
 	projectionId?: string,
 	projection?: {
-		kind: "draft" | "commit" | "pointer";
+		kind: ProjectionKind;
 		pointerNodeId?: string;
 	},
 ): void {
@@ -76,14 +85,8 @@ export function clearDraft(documentId: string): void {
 	localStorage.removeItem(`${DRAFT_PREFIX}${documentId}`);
 }
 
-/** Pick fresher content between server markdown and local draft. */
-export function reconcileDraft(
-	serverMarkdown: string,
-	serverUpdatedAt: number,
-	documentId: string,
-	/** The head the server is on, so pointer work can be judged against it. */
-	serverHeadNodeId?: string,
-): {
+/** What draft recovery decided, on open, before any editor exists. */
+export type DraftRecovery = {
 	markdown: string;
 	hadConflict: boolean;
 	draftOrigin?: string;
@@ -92,8 +95,17 @@ export function reconcileDraft(
 	/** Identity of the surviving work, so its acknowledgement can name it. */
 	projectionId?: string;
 	/** What kind of work survived, so a markdown write cannot retire it. */
-	projectionKind?: "draft" | "commit" | "pointer";
-} {
+	projectionKind?: ProjectionKind;
+};
+
+/** Pick fresher content between server markdown and local draft. */
+export function reconcileDraft(
+	serverMarkdown: string,
+	serverUpdatedAt: number,
+	documentId: string,
+	/** The head the server is on, so pointer work can be judged against it. */
+	serverHeadNodeId?: string,
+): DraftRecovery {
 	const draft = loadDraft(documentId);
 	if (!draft) {
 		return { markdown: serverMarkdown, hadConflict: false };
