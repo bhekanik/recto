@@ -184,7 +184,7 @@ in-flight workers are producing (§4).
 | Worker | Phase | Branch | Status | PR | Reviews (Claude / Codex) | Deployed |
 |---|---|---|---|---|---|---|
 | W1 history-commit | N1a + N0e | 023/history-commit | round 3 (Codex r2: 4 blocking on the cross-hook contract: pre-hydration CAS gap, headMoved clears the draft, adoption never seeds the editor, focus-never-leaves stall; pointer revision added); e2e ×5 proof still blocked on CLERK_SECRET_KEY | #1 | Claude r1+r2 / Codex r1 done | |
-| W2 light-theme | N1c | 023/light-theme | **review green** (r2 fixed; Codex r1 done); waiting to rebase after #6 merges | #3 | Claude r1+r2 / Codex r1 | |
+| W2 light-theme | N1c | 023/light-theme | rebased on main (`12ee48e`); merge + CLI deploy in progress | #3 | Claude r1+r2 / Codex r1 | pending |
 | W3 core-js | N1d + N0d | 023/core-js | **merged** 2026-08-28 (squash); CI on main pending | #6 | Claude r1+r2 / Codex r1 | n/a (CI) |
 | W4 editor-spike | N0b | spike/editor-engine | **done: GO** (fork @ 08ff3c07) | #2 (draft, not merged) | n/a | n/a |
 | W5 native-spike | N0a | spike/native-core | **done: GO** (clerk-ios 1.5.0 + convex-swift 0.8.1; own templated auth provider) | #4 (draft, not merged) | n/a | n/a |
@@ -223,7 +223,7 @@ in-flight workers are producing (§4).
 
 ## 8. Needed from BK (blocks the native lanes, not wave 1)
 
-- **Vercel**: unblock Git deploys (see learnings 2026-08-28). Dashboard → team `planetaryescape` → the blocked deployment's "Request access"/seat prompt, or Account → Authentication → connect GitHub `bhekanik` to the team-member account. Until then the orchestrator deploys via CLI.
+- **Vercel**: unblock Git deploys (see learnings 2026-08-28). The PR check now shows the exact fix: an invite link `https://vercel.com/teams/invite?...teamId=team_3oxuHKlgssY2lCgwFXZJAuOB` ("Git author bhekanik must have access to the project on Vercel to create deployments"): open any PR's Vercel check → follow the invite as the GitHub `bhekanik` account. Dashboard → team `planetaryescape` → the blocked deployment's "Request access"/seat prompt, or Account → Authentication → connect GitHub `bhekanik` to the team-member account. Until then the orchestrator deploys via CLI.
 - **LangSmith**: org Personal / workspace "Workspace 1" / project `recto` created 2026-08-28 (Developer free plan) via Codex computer use; API key `recto-convex` creation pending owner confirmation.
 - Found: Apple team `WAVMJLFY95` (from life-coach-os / worthyourtime); still needed: ASC app records + API key.
 - **Clerk dashboard (dev instance `musical-flounder-88`)**: enable Passkeys; configure Sign in with Apple (Apple Services ID + key under team `WAVMJLFY95`); add a Native Application entry (App ID prefix `WAVMJLFY95`, bundle id `com.bhekani.recto`); allowlist the native OAuth redirect `com.bhekani.recto://callback`. Sign in to dashboard.clerk.com in Dia so Codex computer use can fetch the dev `sk_test_` key for e2e.
