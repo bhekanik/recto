@@ -8,6 +8,17 @@
  * replays the edit list onto the NSTextStorage; the two strings stay identical
  * because both apply the same ops in the same order.
  *
+ * The line array is the source of truth; the flat string and the offset index
+ * are caches rebuilt on demand. Two measured decisions are baked in here, both
+ * from the 950 kB benchmark in `VimSpikeSuite` (p95 CPU per keystroke):
+ *
+ *   - Splicing only the lines an edit touches, instead of re-splitting the
+ *     whole buffer: 1.42 ms -> 0.54 ms.
+ *   - Rebuilding the offset index lazily rather than patching it in place.
+ *     Patching sounds cheaper but measured worse (0.86 ms vs 0.54 ms): it walks
+ *     the tail eagerly on every edit, while the rebuild is one tight
+ *     typed-array loop that runs once however many edits a command made.
+ *
  * Offsets are UTF-16 code units throughout, which is what JS string indices and
  * `NSRange` both already are, so an offset produced here drops straight into an
  * `NSRange` with no conversion. Astral characters (emoji, some CJK extensions)
@@ -27,10 +38,21 @@ export class RectoDoc {
 	setText(text) {
 		// CM6 normalises line endings before the vim core ever sees them; do the
 		// same so a CRLF document does not produce phantom \r at line ends.
-		this.text = text.replace(/\r\n?/g, "\n");
-		this.lines = this.text.split("\n");
-		/** @type {number[] | null} */
+		this.lines = text.replace(/\r\n?/g, "\n").split("\n");
+		this._invalidate();
+	}
+
+	_invalidate() {
+		/** @type {string | null} */
+		this._text = null;
+		/** @type {Int32Array | null} */
 		this._starts = null;
+	}
+
+	/** Flat buffer. Materialised on demand — search and `getValue` are the users. */
+	get text() {
+		if (this._text === null) this._text = this.lines.join("\n");
+		return this._text;
 	}
 
 	get lineCount() {
@@ -38,15 +60,23 @@ export class RectoDoc {
 	}
 
 	get length() {
-		return this.text.length;
+		const starts = this._lineStarts();
+		const last = this.lines.length - 1;
+		return starts[last] + this.lines[last].length;
 	}
 
-	/** Prefix sums of line start offsets, rebuilt lazily after each edit. */
+	/**
+	 * Prefix sums of line start offsets. `Int32Array` because this is rebuilt
+	 * after every edit and reaches ~14,000 entries on a 950 kB document, where
+	 * unboxed integers are worth real time. It was the hottest thing per
+	 * keystroke when profiled (36% of the time).
+	 */
 	_lineStarts() {
 		if (this._starts) return this._starts;
-		const starts = new Array(this.lines.length);
+		const n = this.lines.length;
+		const starts = new Int32Array(n);
 		let at = 0;
-		for (let i = 0; i < this.lines.length; i++) {
+		for (let i = 0; i < n; i++) {
 			starts[i] = at;
 			at += this.lines[i].length + 1; // +1 for the newline
 		}
@@ -87,8 +117,7 @@ export class RectoDoc {
 	/** @param {number} offset @returns {Pos} */
 	posFromIndex(offset) {
 		const starts = this._lineStarts();
-		const clamped = Math.max(0, Math.min(offset, this.text.length));
-		// Binary search for the line containing `clamped`.
+		const clamped = Math.max(0, Math.min(offset, this.length));
 		let lo = 0;
 		let hi = starts.length - 1;
 		while (lo < hi) {
@@ -101,16 +130,36 @@ export class RectoDoc {
 
 	/** @param {number} from @param {number} to */
 	slice(from, to) {
-		return this.text.slice(from, to);
+		const start = this.posFromIndex(from);
+		const end = this.posFromIndex(to);
+		if (start.line === end.line) {
+			return this.lines[start.line].slice(start.ch, end.ch);
+		}
+		const parts = [this.lines[start.line].slice(start.ch)];
+		for (let i = start.line + 1; i < end.line; i++) parts.push(this.lines[i]);
+		parts.push(this.lines[end.line].slice(0, end.ch));
+		return parts.join("\n");
 	}
 
 	/**
-	 * Apply one replacement in offset space and keep the line array in step.
+	 * Apply one replacement in offset space, splicing only the affected lines.
 	 * @param {number} from @param {number} to @param {string} insert
 	 */
 	replace(from, to, insert) {
-		this.text = this.text.slice(0, from) + insert + this.text.slice(to);
-		this.lines = this.text.split("\n");
-		this._starts = null;
+		const start = this.posFromIndex(from);
+		const end = this.posFromIndex(to);
+		const head = this.lines[start.line].slice(0, start.ch);
+		const tail = this.lines[end.line].slice(end.ch);
+		const replacement = (head + insert + tail).split("\n");
+		const removedLines = end.line - start.line + 1;
+
+		if (replacement.length > 30000) {
+			this.lines = this.lines
+				.slice(0, start.line)
+				.concat(replacement, this.lines.slice(end.line + 1));
+		} else {
+			this.lines.splice(start.line, removedLines, ...replacement);
+		}
+		this._invalidate();
 	}
 }
