@@ -1,0 +1,7 @@
+# Regenerated verbatim from node_modules by scripts/extract-core.ts.
+src/generated/
+# Build output. Deliberately not committed: `bun run vim:build` produces it and
+# the Xcode copy-resources script checks it against manifest.json.
+# See README "Build" for why, and ci_scripts/ci_post_clone.sh for Xcode Cloud.
+dist/
+manifest.json

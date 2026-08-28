@@ -1,0 +1,332 @@
+import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+
+import {
+	clusterAlignedDiff,
+	clusterBoundaries,
+	clusterEnd,
+	clusterStart,
+	nextCluster,
+	previousCluster,
+} from "../src/grapheme.js";
+
+/**
+ * Unicode's own `GraphemeBreakTest.txt` is the gate.
+ *
+ * The previous implementation passed a hand-written suite while splitting
+ * Hangul syllables, SpacingMarks and CRLF — every case someone had thought to
+ * write down, and none of the ones they had not. Swift's `GraphemeClamp` runs
+ * the same file, so "the two sides agree" follows from both matching the
+ * standard rather than being a claim about each other.
+ */
+
+type ConformanceCase = {
+	line: number;
+	text: string;
+	/** UTF-16 offsets, ascending, including 0 and `text.length`. */
+	boundaries: number[];
+	description: string;
+};
+
+function loadConformanceCases(): ConformanceCase[] {
+	const path = `${import.meta.dir}/../../editor-fixtures/unicode/GraphemeBreakTest.txt`;
+	const cases: ConformanceCase[] = [];
+
+	for (const [index, raw] of readFileSync(path, "utf8").split("\n").entries()) {
+		const hash = raw.indexOf("#");
+		const body = (hash === -1 ? raw : raw.slice(0, hash)).trim();
+		if (body === "") continue;
+
+		let text = "";
+		const boundaries: number[] = [];
+		for (const token of body.split(/\s+/)) {
+			// `÷` is a break, `×` is not, everything else is a hex code point.
+			if (token === "÷") boundaries.push(text.length);
+			else if (token === "×") continue;
+			else text += String.fromCodePoint(Number.parseInt(token, 16));
+		}
+		cases.push({
+			line: index + 1,
+			text,
+			boundaries,
+			description: (hash === -1 ? "" : raw.slice(hash + 1)).trim(),
+		});
+	}
+	return cases;
+}
+
+const conformance = loadConformanceCases();
+
+/**
+ * Rows where the platform's ICU disagrees with the vendored UCD, by line number.
+ *
+ * These are **not** softening: nothing *outside* the list may diverge, which is
+ * the assertion that catches a regression. The list itself is per-ICU — macOS 26
+ * needs line 1105, the newer ICU in Linux CI does not — so an entry that goes
+ * unused on a given platform is reported rather than failed, and the list is
+ * capped so it cannot become a way of passing. Both Recto implementations are
+ * ICU-backed, so on any one machine they diverge together, which is the property
+ * that actually matters: the two sides agreeing beats either matching a file the
+ * OS has not caught up with.
+ *
+ * 1105: `2701 ZWJ 2701` (UPPER BLADE SCISSORS). GB11 joins
+ * Extended_Pictographic × ZWJ × Extended_Pictographic; macOS 26's ICU is
+ * working from an older Extended_Pictographic set in which U+2701 is not one,
+ * so it breaks after the ZWJ. Nothing in Recto's dialect depends on it.
+ */
+const KNOWN_ICU_DIVERGENCES = new Set([1105]);
+
+function boundariesDiffer(item: ConformanceCase): boolean {
+	return clusterBoundaries(item.text).join(",") !== item.boundaries.join(",");
+}
+
+describe("UAX #29 conformance", () => {
+	test("the conformance file parsed", () => {
+		// Unicode 16 has about 1,100 rows. A parser that silently produced nothing
+		// would make every assertion below vacuous.
+		expect(conformance.length).toBeGreaterThan(600);
+		expect(conformance.every((item) => item.boundaries[0] === 0)).toBe(true);
+	});
+
+	test("every row's boundaries match", () => {
+		// Reported as a list, never a count and never truncated: both
+		// implementations follow whatever Unicode version their ICU ships, so an
+		// OS update to a newer UCD than the vendored file can legitimately move a
+		// few rows, and that has to be distinguishable from a regression.
+		const failures: string[] = [];
+		for (const item of conformance) {
+			if (KNOWN_ICU_DIVERGENCES.has(item.line)) continue;
+			const actual = clusterBoundaries(item.text);
+			if (actual.join(",") !== item.boundaries.join(",")) {
+				failures.push(
+					`line ${item.line}: got [${actual}], expected [${item.boundaries}] — ${item.description}`,
+				);
+			}
+		}
+		expect(failures).toEqual([]);
+	});
+
+	test("the allowance list stays small, and says which entries went unused", () => {
+		// The strict half is above: a row outside the list may not diverge, on
+		// any platform. This half cannot be an assertion, because the list is
+		// per-ICU — macOS 26 needs line 1105 and the newer ICU in Linux CI does
+		// not, and failing on the platform that is *more* correct would be
+		// backwards. So an unused entry is printed rather than thrown, and the
+		// list is capped so it cannot quietly grow into a way of passing.
+		const unused = conformance
+			.filter((item) => KNOWN_ICU_DIVERGENCES.has(item.line))
+			.filter((item) => !boundariesDiffer(item))
+			.map((item) => item.line);
+		if (unused.length > 0) {
+			console.log(
+				`note: this platform's ICU does not need the allowance for line(s) ${unused.join(", ")}`,
+			);
+		}
+		expect(KNOWN_ICU_DIVERGENCES.size).toBeLessThan(5);
+	});
+
+	test("stepping forward and back walks the same boundaries", () => {
+		const failures: string[] = [];
+		for (const item of conformance) {
+			if (item.text.length === 0 || KNOWN_ICU_DIVERGENCES.has(item.line))
+				continue;
+
+			const forward: number[] = [0];
+			let at = 0;
+			while (at < item.text.length) {
+				at = nextCluster(item.text, at);
+				forward.push(at);
+			}
+
+			const backward: number[] = [item.text.length];
+			let back = item.text.length;
+			while (back > 0) {
+				back = previousCluster(item.text, back);
+				backward.push(back);
+			}
+			backward.reverse();
+
+			if (forward.join(",") !== item.boundaries.join(",")) {
+				failures.push(`line ${item.line} forward: [${forward}]`);
+			} else if (backward.join(",") !== item.boundaries.join(",")) {
+				failures.push(`line ${item.line} backward: [${backward}]`);
+			}
+		}
+		expect(failures).toEqual([]);
+	});
+
+	test("every offset resolves to the cluster it is inside", () => {
+		// This is the assertion that catches `Segments.containing()` disagreeing
+		// with its own iteration at a high surrogate. It is deliberately not
+		// truncated — reporting only the first few is how that stayed hidden.
+		const failures: string[] = [];
+		for (const item of conformance) {
+			if (KNOWN_ICU_DIVERGENCES.has(item.line)) continue;
+			for (let i = 0; i < item.boundaries.length - 1; i++) {
+				const start = item.boundaries[i] as number;
+				const end = item.boundaries[i + 1] as number;
+				for (let offset = start; offset < end; offset++) {
+					if (clusterStart(item.text, offset) !== start) {
+						failures.push(
+							`line ${item.line}: clusterStart(${offset}) gave ${clusterStart(item.text, offset)}, expected ${start}`,
+						);
+					}
+					const wanted = offset === start ? start : end;
+					if (clusterEnd(item.text, offset) !== wanted) {
+						failures.push(
+							`line ${item.line}: clusterEnd(${offset}) gave ${clusterEnd(item.text, offset)}, expected ${wanted}`,
+						);
+					}
+				}
+			}
+		}
+		expect(failures).toEqual([]);
+	});
+});
+
+/**
+ * The shapes the vim layer cares about, named so a failure says what broke
+ * rather than "line 431". The last four are the ones the previous
+ * implementation got wrong.
+ */
+describe("cluster boundaries", () => {
+	const samples: [string, string, number][] = [
+		["ZWJ family", "\u{1F468}‍\u{1F469}‍\u{1F467}‍\u{1F466}", 11],
+		["regional-indicator flag", "\u{1F1FF}\u{1F1E6}", 4],
+		["skin-tone modifier", "\u{1F44D}\u{1F3FD}", 4],
+		["combining mark", "é", 2],
+		["single-codepoint emoji", "\u{1F3A9}", 2],
+		["Hangul LV", "가", 2],
+		["Hangul LVT", "각", 3],
+		["SpacingMark", "का", 2],
+		["CRLF", "\r\n", 2],
+		["Prepend", "؀क", 2],
+	];
+
+	for (const [name, cluster, width] of samples) {
+		const text = `a${cluster}b`;
+
+		test(`${name}: every interior offset resolves to the same cluster`, () => {
+			expect(cluster.length).toBe(width);
+			for (let offset = 1; offset < 1 + width; offset++) {
+				expect(clusterStart(text, offset)).toBe(1);
+				expect(clusterEnd(text, offset)).toBe(offset === 1 ? 1 : 1 + width);
+			}
+		});
+
+		test(`${name}: boundaries are fixed points`, () => {
+			for (const offset of [0, 1, 1 + width, text.length]) {
+				expect(clusterStart(text, offset)).toBe(offset);
+				expect(clusterEnd(text, offset)).toBe(offset);
+			}
+		});
+
+		test(`${name}: stepping crosses it in one move`, () => {
+			expect(nextCluster(text, 1)).toBe(1 + width);
+			expect(previousCluster(text, 1 + width)).toBe(1);
+		});
+	}
+});
+
+test("a cluster longer than any plausible window resolves at every offset", () => {
+	// `Intl.Segmenter` has no window, so this side was never at risk — but the
+	// Swift clamp scans back for a provable boundary and did stop early, turning
+	// `clusterStart(300)` into 44 on exactly this string. Both sides carry the
+	// case so the pair cannot drift apart on it.
+	const cluster = `e${"\u0301".repeat(400)}`;
+	const text = `a${cluster}b`;
+	const end = 1 + cluster.length;
+	const wrong: number[] = [];
+	for (let offset = 1; offset < end; offset++) {
+		if (clusterStart(text, offset) !== 1) wrong.push(offset);
+		if (clusterEnd(text, offset) !== (offset === 1 ? 1 : end))
+			wrong.push(-offset);
+	}
+	expect(wrong).toEqual([]);
+	expect(nextCluster(text, 1)).toBe(end);
+	expect(previousCluster(text, end)).toBe(1);
+});
+
+test("ASCII steps one code unit at a time", () => {
+	expect(nextCluster("abc", 0)).toBe(1);
+	expect(previousCluster("abc", 2)).toBe(1);
+	expect(clusterStart("abc", 2)).toBe(2);
+	expect(clusterEnd("abc", 2)).toBe(2);
+});
+
+test("stepping keeps counting past both ends", () => {
+	// `moveByCharacters` produces out-of-range positions on purpose (`3l` on a
+	// two-character line) and lets the core clamp them; the steppers must not
+	// stall, or a count would silently move fewer characters than asked.
+	expect(nextCluster("ab", 2)).toBe(3);
+	expect(nextCluster("ab", 5)).toBe(6);
+	expect(previousCluster("ab", 0)).toBe(-1);
+	expect(previousCluster("ab", -2)).toBe(-3);
+});
+
+test("clamping is total for out-of-range offsets", () => {
+	expect(clusterStart("ab", -5)).toBe(0);
+	expect(clusterStart("ab", 99)).toBe(2);
+	expect(clusterEnd("ab", -5)).toBe(0);
+	expect(clusterEnd("ab", 99)).toBe(2);
+});
+
+describe("clusterAlignedDiff", () => {
+	/** Every case must be able to rebuild `after` from `before` plus the patch. */
+	function applied(before: string, after: string) {
+		const patch = clusterAlignedDiff(before, after);
+		return {
+			patch,
+			rebuilt:
+				before.slice(0, patch.from) + patch.insert + before.slice(patch.to),
+		};
+	}
+
+	test("an insertion is the inserted run and nothing else", () => {
+		const { patch, rebuilt } = applied("Xtail\n", "X\u{65E5}tail\n");
+		expect(patch).toEqual({ from: 1, to: 1, insert: "\u{65E5}" });
+		expect(rebuilt).toBe("X\u{65E5}tail\n");
+	});
+
+	test("two emoji sharing a high surrogate patch whole clusters", () => {
+		// A raw code-unit diff shares the leading D83C and produces a range that
+		// is half a surrogate pair — valid UTF-16, unusable as an edit.
+		const { patch, rebuilt } = applied("a\u{1F3A9}b", "a\u{1F3AA}b");
+		expect(patch).toEqual({ from: 1, to: 3, insert: "\u{1F3AA}" });
+		expect(rebuilt).toBe("a\u{1F3AA}b");
+	});
+
+	test("a combining mark takes its base letter with it", () => {
+		// NFD: the mark alone is not a cluster, so the patch covers `e` too.
+		const { patch, rebuilt } = applied("e", "e\u{0301}");
+		expect(patch).toEqual({ from: 0, to: 1, insert: "e\u{0301}" });
+		expect(rebuilt).toBe("e\u{0301}");
+	});
+
+	test("a marked run rewritten in place", () => {
+		const { patch, rebuilt } = applied("ni\u{3042}b", "\u{65E5}b");
+		expect(rebuilt).toBe("\u{65E5}b");
+		expect(patch.from).toBe(0);
+	});
+
+	test("identical strings produce an empty patch", () => {
+		expect(clusterAlignedDiff("abc", "abc")).toEqual({
+			from: 3,
+			to: 3,
+			insert: "",
+		});
+	});
+
+	test("a deletion at the end of the document", () => {
+		const { patch, rebuilt } = applied("abc\n", "ab\n");
+		expect(patch).toEqual({ from: 2, to: 3, insert: "" });
+		expect(rebuilt).toBe("ab\n");
+	});
+
+	test("CRLF is never cut in half", () => {
+		// ICU treats `\r\n` as one cluster, so a patch may not land between them.
+		const { patch, rebuilt } = applied("a\r\nb", "a\r\nXb");
+		expect(rebuilt).toBe("a\r\nXb");
+		expect(patch.from).not.toBe(2);
+	});
+});

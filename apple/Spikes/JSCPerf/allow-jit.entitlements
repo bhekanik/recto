@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	Without this, a hardened-runtime macOS process cannot map JIT pages and
+	JavaScriptCore falls back to the interpreter. `measure.sh` runs the same
+	binary with and without it; the difference is roughly 13x on a whole-document
+	`normalize`. The Mac app must carry this entitlement.
+	-->
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+</dict>
+</plist>
