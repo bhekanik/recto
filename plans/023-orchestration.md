@@ -198,7 +198,7 @@ in-flight workers are producing (§4).
 | W5 native-spike | N0a | spike/native-core | **done: GO** (clerk-ios 1.5.0 + convex-swift 0.8.1; own templated auth provider) | #4 (draft, not merged) | n/a | n/a |
 | W6 vim-spike | N0c | spike/vim-jsc | **done: GO** (verbatim core split, ~20× latency headroom) | #5 (draft, not merged) | n/a | n/a |
 | W7 settings-workspaces-deletion | N1b | 023/settings | blocked on W1 | | | |
-| W8 js-cores | N3 | 023/js-cores | in review (verified: vim 153, parity green, Swift 23+23, gate ok); Codex running | #10 | Codex running | n/a (CI) |
+| W8 js-cores | N3 | 023/js-cores | round 2 (Codex: 3 blocking: CRLF mirror divergence, native input translation (NFD/emoji/IME/dead keys), non-transactional replay; 11 should-fix) | #10 | Claude r1 / Codex r1 | n/a (CI) |
 | W9a editor-engine stage 1 (fork plumbing + dialect + RectoEditor skeleton) | N5 | 023/editor-engine | round 2 (Codex: 8 blocking: frontmatter header, per-view storage vs D-N1, external assignment emits onEdit, surrogate split, Writing Tools bypass, raw-mode substitutions, paste rewrites, fence perf cliff; 3 should-fix now, 2 to W9b) | #9 + fork PR #1 (`cf9e593`) | Claude r1 / Codex r1 | n/a (CI) |
 | W9b editor-engine stage 2 (blocks, features, undo-tree, typewriter) | N5 | 023/editor-engine-2 | blocked on W9a | | | |
 | W10 native-core | N4 | 023/native-core | round 3 (Codex r2: 7 of 17 partially fixed + 11 new blocking: server-draft provenance, timer-generation races, root re-key of pointer payloads, remote-deletion vs draft, sign-out race/event bypass, cold-start mirror owner, stop() not awaiting tasks, completedAndStop, keep-local queue order, resolution CAS, undecodable payloads) | #7 | Claude r1 / Codex r1+r2 | n/a (CI) |
