@@ -24,6 +24,20 @@ jobs:
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY_CI }}
           NEXT_PUBLIC_CLERK_SIGN_IN_URL: /login
 
+  # Shared JS core (plan 023 N1d/N0d). macOS because the parity spike loads the
+  # bundle into a real JavaScriptCore JSContext; `macos-26` is the GA arm64
+  # runner and matches the toolchain the Apple apps are built with.
+  core-js:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - run: bun run core:build
+      - run: bun run core:parity
+
   # Browser smoke suite (plan 021). Non-blocking (continue-on-error) for the
   # first iteration — flip it to blocking once it has been stable ~2 weeks.
   #
