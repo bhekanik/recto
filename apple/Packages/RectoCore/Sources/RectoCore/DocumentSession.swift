@@ -282,6 +282,20 @@ public actor DocumentSession {
     await withTransition { isFrozen = true }
   }
 
+  /// The guard on every user-triggered mutating transition.
+  ///
+  /// `EditSessionCoordinating.freezeAndFlushAll()` promises that no session
+  /// writes after it returns, and sign-out takes its final unsynced count on
+  /// that promise. A navigation, an undo, a divergence resolution or a timer
+  /// that still moved the head or queued a job in that window was accepted and
+  /// then deleted without anyone consenting.
+  ///
+  /// `flush()` deliberately does NOT check it: the freeze path itself flushes,
+  /// and that flush is how the pending draft reaches the count.
+  private func requireWritable() throws {
+    guard !isFrozen else { throw SessionError.frozen }
+  }
+
   public func resume() async {
     await withTransition { isFrozen = false }
   }
@@ -289,7 +303,7 @@ public actor DocumentSession {
   private func performLocalChange(
     markdown: String, selection: NodeSelection?, structural: Bool
   ) async throws {
-    guard !isFrozen else { throw SessionError.frozen }
+    try requireWritable()
     guard controller != nil, let document else { throw SessionError.notOpen }
     let timestamp = now()
 
@@ -359,6 +373,7 @@ public actor DocumentSession {
   /// the older text and clear the newer draft row along with it.
   public func tickIdle(expectedDraftRevision: Int? = nil) async throws {
     try await withTransition {
+      try requireWritable()
       guard let document else { return }
       if let expectedDraftRevision, document.draftRevision != expectedDraftRevision { return }
       // Staged: the controller only advances once the node is on disk.
@@ -439,6 +454,7 @@ public actor DocumentSession {
   @discardableResult
   public func undo() async throws -> Bool {
     try await withTransition {
+      try requireWritable()
       try await performFlush()
       guard let document, let parent = nodesById[document.localHeadNodeId]?.parentNodeId,
         nodesById[parent] != nil
@@ -452,6 +468,7 @@ public actor DocumentSession {
   @discardableResult
   public func redo() async throws -> Bool {
     try await withTransition {
+      try requireWritable()
       try await performFlush()
       guard let document, let target = children(of: document.localHeadNodeId).last else {
         return false
@@ -463,7 +480,10 @@ public actor DocumentSession {
 
   /// Jump anywhere in the DAG. A pointer move: it never grows the tree.
   public func navigate(to nodeId: String) async throws {
-    try await withTransition { try await performNavigate(to: nodeId) }
+    try await withTransition {
+      try requireWritable()
+      try await performNavigate(to: nodeId)
+    }
   }
 
   private func performNavigate(to nodeId: String) async throws {
@@ -524,6 +544,7 @@ public actor DocumentSession {
   /// recreate the divergence the user just resolved.
   public func resolveDivergenceKeepingLocal() async throws {
     try await withTransition {
+      try requireWritable()
       isRepositioning = true
       defer { isRepositioning = false }
       try await performResolve(keepingLocal: true)
@@ -535,6 +556,7 @@ public actor DocumentSession {
   /// pointer back is rewritten or dropped in the same transaction.
   public func resolveDivergenceKeepingRemote() async throws {
     try await withTransition {
+      try requireWritable()
       isRepositioning = true
       defer { isRepositioning = false }
       try await performResolve(keepingLocal: false)
@@ -705,7 +727,9 @@ public actor DocumentSession {
   private func performWriteDraft(
     markdown: String, selection: NodeSelection?, expectedDraftRevision: Int?
   ) async {
-    guard let document else { return }
+    // A debounce that fires after the freeze is still the user's text arriving
+    // late. The draft it holds is already on disk from the write-ahead save.
+    guard !isFrozen, let document else { return }
     let words = countWords(markdown)
     let job = OutboxJob(
       documentLocalId: documentLocalId,

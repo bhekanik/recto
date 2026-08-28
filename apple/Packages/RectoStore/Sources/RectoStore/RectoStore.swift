@@ -16,6 +16,48 @@ public enum StoreError: Error, Equatable, Sendable {
   case hasLocalWork(String)
 }
 
+/// Why a document's outbox queue is held (`documents.queueBlockedReason`).
+///
+/// Two kinds, and the difference is who is expected to clear it.
+///
+/// A **durable** barrier waits for a person: a divergence holds the queue until
+/// the compare sheet is answered, because everything behind it belongs to the
+/// branch under dispute.
+///
+/// A **provisional** barrier belongs to the reconciliation that runs
+/// immediately after the job which wrote it. It exists only so the tail cannot
+/// drain while the situation is being classified, and that reconciliation must
+/// either promote it to a divergence or release it. Leaving one behind is a
+/// deadlock with no way out: the tail cannot drain, so the document can never
+/// become idle, so the adoption that was deferred *because* work was pending
+/// never happens, and the next reconciliation reads the remote ancestor as
+/// server lag.
+public enum QueueBlockReason: String, Sendable, CaseIterable {
+  /// Durable: both heads are kept and the user chooses.
+  case diverged
+  /// Durable: the document is gone from the server.
+  case removed
+  /// Durable for the length of one resolution: the queue is being rewritten.
+  case resolving
+  /// Provisional: `commitEdit` was answered `diverged` by the server.
+  case commitRejected = "commit-rejected"
+  /// Provisional: `updateCurrentNodeId` lost the last-write-wins check.
+  case pointerMoveRejected = "pointer-move-rejected"
+  /// Provisional: a draft was written against a head that has since moved.
+  case draftHeadMoved = "draft-head-moved"
+
+  public var isProvisional: Bool {
+    switch self {
+    case .commitRejected, .pointerMoveRejected, .draftHeadMoved: true
+    case .diverged, .removed, .resolving: false
+    }
+  }
+
+  public static var provisionalReasons: [String] {
+    allCases.filter(\.isProvisional).map(\.rawValue)
+  }
+}
+
 /// The local SQLite mirror (plan 023 §4.2).
 ///
 /// One `DatabasePool` in WAL mode, owned by an actor. The pool is already
@@ -118,6 +160,26 @@ public actor RectoStore {
           WHERE localId = ?
           """,
         arguments: [title, remoteUpdatedAt, documentLocalId])
+    }
+  }
+
+  /// Documents whose queue is held for one of `reasons`, oldest first.
+  ///
+  /// A provisional barrier belongs to the reconciliation that follows the job
+  /// which wrote it; a crash in between leaves one with no owner, and nothing
+  /// else ever looks at a blocked document. `start()` sweeps them.
+  public func documentsBlocked(byReasons reasons: [String]) throws -> [String] {
+    guard !reasons.isEmpty else { return [] }
+    return try writer.read { db in
+      let placeholders = databaseQuestionMarks(count: reasons.count)
+      return try String.fetchAll(
+        db,
+        sql: """
+          SELECT localId FROM documents
+          WHERE queueBlockedReason IN (\(placeholders)) AND deletedAt IS NULL
+          ORDER BY updatedAt
+          """,
+        arguments: StatementArguments(reasons))
     }
   }
 
@@ -982,6 +1044,22 @@ public actor RectoStore {
     }
   }
 
+  /// Push a job's next attempt out WITHOUT recording a failure.
+  ///
+  /// A server answer of "nothing was written, your baseline is stale" is not an
+  /// error: the job is fine and the next attempt will carry the refreshed
+  /// baseline. Writing `lastError` would derive `SyncState.failed` from it and
+  /// put a stuck-queue badge on a queue that is working exactly as designed.
+  public func deferJob(
+    id: Int64, retryAfter: Double, now: Double = Date().timeIntervalSince1970 * 1000
+  ) throws {
+    try writer.write { db in
+      try db.execute(
+        sql: "UPDATE outbox SET attempts = attempts + 1, nextAttemptAt = ? WHERE id = ?",
+        arguments: [now + retryAfter * 1000, id])
+    }
+  }
+
   /// Rewrite a queued job in place — used when a divergence resolution rebases a
   /// commit onto the remote head. The `clientMutationId` is deliberately NOT
   /// reused: the payload changed, so it is a different mutation.
@@ -1010,7 +1088,7 @@ public actor RectoStore {
       document.syncState = state
       // A divergence and its barrier are one fact; writing them separately is
       // what let a restart drain past an unresolved conflict.
-      if state == .diverged { document.queueBlockedReason = "diverged" }
+      if state == .diverged { document.queueBlockedReason = QueueBlockReason.diverged.rawValue }
       if let remoteHeadNodeId { document.remoteHeadNodeId = remoteHeadNodeId }
       if let remoteUpdatedAt { document.remoteUpdatedAt = remoteUpdatedAt }
       if let remotePointerRevision { document.remotePointerRevision = remotePointerRevision }

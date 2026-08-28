@@ -58,7 +58,7 @@ public actor SyncEngine: SyncControlling {
   /// A per-device provenance id, stored in `docNodes.origin`. The web keeps its
   /// own in localStorage; here it lives in the settings table so it survives a
   /// relaunch and identifies this Mac in the history panel.
-  public static let originSettingKey = "device-origin"
+  public static let originSettingKey = RectoStore.deviceOriginKey
 
   public init(store: RectoStore, transport: any RectoTransport, origin: String) {
     self.store = store
@@ -104,6 +104,7 @@ public actor SyncEngine: SyncControlling {
     libraryTask = Task { [weak self] in await self?.runLibrarySubscription() }
     for localId in openDocumentIds { subscribeToNodes(localId: localId) }
     Task { [weak self] in await self?.rehydrateIncompleteDocuments(generation: generation) }
+    Task { [weak self] in await self?.reconcileAbandonedBarriers(generation: generation) }
     requestDrain()
   }
 
@@ -466,6 +467,9 @@ public actor SyncEngine: SyncControlling {
         logger.error(
           "remote head \(remoteHead, privacy: .public) is still unreachable for \(localId, privacy: .public)"
         )
+        // An unreachable head is not a decision, and a provisional barrier held
+        // on one holds the queue for as long as the branch stays missing.
+        try await releaseProvisionalBarrier(localId: localId)
         return
       }
       let missing = try await transport.listNodes(documentId: convexId, sinceCreatedAt: nil)
@@ -480,14 +484,23 @@ public actor SyncEngine: SyncControlling {
         documentLocalId: localId, await settled(.pending),
         remoteHeadNodeId: remote.currentNodeId, remoteUpdatedAt: remote.updatedAt,
         remotePointerRevision: remote.pointerRevision)
+      try await releaseProvisionalBarrier(localId: localId)
 
     case .adoptRemote(let headNodeId, let whenIdle):
       guard whenIdle else {
         // The user is mid-edit. Record where the server is and adopt once the
         // outbox drains; moving the caret now is plan 022 in a new costume.
+        //
+        // The pointer revision is deliberately NOT recorded: it is the only
+        // thing that tells a deliberate remote undo from server lag, and
+        // consuming it here — before the adoption it justifies has happened —
+        // makes every later reconciliation read this ancestor as lag.
         try await store.setSyncState(
           documentLocalId: localId, await settled(.pending), remoteHeadNodeId: headNodeId,
-          remoteUpdatedAt: remote.updatedAt, remotePointerRevision: remote.pointerRevision)
+          remoteUpdatedAt: remote.updatedAt)
+        // The tail has to be able to drain, or the document can never become
+        // idle and this adoption never happens.
+        try await releaseProvisionalBarrier(localId: localId)
         return
       }
       let markdown = try await store.materializedMarkdown(
@@ -504,9 +517,12 @@ public actor SyncEngine: SyncControlling {
         remoteUpdatedAt: remote.updatedAt,
         remotePointerRevision: remote.pointerRevision)
       guard adopted else {
+        // The CAS lost: a keystroke landed while the target was materializing.
+        // Nothing was adopted, so the ordering signal is still unspent.
         try await store.setSyncState(
           documentLocalId: localId, await settled(.pending), remoteHeadNodeId: headNodeId,
-          remoteUpdatedAt: remote.updatedAt, remotePointerRevision: remote.pointerRevision)
+          remoteUpdatedAt: remote.updatedAt)
+        try await releaseProvisionalBarrier(localId: localId)
         return
       }
       try await store.setQueueBlocked(documentLocalId: localId, reason: nil)
@@ -524,6 +540,50 @@ public actor SyncEngine: SyncControlling {
       // transaction as the divergence itself.
       emit(.diverged(localId: localId, local: local, remote: remoteHead))
       emit(.syncStateChanged(localId: localId, state: .diverged))
+    }
+  }
+
+  /// Drop a barrier this reconciliation now owns.
+  ///
+  /// Only a PROVISIONAL reason (`QueueBlockReason.isProvisional`) is released,
+  /// and only if it is still the reason on the row: a divergence, a removal and
+  /// an in-flight resolution all wait for something other than this pass.
+  private func releaseProvisionalBarrier(localId: String) async throws {
+    guard let raw = try await store.document(localId: localId)?.queueBlockedReason,
+      QueueBlockReason(rawValue: raw)?.isProvisional == true
+    else { return }
+    logger.info(
+      "releasing the \(raw, privacy: .public) barrier on \(localId, privacy: .public) after reconciling"
+    )
+    try await store.setQueueBlocked(documentLocalId: localId, reason: nil)
+  }
+
+  /// Reconcile documents left holding a provisional barrier.
+  ///
+  /// The barrier and the job's deletion commit together, and the reconciliation
+  /// that owns the barrier runs afterwards. A crash in that window leaves a
+  /// barrier nobody will ever clear — `drainPass` skips blocked documents, so
+  /// nothing else would look at it again.
+  /// Recovery entry point for a barrier no reconciliation ever finished.
+  /// `start()` calls this; the app can also call it after a forced relaunch.
+  public func reconcileAbandonedBarriers() async {
+    await reconcileAbandonedBarriers(generation: lifecycle)
+  }
+
+  private func reconcileAbandonedBarriers(generation: Int) async {
+    guard
+      let blocked = try? await store.documentsBlocked(
+        byReasons: QueueBlockReason.provisionalReasons), !blocked.isEmpty
+    else { return }
+    for localId in blocked {
+      guard isCurrent(generation) else { return }
+      logger.info(
+        "reconciling \(localId, privacy: .public), left blocked by an unfinished transition")
+      do {
+        try await reconcileHead(localId: localId)
+      } catch {
+        storeFailed(error, while: "reconciling the abandoned barrier on \(localId)")
+      }
     }
   }
 
@@ -617,10 +677,15 @@ public actor SyncEngine: SyncControlling {
     Task { [weak self] in await self?.armBackoffWake() }
   }
 
+  /// How many wakes have actually been armed. A spin shows up here as an
+  /// unbounded count where the design allows at most one per backed-off head.
+  private(set) var armedBackoffWakes = 0
+
   private func armBackoffWake() async {
     guard isRunning, backoffWake == nil else { return }
     guard let earliest = (try? await store.earliestNextAttempt()) ?? nil else { return }
     let delay = max((earliest - Date().timeIntervalSince1970 * 1000) / 1000, 0)
+    armedBackoffWakes += 1
     backoffWake = Task { [weak self] in
       try? await Task.sleep(for: .seconds(delay))
       guard !Task.isCancelled else { return }
@@ -655,7 +720,11 @@ public actor SyncEngine: SyncControlling {
     /// `reconcile` runs AFTER the job is gone and the barrier is written. The
     /// queue has to be empty for `reconcileHead` to adopt rather than defer, and
     /// while the job is still queued it counts as pending work.
-    case completedAndBlock(reason: String, reconcile: Bool = false)
+    case completedAndBlock(reason: QueueBlockReason, reconcile: Bool = false)
+    /// Keep the job and try it again after a backoff. NOT a failure: the server
+    /// answered, it simply wrote nothing, and the next attempt carries the
+    /// baseline this one just learned.
+    case retryAfterBackoff(reason: String)
     /// Leave the job queued and stop.
     case stop
   }
@@ -714,9 +783,16 @@ public actor SyncEngine: SyncControlling {
       case .completedAndBlock(let reason, let reconcile):
         // One transaction: the job goes and the barrier lands together.
         try await store.completeJobAndBlockQueue(
-          id: jobId, documentLocalId: localId, reason: reason)
+          id: jobId, documentLocalId: localId, reason: reason.rawValue)
         if reconcile { try await reconcileHead(localId: localId) }
         return true
+      case .retryAfterBackoff(let reason):
+        let delay = outboxBackoff(attempts: job.attempts + 1)
+        logger.info(
+          "outbox job \(jobId) will be retried in \(delay)s: \(reason, privacy: .public)")
+        try await store.deferJob(id: jobId, retryAfter: delay)
+        scheduleRetry(jobId: jobId, after: delay)
+        return false
       case .stop:
         return false
       }
@@ -845,7 +921,11 @@ public actor SyncEngine: SyncControlling {
         // The nodes have to be pulled before anything can be decided, and that
         // is safe to do with the job still queued.
         try await pullRemoteNodes(document: document)
-        return .completedAndBlock(reason: "diverged", reconcile: true)
+        // PROVISIONAL. The server refused because the head is not where this
+        // commit expected it; whether that is a divergence, a remote undo we
+        // should adopt, or work we still have to upload is what the
+        // reconciliation below decides, and it writes the durable barrier.
+        return .completedAndBlock(reason: .commitRejected, reconcile: true)
       }
 
     case .appendNode:
@@ -877,7 +957,7 @@ public actor SyncEngine: SyncControlling {
         logger.info(
           "pointer move rejected for \(document.localId, privacy: .public); server head is \(response.currentNodeId, privacy: .public)"
         )
-        return .completedAndBlock(reason: "pointer-move-rejected", reconcile: true)
+        return .completedAndBlock(reason: .pointerMoveRejected, reconcile: true)
       }
       try await store.setSyncState(
         documentLocalId: document.localId, document.syncState,
@@ -893,6 +973,8 @@ public actor SyncEngine: SyncControlling {
         expectedUpdatedAt: document.remoteUpdatedAt ?? document.updatedAt,
         expectedHeadNodeId: job.baseHeadNodeId,
         title: payload.title)
+      // The refreshed baseline goes in either way — it is what the next CAS
+      // uses — but it is not an acknowledgement of the text.
       try await store.setSyncState(
         documentLocalId: document.localId, document.syncState,
         remoteUpdatedAt: response.updatedAt)
@@ -901,10 +983,15 @@ public actor SyncEngine: SyncControlling {
         // would leave `documents.markdown` detached from `currentNodeId`, and
         // retrying would do it again — so drop it and reconcile. No text is
         // lost: the draft row stays local and the next commit carries it.
-        return .completedAndBlock(reason: "draft-head-moved", reconcile: true)
+        return .completedAndBlock(reason: .draftHeadMoved, reconcile: true)
       }
-      // A merely stale `updatedAt` is not an error; the refreshed value is what
-      // the next CAS uses.
+      guard !response.stale else {
+        // `stale` with the head unmoved means the server wrote NOTHING: some
+        // other write bumped `updatedAt` and this CAS lost. Deleting the job
+        // here was treating "rejected" as "accepted", and the queue could then
+        // settle to `synced` with the final draft existing only in SQLite.
+        return .retryAfterBackoff(reason: "draft CAS lost; baseline refreshed")
+      }
       return .completed
 
     case .rename:
@@ -916,7 +1003,7 @@ public actor SyncEngine: SyncControlling {
       guard let convexId = document.convexId else { return .completed }
       try await transport.remove(documentId: convexId)
       try await store.deleteDocumentRow(localId: document.localId)
-      return .completedAndBlock(reason: "removed")
+      return .completedAndBlock(reason: .removed)
 
     case .writingStats:
       guard let date = payload.date, let words = payload.words else { return .completed }
@@ -1003,6 +1090,10 @@ public actor SyncEngine: SyncControlling {
     logger.error("outbox job \(jobId) failed (attempt \(attempts)): \(description, privacy: .public)")
 
     // Wake the loop when the backoff elapses instead of waiting for a keystroke.
+    scheduleRetry(jobId: jobId, after: delay)
+  }
+
+  private func scheduleRetry(jobId: Int64, after delay: Double) {
     retryTasks[jobId]?.cancel()
     retryTasks[jobId] = Task { [weak self] in
       try? await Task.sleep(for: .seconds(delay))

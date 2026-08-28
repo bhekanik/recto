@@ -83,8 +83,17 @@ struct Round5Tests {
   }
 
   // MARK: - 7. Every completedAndBlock writes a barrier
+  //
+  // Round 6 finding 4 corrected the shape of this one. The barrier is still
+  // written in the same transaction as the job's deletion, but it is
+  // PROVISIONAL: the reconciliation that follows owns it and must either
+  // promote it to a divergence or release it. Asserting that the tail was still
+  // blocked afterwards pinned a state the document could never leave — the tail
+  // could not drain, so the document could never become idle, so the deferred
+  // adoption never happened. `Round6Tests` asserts the settled end state; this
+  // one proves the barrier holds the queue while the conflict is unclassified.
 
-  @Test("a rejected pointer move holds the queue behind it")
+  @Test("a rejected pointer move holds the queue until it has been classified")
   func rejectedPointerMoveBlocksTheQueue() async throws {
     let server = InMemoryTransport()
     let seeded = await server.seedDocument(title: "native-spike-block-pointer")
@@ -119,9 +128,15 @@ struct Round5Tests {
         documentLocalId: localId, kind: .rename, clientMutationId: ulid(),
         payload: OutboxPayload(title: "should-not-be-sent").encoded, createdAt: stale + 1))
 
-    await mac.sync.drainNow()
+    // The barrier and the job's deletion are one transaction, so the state a
+    // crash could leave behind is observable: nothing may drain out of it.
+    let rejected = try #require(
+      try await mac.store.pendingJobs(documentLocalId: localId).first)
+    try await mac.store.completeJobAndBlockQueue(
+      id: try #require(rejected.id), documentLocalId: localId,
+      reason: QueueBlockReason.pointerMoveRejected.rawValue)
 
-    #expect(try await mac.store.document(localId: localId)?.queueBlockedReason != nil)
+    #expect(try await mac.store.documentsWithPendingJobs().contains(localId) == false)
     #expect(
       try await server.getDocument(documentId: seeded.documentId)?.title
         != "should-not-be-sent", "the queue behind the rejection stayed put")
