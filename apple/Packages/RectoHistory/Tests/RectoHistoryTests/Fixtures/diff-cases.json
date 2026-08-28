@@ -1,0 +1,2141 @@
+{
+	"cases": [
+		{
+			"current": "the quick brown fox",
+			"branch": "the quick brown fox",
+			"granularity": "word",
+			"runs": [
+				{
+					"type": "same",
+					"text": "the quick brown fox"
+				}
+			],
+			"hunks": [],
+			"mergedNone": "the quick brown fox",
+			"mergedAll": "the quick brown fox",
+			"mergedEven": "the quick brown fox"
+		},
+		{
+			"current": "the quick brown fox",
+			"branch": "the quick brown fox",
+			"granularity": "line",
+			"runs": [
+				{
+					"type": "same",
+					"text": "the quick brown fox"
+				}
+			],
+			"hunks": [],
+			"mergedNone": "the quick brown fox",
+			"mergedAll": "the quick brown fox",
+			"mergedEven": "the quick brown fox"
+		},
+		{
+			"current": "",
+			"branch": "",
+			"granularity": "word",
+			"runs": [],
+			"hunks": [],
+			"mergedNone": "",
+			"mergedAll": "",
+			"mergedEven": ""
+		},
+		{
+			"current": "",
+			"branch": "",
+			"granularity": "line",
+			"runs": [],
+			"hunks": [],
+			"mergedNone": "",
+			"mergedAll": "",
+			"mergedEven": ""
+		},
+		{
+			"current": "",
+			"branch": "brand new document",
+			"granularity": "word",
+			"runs": [
+				{
+					"type": "add",
+					"text": "brand new document"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0
+					]
+				}
+			],
+			"mergedNone": "",
+			"mergedAll": "brand new document",
+			"mergedEven": "brand new document"
+		},
+		{
+			"current": "",
+			"branch": "brand new document",
+			"granularity": "line",
+			"runs": [
+				{
+					"type": "add",
+					"text": "brand new document"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0
+					]
+				}
+			],
+			"mergedNone": "",
+			"mergedAll": "brand new document",
+			"mergedEven": "brand new document"
+		},
+		{
+			"current": "alpha gamma",
+			"branch": "alpha beta gamma",
+			"granularity": "word",
+			"runs": [
+				{
+					"type": "same",
+					"text": "alpha "
+				},
+				{
+					"type": "add",
+					"text": "beta "
+				},
+				{
+					"type": "same",
+					"text": "gamma"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1
+					]
+				}
+			],
+			"mergedNone": "alpha gamma",
+			"mergedAll": "alpha beta gamma",
+			"mergedEven": "alpha beta gamma"
+		},
+		{
+			"current": "alpha gamma",
+			"branch": "alpha beta gamma",
+			"granularity": "line",
+			"runs": [
+				{
+					"type": "del",
+					"text": "alpha gamma"
+				},
+				{
+					"type": "add",
+					"text": "alpha beta gamma"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0,
+						1
+					]
+				}
+			],
+			"mergedNone": "alpha gamma",
+			"mergedAll": "alpha beta gamma",
+			"mergedEven": "alpha beta gamma"
+		},
+		{
+			"current": "brand new document",
+			"branch": "",
+			"granularity": "word",
+			"runs": [
+				{
+					"type": "del",
+					"text": "brand new document"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0
+					]
+				}
+			],
+			"mergedNone": "brand new document",
+			"mergedAll": "",
+			"mergedEven": ""
+		},
+		{
+			"current": "brand new document",
+			"branch": "",
+			"granularity": "line",
+			"runs": [
+				{
+					"type": "del",
+					"text": "brand new document"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0
+					]
+				}
+			],
+			"mergedNone": "brand new document",
+			"mergedAll": "",
+			"mergedEven": ""
+		},
+		{
+			"current": "alpha beta gamma",
+			"branch": "alpha gamma",
+			"granularity": "word",
+			"runs": [
+				{
+					"type": "same",
+					"text": "alpha "
+				},
+				{
+					"type": "del",
+					"text": "beta "
+				},
+				{
+					"type": "same",
+					"text": "gamma"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1
+					]
+				}
+			],
+			"mergedNone": "alpha beta gamma",
+			"mergedAll": "alpha gamma",
+			"mergedEven": "alpha gamma"
+		},
+		{
+			"current": "alpha beta gamma",
+			"branch": "alpha gamma",
+			"granularity": "line",
+			"runs": [
+				{
+					"type": "del",
+					"text": "alpha beta gamma"
+				},
+				{
+					"type": "add",
+					"text": "alpha gamma"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0,
+						1
+					]
+				}
+			],
+			"mergedNone": "alpha beta gamma",
+			"mergedAll": "alpha gamma",
+			"mergedEven": "alpha gamma"
+		},
+		{
+			"current": "the quick brown fox",
+			"branch": "the slow brown fox",
+			"granularity": "word",
+			"runs": [
+				{
+					"type": "same",
+					"text": "the "
+				},
+				{
+					"type": "del",
+					"text": "quick"
+				},
+				{
+					"type": "add",
+					"text": "slow"
+				},
+				{
+					"type": "same",
+					"text": " brown fox"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1,
+						2
+					]
+				}
+			],
+			"mergedNone": "the quick brown fox",
+			"mergedAll": "the slow brown fox",
+			"mergedEven": "the slow brown fox"
+		},
+		{
+			"current": "the quick brown fox",
+			"branch": "the slow brown fox",
+			"granularity": "line",
+			"runs": [
+				{
+					"type": "del",
+					"text": "the quick brown fox"
+				},
+				{
+					"type": "add",
+					"text": "the slow brown fox"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0,
+						1
+					]
+				}
+			],
+			"mergedNone": "the quick brown fox",
+			"mergedAll": "the slow brown fox",
+			"mergedEven": "the slow brown fox"
+		},
+		{
+			"current": "the quick brown fox jumps",
+			"branch": "the slow brown fox leaps",
+			"granularity": "word",
+			"runs": [
+				{
+					"type": "same",
+					"text": "the "
+				},
+				{
+					"type": "del",
+					"text": "quick"
+				},
+				{
+					"type": "add",
+					"text": "slow"
+				},
+				{
+					"type": "same",
+					"text": " brown fox "
+				},
+				{
+					"type": "del",
+					"text": "jumps"
+				},
+				{
+					"type": "add",
+					"text": "leaps"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1,
+						2
+					]
+				},
+				{
+					"index": 1,
+					"runIndices": [
+						4,
+						5
+					]
+				}
+			],
+			"mergedNone": "the quick brown fox jumps",
+			"mergedAll": "the slow brown fox leaps",
+			"mergedEven": "the slow brown fox jumps"
+		},
+		{
+			"current": "the quick brown fox jumps",
+			"branch": "the slow brown fox leaps",
+			"granularity": "line",
+			"runs": [
+				{
+					"type": "del",
+					"text": "the quick brown fox jumps"
+				},
+				{
+					"type": "add",
+					"text": "the slow brown fox leaps"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0,
+						1
+					]
+				}
+			],
+			"mergedNone": "the quick brown fox jumps",
+			"mergedAll": "the slow brown fox leaps",
+			"mergedEven": "the slow brown fox leaps"
+		},
+		{
+			"current": "one two three four",
+			"branch": "ONE TWO three four",
+			"granularity": "word",
+			"runs": [
+				{
+					"type": "del",
+					"text": "one"
+				},
+				{
+					"type": "add",
+					"text": "ONE"
+				},
+				{
+					"type": "same",
+					"text": " "
+				},
+				{
+					"type": "del",
+					"text": "two"
+				},
+				{
+					"type": "add",
+					"text": "TWO"
+				},
+				{
+					"type": "same",
+					"text": " three four"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0,
+						1
+					]
+				},
+				{
+					"index": 1,
+					"runIndices": [
+						3,
+						4
+					]
+				}
+			],
+			"mergedNone": "one two three four",
+			"mergedAll": "ONE TWO three four",
+			"mergedEven": "ONE two three four"
+		},
+		{
+			"current": "one two three four",
+			"branch": "ONE TWO three four",
+			"granularity": "line",
+			"runs": [
+				{
+					"type": "del",
+					"text": "one two three four"
+				},
+				{
+					"type": "add",
+					"text": "ONE TWO three four"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0,
+						1
+					]
+				}
+			],
+			"mergedNone": "one two three four",
+			"mergedAll": "ONE TWO three four",
+			"mergedEven": "ONE TWO three four"
+		},
+		{
+			"current": "start middle end",
+			"branch": "begin middle finish",
+			"granularity": "word",
+			"runs": [
+				{
+					"type": "del",
+					"text": "start"
+				},
+				{
+					"type": "add",
+					"text": "begin"
+				},
+				{
+					"type": "same",
+					"text": " middle "
+				},
+				{
+					"type": "del",
+					"text": "end"
+				},
+				{
+					"type": "add",
+					"text": "finish"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0,
+						1
+					]
+				},
+				{
+					"index": 1,
+					"runIndices": [
+						3,
+						4
+					]
+				}
+			],
+			"mergedNone": "start middle end",
+			"mergedAll": "begin middle finish",
+			"mergedEven": "begin middle end"
+		},
+		{
+			"current": "start middle end",
+			"branch": "begin middle finish",
+			"granularity": "line",
+			"runs": [
+				{
+					"type": "del",
+					"text": "start middle end"
+				},
+				{
+					"type": "add",
+					"text": "begin middle finish"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0,
+						1
+					]
+				}
+			],
+			"mergedNone": "start middle end",
+			"mergedAll": "begin middle finish",
+			"mergedEven": "begin middle finish"
+		},
+		{
+			"current": "# Title\n\nFirst para.\n\nSecond para.\n",
+			"branch": "# Title\n\nFirst para edited.\n\nSecond para.\n",
+			"granularity": "word",
+			"runs": [
+				{
+					"type": "same",
+					"text": "# Title\n\nFirst para"
+				},
+				{
+					"type": "add",
+					"text": " edited"
+				},
+				{
+					"type": "same",
+					"text": ".\n\nSecond para.\n"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1
+					]
+				}
+			],
+			"mergedNone": "# Title\n\nFirst para.\n\nSecond para.\n",
+			"mergedAll": "# Title\n\nFirst para edited.\n\nSecond para.\n",
+			"mergedEven": "# Title\n\nFirst para edited.\n\nSecond para.\n"
+		},
+		{
+			"current": "# Title\n\nFirst para.\n\nSecond para.\n",
+			"branch": "# Title\n\nFirst para edited.\n\nSecond para.\n",
+			"granularity": "line",
+			"runs": [
+				{
+					"type": "same",
+					"text": "# Title\n\n"
+				},
+				{
+					"type": "del",
+					"text": "First para.\n"
+				},
+				{
+					"type": "add",
+					"text": "First para edited.\n"
+				},
+				{
+					"type": "same",
+					"text": "\nSecond para.\n"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1,
+						2
+					]
+				}
+			],
+			"mergedNone": "# Title\n\nFirst para.\n\nSecond para.\n",
+			"mergedAll": "# Title\n\nFirst para edited.\n\nSecond para.\n",
+			"mergedEven": "# Title\n\nFirst para edited.\n\nSecond para.\n"
+		},
+		{
+			"current": "alpha\n\nbeta\n",
+			"branch": "alpha\n\ninserted\n\nbeta\n",
+			"granularity": "word",
+			"runs": [
+				{
+					"type": "same",
+					"text": "alpha\n\n"
+				},
+				{
+					"type": "add",
+					"text": "inserted\n\n"
+				},
+				{
+					"type": "same",
+					"text": "beta\n"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1
+					]
+				}
+			],
+			"mergedNone": "alpha\n\nbeta\n",
+			"mergedAll": "alpha\n\ninserted\n\nbeta\n",
+			"mergedEven": "alpha\n\ninserted\n\nbeta\n"
+		},
+		{
+			"current": "alpha\n\nbeta\n",
+			"branch": "alpha\n\ninserted\n\nbeta\n",
+			"granularity": "line",
+			"runs": [
+				{
+					"type": "same",
+					"text": "alpha\n\n"
+				},
+				{
+					"type": "add",
+					"text": "inserted\n\n"
+				},
+				{
+					"type": "same",
+					"text": "beta\n"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1
+					]
+				}
+			],
+			"mergedNone": "alpha\n\nbeta\n",
+			"mergedAll": "alpha\n\ninserted\n\nbeta\n",
+			"mergedEven": "alpha\n\ninserted\n\nbeta\n"
+		},
+		{
+			"current": "alpha\n\nbeta\n\ngamma\n",
+			"branch": "alpha\n\ngamma\n",
+			"granularity": "word",
+			"runs": [
+				{
+					"type": "same",
+					"text": "alpha\n\n"
+				},
+				{
+					"type": "del",
+					"text": "beta\n\n"
+				},
+				{
+					"type": "same",
+					"text": "gamma\n"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1
+					]
+				}
+			],
+			"mergedNone": "alpha\n\nbeta\n\ngamma\n",
+			"mergedAll": "alpha\n\ngamma\n",
+			"mergedEven": "alpha\n\ngamma\n"
+		},
+		{
+			"current": "alpha\n\nbeta\n\ngamma\n",
+			"branch": "alpha\n\ngamma\n",
+			"granularity": "line",
+			"runs": [
+				{
+					"type": "same",
+					"text": "alpha\n\n"
+				},
+				{
+					"type": "del",
+					"text": "beta\n\n"
+				},
+				{
+					"type": "same",
+					"text": "gamma\n"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1
+					]
+				}
+			],
+			"mergedNone": "alpha\n\nbeta\n\ngamma\n",
+			"mergedAll": "alpha\n\ngamma\n",
+			"mergedEven": "alpha\n\ngamma\n"
+		},
+		{
+			"current": "The quiet river wound its way through the valley before the storm.",
+			"branch": "The quiet river wound its way slowly through the valley before the storm.",
+			"granularity": "word",
+			"runs": [
+				{
+					"type": "same",
+					"text": "The quiet river wound its way "
+				},
+				{
+					"type": "add",
+					"text": "slowly "
+				},
+				{
+					"type": "same",
+					"text": "through the valley before the storm."
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1
+					]
+				}
+			],
+			"mergedNone": "The quiet river wound its way through the valley before the storm.",
+			"mergedAll": "The quiet river wound its way slowly through the valley before the storm.",
+			"mergedEven": "The quiet river wound its way slowly through the valley before the storm."
+		},
+		{
+			"current": "The quiet river wound its way through the valley before the storm.",
+			"branch": "The quiet river wound its way slowly through the valley before the storm.",
+			"granularity": "line",
+			"runs": [
+				{
+					"type": "del",
+					"text": "The quiet river wound its way through the valley before the storm."
+				},
+				{
+					"type": "add",
+					"text": "The quiet river wound its way slowly through the valley before the storm."
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0,
+						1
+					]
+				}
+			],
+			"mergedNone": "The quiet river wound its way through the valley before the storm.",
+			"mergedAll": "The quiet river wound its way slowly through the valley before the storm.",
+			"mergedEven": "The quiet river wound its way slowly through the valley before the storm."
+		},
+		{
+			"current": "line a\nline b\nline c",
+			"branch": "line a\nLINE B\nline c",
+			"granularity": "word",
+			"runs": [
+				{
+					"type": "same",
+					"text": "line a\n"
+				},
+				{
+					"type": "del",
+					"text": "line"
+				},
+				{
+					"type": "add",
+					"text": "LINE"
+				},
+				{
+					"type": "same",
+					"text": " "
+				},
+				{
+					"type": "del",
+					"text": "b"
+				},
+				{
+					"type": "add",
+					"text": "B"
+				},
+				{
+					"type": "same",
+					"text": "\nline c"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1,
+						2
+					]
+				},
+				{
+					"index": 1,
+					"runIndices": [
+						4,
+						5
+					]
+				}
+			],
+			"mergedNone": "line a\nline b\nline c",
+			"mergedAll": "line a\nLINE B\nline c",
+			"mergedEven": "line a\nLINE b\nline c"
+		},
+		{
+			"current": "line a\nline b\nline c",
+			"branch": "line a\nLINE B\nline c",
+			"granularity": "line",
+			"runs": [
+				{
+					"type": "same",
+					"text": "line a\n"
+				},
+				{
+					"type": "del",
+					"text": "line b\n"
+				},
+				{
+					"type": "add",
+					"text": "LINE B\n"
+				},
+				{
+					"type": "same",
+					"text": "line c"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1,
+						2
+					]
+				}
+			],
+			"mergedNone": "line a\nline b\nline c",
+			"mergedAll": "line a\nLINE B\nline c",
+			"mergedEven": "line a\nLINE B\nline c"
+		},
+		{
+			"current": "completely different here",
+			"branch": "nothing matches now",
+			"granularity": "word",
+			"runs": [
+				{
+					"type": "del",
+					"text": "completely"
+				},
+				{
+					"type": "add",
+					"text": "nothing"
+				},
+				{
+					"type": "same",
+					"text": " "
+				},
+				{
+					"type": "del",
+					"text": "different"
+				},
+				{
+					"type": "add",
+					"text": "matches"
+				},
+				{
+					"type": "same",
+					"text": " "
+				},
+				{
+					"type": "del",
+					"text": "here"
+				},
+				{
+					"type": "add",
+					"text": "now"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0,
+						1
+					]
+				},
+				{
+					"index": 1,
+					"runIndices": [
+						3,
+						4
+					]
+				},
+				{
+					"index": 2,
+					"runIndices": [
+						6,
+						7
+					]
+				}
+			],
+			"mergedNone": "completely different here",
+			"mergedAll": "nothing matches now",
+			"mergedEven": "nothing different now"
+		},
+		{
+			"current": "completely different here",
+			"branch": "nothing matches now",
+			"granularity": "line",
+			"runs": [
+				{
+					"type": "del",
+					"text": "completely different here"
+				},
+				{
+					"type": "add",
+					"text": "nothing matches now"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0,
+						1
+					]
+				}
+			],
+			"mergedNone": "completely different here",
+			"mergedAll": "nothing matches now",
+			"mergedEven": "nothing matches now"
+		},
+		{
+			"current": "a x b y c z d",
+			"branch": "a 1 b 2 c 3 d",
+			"granularity": "word",
+			"runs": [
+				{
+					"type": "same",
+					"text": "a "
+				},
+				{
+					"type": "del",
+					"text": "x"
+				},
+				{
+					"type": "add",
+					"text": "1"
+				},
+				{
+					"type": "same",
+					"text": " b "
+				},
+				{
+					"type": "del",
+					"text": "y"
+				},
+				{
+					"type": "add",
+					"text": "2"
+				},
+				{
+					"type": "same",
+					"text": " c "
+				},
+				{
+					"type": "del",
+					"text": "z"
+				},
+				{
+					"type": "add",
+					"text": "3"
+				},
+				{
+					"type": "same",
+					"text": " d"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1,
+						2
+					]
+				},
+				{
+					"index": 1,
+					"runIndices": [
+						4,
+						5
+					]
+				},
+				{
+					"index": 2,
+					"runIndices": [
+						7,
+						8
+					]
+				}
+			],
+			"mergedNone": "a x b y c z d",
+			"mergedAll": "a 1 b 2 c 3 d",
+			"mergedEven": "a 1 b y c 3 d"
+		},
+		{
+			"current": "a x b y c z d",
+			"branch": "a 1 b 2 c 3 d",
+			"granularity": "line",
+			"runs": [
+				{
+					"type": "del",
+					"text": "a x b y c z d"
+				},
+				{
+					"type": "add",
+					"text": "a 1 b 2 c 3 d"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0,
+						1
+					]
+				}
+			],
+			"mergedNone": "a x b y c z d",
+			"mergedAll": "a 1 b 2 c 3 d",
+			"mergedEven": "a 1 b 2 c 3 d"
+		},
+		{
+			"current": "a\nb\nc\n",
+			"branch": "a\nB\nc\n",
+			"granularity": "word",
+			"runs": [
+				{
+					"type": "same",
+					"text": "a\n"
+				},
+				{
+					"type": "del",
+					"text": "b"
+				},
+				{
+					"type": "add",
+					"text": "B"
+				},
+				{
+					"type": "same",
+					"text": "\nc\n"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1,
+						2
+					]
+				}
+			],
+			"mergedNone": "a\nb\nc\n",
+			"mergedAll": "a\nB\nc\n",
+			"mergedEven": "a\nB\nc\n"
+		},
+		{
+			"current": "a\nb\nc\n",
+			"branch": "a\nB\nc\n",
+			"granularity": "line",
+			"runs": [
+				{
+					"type": "same",
+					"text": "a\n"
+				},
+				{
+					"type": "del",
+					"text": "b\n"
+				},
+				{
+					"type": "add",
+					"text": "B\n"
+				},
+				{
+					"type": "same",
+					"text": "c\n"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1,
+						2
+					]
+				}
+			],
+			"mergedNone": "a\nb\nc\n",
+			"mergedAll": "a\nB\nc\n",
+			"mergedEven": "a\nB\nc\n"
+		},
+		{
+			"current": "trailing space  ",
+			"branch": "trailing space",
+			"granularity": "word",
+			"runs": [
+				{
+					"type": "same",
+					"text": "trailing space"
+				},
+				{
+					"type": "del",
+					"text": "  "
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1
+					]
+				}
+			],
+			"mergedNone": "trailing space  ",
+			"mergedAll": "trailing space",
+			"mergedEven": "trailing space"
+		},
+		{
+			"current": "trailing space  ",
+			"branch": "trailing space",
+			"granularity": "line",
+			"runs": [
+				{
+					"type": "del",
+					"text": "trailing space  "
+				},
+				{
+					"type": "add",
+					"text": "trailing space"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0,
+						1
+					]
+				}
+			],
+			"mergedNone": "trailing space  ",
+			"mergedAll": "trailing space",
+			"mergedEven": "trailing space"
+		},
+		{
+			"current": "multi   spaced   words",
+			"branch": "multi spaced words",
+			"granularity": "word",
+			"runs": [
+				{
+					"type": "same",
+					"text": "multi"
+				},
+				{
+					"type": "del",
+					"text": "   "
+				},
+				{
+					"type": "add",
+					"text": " "
+				},
+				{
+					"type": "same",
+					"text": "spaced"
+				},
+				{
+					"type": "del",
+					"text": "   "
+				},
+				{
+					"type": "add",
+					"text": " "
+				},
+				{
+					"type": "same",
+					"text": "words"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1,
+						2
+					]
+				},
+				{
+					"index": 1,
+					"runIndices": [
+						4,
+						5
+					]
+				}
+			],
+			"mergedNone": "multi   spaced   words",
+			"mergedAll": "multi spaced words",
+			"mergedEven": "multi spaced   words"
+		},
+		{
+			"current": "multi   spaced   words",
+			"branch": "multi spaced words",
+			"granularity": "line",
+			"runs": [
+				{
+					"type": "del",
+					"text": "multi   spaced   words"
+				},
+				{
+					"type": "add",
+					"text": "multi spaced words"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0,
+						1
+					]
+				}
+			],
+			"mergedNone": "multi   spaced   words",
+			"mergedAll": "multi spaced words",
+			"mergedEven": "multi spaced words"
+		},
+		{
+			"current": "punctuation, here!",
+			"branch": "punctuation; here?",
+			"granularity": "word",
+			"runs": [
+				{
+					"type": "same",
+					"text": "punctuation"
+				},
+				{
+					"type": "del",
+					"text": ","
+				},
+				{
+					"type": "add",
+					"text": ";"
+				},
+				{
+					"type": "same",
+					"text": " here"
+				},
+				{
+					"type": "del",
+					"text": "!"
+				},
+				{
+					"type": "add",
+					"text": "?"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1,
+						2
+					]
+				},
+				{
+					"index": 1,
+					"runIndices": [
+						4,
+						5
+					]
+				}
+			],
+			"mergedNone": "punctuation, here!",
+			"mergedAll": "punctuation; here?",
+			"mergedEven": "punctuation; here!"
+		},
+		{
+			"current": "punctuation, here!",
+			"branch": "punctuation; here?",
+			"granularity": "line",
+			"runs": [
+				{
+					"type": "del",
+					"text": "punctuation, here!"
+				},
+				{
+					"type": "add",
+					"text": "punctuation; here?"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0,
+						1
+					]
+				}
+			],
+			"mergedNone": "punctuation, here!",
+			"mergedAll": "punctuation; here?",
+			"mergedEven": "punctuation; here?"
+		},
+		{
+			"current": "emoji 😀 run",
+			"branch": "emoji 😁 run",
+			"granularity": "word",
+			"runs": [
+				{
+					"type": "same",
+					"text": "emoji "
+				},
+				{
+					"type": "del",
+					"text": "😀"
+				},
+				{
+					"type": "add",
+					"text": "😁"
+				},
+				{
+					"type": "same",
+					"text": " run"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1,
+						2
+					]
+				}
+			],
+			"mergedNone": "emoji 😀 run",
+			"mergedAll": "emoji 😁 run",
+			"mergedEven": "emoji 😁 run"
+		},
+		{
+			"current": "emoji 😀 run",
+			"branch": "emoji 😁 run",
+			"granularity": "line",
+			"runs": [
+				{
+					"type": "del",
+					"text": "emoji 😀 run"
+				},
+				{
+					"type": "add",
+					"text": "emoji 😁 run"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0,
+						1
+					]
+				}
+			],
+			"mergedNone": "emoji 😀 run",
+			"mergedAll": "emoji 😁 run",
+			"mergedEven": "emoji 😁 run"
+		},
+		{
+			"current": "café naïve",
+			"branch": "cafe naive",
+			"granularity": "word",
+			"runs": [
+				{
+					"type": "del",
+					"text": "café"
+				},
+				{
+					"type": "add",
+					"text": "cafe"
+				},
+				{
+					"type": "same",
+					"text": " "
+				},
+				{
+					"type": "del",
+					"text": "naïve"
+				},
+				{
+					"type": "add",
+					"text": "naive"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0,
+						1
+					]
+				},
+				{
+					"index": 1,
+					"runIndices": [
+						3,
+						4
+					]
+				}
+			],
+			"mergedNone": "café naïve",
+			"mergedAll": "cafe naive",
+			"mergedEven": "cafe naïve"
+		},
+		{
+			"current": "café naïve",
+			"branch": "cafe naive",
+			"granularity": "line",
+			"runs": [
+				{
+					"type": "del",
+					"text": "café naïve"
+				},
+				{
+					"type": "add",
+					"text": "cafe naive"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0,
+						1
+					]
+				}
+			],
+			"mergedNone": "café naïve",
+			"mergedAll": "cafe naive",
+			"mergedEven": "cafe naive"
+		},
+		{
+			"current": "mixed\r\nnewlines\r\nhere",
+			"branch": "mixed\nnewlines\nhere",
+			"granularity": "word",
+			"runs": [
+				{
+					"type": "same",
+					"text": "mixed"
+				},
+				{
+					"type": "del",
+					"text": "\r\n"
+				},
+				{
+					"type": "add",
+					"text": "\n"
+				},
+				{
+					"type": "same",
+					"text": "newlines"
+				},
+				{
+					"type": "del",
+					"text": "\r\n"
+				},
+				{
+					"type": "add",
+					"text": "\n"
+				},
+				{
+					"type": "same",
+					"text": "here"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1,
+						2
+					]
+				},
+				{
+					"index": 1,
+					"runIndices": [
+						4,
+						5
+					]
+				}
+			],
+			"mergedNone": "mixed\r\nnewlines\r\nhere",
+			"mergedAll": "mixed\nnewlines\nhere",
+			"mergedEven": "mixed\nnewlines\r\nhere"
+		},
+		{
+			"current": "mixed\r\nnewlines\r\nhere",
+			"branch": "mixed\nnewlines\nhere",
+			"granularity": "line",
+			"runs": [
+				{
+					"type": "del",
+					"text": "mixed\r\nnewlines\r\n"
+				},
+				{
+					"type": "add",
+					"text": "mixed\nnewlines\n"
+				},
+				{
+					"type": "same",
+					"text": "here"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0,
+						1
+					]
+				}
+			],
+			"mergedNone": "mixed\r\nnewlines\r\nhere",
+			"mergedAll": "mixed\nnewlines\nhere",
+			"mergedEven": "mixed\nnewlines\nhere"
+		},
+		{
+			"current": "one-two-three",
+			"branch": "one_two_three",
+			"granularity": "word",
+			"runs": [
+				{
+					"type": "del",
+					"text": "one-two-three"
+				},
+				{
+					"type": "add",
+					"text": "one_two_three"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0,
+						1
+					]
+				}
+			],
+			"mergedNone": "one-two-three",
+			"mergedAll": "one_two_three",
+			"mergedEven": "one_two_three"
+		},
+		{
+			"current": "one-two-three",
+			"branch": "one_two_three",
+			"granularity": "line",
+			"runs": [
+				{
+					"type": "del",
+					"text": "one-two-three"
+				},
+				{
+					"type": "add",
+					"text": "one_two_three"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0,
+						1
+					]
+				}
+			],
+			"mergedNone": "one-two-three",
+			"mergedAll": "one_two_three",
+			"mergedEven": "one_two_three"
+		},
+		{
+			"current": "# H\n\n- a\n- b\n",
+			"branch": "# H\n\n- a\n- c\n- b\n",
+			"granularity": "word",
+			"runs": [
+				{
+					"type": "same",
+					"text": "# H\n\n- a\n- "
+				},
+				{
+					"type": "add",
+					"text": "c\n- "
+				},
+				{
+					"type": "same",
+					"text": "b\n"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1
+					]
+				}
+			],
+			"mergedNone": "# H\n\n- a\n- b\n",
+			"mergedAll": "# H\n\n- a\n- c\n- b\n",
+			"mergedEven": "# H\n\n- a\n- c\n- b\n"
+		},
+		{
+			"current": "# H\n\n- a\n- b\n",
+			"branch": "# H\n\n- a\n- c\n- b\n",
+			"granularity": "line",
+			"runs": [
+				{
+					"type": "same",
+					"text": "# H\n\n- a\n"
+				},
+				{
+					"type": "add",
+					"text": "- c\n"
+				},
+				{
+					"type": "same",
+					"text": "- b\n"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1
+					]
+				}
+			],
+			"mergedNone": "# H\n\n- a\n- b\n",
+			"mergedAll": "# H\n\n- a\n- c\n- b\n",
+			"mergedEven": "# H\n\n- a\n- c\n- b\n"
+		}
+	],
+	"lineCases": [
+		{
+			"current": "the quick brown fox",
+			"branch": "the quick brown fox",
+			"lines": [
+				{
+					"type": "same",
+					"text": "the quick brown fox"
+				}
+			]
+		},
+		{
+			"current": "",
+			"branch": "",
+			"lines": [
+				{
+					"type": "same",
+					"text": ""
+				}
+			]
+		},
+		{
+			"current": "",
+			"branch": "brand new document",
+			"lines": [
+				{
+					"type": "del",
+					"text": ""
+				},
+				{
+					"type": "add",
+					"text": "brand new document"
+				}
+			]
+		},
+		{
+			"current": "alpha gamma",
+			"branch": "alpha beta gamma",
+			"lines": [
+				{
+					"type": "del",
+					"text": "alpha gamma"
+				},
+				{
+					"type": "add",
+					"text": "alpha beta gamma"
+				}
+			]
+		},
+		{
+			"current": "brand new document",
+			"branch": "",
+			"lines": [
+				{
+					"type": "del",
+					"text": "brand new document"
+				},
+				{
+					"type": "add",
+					"text": ""
+				}
+			]
+		},
+		{
+			"current": "alpha beta gamma",
+			"branch": "alpha gamma",
+			"lines": [
+				{
+					"type": "del",
+					"text": "alpha beta gamma"
+				},
+				{
+					"type": "add",
+					"text": "alpha gamma"
+				}
+			]
+		},
+		{
+			"current": "the quick brown fox",
+			"branch": "the slow brown fox",
+			"lines": [
+				{
+					"type": "del",
+					"text": "the quick brown fox"
+				},
+				{
+					"type": "add",
+					"text": "the slow brown fox"
+				}
+			]
+		},
+		{
+			"current": "the quick brown fox jumps",
+			"branch": "the slow brown fox leaps",
+			"lines": [
+				{
+					"type": "del",
+					"text": "the quick brown fox jumps"
+				},
+				{
+					"type": "add",
+					"text": "the slow brown fox leaps"
+				}
+			]
+		},
+		{
+			"current": "one two three four",
+			"branch": "ONE TWO three four",
+			"lines": [
+				{
+					"type": "del",
+					"text": "one two three four"
+				},
+				{
+					"type": "add",
+					"text": "ONE TWO three four"
+				}
+			]
+		},
+		{
+			"current": "start middle end",
+			"branch": "begin middle finish",
+			"lines": [
+				{
+					"type": "del",
+					"text": "start middle end"
+				},
+				{
+					"type": "add",
+					"text": "begin middle finish"
+				}
+			]
+		},
+		{
+			"current": "# Title\n\nFirst para.\n\nSecond para.\n",
+			"branch": "# Title\n\nFirst para edited.\n\nSecond para.\n",
+			"lines": [
+				{
+					"type": "same",
+					"text": "# Title"
+				},
+				{
+					"type": "same",
+					"text": ""
+				},
+				{
+					"type": "del",
+					"text": "First para."
+				},
+				{
+					"type": "add",
+					"text": "First para edited."
+				},
+				{
+					"type": "same",
+					"text": ""
+				},
+				{
+					"type": "same",
+					"text": "Second para."
+				},
+				{
+					"type": "same",
+					"text": ""
+				}
+			]
+		},
+		{
+			"current": "alpha\n\nbeta\n",
+			"branch": "alpha\n\ninserted\n\nbeta\n",
+			"lines": [
+				{
+					"type": "same",
+					"text": "alpha"
+				},
+				{
+					"type": "same",
+					"text": ""
+				},
+				{
+					"type": "add",
+					"text": "inserted"
+				},
+				{
+					"type": "add",
+					"text": ""
+				},
+				{
+					"type": "same",
+					"text": "beta"
+				},
+				{
+					"type": "same",
+					"text": ""
+				}
+			]
+		},
+		{
+			"current": "alpha\n\nbeta\n\ngamma\n",
+			"branch": "alpha\n\ngamma\n",
+			"lines": [
+				{
+					"type": "same",
+					"text": "alpha"
+				},
+				{
+					"type": "same",
+					"text": ""
+				},
+				{
+					"type": "del",
+					"text": "beta"
+				},
+				{
+					"type": "del",
+					"text": ""
+				},
+				{
+					"type": "same",
+					"text": "gamma"
+				},
+				{
+					"type": "same",
+					"text": ""
+				}
+			]
+		},
+		{
+			"current": "The quiet river wound its way through the valley before the storm.",
+			"branch": "The quiet river wound its way slowly through the valley before the storm.",
+			"lines": [
+				{
+					"type": "del",
+					"text": "The quiet river wound its way through the valley before the storm."
+				},
+				{
+					"type": "add",
+					"text": "The quiet river wound its way slowly through the valley before the storm."
+				}
+			]
+		},
+		{
+			"current": "line a\nline b\nline c",
+			"branch": "line a\nLINE B\nline c",
+			"lines": [
+				{
+					"type": "same",
+					"text": "line a"
+				},
+				{
+					"type": "del",
+					"text": "line b"
+				},
+				{
+					"type": "add",
+					"text": "LINE B"
+				},
+				{
+					"type": "same",
+					"text": "line c"
+				}
+			]
+		},
+		{
+			"current": "completely different here",
+			"branch": "nothing matches now",
+			"lines": [
+				{
+					"type": "del",
+					"text": "completely different here"
+				},
+				{
+					"type": "add",
+					"text": "nothing matches now"
+				}
+			]
+		},
+		{
+			"current": "a x b y c z d",
+			"branch": "a 1 b 2 c 3 d",
+			"lines": [
+				{
+					"type": "del",
+					"text": "a x b y c z d"
+				},
+				{
+					"type": "add",
+					"text": "a 1 b 2 c 3 d"
+				}
+			]
+		},
+		{
+			"current": "a\nb\nc\n",
+			"branch": "a\nB\nc\n",
+			"lines": [
+				{
+					"type": "same",
+					"text": "a"
+				},
+				{
+					"type": "del",
+					"text": "b"
+				},
+				{
+					"type": "add",
+					"text": "B"
+				},
+				{
+					"type": "same",
+					"text": "c"
+				},
+				{
+					"type": "same",
+					"text": ""
+				}
+			]
+		},
+		{
+			"current": "trailing space  ",
+			"branch": "trailing space",
+			"lines": [
+				{
+					"type": "del",
+					"text": "trailing space  "
+				},
+				{
+					"type": "add",
+					"text": "trailing space"
+				}
+			]
+		},
+		{
+			"current": "multi   spaced   words",
+			"branch": "multi spaced words",
+			"lines": [
+				{
+					"type": "del",
+					"text": "multi   spaced   words"
+				},
+				{
+					"type": "add",
+					"text": "multi spaced words"
+				}
+			]
+		},
+		{
+			"current": "punctuation, here!",
+			"branch": "punctuation; here?",
+			"lines": [
+				{
+					"type": "del",
+					"text": "punctuation, here!"
+				},
+				{
+					"type": "add",
+					"text": "punctuation; here?"
+				}
+			]
+		},
+		{
+			"current": "emoji 😀 run",
+			"branch": "emoji 😁 run",
+			"lines": [
+				{
+					"type": "del",
+					"text": "emoji 😀 run"
+				},
+				{
+					"type": "add",
+					"text": "emoji 😁 run"
+				}
+			]
+		},
+		{
+			"current": "café naïve",
+			"branch": "cafe naive",
+			"lines": [
+				{
+					"type": "del",
+					"text": "café naïve"
+				},
+				{
+					"type": "add",
+					"text": "cafe naive"
+				}
+			]
+		},
+		{
+			"current": "mixed\r\nnewlines\r\nhere",
+			"branch": "mixed\nnewlines\nhere",
+			"lines": [
+				{
+					"type": "del",
+					"text": "mixed\r"
+				},
+				{
+					"type": "del",
+					"text": "newlines\r"
+				},
+				{
+					"type": "add",
+					"text": "mixed"
+				},
+				{
+					"type": "add",
+					"text": "newlines"
+				},
+				{
+					"type": "same",
+					"text": "here"
+				}
+			]
+		},
+		{
+			"current": "one-two-three",
+			"branch": "one_two_three",
+			"lines": [
+				{
+					"type": "del",
+					"text": "one-two-three"
+				},
+				{
+					"type": "add",
+					"text": "one_two_three"
+				}
+			]
+		},
+		{
+			"current": "# H\n\n- a\n- b\n",
+			"branch": "# H\n\n- a\n- c\n- b\n",
+			"lines": [
+				{
+					"type": "same",
+					"text": "# H"
+				},
+				{
+					"type": "same",
+					"text": ""
+				},
+				{
+					"type": "same",
+					"text": "- a"
+				},
+				{
+					"type": "add",
+					"text": "- c"
+				},
+				{
+					"type": "same",
+					"text": "- b"
+				},
+				{
+					"type": "same",
+					"text": ""
+				}
+			]
+		}
+	]
+}
