@@ -40,8 +40,11 @@ export type DocumentSyncState = {
 	pendingConflict: boolean;
 	/** Null until the history hook has decided what this document shows. */
 	markdown: string | null;
-	/** Bumped by every publication; panes key their mode snapshot on it. */
-	projectionGeneration: number;
+	/**
+	 * Identifies the current publication, scoped to the host instance and the
+	 * document. Panes key their mode snapshot on it.
+	 */
+	projectionGeneration: string;
 	handleEditorChange: () => void;
 	flushMarkdown: (markdown: string) => Promise<void>;
 	recordHistory: (opts?: { structural?: boolean }) => void;
@@ -185,10 +188,22 @@ function OwnerSyncHost({
 	const [projectedMarkdown, setProjectedMarkdown] = useState<string | null>(
 		null,
 	);
-	// Monotonic: every publication supersedes the last. Panes key their
-	// mode-switch snapshot on this rather than on the text, because an undo can
-	// republish markdown a superseded snapshot was keyed on.
-	const [projectionGeneration, setProjectionGeneration] = useState(0);
+	// Every publication supersedes the last. Panes key their mode-switch
+	// snapshot on this rather than on the text, because an undo can republish
+	// markdown a superseded snapshot was keyed on.
+	//
+	// It is a STRING scoped to this host instance and this document, not a bare
+	// counter: a counter restarts at 0 for every host and every document, so a
+	// snapshot taken in document A — or by a host that has since remounted —
+	// matched document B's first publication and flushed A's text under B.
+	const hostInstanceIdRef = useRef<string>("");
+	if (hostInstanceIdRef.current === "") {
+		hostInstanceIdRef.current = crypto.randomUUID();
+	}
+	const projectionCountRef = useRef(0);
+	const [projectionGeneration, setProjectionGeneration] = useState(
+		() => `${hostInstanceIdRef.current}:${documentId}:0`,
+	);
 	const acceptRemoteProjection = sync.acceptRemoteProjection;
 	const adoptRecoveredDraft = sync.adoptRecoveredDraft;
 	const markLocalProjectionPending = sync.markLocalProjectionPending;
@@ -198,11 +213,15 @@ function OwnerSyncHost({
 			markdown: string;
 			serverUpdatedAt: number;
 			source: "server" | "recovered-draft" | "local";
+			projectionId?: string;
 		}) => {
 			// Publish first: this is how the text reaches a preview-only pane, and
 			// nothing may be treated as accepted before it has.
 			setProjectedMarkdown(projection.markdown);
-			setProjectionGeneration((generation) => generation + 1);
+			projectionCountRef.current += 1;
+			setProjectionGeneration(
+				`${hostInstanceIdRef.current}:${documentId}:${projectionCountRef.current}`,
+			);
 			if (projection.source === "server") {
 				acceptRemoteProjection(projection.markdown, projection.serverUpdatedAt);
 			} else if (projection.source === "recovered-draft") {
@@ -212,10 +231,18 @@ function OwnerSyncHost({
 				// handleEditorChange, and a pointer move changes no text at all, so
 				// nothing else would mark either dirty. They stay unsaved — and
 				// recoverable — until the server acknowledges them.
-				markLocalProjectionPending(projection.markdown);
+				markLocalProjectionPending(
+					projection.markdown,
+					projection.projectionId ?? crypto.randomUUID(),
+				);
 			}
 		},
-		[acceptRemoteProjection, adoptRecoveredDraft, markLocalProjectionPending],
+		[
+			acceptRemoteProjection,
+			adoptRecoveredDraft,
+			documentId,
+			markLocalProjectionPending,
+		],
 	);
 
 	const history = useDocumentHistory({
@@ -231,6 +258,7 @@ function OwnerSyncHost({
 		origin: getDeviceOrigin(),
 		onProjection,
 		onProjectionSettled: settleLocalProjection,
+		getPendingProjectionId: sync.getPendingProjectionId,
 		getRecoveredDraft: sync.getRecoveredDraft,
 	});
 	historyApiRef.current = history;
@@ -407,7 +435,7 @@ function ReviewerSyncHost({
 		syncStatus: "saved",
 		pendingConflict: false,
 		markdown: shared?.markdown ?? "",
-		projectionGeneration: 0,
+		projectionGeneration: "reviewer",
 		handleEditorChange,
 		// No owner write path for a grantee — flushing markdown is a no-op.
 		flushMarkdown: async () => {},
@@ -486,7 +514,10 @@ export function WorkspaceProvider({
 				prev.wordCount !== state.wordCount ||
 				prev.syncStatus !== state.syncStatus ||
 				prev.pendingConflict !== state.pendingConflict ||
-				prev.markdown !== state.markdown
+				prev.markdown !== state.markdown ||
+				// An undo can republish identical text; without this the panes never
+				// learn that their mode snapshot has been superseded.
+				prev.projectionGeneration !== state.projectionGeneration
 			) {
 				setSyncVersion((v) => v + 1);
 			}

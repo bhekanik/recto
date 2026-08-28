@@ -5,6 +5,14 @@ export type DraftRecord = {
 	markdown: string;
 	updatedAt: number;
 	origin: string;
+	/**
+	 * Identifies the unsaved work this record holds. An acknowledgement may only
+	 * retire a draft whose id it names: text equality cannot tell "the write I
+	 * sent came back" from "someone else's write happened to carry the same
+	 * words", and a stale host acknowledging an old commit would otherwise clear
+	 * a draft written after it.
+	 */
+	projectionId?: string;
 };
 
 /** Stable per-client origin id for last-writer guard. */
@@ -19,11 +27,16 @@ export function getClientOrigin(): string {
 }
 
 /** Persist a local draft copy for crash/offline recovery. */
-export function saveDraft(documentId: string, markdown: string): void {
+export function saveDraft(
+	documentId: string,
+	markdown: string,
+	projectionId?: string,
+): void {
 	const record: DraftRecord = {
 		markdown,
 		updatedAt: Date.now(),
 		origin: getClientOrigin(),
+		projectionId,
 	};
 	localStorage.setItem(`${DRAFT_PREFIX}${documentId}`, JSON.stringify(record));
 }
@@ -80,4 +93,9 @@ export function reconcileDraft(
 export function isOwnDraftOrigin(draftOrigin: string | undefined): boolean {
 	if (!draftOrigin) return false;
 	return draftOrigin === getClientOrigin();
+}
+
+/** A fresh identity for a unit of unsaved work (S2). */
+export function newProjectionId(): string {
+	return crypto.randomUUID();
 }

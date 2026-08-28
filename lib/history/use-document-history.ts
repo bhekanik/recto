@@ -8,8 +8,8 @@ import type { Id } from "@/convex/_generated/dataModel";
 import type { EditorHandle } from "@/lib/editor/handle";
 import { countWords } from "@/lib/markdown";
 import { caretAtOffset } from "@/lib/modes/caret";
+import { newProjectionId } from "@/lib/sync/draft-buffer";
 import { toast } from "@/lib/ui/toast";
-
 import {
 	type GroupCommit,
 	GroupingController,
@@ -22,6 +22,7 @@ import {
 	materialize,
 	unionMerge,
 } from "./materialize";
+
 import { ulid } from "./ulid";
 
 export type HistoryNode = DocNode & {
@@ -97,6 +98,8 @@ export type LocalPointerMove = {
 	appliedRevision: number | null;
 	/** The text published for this move, so its acknowledgement can name it. */
 	markdown: string;
+	/** Identity of the unsaved work this move published (S2). */
+	projectionId: string;
 };
 
 /** A remote pointer we have decided to adopt but could not project yet. */
@@ -217,18 +220,23 @@ export function useDocumentHistory(args: {
 		serverUpdatedAt: number;
 		/** Where the text came from, which decides whether it counts as saved. */
 		source: "server" | "recovered-draft" | "local";
+		/** Identity of the unsaved work, for anything but a server projection. */
+		projectionId?: string;
 	}) => void;
 	/**
 	 * A local projection has been accepted or refused by the server. Until this
 	 * says `ok`, the text it names is unsaved and must stay recoverable.
 	 */
 	onProjectionSettled?: (settled: {
+		projectionId: string;
 		markdown: string;
 		serverUpdatedAt: number;
 		ok: boolean;
 	}) => void;
 	/** A draft restored from storage on open, resolved without an editor. */
 	getRecoveredDraft?: () => { present: boolean; markdown: string } | null;
+	/** Unsaved local work the server has not answered yet (S2/S3). */
+	getPendingProjectionId?: () => string | null;
 }): HistoryController {
 	const {
 		documentId,
@@ -244,6 +252,7 @@ export function useDocumentHistory(args: {
 		onProjection,
 		onProjectionSettled,
 		getRecoveredDraft,
+		getPendingProjectionId,
 	} = args;
 
 	const dagRows = useQuery(
@@ -269,12 +278,29 @@ export function useDocumentHistory(args: {
 	const currentNodeIdRef = useRef<string | null>(null);
 	const ensureRootSentRef = useRef(false);
 	const ensureRootAttemptsRef = useRef(0);
+	// Binds a retry to the attempt that started it. A response or timer that
+	// arrives after the hook has moved on — unmounted, or rebound to another
+	// document — would otherwise resurrect a retry loop against state that no
+	// longer exists.
+	const ensureRootTokenRef = useRef(0);
 	const ensureRootTimerRef = useRef<number | null>(null);
 	// Set once the automatic attempts are spent, so the failure is reported once
 	// rather than on every retry.
 	const [rootFailed, setRootFailed] = useState(false);
 	const localMoveRef = useRef<LocalPointerMove | null>(null);
 	const moveTokenRef = useRef(0);
+	// What each in-flight write carries, kept independently of the pointer-move
+	// slot. That slot is cleared as soon as the server echoes the new head —
+	// which Convex delivers BEFORE the mutation's own result — so an
+	// acknowledgement that looked there found nothing and the work it was
+	// acknowledging stayed pending forever.
+	const inFlightRef = useRef(
+		new Map<number, { projectionId: string; markdown: string }>(),
+	);
+	// The one pending projection an automatic re-sync may resolve: the pointer
+	// move whose write failed. Anything the writer produced after it is newer
+	// than the failure and is not ours to overwrite.
+	const resyncProjectionIdRef = useRef<string | null>(null);
 	// A remote pointer we have decided to adopt but cannot project yet — the
 	// writer is mid-sentence, or the node has not reached this client's DAG.
 	// Held until the next safe moment instead of being dropped.
@@ -311,6 +337,9 @@ export function useDocumentHistory(args: {
 		hydratedRef.current = false;
 		ensureRootSentRef.current = false;
 		ensureRootAttemptsRef.current = 0;
+		// Invalidate BEFORE clearing the timer: a callback already queued cannot
+		// be cancelled, so it has to be able to recognise itself as stale.
+		ensureRootTokenRef.current += 1;
 		if (ensureRootTimerRef.current !== null) {
 			window.clearTimeout(ensureRootTimerRef.current);
 			ensureRootTimerRef.current = null;
@@ -318,6 +347,7 @@ export function useDocumentHistory(args: {
 		setRootFailed(false);
 		lastAutoNodeIdRef.current = null;
 		localMoveRef.current = null;
+		inFlightRef.current.clear();
 		pendingRemotePointerRef.current = null;
 		pendingRecordRef.current = null;
 		headNodeIdRef.current = null;
@@ -336,8 +366,14 @@ export function useDocumentHistory(args: {
 			markdown: string,
 			source: "server" | "recovered-draft" | "local",
 			serverUpdatedAt = 0,
+			projectionId?: string,
 		) => {
-			onProjectionRef.current?.({ markdown, serverUpdatedAt, source });
+			onProjectionRef.current?.({
+				markdown,
+				serverUpdatedAt,
+				source,
+				projectionId,
+			});
 		},
 		[],
 	);
@@ -350,14 +386,19 @@ export function useDocumentHistory(args: {
 
 	/** Claim the pointer for a move this client is about to write. */
 	const startLocalMove = useCallback(
-		(nodeId: string, markdown: string): number => {
+		(nodeId: string, markdown: string, projectionId: string): number => {
 			moveTokenRef.current += 1;
 			localMoveRef.current = {
 				token: moveTokenRef.current,
 				nodeId,
 				appliedRevision: null,
 				markdown,
+				projectionId,
 			};
+			inFlightRef.current.set(moveTokenRef.current, {
+				projectionId,
+				markdown,
+			});
 			headNodeIdRef.current = nodeId;
 			return moveTokenRef.current;
 		},
@@ -376,18 +417,24 @@ export function useDocumentHistory(args: {
 	 */
 	const settleLocalMove = useCallback(
 		(token: number, appliedRevision: number | null, serverUpdatedAt = 0) => {
-			const move = localMoveRef.current;
-			if (move?.token !== token) return;
 			// A local transition is only SAVED once the server has taken it. Until
 			// then its text must stay recoverable: a programmatic seed (AI accept,
 			// version restore) never goes through the editor's change handler, so
 			// nothing else would mark it dirty, and a rejected commit would lose it
-			// on reload.
-			onProjectionSettledRef.current?.({
-				markdown: move.markdown,
-				serverUpdatedAt,
-				ok: appliedRevision !== null,
-			});
+			// on reload. This is reported from the in-flight record, not from the
+			// pointer slot, which the server's echo may already have cleared.
+			const inFlight = inFlightRef.current.get(token);
+			if (inFlight) {
+				inFlightRef.current.delete(token);
+				onProjectionSettledRef.current?.({
+					projectionId: inFlight.projectionId,
+					markdown: inFlight.markdown,
+					serverUpdatedAt,
+					ok: appliedRevision !== null,
+				});
+			}
+			const move = localMoveRef.current;
+			if (move?.token !== token) return;
 			if (appliedRevision === null) localMoveRef.current = null;
 			else move.appliedRevision = appliedRevision;
 			setReconcileTick((tick) => tick + 1);
@@ -468,8 +515,13 @@ export function useDocumentHistory(args: {
 				node,
 			);
 			setPointer(commit.nodeId);
-			publishProjection(commit.markdown, "local");
-			const moveToken = startLocalMove(commit.nodeId, commit.markdown);
+			const projectionId = newProjectionId();
+			const moveToken = startLocalMove(
+				commit.nodeId,
+				commit.markdown,
+				projectionId,
+			);
+			publishProjection(commit.markdown, "local", 0, projectionId);
 
 			// One transaction: the node, the pointer, the markdown. See the
 			// documents.commitEdit doc comment for why these can't be separate.
@@ -505,6 +557,10 @@ export function useDocumentHistory(args: {
 						nodeId: result.remoteHeadNodeId,
 						revision: result.remotePointerRevision,
 					});
+					// The server has definitively refused this transition, so it is
+					// resolved and reconciliation may replace it. Work it has NOT
+					// answered stays untouchable.
+					resyncProjectionIdRef.current = projectionId;
 					settleLocalMove(moveToken, null);
 				})
 				.catch(() => settleLocalMove(moveToken, null));
@@ -538,7 +594,9 @@ export function useDocumentHistory(args: {
 			// hammered the server and raised a toast on every attempt.
 			if (!ensureRootSentRef.current && !rootFailed) {
 				ensureRootSentRef.current = true;
+				const attemptToken = ensureRootTokenRef.current;
 				void ensureRoot({ documentId }).catch(() => {
+					if (attemptToken !== ensureRootTokenRef.current) return;
 					ensureRootSentRef.current = false;
 					ensureRootAttemptsRef.current += 1;
 					if (ensureRootAttemptsRef.current >= ENSURE_ROOT_MAX_ATTEMPTS) {
@@ -553,6 +611,7 @@ export function useDocumentHistory(args: {
 						ENSURE_ROOT_BASE_DELAY_MS *
 						2 ** (ensureRootAttemptsRef.current - 1);
 					ensureRootTimerRef.current = window.setTimeout(() => {
+						if (attemptToken !== ensureRootTokenRef.current) return;
 						ensureRootTimerRef.current = null;
 						setReconcileTick((tick) => tick + 1);
 					}, delay);
@@ -697,12 +756,13 @@ export function useDocumentHistory(args: {
 			}
 			controller?.setCurrent(nodeId, markdown);
 			setPointer(nodeId);
-			publishProjection(markdown, "local");
 			// Release the guard after the async re-seed cascade (idle-rehydrate, etc.).
 			window.setTimeout(() => {
 				navigatingRef.current = false;
 			}, 200);
-			const moveToken = startLocalMove(nodeId, markdown);
+			const projectionId = newProjectionId();
+			const moveToken = startLocalMove(nodeId, markdown, projectionId);
+			publishProjection(markdown, "local", 0, projectionId);
 			void updatePointer({
 				documentId,
 				currentNodeId: nodeId,
@@ -728,9 +788,14 @@ export function useDocumentHistory(args: {
 						nodeId: result.currentNodeId,
 						revision: result.pointerRevision,
 					});
+					// This move is the pending work reconciliation may resolve. If the
+					// writer has typed since, that text is newer than the failure and
+					// must not be projected over.
+					resyncProjectionIdRef.current = projectionId;
 					settleLocalMove(moveToken, null);
 				})
 				.catch(() => {
+					resyncProjectionIdRef.current = projectionId;
 					settleLocalMove(moveToken, null);
 					toast("Couldn't sync undo position", "error");
 				});
@@ -944,6 +1009,13 @@ export function useDocumentHistory(args: {
 		// Never re-project over text the tree has not captured: those keystrokes
 		// exist nowhere else yet.
 		if (controllerRef.current?.hasPendingDraft) return false;
+		// Nor over work the server has not answered. Once a draft closes into a
+		// node, hasPendingDraft goes quiet while that node may still be stuck
+		// behind a failed pointer move — projecting then discarded it.
+		const pendingId = getPendingProjectionId?.() ?? null;
+		if (pendingId !== null && pendingId !== resyncProjectionIdRef.current) {
+			return false;
+		}
 		// Idle, not unfocused. In vim and full-screen the editor keeps DOM focus
 		// forever, so a focus gate would defer this indefinitely.
 		if (!editorIdleRef.current) return false;
@@ -986,6 +1058,7 @@ export function useDocumentHistory(args: {
 		return true;
 	}, [
 		getBaselineUpdatedAt,
+		getPendingProjectionId,
 		publishProjection,
 		serverMarkdown,
 		serverMarkdownHeadNodeId,
@@ -1056,6 +1129,10 @@ export function useDocumentHistory(args: {
 
 	useEffect(() => {
 		return () => {
+			// Invalidate first, then cancel: an in-flight ensureRoot rejection has
+			// no timer to clear and would otherwise schedule a new one after the
+			// hook is gone.
+			ensureRootTokenRef.current += 1;
 			if (ensureRootTimerRef.current === null) return;
 			window.clearTimeout(ensureRootTimerRef.current);
 			ensureRootTimerRef.current = null;

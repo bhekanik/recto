@@ -5,28 +5,31 @@
 export type PaneSnapshot = {
 	markdown: string;
 	/**
-	 * The projection generation this snapshot was taken against. A counter, not
-	 * the text: an undo can republish the exact markdown a superseded snapshot
-	 * was keyed on, and equality would then bring that snapshot back to life
-	 * after a newer projection had already replaced it.
+	 * The projection this snapshot was taken against, as a key scoped to the host
+	 * instance and the document — not a bare counter.
+	 *
+	 * A counter restarts at 0 for every host and every document, so a snapshot
+	 * taken in document A, or by a host that has since remounted, collided with
+	 * document B's first publication and flushed A's text under B. It is not the
+	 * markdown either: an undo republishes the exact text a superseded snapshot
+	 * was taken against, which would bring it back to life.
 	 */
-	basisGeneration: number;
+	basisGeneration: string;
 } | null;
 
 /**
  * The snapshot a pane should still honour, or null to fall back to the
  * projection.
  *
- * A snapshot is valid only until the next projection. Holding it beyond that
+ * A snapshot is valid only until the next publication. Holding it beyond that
  * pinned the pane to the text it had at the moment of the switch: a remote
  * update arriving while the pane sat in preview was never rendered, and
- * switching back to an editable lens seeded — and then flushed — that stale
- * copy under whichever node had since been adopted. The generation is
- * monotonic, so once superseded a snapshot can never reactivate.
+ * switching back to an editable lens seeded — and then flushed — that stale copy
+ * under whichever node had since been adopted.
  */
 export function activePaneSnapshot(
 	snapshot: PaneSnapshot,
-	projectionGeneration: number,
+	projectionGeneration: string,
 ): string | null {
 	if (!snapshot) return null;
 	if (snapshot.basisGeneration !== projectionGeneration) return null;

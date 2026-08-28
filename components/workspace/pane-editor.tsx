@@ -147,7 +147,7 @@ export function PaneEditor({
 
 	const paneMarkdown = activePaneSnapshot(
 		paneSnapshot,
-		sync?.projectionGeneration ?? 0,
+		sync?.projectionGeneration ?? "",
 	);
 	const markdown = paneMarkdown ?? sync?.markdown ?? "";
 	const bridgeSession = useBridgeSession(documentId, markdown);
@@ -164,6 +164,11 @@ export function PaneEditor({
 	useEffect(() => {
 		paneSeededRef.current = false;
 		freshSeedDoneRef.current = false;
+		// The pane outlives the document it was showing, so anything captured
+		// from the previous one has to go: a snapshot of A's text seeded into B
+		// gets flushed under B's head, and A's caret offsets mean nothing here.
+		setPaneSnapshot(null);
+		setPendingCaret(null);
 	}, [documentId]);
 
 	const getEditorHandle = useCallback((): EditorHandle | null => {
@@ -468,7 +473,7 @@ export function PaneEditor({
 			const caret = outgoing?.exportCaret() ?? null;
 			setPaneSnapshot({
 				markdown: liveMarkdown,
-				basisGeneration: sync?.projectionGeneration ?? 0,
+				basisGeneration: sync?.projectionGeneration ?? "",
 			});
 			setPendingCaret(caret);
 			actions.setPaneMode(leaf.paneId, to);
