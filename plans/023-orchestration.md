@@ -204,7 +204,7 @@ in-flight workers are producing (§4).
 
 | Worker | Phase | Branch | Status | PR | Reviews (Claude / Codex) | Deployed |
 |---|---|---|---|---|---|---|
-| W1 history-commit (client half) | N1a | 023/history-commit | round 14 fixed by W1b (typed refusals via `classifyRefusal`; non-destructive Retry honouring retryAfter; discard dialog with counts; causal revision chain; 697 tests); orchestrator verifying; Codex r14 running; e2e ×5 proof still blocked on CLERK_SECRET_KEY | #1 | Claude / Codex r1–r13 | |
+| W1 history-commit (client half) | N1a | 023/history-commit | round 14 fixed by W1b (typed refusals via `classifyRefusal`; non-destructive Retry honouring retryAfter; discard dialog with counts; causal revision chain; 697 tests; verified by orchestrator: convex identical, build ok); Codex r14 running; e2e ×5 proof still blocked on CLERK_SECRET_KEY | #1 | Claude / Codex r1–r13 | |
 | W1b history-backend (backend half, cut by the orchestrator from W1's head `9cf1e94`) | N1a + N0e | 023/history-backend | **merged + deployed** 2026-08-28; smoke: `commitEdit` validates, LangSmith smoke skips (no key) | #11 | orchestrator / Codex (no blocking) | prod |
 | W1c pointer-cas (backend follow-up cut by the orchestrator: `updateCurrentNodeId.expectedPointerRevision`; review accepts bump the revision) | N1a | 023/pointer-cas | **merged + deployed** 2026-08-28 (prod + dev); gated locally (CI billing-blocked) | #13 | orchestrator / Codex (1 finding fixed) | prod |
 | W1d refusal-codes (backend follow-up cut by the orchestrator: `ConvexError({code})` for deterministic refusals; `TERMINAL_REFUSAL_CODES` excludes `unauthenticated`) | N1a | 023/refusal-codes | **merged + deployed** 2026-08-28 (prod + dev) | #14 | orchestrator / Codex (2 findings fixed) | prod |
