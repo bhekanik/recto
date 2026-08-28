@@ -200,7 +200,14 @@ export function useDocumentHistory(args: {
 	 * hook can accept the text as the new baseline instead of flushing it back
 	 * as a local edit. Projection is the ONLY thing that clears a dirty draft.
 	 */
-	onRemoteProjection?: (markdown: string, serverUpdatedAt: number) => void;
+	onProjection?: (projection: {
+		markdown: string;
+		serverUpdatedAt: number;
+		/** False for a recovered local draft, which is unsaved. */
+		serverDerived: boolean;
+	}) => void;
+	/** A draft restored from storage on open, resolved without an editor. */
+	getRecoveredDraft?: () => { present: boolean; markdown: string } | null;
 }): HistoryController {
 	const {
 		documentId,
@@ -213,7 +220,8 @@ export function useDocumentHistory(args: {
 		getBaselineUpdatedAt,
 		enabled,
 		origin,
-		onRemoteProjection,
+		onProjection,
+		getRecoveredDraft,
 	} = args;
 
 	const dagRows = useQuery(
@@ -252,8 +260,8 @@ export function useDocumentHistory(args: {
 	// than on blur: in vim and full-screen the editor never loses DOM focus, so
 	// a focus-gated adoption would never fire at all (R4).
 	const editorIdleRef = useRef(true);
-	const onRemoteProjectionRef = useRef(onRemoteProjection);
-	onRemoteProjectionRef.current = onRemoteProjection;
+	const onProjectionRef = useRef(onProjection);
+	onProjectionRef.current = onProjection;
 	// Bumped whenever something happens that could unblock a queued adoption
 	// (a local move settles, the editor blurs). The reconciliation lives in an
 	// effect, so it needs a state dependency to re-run on.
@@ -482,17 +490,14 @@ export function useDocumentHistory(args: {
 		const editorText = handle?.getCanonicalMarkdown() ?? "";
 
 		// Local input outranks anything from the server: keystrokes that landed
-		// before the DAG resolved, or a draft recovered from localStorage (which
-		// the sync hook does seed, because it is this writer's own unsaved work).
+		// before the DAG resolved, or a draft recovered from storage. The recovery
+		// result is a tagged flag rather than a non-empty string, because a draft
+		// that deletes everything is still one the writer meant to keep.
 		const pending = pendingRecordRef.current;
 		pendingRecordRef.current = null;
+		const recovered = getRecoveredDraft?.() ?? null;
 		const localInput =
-			pending?.markdown ??
-			(editorText !== "" &&
-			editorText !== rootMarkdown &&
-			editorText !== serverMarkdown
-				? editorText
-				: null);
+			pending?.markdown ?? (recovered?.present ? recovered.markdown : null);
 
 		// Opening is the first thing this device has seen, so there is no earlier
 		// baseline for the server to be newer than.
@@ -512,12 +517,14 @@ export function useDocumentHistory(args: {
 			// child node instead of being dropped by the navigation.
 			controller.record(shown, pending?.selection ?? null);
 		}
-		if (localInput === null) {
-			// Server-derived text — tell the sync hook this is the baseline, or it
-			// will push it back up as though the writer had typed it. Local input
-			// stays dirty and is deliberately NOT reported as saved.
-			onRemoteProjectionRef.current?.(shown, serverUpdatedAt ?? 0);
-		}
+		// Publish it either way — the pane renders from this, which is the only
+		// way the text reaches a preview-only surface. `serverDerived` decides
+		// whether it counts as saved: local input stays dirty until it is written.
+		onProjectionRef.current?.({
+			markdown: shown,
+			serverUpdatedAt: serverUpdatedAt ?? 0,
+			serverDerived: localInput === null,
+		});
 	}, [
 		enabled,
 		documentId,
@@ -527,6 +534,7 @@ export function useDocumentHistory(args: {
 		serverMarkdownHeadNodeId,
 		serverUpdatedAt,
 		ensureRoot,
+		getRecoveredDraft,
 		onCommit,
 		setPointer,
 	]);
@@ -704,9 +712,14 @@ export function useDocumentHistory(args: {
 		(markdown: string, opts?: { origin?: string }): string | null => {
 			const controller = controllerRef.current;
 			if (!controller) return null;
+			// Close any open draft BEFORE claiming the origin. Setting it first gave
+			// the writer's own pending text the `ai:<label>` tag and left the AI's
+			// node tagged as an ordinary device edit — and, because `before` was
+			// read ahead of the flush, an AI result identical to the current text
+			// still looked like it had committed something.
+			controller.flush();
 			const before = controller.currentNodeId;
 			if (opts?.origin) originOverrideRef.current = opts.origin;
-			controller.flush();
 			const handle = getHandleRef.current();
 			handle?.seed(markdown, { programmatic: true });
 			controller.record(markdown, null, { structural: true });
@@ -771,7 +784,17 @@ export function useDocumentHistory(args: {
 	 * the remote revision handled.
 	 */
 	const reconcileRemote = useCallback((): boolean => {
-		const target = pendingRemotePointerRef.current;
+		// A markdown-only update moves no pointer, so nothing queues one — but a
+		// newer trusted draft at the head we are already on is still a change the
+		// writer must see. Treat the current head as an implicit target.
+		const target =
+			pendingRemotePointerRef.current ??
+			(currentNodeIdRef.current
+				? {
+						nodeId: currentNodeIdRef.current,
+						revision: serverPointerRevision ?? 0,
+					}
+				: null);
 		if (target === null) return true; // nothing outstanding
 
 		const map = nodesByIdRef.current;
@@ -822,18 +845,20 @@ export function useDocumentHistory(args: {
 		// forever, so a focus gate would defer this indefinitely.
 		if (!editorIdleRef.current) return false;
 
-		// A preview-only pane has a handle whose seed is a no-op. Advancing the
-		// pointer against it would leave the tree claiming a projection that never
-		// reached any editor; wait for a writable lens instead.
+		// A preview-only pane registers no writable handle, but the projection is
+		// PUBLISHED to the pane and rendered from there, so it does reach the
+		// writer either way. Seed when there is somewhere to seed; never make the
+		// projection conditional on it, or a preview pane would sit on stale text
+		// forever waiting for an editor it does not have.
 		const handle = getHandleRef.current();
-		if (!handle || handle.readOnly) return false;
-
-		const caretBefore = handle.exportCaret().head;
 		navigatingRef.current = true;
-		handle.seed(editorText, { programmatic: true });
-		// The remote text is a different document; the old offset may not exist in
-		// it, so clamp rather than dropping the caret to the top.
-		handle.importCaret(caretAtOffset(caretBefore, editorText.length));
+		if (handle && !handle.readOnly) {
+			const caretBefore = handle.exportCaret().head;
+			handle.seed(editorText, { programmatic: true });
+			// The remote text is a different document; the old offset may not exist
+			// in it, so clamp rather than dropping the caret to the top.
+			handle.importCaret(caretAtOffset(caretBefore, editorText.length));
+		}
 		controllerRef.current?.setCurrent(target.nodeId, materialized);
 		if (trustedDraft) {
 			// Hold the rescued draft as an OPEN draft on the node, not as silent
@@ -853,13 +878,18 @@ export function useDocumentHistory(args: {
 		// will flush the projected text back as though the writer had typed it —
 		// and if that text were the materialization, the flush would clobber the
 		// draft this projection just rescued.
-		onRemoteProjectionRef.current?.(editorText, serverUpdatedAt ?? 0);
+		onProjectionRef.current?.({
+			markdown: editorText,
+			serverUpdatedAt: serverUpdatedAt ?? 0,
+			serverDerived: true,
+		});
 		toast("Updated from another device", "info");
 		return true;
 	}, [
 		getBaselineUpdatedAt,
 		serverMarkdown,
 		serverMarkdownHeadNodeId,
+		serverPointerRevision,
 		serverUpdatedAt,
 		setPointer,
 	]);

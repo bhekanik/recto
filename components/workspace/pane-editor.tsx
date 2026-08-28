@@ -290,6 +290,10 @@ export function PaneEditor({
 	// biome-ignore lint/correctness/useExhaustiveDependencies: sync?.markdown drives re-hydration; leaf.viewState read once on first seed
 	useEffect(() => {
 		if (!editorReady || !documentId || !sync) return;
+		// Null means the history hook has not decided what this document shows yet
+		// (ADR-19 V2). Seeding raw documents.markdown here is exactly how an
+		// unstamped legacy body used to reach the editor.
+		if (sync.markdown === null) return;
 		if (leaf.mode === "preview") return;
 		if (paneMarkdown !== null) return; // a local mode-switch owns this pane's content
 		const handle = leaf.mode === "rich" ? richRef.current : cmRef.current;

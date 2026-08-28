@@ -38,11 +38,10 @@ export type DocumentSyncState = {
 	wordCount: number;
 	syncStatus: SyncStatus;
 	pendingConflict: boolean;
-	markdown: string;
+	/** Null until the history hook has decided what this document shows. */
+	markdown: string | null;
 	handleEditorChange: () => void;
 	flushMarkdown: (markdown: string) => Promise<void>;
-	useDraft: () => void;
-	useServer: () => void;
 	recordHistory: (opts?: { structural?: boolean }) => void;
 	flushHistory: () => void;
 };
@@ -177,7 +176,32 @@ function OwnerSyncHost({
 		reconcileRemote,
 	});
 
+	// V2: what the panes render. NOT documents.markdown — that value has no
+	// provenance, so a preview pane would show a legacy body and a switch to raw
+	// would flush it back under the current head, stamping it. Null until the
+	// history hook has made its first decision; panes treat that as loading.
+	const [projectedMarkdown, setProjectedMarkdown] = useState<string | null>(
+		null,
+	);
 	const acceptRemoteProjection = sync.acceptRemoteProjection;
+	const adoptRecoveredDraft = sync.adoptRecoveredDraft;
+	const onProjection = useCallback(
+		(projection: {
+			markdown: string;
+			serverUpdatedAt: number;
+			serverDerived: boolean;
+		}) => {
+			// Publish first: this is how the text reaches a preview-only pane, and
+			// nothing may be treated as accepted before it has.
+			setProjectedMarkdown(projection.markdown);
+			if (projection.serverDerived) {
+				acceptRemoteProjection(projection.markdown, projection.serverUpdatedAt);
+			} else {
+				adoptRecoveredDraft(projection.markdown);
+			}
+		},
+		[acceptRemoteProjection, adoptRecoveredDraft],
+	);
 
 	const history = useDocumentHistory({
 		documentId,
@@ -190,7 +214,8 @@ function OwnerSyncHost({
 		getBaselineUpdatedAt: sync.getBaselineUpdatedAt,
 		enabled,
 		origin: getDeviceOrigin(),
-		onRemoteProjection: acceptRemoteProjection,
+		onProjection,
+		getRecoveredDraft: sync.getRecoveredDraft,
 	});
 	historyApiRef.current = history;
 
@@ -226,11 +251,9 @@ function OwnerSyncHost({
 		wordCount: sync.wordCount,
 		syncStatus: sync.syncStatus,
 		pendingConflict: sync.pendingConflict,
-		markdown: document?.markdown ?? "",
+		markdown: projectedMarkdown,
 		handleEditorChange,
 		flushMarkdown: sync.flushMarkdown,
-		useDraft: sync.useDraft,
-		useServer: sync.useServer,
 		recordHistory: history.recordChange,
 		flushHistory: history.flush,
 	};
@@ -365,8 +388,6 @@ function ReviewerSyncHost({
 		handleEditorChange,
 		// No owner write path for a grantee — flushing markdown is a no-op.
 		flushMarkdown: async () => {},
-		useDraft: () => {},
-		useServer: () => {},
 		recordHistory: canSuggest ? history.recordChange : noopRecord,
 		flushHistory: canSuggest ? history.flush : noopFlush,
 	};

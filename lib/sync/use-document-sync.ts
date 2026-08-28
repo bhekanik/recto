@@ -19,6 +19,9 @@ export const DEBOUNCE_MS = 500;
 
 export type SyncStatus = "idle" | "saving" | "saved" | "unsynced";
 
+/** A local draft restored from storage. `present: false` means there was none. */
+export type RecoveredDraft = { present: boolean; markdown: string };
+
 type UseDocumentSyncArgs = {
 	documentId: Id<"documents"> | null;
 	getEditorHandle: () => EditorHandle | null;
@@ -48,8 +51,6 @@ type UseDocumentSyncResult = {
 	wordCount: number;
 	syncStatus: SyncStatus;
 	pendingConflict: boolean;
-	useDraft: () => void;
-	useServer: () => void;
 	handleEditorChange: () => void;
 	flushSync: () => Promise<void>;
 	flushMarkdown: (markdown: string) => Promise<void>;
@@ -58,6 +59,10 @@ type UseDocumentSyncResult = {
 	acceptRemoteProjection: (markdown: string, serverUpdatedAt: number) => void;
 	/** The server revision the editor currently reflects (ADR-19, Y1). */
 	getBaselineUpdatedAt: () => number;
+	/** A draft restored from storage on open, resolved without an editor. */
+	getRecoveredDraft: () => RecoveredDraft | null;
+	/** Report a recovered draft the history hook has put on screen (unsaved). */
+	adoptRecoveredDraft: (markdown: string) => void;
 };
 
 /** Whether a reactive query update is from a remote writer (not this client's echo). */
@@ -100,6 +105,11 @@ export function useDocumentSync({
 	const lastWrittenUpdatedAtRef = useRef<number>(0);
 	const lastHandledServerUpdatedAtRef = useRef<number>(0);
 	const hasSeededRef = useRef(false);
+	// Draft recovery is resolved from storage alone. Gating it on an editor
+	// handle lost the draft entirely when the only pane was preview (which
+	// registers no handle), and `present` is a flag rather than a non-empty
+	// string because deleting everything is a draft a writer meant to keep.
+	const recoveredRef = useRef<RecoveredDraft | null>(null);
 	const pendingMarkdownRef = useRef<string | null>(null);
 	const flushInFlightRef = useRef(false);
 	const pendingFlushAfterInFlightRef = useRef(false);
@@ -116,6 +126,7 @@ export function useDocumentSync({
 		lastHandledServerUpdatedAtRef.current = 0;
 		lastFlushedMarkdownRef.current = "";
 		projectedBaselineUpdatedAtRef.current = 0;
+		recoveredRef.current = null;
 	}, [documentId]);
 
 	const performFlush = useCallback(
@@ -282,59 +293,67 @@ export function useDocumentSync({
 		debouncedFlush();
 	}, [debouncedFlush, documentId]);
 
-	const seedEditor = useCallback((markdown: string) => {
-		const editorRef = getEditorHandleRef.current();
-		editorRef?.seed(markdown, { programmatic: true });
-		setWordCount(countWords(markdown));
-	}, []);
-
-	// Seed on open — retry until editor ref is ready
+	// Resolve draft recovery on open. Deliberately NOT gated on an editor
+	// handle: a preview-only pane registers none, and waiting for one meant the
+	// draft was never recovered at all — history then read an empty editor as
+	// "no local input", accepted server text, and cleared the draft from storage.
 	useEffect(() => {
 		if (!enabled || !documentId || serverMarkdown === undefined) return;
 		if (hasSeededRef.current) return;
 
+		const { markdown, hadConflict, draftOrigin } = reconcileDraft(
+			serverMarkdown,
+			serverUpdatedAt ?? 0,
+			documentId,
+		);
+		// A draft that deletes everything is still a draft the writer meant to
+		// keep, so presence is a flag rather than "the text is non-empty".
+		const present = markdown !== serverMarkdown;
+		recoveredRef.current = { present, markdown };
+
+		expectedUpdatedAtRef.current = serverUpdatedAt ?? 0;
+		lastWrittenUpdatedAtRef.current = serverUpdatedAt ?? 0;
+		lastHandledServerUpdatedAtRef.current = serverUpdatedAt ?? 0;
+		hasSeededRef.current = true;
+
+		if (present && hadConflict && !isOwnDraftOrigin(draftOrigin)) {
+			setPendingConflict(true);
+		}
+
+		// With a projection owner, the history hook decides what reaches the
+		// editor — it is the only thing that can tell a trustworthy draft from a
+		// legacy body. Without one (the reviewer surface) this hook still seeds.
+		if (reconcileRemote) return;
+
 		const trySeed = (): boolean => {
 			const editorRef = getEditorHandleRef.current();
 			if (!editorRef) return false;
-
-			const { markdown, hadConflict, draftOrigin } = reconcileDraft(
-				serverMarkdown,
-				serverUpdatedAt ?? 0,
-				documentId,
-			);
-
-			// A recovered localStorage draft is this writer's own unsaved work and
-			// always wins, so seed it here. Plain server markdown does NOT get
-			// seeded when the history hook owns projection: only it can tell a
-			// trustworthy draft from text a pre-deploy client left under an
-			// unknown head, and showing the untrustworthy kind — even briefly —
-			// is how it ends up committed as a child of the wrong node.
-			const recoveredDraft = markdown !== serverMarkdown;
-			if (recoveredDraft || !reconcileRemote) {
-				editorRef.seed(markdown, { programmatic: true });
-				setWordCount(countWords(markdown));
-				lastFlushedMarkdownRef.current = markdown;
-				projectedBaselineUpdatedAtRef.current = serverUpdatedAt ?? 0;
-			}
-			expectedUpdatedAtRef.current = serverUpdatedAt ?? 0;
-			lastWrittenUpdatedAtRef.current = serverUpdatedAt ?? 0;
-			lastHandledServerUpdatedAtRef.current = serverUpdatedAt ?? 0;
-			hasSeededRef.current = true;
-
-			if (hadConflict && !isOwnDraftOrigin(draftOrigin)) {
-				setPendingConflict(true);
-			}
+			editorRef.seed(markdown, { programmatic: true });
+			setWordCount(countWords(markdown));
+			lastFlushedMarkdownRef.current = markdown;
+			projectedBaselineUpdatedAtRef.current = serverUpdatedAt ?? 0;
 			return true;
 		};
-
 		if (trySeed()) return;
-
 		const interval = window.setInterval(() => {
 			if (trySeed()) window.clearInterval(interval);
 		}, 50);
-
 		return () => window.clearInterval(interval);
 	}, [enabled, documentId, reconcileRemote, serverMarkdown, serverUpdatedAt]);
+
+	const getRecoveredDraft = useCallback(() => recoveredRef.current, []);
+
+	/**
+	 * The history hook has projected a recovered local draft. It is UNSAVED — the
+	 * server has never seen it — so it must be reported dirty and its storage
+	 * copy kept until a write actually succeeds. Treating it as flushed lost the
+	 * draft on the next open: cleared from storage, never sent.
+	 */
+	const adoptRecoveredDraft = useCallback((markdown: string) => {
+		setWordCount(countWords(markdown));
+		pendingMarkdownRef.current = markdown;
+		setSyncStatus("unsynced");
+	}, []);
 
 	// Idle re-hydrate when remote write arrives (G7.4 origin/updatedAt guard)
 	useEffect(() => {
@@ -423,25 +442,6 @@ export function useDocumentSync({
 		[documentId],
 	);
 
-	const useDraft = useCallback(() => {
-		if (!documentId) return;
-		const draft = reconcileDraft(
-			serverMarkdown ?? "",
-			serverUpdatedAt ?? 0,
-			documentId,
-		);
-		seedEditor(draft.markdown);
-		setPendingConflict(false);
-		debouncedFlush();
-	}, [documentId, debouncedFlush, seedEditor, serverMarkdown, serverUpdatedAt]);
-
-	const useServer = useCallback(() => {
-		if (serverMarkdown === undefined) return;
-		seedEditor(serverMarkdown);
-		if (documentId) clearDraft(documentId);
-		setPendingConflict(false);
-	}, [documentId, seedEditor, serverMarkdown]);
-
 	useEffect(() => {
 		return () => {
 			debouncedFlush.flush();
@@ -463,13 +463,13 @@ export function useDocumentSync({
 		wordCount,
 		syncStatus,
 		pendingConflict,
-		useDraft,
-		useServer,
 		handleEditorChange,
 		flushSync,
 		flushMarkdown,
 		getCurrentMarkdown,
 		acceptRemoteProjection,
 		getBaselineUpdatedAt,
+		getRecoveredDraft,
+		adoptRecoveredDraft,
 	};
 }
