@@ -214,6 +214,8 @@ function OwnerSyncHost({
 			serverUpdatedAt: number;
 			source: "server" | "recovered-draft" | "local";
 			projectionId?: string;
+			kind?: "text" | "pointer";
+			resolvedProjectionId?: string;
 		}) => {
 			// Publish first: this is how the text reaches a preview-only pane, and
 			// nothing may be treated as accepted before it has.
@@ -223,7 +225,11 @@ function OwnerSyncHost({
 				`${hostInstanceIdRef.current}:${documentId}:${projectionCountRef.current}`,
 			);
 			if (projection.source === "server") {
-				acceptRemoteProjection(projection.markdown, projection.serverUpdatedAt);
+				acceptRemoteProjection(
+					projection.markdown,
+					projection.serverUpdatedAt,
+					projection.resolvedProjectionId,
+				);
 			} else if (projection.source === "recovered-draft") {
 				adoptRecoveredDraft(projection.markdown);
 			} else {
@@ -234,6 +240,7 @@ function OwnerSyncHost({
 				markLocalProjectionPending(
 					projection.markdown,
 					projection.projectionId ?? crypto.randomUUID(),
+					projection.kind ?? "text",
 				);
 			}
 		},

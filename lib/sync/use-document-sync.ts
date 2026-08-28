@@ -24,6 +24,14 @@ export type SyncStatus = "idle" | "saving" | "saved" | "unsynced";
 /** A local draft restored from storage. `present: false` means there was none. */
 export type RecoveredDraft = { present: boolean; markdown: string };
 
+/** Unsaved work waiting on the server. */
+export type PendingProjection = {
+	id: string;
+	/** Text the writer produced, or a pointer move that changes no text. */
+	kind: "text" | "pointer";
+	markdown: string;
+};
+
 type UseDocumentSyncArgs = {
 	documentId: Id<"documents"> | null;
 	getEditorHandle: () => EditorHandle | null;
@@ -58,7 +66,11 @@ type UseDocumentSyncResult = {
 	flushMarkdown: (markdown: string) => Promise<void>;
 	getCurrentMarkdown: () => string;
 	/** Called by the history hook once it has projected remote state (R3). */
-	acceptRemoteProjection: (markdown: string, serverUpdatedAt: number) => void;
+	acceptRemoteProjection: (
+		markdown: string,
+		serverUpdatedAt: number,
+		resolvedProjectionId?: string,
+	) => void;
 	/** The server revision the editor currently reflects (ADR-19, Y1). */
 	getBaselineUpdatedAt: () => number;
 	/** A draft restored from storage on open, resolved without an editor. */
@@ -68,7 +80,11 @@ type UseDocumentSyncResult = {
 	/** Report a recovered draft the history hook has put on screen (unsaved). */
 	adoptRecoveredDraft: (markdown: string) => void;
 	/** A local transition is on screen but the server has not taken it yet. */
-	markLocalProjectionPending: (markdown: string, projectionId: string) => void;
+	markLocalProjectionPending: (
+		markdown: string,
+		projectionId: string,
+		kind: "text" | "pointer",
+	) => void;
 	/** That transition was accepted (or refused) by the server. */
 	settleLocalProjection: (settled: {
 		projectionId: string;
@@ -123,11 +139,18 @@ export function useDocumentSync({
 	// registers no handle), and `present` is a flag rather than a non-empty
 	// string because deleting everything is a draft a writer meant to keep.
 	const recoveredRef = useRef<RecoveredDraft | null>(null);
-	// Identifies the unsaved work currently on screen. Acknowledgements match
-	// on this, never on text: equality cannot tell our own write coming back
-	// from someone else's that happens to carry the same words, and a stale
-	// host acknowledging an old commit would otherwise clear a newer draft.
-	const pendingProjectionIdRef = useRef<string | null>(null);
+	// The unsaved work currently on screen. Acknowledgements match on its id,
+	// never on text: equality cannot tell our own write coming back from
+	// someone else's that happens to carry the same words, and a stale host
+	// acknowledging an old commit would otherwise clear a newer draft.
+	//
+	// `kind` matters because two nodes can hold identical markdown: a content
+	// match proves a text draft was reverted, but says nothing about whether a
+	// pointer move landed, so it must never retire pointer work.
+	const pendingProjectionRef = useRef<PendingProjection | null>(null);
+	// The newest server revision any acknowledgement has accepted. Only the
+	// owner of that revision may declare what the server now holds.
+	const lastAcceptedRevisionRef = useRef(0);
 	const pendingMarkdownRef = useRef<string | null>(null);
 	const flushInFlightRef = useRef(false);
 	const pendingFlushAfterInFlightRef = useRef(false);
@@ -148,8 +171,63 @@ export function useDocumentSync({
 		lastFlushedMarkdownRef.current = null;
 		projectedBaselineUpdatedAtRef.current = 0;
 		recoveredRef.current = null;
-		pendingProjectionIdRef.current = null;
+		pendingProjectionRef.current = null;
+		lastAcceptedRevisionRef.current = 0;
 	}, [documentId]);
+
+	/**
+	 * Record where the server got to. Revisions only ever move forwards, and
+	 * only the acknowledgement that owns the newest accepted revision may say
+	 * what the server now holds — an older completion arriving late would
+	 * otherwise declare its stale text to be the current baseline.
+	 */
+	const observeServerRevision = useCallback(
+		(serverUpdatedAt: number, markdown: string | null) => {
+			if (serverUpdatedAt <= 0) return;
+			expectedUpdatedAtRef.current = Math.max(
+				expectedUpdatedAtRef.current,
+				serverUpdatedAt,
+			);
+			lastWrittenUpdatedAtRef.current = Math.max(
+				lastWrittenUpdatedAtRef.current,
+				serverUpdatedAt,
+			);
+			lastHandledServerUpdatedAtRef.current = Math.max(
+				lastHandledServerUpdatedAtRef.current,
+				serverUpdatedAt,
+			);
+			projectedBaselineUpdatedAtRef.current = Math.max(
+				projectedBaselineUpdatedAtRef.current,
+				serverUpdatedAt,
+			);
+			if (markdown === null) return;
+			if (serverUpdatedAt < lastAcceptedRevisionRef.current) return;
+			lastAcceptedRevisionRef.current = serverUpdatedAt;
+			lastFlushedMarkdownRef.current = markdown;
+		},
+		[],
+	);
+
+	/**
+	 * Retire the pending work an acknowledgement names, if it is still ours to
+	 * retire. BOTH the in-memory record and the stored one must name it: the
+	 * stored copy is shared across hosts, so a host acknowledging its own old
+	 * write would otherwise delete a draft another host had written since.
+	 */
+	const retirePending = useCallback(
+		(projectionId: string): boolean => {
+			if (!documentId) return false;
+			if (pendingProjectionRef.current?.id !== projectionId) return false;
+			const stored = loadDraft(documentId);
+			if (!stored || stored.projectionId !== projectionId) return false;
+			pendingProjectionRef.current = null;
+			pendingMarkdownRef.current = null;
+			clearDraft(documentId);
+			setSyncStatus("saved");
+			return true;
+		},
+		[documentId],
+	);
 
 	const performFlush = useCallback(
 		async (
@@ -177,22 +255,30 @@ export function useDocumentSync({
 				return "skipped";
 			}
 
+			// The text already matches what the server holds, so there is nothing
+			// to write. That proves a TEXT draft was reverted; it proves nothing
+			// about a pointer move, because two nodes can carry identical markdown
+			// and retiring pointer work here lost an undo the server never took.
 			if (markdown === lastFlushedMarkdownRef.current) {
-				pendingMarkdownRef.current = null;
-				pendingProjectionIdRef.current = null;
-				clearDraft(documentId);
-				setSyncStatus("saved");
+				const pending = pendingProjectionRef.current;
+				if (pending && pending.kind === "text") {
+					retirePending(pending.id);
+				} else if (!pending) {
+					pendingMarkdownRef.current = null;
+					setSyncStatus("saved");
+				}
 				return "done";
 			}
 
 			// Claim identity only now, with a write actually going out. Creating it
 			// earlier marked the document dirty on every no-op flush, which left a
 			// pending id nothing would ever acknowledge.
-			if (pendingProjectionIdRef.current === null) {
-				pendingProjectionIdRef.current = newProjectionId();
-				saveDraft(documentId, markdown, pendingProjectionIdRef.current);
+			if (pendingProjectionRef.current === null) {
+				const id = newProjectionId();
+				pendingProjectionRef.current = { id, kind: "text", markdown };
+				saveDraft(documentId, markdown, id);
 			}
-			const projectionId = pendingProjectionIdRef.current;
+			const projectionId = pendingProjectionRef.current.id;
 			setSyncStatus("saving");
 
 			try {
@@ -220,24 +306,14 @@ export function useDocumentSync({
 				}
 
 				if (result.stale) {
-					expectedUpdatedAtRef.current = result.updatedAt;
-					lastHandledServerUpdatedAtRef.current = result.updatedAt;
+					observeServerRevision(result.updatedAt, null);
 					return "retry";
 				}
 
-				expectedUpdatedAtRef.current = result.updatedAt;
-				lastWrittenUpdatedAtRef.current = result.updatedAt;
-				lastHandledServerUpdatedAtRef.current = result.updatedAt;
-				lastFlushedMarkdownRef.current = markdown;
-				projectedBaselineUpdatedAtRef.current = result.updatedAt;
+				observeServerRevision(result.updatedAt, markdown);
 				// Only retire what this write actually carried. The writer may have
 				// typed on while it was in flight, and that text is still unsaved.
-				if (pendingProjectionIdRef.current === projectionId) {
-					pendingMarkdownRef.current = null;
-					pendingProjectionIdRef.current = null;
-					clearDraft(documentId);
-					setSyncStatus("saved");
-				}
+				retirePending(projectionId);
 				return "done";
 			} catch {
 				setSyncStatus("unsynced");
@@ -249,6 +325,8 @@ export function useDocumentSync({
 			deriveTitle,
 			getCurrentHeadNodeId,
 			isManualTitle,
+			observeServerRevision,
+			retirePending,
 			updateMarkdown,
 		],
 	);
@@ -325,7 +403,11 @@ export function useDocumentSync({
 		// Typing supersedes whatever was pending: a later acknowledgement of the
 		// older work must not retire this text.
 		const projectionId = newProjectionId();
-		pendingProjectionIdRef.current = projectionId;
+		pendingProjectionRef.current = {
+			id: projectionId,
+			kind: "text",
+			markdown,
+		};
 		if (documentId) saveDraft(documentId, markdown, projectionId);
 		pendingMarkdownRef.current = markdown;
 		setSyncStatus("unsynced");
@@ -390,10 +472,10 @@ export function useDocumentSync({
 	 * status still reading "saved".
 	 */
 	const markLocalProjectionPending = useCallback(
-		(markdown: string, projectionId: string) => {
+		(markdown: string, projectionId: string, kind: "text" | "pointer") => {
 			setWordCount(countWords(markdown));
 			pendingMarkdownRef.current = markdown;
-			pendingProjectionIdRef.current = projectionId;
+			pendingProjectionRef.current = { id: projectionId, kind, markdown };
 			if (documentId) saveDraft(documentId, markdown, projectionId);
 			setSyncStatus("unsynced");
 		},
@@ -408,44 +490,15 @@ export function useDocumentSync({
 			serverUpdatedAt: number;
 			ok: boolean;
 		}) => {
-			// Knowing where the server got to is useful whoever sent the write, so
-			// the revision refs advance for any completion — but only forwards.
-			if (settled.ok && settled.serverUpdatedAt > 0) {
-				const seen = settled.serverUpdatedAt;
-				if (seen > expectedUpdatedAtRef.current) {
-					expectedUpdatedAtRef.current = seen;
-				}
-				if (seen > lastWrittenUpdatedAtRef.current) {
-					lastWrittenUpdatedAtRef.current = seen;
-				}
-				if (seen > lastHandledServerUpdatedAtRef.current) {
-					lastHandledServerUpdatedAtRef.current = seen;
-				}
-				if (seen > projectedBaselineUpdatedAtRef.current) {
-					projectedBaselineUpdatedAtRef.current = seen;
-				}
-			}
 			if (!settled.ok) return; // stays dirty, stays recoverable
-			// Retiring the draft is the destructive half, so it needs identity on
-			// both sides: the work on screen must still be the work this
-			// acknowledgement names, and the stored copy must be the same one. A
-			// host that outlived its document would otherwise clear a draft written
-			// long after the write it is acknowledging.
-			if (pendingProjectionIdRef.current !== settled.projectionId) return;
-			if (!documentId) return;
-			const stored = loadDraft(documentId);
-			if (stored && stored.projectionId !== settled.projectionId) return;
-			lastFlushedMarkdownRef.current = settled.markdown;
-			pendingMarkdownRef.current = null;
-			pendingProjectionIdRef.current = null;
-			clearDraft(documentId);
-			setSyncStatus("saved");
+			observeServerRevision(settled.serverUpdatedAt, settled.markdown);
+			retirePending(settled.projectionId);
 		},
-		[documentId],
+		[observeServerRevision, retirePending],
 	);
 
 	const getPendingProjectionId = useCallback(
-		() => pendingProjectionIdRef.current,
+		() => pendingProjectionRef.current?.id ?? null,
 		[],
 	);
 
@@ -534,21 +587,29 @@ export function useDocumentSync({
 	 * dirty draft, since something has finally replaced it.
 	 */
 	const acceptRemoteProjection = useCallback(
-		(markdown: string, serverRevisionUpdatedAt: number) => {
+		(
+			markdown: string,
+			serverRevisionUpdatedAt: number,
+			resolvedProjectionId?: string,
+		) => {
 			setWordCount(countWords(markdown));
-			expectedUpdatedAtRef.current = serverRevisionUpdatedAt;
-			lastWrittenUpdatedAtRef.current = serverRevisionUpdatedAt;
-			lastHandledServerUpdatedAtRef.current = serverRevisionUpdatedAt;
-			lastFlushedMarkdownRef.current = markdown;
-			projectedBaselineUpdatedAtRef.current = serverRevisionUpdatedAt;
-			// Remote text replaces what is on screen, but it cannot speak for a
-			// local projection the server has not answered yet.
-			if (pendingProjectionIdRef.current !== null) return;
+			observeServerRevision(serverRevisionUpdatedAt, markdown);
+			// This projection RESOLVES the transition it names — the server refused
+			// that move and this is the state it kept instead. Without saying so,
+			// the pane showed the server's head while the document stayed unsynced
+			// and storage still held the refused target.
+			if (resolvedProjectionId !== undefined) {
+				retirePending(resolvedProjectionId);
+				return;
+			}
+			// Anything else pending is work the server has not answered; remote
+			// text cannot speak for it.
+			if (pendingProjectionRef.current !== null) return;
 			pendingMarkdownRef.current = null;
 			if (documentId) clearDraft(documentId);
 			setSyncStatus("saved");
 		},
-		[documentId],
+		[documentId, observeServerRevision, retirePending],
 	);
 
 	useEffect(() => {

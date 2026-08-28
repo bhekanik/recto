@@ -294,6 +294,9 @@ export function useReviewerHistory(args: {
 		tagVersion: noopTag,
 		materializeAt,
 		getHeadNodeId,
+		// The reviewer surface writes through review.reviewerAppend, which has no
+		// outbox — there is nothing here that can be left unresolved.
+		hasUnresolvedWrites: false,
 		hasPendingDraft: noPendingDraft,
 		reconcileRemote: noRemoteToReconcile,
 	};

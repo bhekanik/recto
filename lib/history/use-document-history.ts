@@ -23,8 +23,6 @@ import {
 	unionMerge,
 } from "./materialize";
 
-import { ulid } from "./ulid";
-
 export type HistoryNode = DocNode & {
 	createdAt: number;
 	origin?: string;
@@ -63,6 +61,12 @@ export type HistoryController = {
 	 * which would send the autosave CAS the previous head.
 	 */
 	getHeadNodeId: () => string | null;
+	/**
+	 * True while a commit the server never answered is waiting to be retried.
+	 * The document is neither saved nor refused — it is unresolved, and the
+	 * writer should be told that rather than shown a reassuring tick.
+	 */
+	hasUnresolvedWrites: boolean;
 	/** Local input the tree has not captured yet — see GroupingController. */
 	hasPendingDraft: () => boolean;
 	/**
@@ -83,6 +87,33 @@ const HANDLE_RETRY_MS = 250;
 /** Automatic ensureRoot attempts before the writer is asked to retry. */
 const ENSURE_ROOT_MAX_ATTEMPTS = 4;
 const ENSURE_ROOT_BASE_DELAY_MS = 400;
+/** Backoff for retrying a commit the server never answered. */
+const OUTBOX_BASE_DELAY_MS = 500;
+const OUTBOX_MAX_DELAY_MS = 15_000;
+
+/** A commit waiting to be accepted, retried under its original identity. */
+type OutboxEntry = {
+	moveToken: number;
+	projectionId: string;
+	clientMutationId: string;
+	attempts: number;
+	args: {
+		documentId: Id<"documents">;
+		node: {
+			nodeId: string;
+			parentNodeId: string | null;
+			patch: string;
+			snapshot?: string;
+			selection: { anchor: number; head: number } | null;
+			origin: string;
+			createdAt: number;
+		};
+		markdown: string;
+		wordCount: number;
+		expectedHeadNodeId: string;
+		clientMutationId: string;
+	};
+};
 
 /**
  * This client's own most recent pointer move, tracked until the server echoes it
@@ -222,6 +253,14 @@ export function useDocumentHistory(args: {
 		source: "server" | "recovered-draft" | "local";
 		/** Identity of the unsaved work, for anything but a server projection. */
 		projectionId?: string;
+		/** Whether this work is text the writer produced or a pointer move. */
+		kind?: "text" | "pointer";
+		/**
+		 * For a server projection that RESOLVES a refused transition: the id it
+		 * settles. Without it the pane showed the server's head while the
+		 * document stayed unsynced and storage kept the refused target.
+		 */
+		resolvedProjectionId?: string;
 	}) => void;
 	/**
 	 * A local projection has been accepted or refused by the server. Until this
@@ -289,6 +328,17 @@ export function useDocumentHistory(args: {
 	const [rootFailed, setRootFailed] = useState(false);
 	const localMoveRef = useRef<LocalPointerMove | null>(null);
 	const moveTokenRef = useRef(0);
+	// Commits waiting on the server, oldest first. A rejected commitEdit means
+	// the transaction ROLLED BACK — the node never landed — so sending its
+	// descendants would chain the tree off a node the server has never seen.
+	// They queue behind it and the same clientMutationId is retried, which the
+	// server answers idempotently.
+	const outboxRef = useRef<OutboxEntry[]>([]);
+	const outboxTimerRef = useRef<number | null>(null);
+	// True once a commit has failed without an answer. A timeout is not a
+	// refusal: the write may yet have landed, so the work stays pending and the
+	// writer is told the document is unresolved rather than saved.
+	const [outboxStalled, setOutboxStalled] = useState(false);
 	// What each in-flight write carries, kept independently of the pointer-move
 	// slot. That slot is cleared as soon as the server echoes the new head —
 	// which Convex delivers BEFORE the mutation's own result — so an
@@ -348,6 +398,12 @@ export function useDocumentHistory(args: {
 		lastAutoNodeIdRef.current = null;
 		localMoveRef.current = null;
 		inFlightRef.current.clear();
+		outboxRef.current = [];
+		if (outboxTimerRef.current !== null) {
+			window.clearTimeout(outboxTimerRef.current);
+			outboxTimerRef.current = null;
+		}
+		setOutboxStalled(false);
 		pendingRemotePointerRef.current = null;
 		pendingRecordRef.current = null;
 		headNodeIdRef.current = null;
@@ -367,12 +423,15 @@ export function useDocumentHistory(args: {
 			source: "server" | "recovered-draft" | "local",
 			serverUpdatedAt = 0,
 			projectionId?: string,
+			extra?: { kind?: "text" | "pointer"; resolvedProjectionId?: string },
 		) => {
 			onProjectionRef.current?.({
 				markdown,
 				serverUpdatedAt,
 				source,
 				projectionId,
+				kind: extra?.kind,
+				resolvedProjectionId: extra?.resolvedProjectionId,
 			});
 		},
 		[],
@@ -495,6 +554,66 @@ export function useDocumentHistory(args: {
 	// origin (plan 009).
 	const originOverrideRef = useRef<string | null>(null);
 
+	/**
+	 * Send the head of the outbox, and only the head. Nothing behind a commit the
+	 * server has not accepted may go out: the node it depends on may not exist.
+	 */
+	const pumpOutbox = useCallback(() => {
+		if (outboxTimerRef.current !== null) return;
+		const entry = outboxRef.current[0];
+		if (!entry) return;
+		if (entry.attempts > 0 && !documentId) return;
+		entry.attempts += 1;
+
+		void commitEdit(entry.args)
+			.then((result) => {
+				if (outboxRef.current[0] !== entry) return;
+				outboxRef.current.shift();
+				setOutboxStalled(false);
+				if (result.committed) {
+					settleLocalMove(
+						entry.moveToken,
+						result.pointerRevision,
+						result.updatedAt,
+					);
+				} else {
+					// Another writer owns the head. Queue theirs so the next safe
+					// moment adopts it; the writer is probably still mid-sentence, and
+					// re-projecting under their caret is not an option.
+					queueRemotePointer({
+						nodeId: result.remoteHeadNodeId,
+						revision: result.remotePointerRevision,
+					});
+					// The server has definitively refused this transition, so it is
+					// resolved and reconciliation may replace it. Work it has NOT
+					// answered stays untouchable.
+					resyncProjectionIdRef.current = entry.projectionId;
+					settleLocalMove(entry.moveToken, null);
+				}
+				pumpOutboxRef.current();
+			})
+			.catch(() => {
+				if (outboxRef.current[0] !== entry) return;
+				// NOT a refusal. The write may have landed and the answer been lost,
+				// so the entry stays queued under the same clientMutationId — which
+				// the server replays idempotently — and nothing behind it is sent.
+				setOutboxStalled(true);
+				const delay = Math.min(
+					OUTBOX_BASE_DELAY_MS * 2 ** (entry.attempts - 1),
+					OUTBOX_MAX_DELAY_MS,
+				);
+				outboxTimerRef.current = window.setTimeout(() => {
+					outboxTimerRef.current = null;
+					pumpOutboxRef.current();
+				}, delay);
+			});
+	}, [commitEdit, documentId, queueRemotePointer, settleLocalMove]);
+
+	// The pump re-enters itself through a ref so a retry scheduled by an older
+	// render still reaches the current implementation.
+	const pumpOutboxRef = useRef(pumpOutbox);
+	pumpOutboxRef.current = pumpOutbox;
+
 	const onCommit = useCallback(
 		(commit: GroupCommit) => {
 			if (!documentId) return;
@@ -521,60 +640,45 @@ export function useDocumentHistory(args: {
 				commit.markdown,
 				projectionId,
 			);
-			publishProjection(commit.markdown, "local", 0, projectionId);
+			publishProjection(commit.markdown, "local", 0, projectionId, {
+				kind: "text",
+			});
 
 			// One transaction: the node, the pointer, the markdown. See the
 			// documents.commitEdit doc comment for why these can't be separate.
-			void commitEdit({
-				documentId,
-				node: {
-					nodeId: commit.nodeId,
-					parentNodeId: commit.parentNodeId,
-					patch: commit.patch,
-					snapshot: commit.snapshot,
-					selection: commit.selection,
-					origin: commitOrigin,
-					createdAt: node.createdAt,
+			outboxRef.current.push({
+				moveToken,
+				projectionId,
+				clientMutationId: commit.nodeId,
+				attempts: 0,
+				args: {
+					documentId,
+					node: {
+						nodeId: commit.nodeId,
+						parentNodeId: commit.parentNodeId,
+						patch: commit.patch,
+						snapshot: commit.snapshot,
+						selection: commit.selection,
+						origin: commitOrigin,
+						createdAt: node.createdAt,
+					},
+					markdown: commit.markdown,
+					wordCount: countWords(commit.markdown),
+					expectedHeadNodeId: commit.parentNodeId,
+					// The node's own id: stable across retries, unique per commit, so
+					// the server recognises a replay as the same attempt.
+					clientMutationId: commit.nodeId,
 				},
-				markdown: commit.markdown,
-				wordCount: countWords(commit.markdown),
-				expectedHeadNodeId: commit.parentNodeId,
-				clientMutationId: ulid(),
-			})
-				.then((result) => {
-					if (result.committed) {
-						settleLocalMove(
-							moveToken,
-							result.pointerRevision,
-							result.updatedAt,
-						);
-						return;
-					}
-					// Another writer owns the head. Queue theirs so the next safe
-					// moment adopts it; the writer is probably still mid-sentence,
-					// and re-projecting under their caret is not an option.
-					queueRemotePointer({
-						nodeId: result.remoteHeadNodeId,
-						revision: result.remotePointerRevision,
-					});
-					// The server has definitively refused this transition, so it is
-					// resolved and reconciliation may replace it. Work it has NOT
-					// answered stays untouchable.
-					resyncProjectionIdRef.current = projectionId;
-					settleLocalMove(moveToken, null);
-				})
-				.catch(() => settleLocalMove(moveToken, null));
+			});
+			pumpOutboxRef.current();
 			debouncedAutoVersion();
 		},
 		[
-			commitEdit,
 			debouncedAutoVersion,
 			documentId,
 			origin,
 			publishProjection,
-			queueRemotePointer,
 			setPointer,
-			settleLocalMove,
 			startLocalMove,
 		],
 	);
@@ -762,7 +866,11 @@ export function useDocumentHistory(args: {
 			}, 200);
 			const projectionId = newProjectionId();
 			const moveToken = startLocalMove(nodeId, markdown, projectionId);
-			publishProjection(markdown, "local", 0, projectionId);
+			// A navigation changes no text, so a later content match cannot prove
+			// it landed — two nodes can hold identical markdown.
+			publishProjection(markdown, "local", 0, projectionId, {
+				kind: "pointer",
+			});
 			void updatePointer({
 				documentId,
 				currentNodeId: nodeId,
@@ -1053,7 +1161,12 @@ export function useDocumentHistory(args: {
 		// will flush the projected text back as though the writer had typed it —
 		// and if that text were the materialization, the flush would clobber the
 		// draft this projection just rescued.
-		publishProjection(editorText, "server", serverUpdatedAt ?? 0);
+		// If this projection is the resolution of a refused transition, say so:
+		// the server kept this state INSTEAD of that move, which settles it.
+		publishProjection(editorText, "server", serverUpdatedAt ?? 0, undefined, {
+			resolvedProjectionId: resyncProjectionIdRef.current ?? undefined,
+		});
+		resyncProjectionIdRef.current = null;
 		toast("Updated from another device", "info");
 		return true;
 	}, [
@@ -1129,6 +1242,12 @@ export function useDocumentHistory(args: {
 
 	useEffect(() => {
 		return () => {
+			outboxRef.current = [];
+			inFlightRef.current.clear();
+			if (outboxTimerRef.current !== null) {
+				window.clearTimeout(outboxTimerRef.current);
+				outboxTimerRef.current = null;
+			}
 			// Invalidate first, then cancel: an in-flight ensureRoot rejection has
 			// no timer to clear and would otherwise schedule a new one after the
 			// hook is gone.
@@ -1167,6 +1286,7 @@ export function useDocumentHistory(args: {
 		tagVersion,
 		materializeAt,
 		getHeadNodeId,
+		hasUnresolvedWrites: outboxStalled,
 		hasPendingDraft,
 		reconcileRemote,
 	};
