@@ -1,0 +1,272 @@
+{
+	"$source": "lib/markdown/corpus/cases.ts + lib/markdown (CANONICAL_STRINGIFY)",
+	"$contract": "normalize(input) === normalized; normalize(normalized) === normalized",
+	"cases": [
+		{
+			"id": 1,
+			"name": "headings H1–H6 ATX",
+			"input": "# One\n## Two\n### Three\n#### Four\n##### Five\n###### Six\n",
+			"normalized": "# One\n\n## Two\n\n### Three\n\n#### Four\n\n##### Five\n\n###### Six\n",
+			"words": 6,
+			"outline": [
+				{
+					"depth": 1,
+					"text": "One",
+					"offset": 0,
+					"index": 0
+				},
+				{
+					"depth": 2,
+					"text": "Two",
+					"offset": 6,
+					"index": 1
+				},
+				{
+					"depth": 3,
+					"text": "Three",
+					"offset": 13,
+					"index": 2
+				},
+				{
+					"depth": 4,
+					"text": "Four",
+					"offset": 23,
+					"index": 3
+				},
+				{
+					"depth": 5,
+					"text": "Five",
+					"offset": 33,
+					"index": 4
+				},
+				{
+					"depth": 6,
+					"text": "Six",
+					"offset": 44,
+					"index": 5
+				}
+			],
+			"yaml": null
+		},
+		{
+			"id": 2,
+			"name": "Setext to ATX",
+			"input": "Title\n=====\n\nSubtitle\n---\n",
+			"normalized": "# Title\n\n## Subtitle\n",
+			"words": 2,
+			"outline": [
+				{
+					"depth": 1,
+					"text": "Title",
+					"offset": 0,
+					"index": 0
+				},
+				{
+					"depth": 2,
+					"text": "Subtitle",
+					"offset": 13,
+					"index": 1
+				}
+			],
+			"yaml": null
+		},
+		{
+			"id": 3,
+			"name": "nested unordered list",
+			"input": "- one\n - two\n  - three\n",
+			"normalized": "- one\n- two\n- three\n",
+			"words": 3,
+			"outline": [],
+			"yaml": null
+		},
+		{
+			"id": 4,
+			"name": "nested ordered list with start",
+			"input": "3. first\n4. second\n   1. nested\n",
+			"normalized": "3. first\n4. second\n   1. nested\n",
+			"words": 3,
+			"outline": [],
+			"yaml": null
+		},
+		{
+			"id": 5,
+			"name": "mixed ordered and unordered nesting",
+			"input": "1. ordered\n   - bullet\n     1. inner ordered\n- top bullet\n  1. inner\n",
+			"normalized": "1. ordered\n   - bullet\n     1. inner ordered\n\n- top bullet\n  1. inner\n",
+			"words": 7,
+			"outline": [],
+			"yaml": null
+		},
+		{
+			"id": 6,
+			"name": "task list",
+			"input": "- [ ] todo\n- [x] done\n  - [ ] nested\n",
+			"normalized": "- [ ] todo\n- [x] done\n  - [ ] nested\n",
+			"words": 3,
+			"outline": [],
+			"yaml": null
+		},
+		{
+			"id": 7,
+			"name": "table alignments",
+			"input": "| left | center | right | default |\n| :--- | :----: | ----: | --- |\n| a | b | c | d |\n",
+			"normalized": "| left | center | right | default |\n| :--- | :----: | ----: | ------- |\n| a    |    b   |     c | d       |\n",
+			"words": 8,
+			"outline": [],
+			"yaml": null
+		},
+		{
+			"id": 8,
+			"name": "table escaped pipes",
+			"input": "| col |\n| --- |\n| a \\| b |\n",
+			"normalized": "| col    |\n| ------ |\n| a \\| b |\n",
+			"words": 4,
+			"outline": [],
+			"yaml": null
+		},
+		{
+			"id": 9,
+			"name": "table cell br",
+			"input": "| col |\n| --- |\n| line1<br>line2 |\n",
+			"normalized": "| col            |\n| -------------- |\n| line1<br>line2 |\n",
+			"words": 3,
+			"outline": [],
+			"yaml": null
+		},
+		{
+			"id": 10,
+			"name": "multiple footnotes out of order",
+			"input": "Second[^b] and first[^a].\n\n[^b]: Note B\n[^a]: Note A\n",
+			"normalized": "Second[^b] and first[^a].\n\n[^b]: Note B\n\n[^a]: Note A\n",
+			"words": 8,
+			"outline": [],
+			"yaml": null
+		},
+		{
+			"id": 11,
+			"name": "orphan footnote ref and def",
+			"input": "Missing[^missing] and orphan[^orphan].\n\n[^orphan]: Orphan only\n",
+			"normalized": "Missing\\[^missing] and orphan[^orphan].\n\n[^orphan]: Orphan only\n",
+			"words": 6,
+			"outline": [],
+			"yaml": null
+		},
+		{
+			"id": 12,
+			"name": "nested YAML frontmatter",
+			"input": "---\ntitle: Hello\ntags:\n  - one\n  - two\nmeta:\n  nested: true\ndate: 2026-01-15\n---\n\nBody after frontmatter.\n",
+			"normalized": "---\ntitle: Hello\ntags:\n  - one\n  - two\nmeta:\n  nested: true\ndate: 2026-01-15\n---\n\nBody after frontmatter.\n",
+			"words": 3,
+			"outline": [],
+			"yaml": "title: Hello\ntags:\n  - one\n  - two\nmeta:\n  nested: true\ndate: 2026-01-15"
+		},
+		{
+			"id": 13,
+			"name": "hard break backslash and trailing spaces",
+			"input": "Line one\\\nLine two  \nLine three\n",
+			"normalized": "Line one\\\nLine two\\\nLine three\n",
+			"words": 6,
+			"outline": [],
+			"yaml": null
+		},
+		{
+			"id": 14,
+			"name": "soft break in paragraph",
+			"input": "Line one\nLine two still same paragraph\n",
+			"normalized": "Line one\nLine two still same paragraph\n",
+			"words": 7,
+			"outline": [],
+			"yaml": null
+		},
+		{
+			"id": 15,
+			"name": "fenced code with lang and inner backticks",
+			"input": "```ts\nconst x = `hello`;\n```\n",
+			"normalized": "```ts\nconst x = `hello`;\n```\n",
+			"words": 0,
+			"outline": [],
+			"yaml": null
+		},
+		{
+			"id": 16,
+			"name": "nested blockquote",
+			"input": "> outer\n>\n> > inner\n",
+			"normalized": "> outer\n>\n> > inner\n",
+			"words": 2,
+			"outline": [],
+			"yaml": null
+		},
+		{
+			"id": 17,
+			"name": "links and images with titles",
+			"input": "[link](https://example.com \"Link title\")\n\n![alt](https://example.com/img.png \"Image title\")\n",
+			"normalized": "[link](https://example.com \"Link title\")\n\n![alt](https://example.com/img.png \"Image title\")\n",
+			"words": 1,
+			"outline": [],
+			"yaml": null
+		},
+		{
+			"id": 18,
+			"name": "reference-style link",
+			"input": "[ref link][id]\n\n[id]: https://example.com \"Ref title\"\n",
+			"normalized": "[ref link][id]\n\n[id]: https://example.com \"Ref title\"\n",
+			"words": 2,
+			"outline": [],
+			"yaml": null
+		},
+		{
+			"id": 19,
+			"name": "strikethrough",
+			"input": "~~deleted~~ text\n",
+			"normalized": "~~deleted~~ text\n",
+			"words": 2,
+			"outline": [],
+			"yaml": null
+		},
+		{
+			"id": 20,
+			"name": "autolinks",
+			"input": "<https://example.com>\n\nwww.example.org\n",
+			"normalized": "[https://example.com](https://example.com)\n\n[www.example.org](http://www.example.org)\n",
+			"words": 2,
+			"outline": [],
+			"yaml": null
+		},
+		{
+			"id": 21,
+			"name": "inline mix",
+			"input": "**bold** _italic_ `code` ~~strike~~ [link](https://x.com) and footnote[^n].\n\n[^n]: Note\n",
+			"normalized": "**bold** _italic_ `code` ~~strike~~ [link](https://x.com) and footnote[^n].\n\n[^n]: Note\n",
+			"words": 8,
+			"outline": [],
+			"yaml": null
+		},
+		{
+			"id": 22,
+			"name": "delimiter normalization",
+			"input": "*foo* and __bar__\n",
+			"normalized": "_foo_ and **bar**\n",
+			"words": 3,
+			"outline": [],
+			"yaml": null
+		},
+		{
+			"id": 23,
+			"name": "thematic break variants",
+			"input": "Before\n\n***\n\nBetween\n\n___\n\nAfter\n\n- - -\n\nEnd\n",
+			"normalized": "Before\n\n---\n\nBetween\n\n---\n\nAfter\n\n---\n\nEnd\n",
+			"words": 4,
+			"outline": [],
+			"yaml": null
+		},
+		{
+			"id": 24,
+			"name": "inline raw HTML",
+			"input": "<span>safe</span>\n\n<script>alert(1)</script>\n",
+			"normalized": "<span>safe</span>\n\n<script>alert(1)</script>\n",
+			"words": 1,
+			"outline": [],
+			"yaml": null
+		}
+	]
+}

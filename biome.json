@@ -3,7 +3,12 @@
 	"vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
 	"files": {
 		"ignoreUnknown": true,
-		"includes": ["**", "!convex/_generated", "!.next"]
+		"includes": [
+			"**",
+			"!convex/_generated",
+			"!.next",
+			"!packages/editor-fixtures/*.json"
+		]
 	},
 	"formatter": { "enabled": true, "indentStyle": "tab" },
 	"linter": {
