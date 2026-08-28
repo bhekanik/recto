@@ -243,6 +243,7 @@ in-flight workers are producing (§4).
 
 ## 8. Needed from BK (blocks the native lanes, not wave 1)
 
+- **GitHub Actions billing** (found 2026-08-28 by W8): every CI job now fails to start with "recent account payments have failed or your spending limit needs to be increased". Until fixed in GitHub billing settings, the orchestrator gates merges on locally re-run suites instead of CI.
 - **Vercel**: unblock Git deploys (see learnings 2026-08-28). The PR check now shows the exact fix: an invite link `https://vercel.com/teams/invite?...teamId=team_3oxuHKlgssY2lCgwFXZJAuOB` ("Git author bhekanik must have access to the project on Vercel to create deployments"): open any PR's Vercel check → follow the invite as the GitHub `bhekanik` account. Dashboard → team `planetaryescape` → the blocked deployment's "Request access"/seat prompt, or Account → Authentication → connect GitHub `bhekanik` to the team-member account. Until then the orchestrator deploys via CLI.
 - **LangSmith**: org Personal / workspace "Workspace 1" / project `recto` created 2026-08-28 (Developer free plan) via Codex computer use; API key `recto-convex` creation pending owner confirmation.
 - Found: Apple team `WAVMJLFY95` (from life-coach-os / worthyourtime); still needed: ASC app records + API key.
