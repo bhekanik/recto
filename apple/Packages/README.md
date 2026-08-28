@@ -250,7 +250,13 @@ is the identity on everything JS produces.
 **Both sides are gated by Unicode's own `GraphemeBreakTest.txt`**, vendored under
 `packages/editor-fixtures/unicode/` with its licence. JS uses `Intl.Segmenter`
 and Swift walks `Character` boundaries — both ICU, both run against all ~1,100
-rows and every offset within each row. That is not ceremony: the pair this
+rows and every offset within each row. Swift walks from a position it can
+*prove* is a boundary: offset 0, after a line feed, after a lone CR, or between
+two ASCII printables. In markdown one of those is a few units away, which keeps a
+lookup local; when none is — a long combining run, a line of pure CJK — it walks
+back to 0 rather than returning a position it cannot vouch for. Stopping early
+at a fixed window is what made `clusterStart(offset: 300)` answer 44 on a
+400-mark cluster starting at 1. That is not ceremony: the pair this
 replaced used `@marijn/find-cluster-break` and
 `NSString.rangeOfComposedCharacterSequence`, neither of which is complete
 UAX #29, and they passed a hand-written suite while splitting Hangul syllables
@@ -286,6 +292,11 @@ it is a protocol. Three things this cost the spike, in case they bite again:
   has no undo manager at all. Either one makes `u` do nothing, silently.
 - Edits must go through `shouldChangeText`/`didChangeText`. Writing to
   `textStorage` directly is invisible to undo.
+- **An insert session is one undo step.** Vim's undo unit is a *command*, and
+  `iabc<Esc>` is one command: `u` removes `abc`. The group opens on the first
+  insert-mode edit and closes when the command ends — leaving insert mode, a
+  normal-mode command, an external sync, or an undo. Opening and closing a group
+  per bridge edit, which is the obvious implementation, made `u` remove the `c`.
 - `undoManager.groupsByEvent` must be off **for our own writes and only those**.
   It groups per run-loop pass, and with no run loop turning it swallows a whole
   session into one group — but leaving it off breaks IME, because
@@ -297,9 +308,13 @@ it is a protocol. Three things this cost the spike, in case they bite again:
 start of the change it restored; `NSUndoManager` restores whatever selection it
 recorded, which in the spike's proof was two lines away. Diffing the two versions
 looks like a fix and is not: on `"aa"`, `ia<Esc>u` gives a first-difference of 1
-where the patch began at 0, because the surrounding text repeats. `VimUndoPatchLog`
-records the range each keystroke wrote and both adapters return its start through
-`VimHistoryResult` — the contract `RectoHistory` implements with its own patch.
+where the patch began at 0, because the surrounding text repeats. The caret is registered as an
+**undo action inside its own group**, so it is consumed exactly when that group
+is undone; a parallel stack keyed by order handed an external edit's undo step
+the caret belonging to the vim edit before it. An entry with no caret action —
+anything vim did not write — falls back to the text view's restored selection,
+which is the only honest answer there. Both adapters report through one
+`VimHistoryResult`, the contract `RectoHistory` implements with its own patch.
 Vim's own clamping still applies on top: a patch starting past the last character
 of a line lands *on* that character in normal mode.
 
