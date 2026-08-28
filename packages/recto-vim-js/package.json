@@ -1,0 +1,12 @@
+{
+	"name": "@recto/vim-js",
+	"private": true,
+	"type": "module",
+	"version": "0.1.0",
+	"description": "codemirror-vim's keymap core, bundled DOM-free for JavaScriptCore behind a Swift adapter",
+	"scripts": {
+		"extract": "bun scripts/extract-core.ts",
+		"build": "bun build.ts",
+		"test": "bun test"
+	}
+}
