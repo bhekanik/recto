@@ -8,11 +8,14 @@ import {
 	Highlighter,
 	Keyboard,
 	Minus,
+	Monitor,
+	Moon,
 	Palette,
 	Plus,
 	ScanText,
 	SpellCheck,
 	SquareDashed,
+	Sun,
 	Type,
 } from "lucide-react";
 
@@ -21,6 +24,8 @@ import { formatReadingTime } from "@/lib/markdown";
 import { MODE_RING, type Mode, modeToLabel } from "@/lib/modes/types";
 import type { GoalKind, GoalProgress } from "@/lib/stats/streak";
 import {
+	APPEARANCES,
+	type Appearance,
 	type FocusScope,
 	type GoalScope,
 	type GoalStyle,
@@ -30,6 +35,12 @@ import {
 } from "@/lib/studio/use-studio-settings";
 import type { SyncStatus } from "@/lib/sync/use-document-sync";
 import { cn } from "@/lib/utils";
+
+const APPEARANCE_ICON: Record<Appearance, typeof Type> = {
+	system: Monitor,
+	light: Sun,
+	dark: Moon,
+};
 
 const MODE_ICON: Record<Mode, typeof Type> = {
 	rich: Type,
@@ -46,6 +57,10 @@ type StatusBarProps = {
 	onModeChange: (mode: Mode) => void;
 	theme: Theme;
 	onCycleTheme: () => void;
+	appearance: Appearance;
+	onCycleAppearance: () => void;
+	/** Resolved light/dark — the dark palettes are inert while this is light. */
+	resolvedAppearance: "light" | "dark";
 	readingFont: ReadingFont;
 	onToggleFont: () => void;
 	readingScale: number;
@@ -247,6 +262,9 @@ export function StatusBar({
 	onModeChange,
 	theme,
 	onCycleTheme,
+	appearance,
+	onCycleAppearance,
+	resolvedAppearance,
 	readingFont,
 	onToggleFont,
 	readingScale,
@@ -287,7 +305,15 @@ export function StatusBar({
 	onGoalStyleChange,
 }: StatusBarProps) {
 	const zoomPct = Math.round(readingScale * 100);
-	const themeLabel = THEMES.find((t) => t.id === theme)?.label ?? theme;
+	const darkPalettes = resolvedAppearance === "dark";
+	// Paper is the one light palette, so that is what the picker reports while the
+	// appearance resolves to light — the stored dark palette is simply dormant.
+	const themeLabel = darkPalettes
+		? (THEMES.find((t) => t.id === theme)?.label ?? theme)
+		: "Paper";
+	const appearanceMeta = APPEARANCES.find((a) => a.id === appearance);
+	const appearanceLabel = appearanceMeta?.label ?? appearance;
+	const AppearanceIcon = APPEARANCE_ICON[appearance];
 
 	return (
 		<footer
@@ -298,13 +324,34 @@ export function StatusBar({
 			<ModeSwitcher mode={mode} onModeChange={onModeChange} />
 
 			<div className="flex items-center gap-[var(--space-2)]">
-				{/* Colour theme — click to cycle through the calm palettes */}
+				{/* Appearance — system / light / dark (ADR-20) */}
+				<button
+					type="button"
+					onClick={onCycleAppearance}
+					title={`Appearance: ${appearanceLabel} — click to cycle`}
+					aria-label={`Appearance: ${appearanceLabel}. Click to change appearance`}
+					className="flex h-6 items-center gap-1.5 rounded-[var(--radius-sm)] px-2 text-[length:var(--text-ui-sm)] text-[var(--color-ink-tertiary)] transition-colors duration-[var(--motion-instant)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-ink-secondary)]"
+				>
+					<AppearanceIcon
+						aria-hidden
+						className="size-[14px] text-[var(--color-accent)]"
+					/>
+					<span className="hidden sm:inline">{appearanceLabel}</span>
+				</button>
+
+				{/* Colour theme — click to cycle through the calm palettes. Disabled in
+				    light: Paper is the only light palette (ADR-20). */}
 				<button
 					type="button"
 					onClick={onCycleTheme}
-					title={`Theme: ${themeLabel} — click to cycle`}
-					aria-label={`Theme: ${themeLabel}. Click to change theme`}
-					className="flex h-6 items-center gap-1.5 rounded-[var(--radius-sm)] px-2 text-[length:var(--text-ui-sm)] text-[var(--color-ink-tertiary)] transition-colors duration-[var(--motion-instant)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-ink-secondary)]"
+					disabled={!darkPalettes}
+					title={
+						darkPalettes
+							? `Palette: ${themeLabel} — click to cycle`
+							: "Palette: Paper — the other palettes need a dark appearance"
+					}
+					aria-label={`Palette: ${themeLabel}. Click to change palette`}
+					className="flex h-6 items-center gap-1.5 rounded-[var(--radius-sm)] px-2 text-[length:var(--text-ui-sm)] text-[var(--color-ink-tertiary)] transition-colors duration-[var(--motion-instant)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-ink-secondary)] disabled:cursor-default disabled:opacity-60 disabled:hover:bg-transparent disabled:hover:text-[var(--color-ink-tertiary)]"
 				>
 					<Palette
 						aria-hidden

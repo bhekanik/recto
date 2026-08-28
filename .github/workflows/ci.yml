@@ -24,6 +24,36 @@ jobs:
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY_CI }}
           NEXT_PUBLIC_CLERK_SIGN_IN_URL: /login
 
+  # Shared JS core (plan 023 N1d/N0d). macOS because the parity spike loads the
+  # bundle into a real JavaScriptCore JSContext; `macos-26` is the GA arm64
+  # runner and matches the toolchain the Apple apps are built with.
+  core-js:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - run: bun run core:build
+      - run: bun run core:parity
+
+  # Design-token cascade check (follow-up F1). Needs a browser: the bug it
+  # guards against is only visible once a CSS engine has resolved the cascade,
+  # and the blocking `ci` job above deliberately stays browser-free. Compiles
+  # app/globals.css with the app's own PostCSS pipeline, so it does not depend
+  # on `next build`.
+  design-tokens:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - run: bunx playwright install --with-deps chromium
+      - run: bun run tokens:cascade
+
   # RectoEditor (plan 023 N5). `macos-26` is arm64 with Xcode 26.6 (17F113)
   # as the default toolchain — the macOS 26 SDK and Swift 6.3 the package needs
   # (`swift-tools-version: 6.2`, `.defaultIsolation(MainActor.self)`,

@@ -34,6 +34,11 @@ type CommandPaletteProps = {
 	canReview: boolean;
 	/** Gate the comment actions (plan 010 Phase B) — owner or any grantee. */
 	canComment: boolean;
+	/**
+	 * Hide the dark-only palettes while the appearance resolves to light: Paper is
+	 * the one light palette, so picking Aurora there would do nothing (ADR-20).
+	 */
+	darkPalettesAvailable: boolean;
 	onRunAction: (id: ActionId) => void;
 	onOpenDocument: (id: Id<"documents">) => void;
 	onJumpToHeading: (index: number) => void;
@@ -55,6 +60,7 @@ export function CommandPalette({
 	canManageSharing,
 	canReview,
 	canComment,
+	darkPalettesAvailable,
 	onRunAction,
 	onOpenDocument,
 	onJumpToHeading,
@@ -213,6 +219,11 @@ export function CommandPalette({
 									}
 									return canManageSharing;
 								});
+							}
+							// Paper is the only light palette; the dark ones are inert
+							// until the appearance resolves to dark (ADR-20).
+							if (section === "Theme" && !darkPalettesAvailable) {
+								defs = defs.filter((a) => a.id.startsWith("appearance-"));
 							}
 							if (defs.length === 0) return null;
 							return (

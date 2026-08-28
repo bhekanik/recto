@@ -17,7 +17,7 @@ The defining idea: **one piece of writing, edited through four interchangeable l
 3. **Vim** — Vim keybindings layered on the Markdown editor (normal / insert / visual).
 4. **Preview** — a read-only rendered view of the Markdown.
 
-Switching between lenses is **instant and lossless**. You can **split the writing surface** vertically and/or horizontally to write against a reference. Every document has a **branching undo tree** (not linear undo) and a **tagged version history**, both synced across devices. The interface is **dark-only, typography-first, and bespoke** — the type *is* the UI.
+Switching between lenses is **instant and lossless**. You can **split the writing surface** vertically and/or horizontally to write against a reference. Every document has a **branching undo tree** (not linear undo) and a **tagged version history**, both synced across devices. The interface is **typography-first and bespoke** — the type *is* the UI — in a paired **Twilight** (dark) and **Paper** (light) palette that follows the system appearance.
 
 It is a personal tool. There is no multi-user collaboration, no sharing, no public surface. The only reason it has authentication at all is that cloud state must be scoped to one identity (you).
 
@@ -57,7 +57,7 @@ These are settled. Changing one is a significant scope change, not a tweak.
 | D10 | Backend / sync | **Convex**, debounced **last-write-wins snapshot** sync; **no** `prosemirror-sync` / Yjs / CRDT |
 | D11 | Editing performance model | **Local editor owns live state**; debounced persistence; hydrate-on-open/idle; the editor is never a controlled component of a reactive query |
 | D12 | Auth | **Better Auth** (default), single user, private |
-| D13 | Theme | **Dark only.** No light theme |
+| D13 | Theme | ~~**Dark only.** No light theme~~ — **reversed by [ADR-20](./14-tech-decisions.md#adr-20--light-theme-paper-palette--appearance-setting-reverses-d13)** (2026-08-28): Twilight (dark) + Paper (light), appearance follows the system with an override. Aurora/Dawn/Moonlit stay dark-only |
 | D14 | App framework | **Next.js (App Router)**, TypeScript strict, **bun**, ESM |
 | D15 | Word count | Always available |
 
@@ -78,7 +78,6 @@ These are settled. Changing one is a significant scope change, not a tweak.
 ## 5. Non-goals (v1)
 
 - Multi-user / real-time collaboration, presence, comments, sharing.
-- A light theme.
 - Mobile-native apps (responsive web is fine; the design target is desktop).
 - Publishing / sending newsletters (export + copy only).
 - Plugins / extensibility API.

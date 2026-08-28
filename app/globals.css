@@ -1,69 +1,13 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+/* Palette tokens are GENERATED from packages/design-tokens/tokens.json — the one
+   source shared with the Apple apps. Edit the JSON, run `bun run tokens:build`. */
+@import "../packages/design-tokens/generated/tokens.css";
 
 @custom-variant dark (&:is(.dark *));
 
-/* Recto dark-only design tokens — blueprint 12-design-system.md */
 @theme {
-	/* ─── Default palette: TWILIGHT (indigo · periwinkle glow). The other calm
-	   themes override these same tokens under :root[data-theme="…"] below. Soft
-	   colour on a deep, considered base — ethereal and calm, never flat grey. The
-	   base carries real (low) chroma so the room reads as dusk, not a void. ─── */
-	--color-bg-app: oklch(0.18 0.028 280);
-	--color-bg-surface: oklch(0.215 0.03 281);
-	--color-bg-raised: oklch(0.255 0.032 282);
-	--color-bg-overlay: oklch(0.285 0.034 282);
-
-	--color-ink-primary: oklch(0.94 0.012 285);
-	--color-ink-secondary: oklch(0.79 0.016 284);
-	--color-ink-tertiary: oklch(0.665 0.018 283);
-
-	--color-line: oklch(0.33 0.025 282);
-	--color-line-strong: oklch(0.45 0.03 282);
-
-	/* The single live affordance — caret, links, list markers, active states.
-	   A soft periwinkle that glows rather than shouts (P5: calm). */
-	--color-accent: oklch(0.74 0.13 288);
-	--color-accent-muted: oklch(0.62 0.11 288);
-	--color-accent-2: oklch(0.78 0.1 250);
-
-	--color-success: oklch(0.8 0.095 155);
-	--color-warning: oklch(0.84 0.1 85);
-	--color-danger: oklch(0.7 0.16 20);
-
-	/* Prose-lint squiggles (plan 004) — calm, per-category, OKLCH. Wavy underlines
-	   only, so they never shift layout (no borders/backgrounds that change box
-	   size). Low chroma to stay in the restrained dark palette, not loud Hemingway. */
-	--color-lint-passive: oklch(0.74 0.1 290); /* periwinkle, like the accent */
-	--color-lint-readability: oklch(0.84 0.1 85); /* amber = "slow down" */
-	--color-lint-adverb: oklch(0.78 0.08 250); /* soft blue */
-	--color-lint-weasel: oklch(0.7 0.09 330); /* muted rose */
-
-	/* Comment-anchor highlights (plan 010 Phase B) — a filled tint (not a squiggle)
-	   so a commented span reads as a highlighted region, distinct from the wavy lint
-	   underlines and the diff add/del colours. Low-chroma teal stays in the palette. */
-	--color-comment: oklch(0.82 0.09 195); /* teal, the "annotation" hue */
-	--color-comment-wash: oklch(0.82 0.09 195 / 0.16);
-	--color-comment-wash-strong: oklch(0.82 0.09 195 / 0.28);
-
-	--color-selection: oklch(0.74 0.13 288 / 0.26);
-	--color-focus-ring: oklch(0.76 0.12 286);
-
-	/* Interaction fills (derived) */
-	--color-bg-hover: oklch(0.29 0.034 282);
-	--color-accent-wash: oklch(0.74 0.13 288 / 0.15);
-
-	/* Caret — bright and faintly tinted so it reads against text without the
-	   loudness of the accent. */
-	--color-caret: oklch(0.92 0.04 285);
-
-	/* Atmosphere — a faint two-tone aurora wash on the canvas + the overlay
-	   scrim. Per-theme, so the room's colour drifts with the palette. */
-	--atmos-1: oklch(0.5 0.12 290 / 0.4);
-	--atmos-2: oklch(0.42 0.1 255 / 0.4);
-	--scrim: oklch(0.12 0.02 280 / 0.6);
-
 	/* App font stacks. We use app-prefixed names rather than Tailwind's own
 	   --font-sans / --font-serif theme keys: the latter collide with Tailwind's
 	   generated `--font-sans: var(--font-sans)` self-reference (→ empty → Times). */
@@ -133,79 +77,6 @@
 	--ease-in: cubic-bezier(0.4, 0, 1, 1);
 }
 
-/* ─── Calm/ethereal themes (D13). The default (TWILIGHT) lives in @theme above;
-   these override the palette tokens when the studio sets `data-theme` on <html>.
-   Each keeps the same structure — only hue, chroma, accent, glow and scrim move.
-   Semantic success/warning/danger stay constant across themes. ─── */
-:root[data-theme="aurora"] {
-	--color-bg-app: oklch(0.18 0.022 202);
-	--color-bg-surface: oklch(0.215 0.024 202);
-	--color-bg-raised: oklch(0.255 0.026 200);
-	--color-bg-overlay: oklch(0.285 0.028 200);
-	--color-ink-primary: oklch(0.94 0.012 200);
-	--color-ink-secondary: oklch(0.79 0.016 200);
-	--color-ink-tertiary: oklch(0.665 0.018 200);
-	--color-line: oklch(0.33 0.022 200);
-	--color-line-strong: oklch(0.45 0.026 200);
-	--color-accent: oklch(0.78 0.115 178);
-	--color-accent-muted: oklch(0.64 0.1 180);
-	--color-accent-2: oklch(0.8 0.1 205);
-	--color-selection: oklch(0.78 0.115 178 / 0.24);
-	--color-focus-ring: oklch(0.78 0.1 185);
-	--color-bg-hover: oklch(0.29 0.028 200);
-	--color-accent-wash: oklch(0.78 0.115 178 / 0.14);
-	--color-caret: oklch(0.93 0.05 190);
-	--atmos-1: oklch(0.5 0.1 185 / 0.38);
-	--atmos-2: oklch(0.44 0.09 162 / 0.36);
-	--scrim: oklch(0.12 0.018 200 / 0.6);
-}
-
-:root[data-theme="dawn"] {
-	--color-bg-app: oklch(0.185 0.016 330);
-	--color-bg-surface: oklch(0.22 0.018 331);
-	--color-bg-raised: oklch(0.26 0.02 332);
-	--color-bg-overlay: oklch(0.29 0.022 332);
-	--color-ink-primary: oklch(0.94 0.01 330);
-	--color-ink-secondary: oklch(0.79 0.014 330);
-	--color-ink-tertiary: oklch(0.665 0.016 330);
-	--color-line: oklch(0.33 0.018 330);
-	--color-line-strong: oklch(0.45 0.022 330);
-	--color-accent: oklch(0.78 0.09 350);
-	--color-accent-muted: oklch(0.64 0.08 350);
-	--color-accent-2: oklch(0.78 0.08 300);
-	--color-selection: oklch(0.78 0.09 350 / 0.24);
-	--color-focus-ring: oklch(0.78 0.08 345);
-	--color-bg-hover: oklch(0.3 0.022 332);
-	--color-accent-wash: oklch(0.78 0.09 350 / 0.14);
-	--color-caret: oklch(0.93 0.04 345);
-	--atmos-1: oklch(0.55 0.09 350 / 0.34);
-	--atmos-2: oklch(0.5 0.08 298 / 0.34);
-	--scrim: oklch(0.12 0.014 330 / 0.6);
-}
-
-:root[data-theme="moonlit"] {
-	--color-bg-app: oklch(0.155 0.014 250);
-	--color-bg-surface: oklch(0.195 0.016 250);
-	--color-bg-raised: oklch(0.235 0.018 250);
-	--color-bg-overlay: oklch(0.265 0.02 250);
-	--color-ink-primary: oklch(0.94 0.01 250);
-	--color-ink-secondary: oklch(0.79 0.014 250);
-	--color-ink-tertiary: oklch(0.66 0.016 250);
-	--color-line: oklch(0.31 0.018 250);
-	--color-line-strong: oklch(0.43 0.022 250);
-	--color-accent: oklch(0.82 0.08 210);
-	--color-accent-muted: oklch(0.68 0.07 212);
-	--color-accent-2: oklch(0.83 0.08 215);
-	--color-selection: oklch(0.82 0.08 210 / 0.22);
-	--color-focus-ring: oklch(0.82 0.07 212);
-	--color-bg-hover: oklch(0.27 0.02 250);
-	--color-accent-wash: oklch(0.82 0.08 210 / 0.12);
-	--color-caret: oklch(0.94 0.03 230);
-	--atmos-1: oklch(0.42 0.07 240 / 0.4);
-	--atmos-2: oklch(0.22 0.04 250 / 0.5);
-	--scrim: oklch(0.1 0.015 250 / 0.62);
-}
-
 @media (prefers-reduced-motion: reduce) {
 	*,
 	*::before,
@@ -238,6 +109,13 @@
 	html {
 		color-scheme: dark;
 		font-family: var(--font-app-sans);
+	}
+
+	/* The appearance script (app/layout.tsx) adds `.dark` to <html> when the
+	   resolved appearance is dark, so its absence is light. Native form controls,
+	   scrollbars and the canvas behind the page follow this. */
+	:root:not(.dark) {
+		color-scheme: light;
 	}
 
 	body {
@@ -273,8 +151,8 @@
 		inset: 0;
 		z-index: 0;
 		pointer-events: none;
-		opacity: 0.025;
-		mix-blend-mode: soft-light;
+		opacity: var(--grain-opacity);
+		mix-blend-mode: var(--grain-blend);
 		background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 	}
 
@@ -357,7 +235,7 @@
 
 	@media (prefers-reduced-transparency: reduce) {
 		.recto-scrim {
-			background: oklch(0.1 0.01 280 / 0.95);
+			background: var(--scrim-opaque);
 			backdrop-filter: none;
 		}
 	}
@@ -366,9 +244,7 @@
 		background: var(--color-bg-overlay);
 		border: 1px solid var(--color-line);
 		border-radius: var(--radius-lg);
-		box-shadow:
-			0 24px 64px -28px oklch(0 0 0 / 0.75),
-			0 2px 10px -6px oklch(0 0 0 / 0.55);
+		box-shadow: var(--elevation-panel);
 		animation: recto-rise var(--motion-base) var(--ease-out);
 	}
 
@@ -825,9 +701,7 @@
 	border-radius: var(--radius-md);
 	border: 1px solid var(--color-line-strong);
 	background: var(--color-bg-overlay);
-	box-shadow:
-		0 2px 6px oklch(0 0 0 / 0.35),
-		0 12px 28px -12px oklch(0 0 0 / 0.6);
+	box-shadow: var(--elevation-toolbar);
 	animation: recto-fade-in var(--motion-fast) var(--ease-out);
 }
 
@@ -956,8 +830,16 @@
 	--color-input: var(--input);
 	--color-border: var(--border);
 	--color-destructive: var(--destructive);
-	--color-accent-foreground: var(--accent-foreground);
-	--color-accent: var(--accent);
+	/* shadcn's `accent` is its subtle hover/active fill. It is NOT Recto's accent,
+	   and it must not claim Tailwind's `accent` colour key: `@theme inline` is
+	   emitted after the generated palette, so `--color-accent: var(--accent)` at
+	   the same specificity silently replaced Recto's live accent with
+	   `accent-muted` in Twilight — the one palette with no `[data-theme]` rule to
+	   win the cascade back. Namespaced to `ui-accent`, so `bg-ui-accent` /
+	   `text-ui-accent-foreground` are the shadcn fills and `--color-accent` stays
+	   Recto's (ADR-20, follow-up F1). */
+	--color-ui-accent-foreground: var(--accent-foreground);
+	--color-ui-accent: var(--accent);
 	--color-muted-foreground: var(--muted-foreground);
 	--color-muted: var(--muted);
 	--color-secondary-foreground: var(--secondary-foreground);
@@ -980,7 +862,9 @@
 }
 
 :root {
-	/* shadcn semantic tokens — mapped to Recto OKLCH (dark-only, D13) */
+	/* shadcn semantic tokens — mapped to the Recto OKLCH tokens, which flip with
+	   the appearance (ADR-20). Nothing here is per-appearance: the palette layer
+	   above already resolved light vs dark. */
 	--background: var(--color-bg-app);
 	--foreground: var(--color-ink-primary);
 	--card: var(--color-bg-surface);
@@ -988,13 +872,13 @@
 	--popover: var(--color-bg-overlay);
 	--popover-foreground: var(--color-ink-primary);
 	--primary: var(--color-accent-muted);
-	--primary-foreground: var(--color-ink-primary);
+	--primary-foreground: var(--color-on-accent);
 	--secondary: var(--color-bg-raised);
 	--secondary-foreground: var(--color-ink-secondary);
 	--muted: var(--color-bg-raised);
 	--muted-foreground: var(--color-ink-tertiary);
 	--accent: var(--color-accent-muted);
-	--accent-foreground: var(--color-ink-primary);
+	--accent-foreground: var(--color-on-accent);
 	--destructive: var(--color-danger);
 	--border: var(--color-line);
 	--input: var(--color-line);
@@ -1008,7 +892,7 @@
 	--sidebar: var(--color-bg-app);
 	--sidebar-foreground: var(--color-ink-secondary);
 	--sidebar-primary: var(--color-accent-muted);
-	--sidebar-primary-foreground: var(--color-ink-primary);
+	--sidebar-primary-foreground: var(--color-on-accent);
 	--sidebar-accent: var(--color-bg-raised);
 	--sidebar-accent-foreground: var(--color-ink-secondary);
 	--sidebar-border: var(--color-line);

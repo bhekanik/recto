@@ -73,6 +73,9 @@ export type ActionId =
 	| "set-goal"
 	| "toggle-goal-style"
 	| "toggle-goal-scope"
+	| "appearance-system"
+	| "appearance-light"
+	| "appearance-dark"
 	| "theme-twilight"
 	| "theme-aurora"
 	| "theme-dawn"
@@ -483,6 +486,27 @@ export const ACTIONS: ActionDef[] = [
 		label: "Toggle goal scope (document / daily)",
 		section: "View",
 		aliases: ["daily goal", "document goal", "goal scope"],
+		shortcut: { mac: "", other: "" },
+	},
+	{
+		id: "appearance-system",
+		label: "Appearance: Match system",
+		section: "Theme",
+		aliases: ["auto", "light", "dark", "system", "os", "prefers-color-scheme"],
+		shortcut: { mac: "", other: "" },
+	},
+	{
+		id: "appearance-light",
+		label: "Appearance: Light (Paper)",
+		section: "Theme",
+		aliases: ["light", "paper", "day", "white", "bright"],
+		shortcut: { mac: "", other: "" },
+	},
+	{
+		id: "appearance-dark",
+		label: "Appearance: Dark",
+		section: "Theme",
+		aliases: ["dark", "night", "twilight"],
 		shortcut: { mac: "", other: "" },
 	},
 	{

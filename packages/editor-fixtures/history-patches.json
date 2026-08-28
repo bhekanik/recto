@@ -1,0 +1,266 @@
+{
+	"$source": "lib/history/patch.ts + lib/history/materialize.ts",
+	"$contract": "applyPatch(parent, encodePatch(computePatch(parent, next))) === next; materialize walks to the nearest snapshot then replays forward",
+	"snapshotEveryN": 50,
+	"patches": [
+		{
+			"name": "empty to text",
+			"parent": "",
+			"next": "hello",
+			"patch": {
+				"from": 0,
+				"to": 0,
+				"insert": "hello"
+			},
+			"encoded": "{\"from\":0,\"to\":0,\"insert\":\"hello\"}"
+		},
+		{
+			"name": "insert in the middle",
+			"parent": "hello world",
+			"next": "hello brave world",
+			"patch": {
+				"from": 6,
+				"to": 6,
+				"insert": "brave "
+			},
+			"encoded": "{\"from\":6,\"to\":6,\"insert\":\"brave \"}"
+		},
+		{
+			"name": "edit a paragraph",
+			"parent": "# Title\n\nBody.\n",
+			"next": "# Title\n\nBody edited.\n",
+			"patch": {
+				"from": 13,
+				"to": 13,
+				"insert": " edited"
+			},
+			"encoded": "{\"from\":13,\"to\":13,\"insert\":\" edited\"}"
+		},
+		{
+			"name": "replace a run",
+			"parent": "abcdef",
+			"next": "abXYZef",
+			"patch": {
+				"from": 2,
+				"to": 4,
+				"insert": "XYZ"
+			},
+			"encoded": "{\"from\":2,\"to\":4,\"insert\":\"XYZ\"}"
+		},
+		{
+			"name": "truncate",
+			"parent": "keep this",
+			"next": "keep",
+			"patch": {
+				"from": 4,
+				"to": 9,
+				"insert": ""
+			},
+			"encoded": "{\"from\":4,\"to\":9,\"insert\":\"\"}"
+		},
+		{
+			"name": "no change",
+			"parent": "identical",
+			"next": "identical",
+			"patch": {
+				"from": 9,
+				"to": 9,
+				"insert": ""
+			},
+			"encoded": "{\"from\":9,\"to\":9,\"insert\":\"\"}"
+		},
+		{
+			"name": "delete everything",
+			"parent": "gone",
+			"next": "",
+			"patch": {
+				"from": 0,
+				"to": 4,
+				"insert": ""
+			},
+			"encoded": "{\"from\":0,\"to\":4,\"insert\":\"\"}"
+		},
+		{
+			"name": "unicode boundary (UTF-16 code units, not code points)",
+			"parent": "a😀b",
+			"next": "a😀c",
+			"patch": {
+				"from": 3,
+				"to": 4,
+				"insert": "c"
+			},
+			"encoded": "{\"from\":3,\"to\":4,\"insert\":\"c\"}"
+		}
+	],
+	"materialize": [
+		{
+			"name": "replays from the root snapshot",
+			"nodes": [
+				{
+					"nodeId": "n0",
+					"parentNodeId": null,
+					"patch": "",
+					"snapshot": "A"
+				},
+				{
+					"nodeId": "n1",
+					"parentNodeId": "n0",
+					"patch": "{\"from\":1,\"to\":1,\"insert\":\"B\"}"
+				},
+				{
+					"nodeId": "n2",
+					"parentNodeId": "n1",
+					"patch": "{\"from\":2,\"to\":2,\"insert\":\"C\"}",
+					"snapshot": "ABC"
+				},
+				{
+					"nodeId": "n3",
+					"parentNodeId": "n2",
+					"patch": "{\"from\":3,\"to\":3,\"insert\":\"D\"}"
+				}
+			],
+			"target": "n1",
+			"markdown": "AB"
+		},
+		{
+			"name": "returns a snapshot node's snapshot directly",
+			"nodes": [
+				{
+					"nodeId": "n0",
+					"parentNodeId": null,
+					"patch": "",
+					"snapshot": "A"
+				},
+				{
+					"nodeId": "n1",
+					"parentNodeId": "n0",
+					"patch": "{\"from\":1,\"to\":1,\"insert\":\"B\"}"
+				},
+				{
+					"nodeId": "n2",
+					"parentNodeId": "n1",
+					"patch": "{\"from\":2,\"to\":2,\"insert\":\"C\"}",
+					"snapshot": "ABC"
+				},
+				{
+					"nodeId": "n3",
+					"parentNodeId": "n2",
+					"patch": "{\"from\":3,\"to\":3,\"insert\":\"D\"}"
+				}
+			],
+			"target": "n2",
+			"markdown": "ABC"
+		},
+		{
+			"name": "replays across a mid-branch snapshot boundary",
+			"nodes": [
+				{
+					"nodeId": "n0",
+					"parentNodeId": null,
+					"patch": "",
+					"snapshot": "A"
+				},
+				{
+					"nodeId": "n1",
+					"parentNodeId": "n0",
+					"patch": "{\"from\":1,\"to\":1,\"insert\":\"B\"}"
+				},
+				{
+					"nodeId": "n2",
+					"parentNodeId": "n1",
+					"patch": "{\"from\":2,\"to\":2,\"insert\":\"C\"}",
+					"snapshot": "ABC"
+				},
+				{
+					"nodeId": "n3",
+					"parentNodeId": "n2",
+					"patch": "{\"from\":3,\"to\":3,\"insert\":\"D\"}"
+				}
+			],
+			"target": "n3",
+			"markdown": "ABCD"
+		},
+		{
+			"name": "root only",
+			"nodes": [
+				{
+					"nodeId": "n0",
+					"parentNodeId": null,
+					"patch": "",
+					"snapshot": "# Title\n"
+				}
+			],
+			"target": "n0",
+			"markdown": "# Title\n"
+		},
+		{
+			"name": "twelve-node chain with one mid-chain snapshot",
+			"nodes": [
+				{
+					"nodeId": "n0",
+					"parentNodeId": null,
+					"patch": "",
+					"snapshot": "line 0\n"
+				},
+				{
+					"nodeId": "n1",
+					"parentNodeId": "n0",
+					"patch": "{\"from\":5,\"to\":6,\"insert\":\"1\\nline 1\"}"
+				},
+				{
+					"nodeId": "n2",
+					"parentNodeId": "n1",
+					"patch": "{\"from\":5,\"to\":13,\"insert\":\"2\\nline 2\\nline 2\"}"
+				},
+				{
+					"nodeId": "n3",
+					"parentNodeId": "n2",
+					"patch": "{\"from\":5,\"to\":20,\"insert\":\"3\\nline 3\\nline 3\\nline 3\"}"
+				},
+				{
+					"nodeId": "n4",
+					"parentNodeId": "n3",
+					"patch": "{\"from\":5,\"to\":27,\"insert\":\"4\\nline 4\\nline 4\\nline 4\\nline 4\"}"
+				},
+				{
+					"nodeId": "n5",
+					"parentNodeId": "n4",
+					"patch": "{\"from\":5,\"to\":34,\"insert\":\"5\\nline 5\\nline 5\\nline 5\\nline 5\\nline 5\"}"
+				},
+				{
+					"nodeId": "n6",
+					"parentNodeId": "n5",
+					"patch": "{\"from\":5,\"to\":41,\"insert\":\"6\\nline 6\\nline 6\\nline 6\\nline 6\\nline 6\\nline 6\"}",
+					"snapshot": "line 6\nline 6\nline 6\nline 6\nline 6\nline 6\nline 6\n"
+				},
+				{
+					"nodeId": "n7",
+					"parentNodeId": "n6",
+					"patch": "{\"from\":5,\"to\":48,\"insert\":\"7\\nline 7\\nline 7\\nline 7\\nline 7\\nline 7\\nline 7\\nline 7\"}"
+				},
+				{
+					"nodeId": "n8",
+					"parentNodeId": "n7",
+					"patch": "{\"from\":5,\"to\":55,\"insert\":\"8\\nline 8\\nline 8\\nline 8\\nline 8\\nline 8\\nline 8\\nline 8\\nline 8\"}"
+				},
+				{
+					"nodeId": "n9",
+					"parentNodeId": "n8",
+					"patch": "{\"from\":5,\"to\":62,\"insert\":\"9\\nline 9\\nline 9\\nline 9\\nline 9\\nline 9\\nline 9\\nline 9\\nline 9\\nline 9\"}"
+				},
+				{
+					"nodeId": "n10",
+					"parentNodeId": "n9",
+					"patch": "{\"from\":5,\"to\":69,\"insert\":\"10\\nline 10\\nline 10\\nline 10\\nline 10\\nline 10\\nline 10\\nline 10\\nline 10\\nline 10\\nline 10\"}"
+				},
+				{
+					"nodeId": "n11",
+					"parentNodeId": "n10",
+					"patch": "{\"from\":6,\"to\":87,\"insert\":\"1\\nline 11\\nline 11\\nline 11\\nline 11\\nline 11\\nline 11\\nline 11\\nline 11\\nline 11\\nline 11\\nline 11\"}"
+				}
+			],
+			"target": "n11",
+			"markdown": "line 11\nline 11\nline 11\nline 11\nline 11\nline 11\nline 11\nline 11\nline 11\nline 11\nline 11\nline 11\n"
+		}
+	]
+}

@@ -48,6 +48,7 @@ import { useAiFeatures } from "@/lib/studio/use-ai-features";
 import { useCommentHighlights } from "@/lib/studio/use-comment-highlights";
 import { useIsMobile } from "@/lib/studio/use-is-mobile";
 import { useOutline } from "@/lib/studio/use-outline";
+import { useResolvedAppearance } from "@/lib/studio/use-resolved-appearance";
 import {
 	READING_SCALE_MAX,
 	READING_SCALE_MIN,
@@ -95,6 +96,10 @@ function StudioWorkspace() {
 
 	const settings = useStudioSettings();
 	const isMobile = useIsMobile();
+	// Writes the `dark` class on <html>; the layout's blocking script already set
+	// it before the first paint, this keeps it honest when the setting changes.
+	const resolvedAppearance = useResolvedAppearance(settings.appearance);
+	const darkPalettes = resolvedAppearance === "dark";
 
 	// Apply the palette to <html> (not just the shell div) so it also reaches
 	// portalled overlays — command palette, switcher, dialogs — and the body
@@ -569,7 +574,7 @@ function StudioWorkspace() {
 				<div className={topChromeClass} {...chromeHoverProps}>
 					<header className="flex h-10 shrink-0 items-center justify-between gap-[var(--space-3)] border-b border-[var(--color-line)] bg-[var(--color-bg-app)] px-[var(--space-4)]">
 						<div className="flex min-w-0 flex-1 items-center gap-[var(--space-3)]">
-							<span className="select-none font-[family-name:var(--font-ui)] text-[length:var(--text-ui)] font-semibold tracking-tight text-[var(--color-ink-secondary)]">
+							<span className="select-none font-[family-name:var(--font-app-serif)] text-[length:var(--text-ui)] font-semibold tracking-tight text-[var(--color-ink-secondary)]">
 								Recto
 							</span>
 							{!showEmpty && (
@@ -678,6 +683,12 @@ function StudioWorkspace() {
 								settings.cycleTheme();
 								dispatchFocusEditor();
 							}}
+							appearance={settings.appearance}
+							onCycleAppearance={() => {
+								settings.cycleAppearance();
+								dispatchFocusEditor();
+							}}
+							resolvedAppearance={resolvedAppearance}
 							readingFont={settings.readingFont}
 							onToggleFont={() => {
 								settings.toggleReadingFont();
@@ -760,6 +771,7 @@ function StudioWorkspace() {
 					canManageSharing={activeDocId !== null && activeDocIsOwned}
 					canReview={activeDocId !== null && canReview}
 					canComment={canComment}
+					darkPalettesAvailable={darkPalettes}
 					onRunAction={(id) => dispatchRef.current(id)}
 					onOpenDocument={(id) => {
 						if (workspace?.activePaneId) {

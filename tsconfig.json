@@ -30,6 +30,7 @@
 		"components/**/*",
 		"lib/**/*",
 		"convex/**/*",
+		"packages/**/*.ts",
 		"spikes/**/*",
 		"vitest.config.ts",
 		"vite.config.ts",
