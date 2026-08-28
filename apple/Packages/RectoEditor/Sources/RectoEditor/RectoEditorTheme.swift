@@ -96,7 +96,7 @@ public struct RectoEditorTheme: Sendable, Equatable {
 
     /// The palette for the given appearance. `nil` reads the current one.
     public static func matching(_ appearance: NSAppearance? = nil) -> RectoEditorTheme {
-        let name = (appearance ?? NSApp?.effectiveAppearance)?
+        let name = (appearance ?? NSApplication.shared.effectiveAppearance)
             .bestMatch(from: [.aqua, .darkAqua])
         return name == .darkAqua ? .twilight : .paper
     }

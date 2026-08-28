@@ -1,0 +1,14 @@
+{
+  "originHash" : "df5644a87c26067357dc32eed2f8da34cbeb4c176c26c849ee6de6a4df196bfa",
+  "pins" : [
+    {
+      "identity" : "swift-markdown-engine",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/bhekanik/swift-markdown-engine",
+      "state" : {
+        "revision" : "91c46c25810af250d0f4052e1de6f6110a82d9e3"
+      }
+    }
+  ],
+  "version" : 3
+}

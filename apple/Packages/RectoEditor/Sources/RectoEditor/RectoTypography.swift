@@ -20,7 +20,9 @@ public struct RectoTypography: Sendable, Equatable {
     public var lineHeightMultiple: CGFloat
     /// Heading sizes in em, H1…H6.
     public var headingMultipliers: [CGFloat]
-    /// Space above each heading, in multiples of its own size.
+    /// Space above each heading, in multiples of its own size. Design §5 does
+    /// not specify this; these values give 19 pt prose at 1.6 enough air for a
+    /// heading to read as a break rather than a bold line.
     public var headingTopSpacingEm: [CGFloat]
     /// Letter spacing in em. Negative tightens.
     public var tracking: CGFloat
@@ -32,7 +34,7 @@ public struct RectoTypography: Sendable, Equatable {
         baseSize: CGFloat,
         lineHeightMultiple: CGFloat = 1.6,
         headingMultipliers: [CGFloat] = [1.7, 1.42, 1.22, 1.08, 1, 1],
-        headingTopSpacingEm: [CGFloat] = [1.1, 1.0, 0.9, 0.8, 0.7, 0.7],
+        headingTopSpacingEm: [CGFloat] = [0.9, 0.8, 0.7, 0.6, 0.5, 0.5],
         tracking: CGFloat = -0.015,
         scale: CGFloat = 1
     ) {
@@ -68,6 +70,17 @@ public struct RectoTypography: Sendable, Equatable {
 
     /// Body size after the reader's text-size control.
     public var resolvedSize: CGFloat { baseSize * min(max(scale, 0.8), 2.0) }
+
+    /// Extra leading the engine must add to reach ``lineHeightMultiple``.
+    ///
+    /// The engine sets a paragraph's minimum line height to the font's natural
+    /// line height plus `ParagraphStyle.lineHeightExtraSpacing`, so a ratio has
+    /// to be expressed as the difference.
+    public var lineHeightExtraSpacing: CGFloat {
+        let font = bodyFont
+        let natural = ceil(font.ascender - font.descender + font.leading)
+        return max(0, round(resolvedSize * lineHeightMultiple) - natural)
+    }
 
     /// The resolved body font, falling back to a system face when the bundled
     /// resource is missing (a mis-built app bundle) so the editor still reads.

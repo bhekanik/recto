@@ -62,7 +62,7 @@ public struct MarkdownStyler: Sendable, Equatable {
         MarkdownEditorConfiguration(
             theme: engineTheme,
             services: MarkdownEditorServices(
-                syntaxHighlighter: RectoCodeStyle(theme: theme, size: typography.resolvedSize)
+                syntaxHighlighter: RectoCodeStyle(theme: theme)
             ),
             markers: MarkerStyle(hiddenMarkerFontSize: 0.1),
             codeBlock: CodeBlockStyle(fontSizeScale: 0.85, horizontalIndent: 12),
@@ -77,7 +77,11 @@ public struct MarkdownStyler: Sendable, Equatable {
                 fontMultipliers: typography.headingMultipliers,
                 topSpacingEm: typography.headingTopSpacingEm
             ),
-            paragraph: ParagraphStyle(spacingFactor: typography.lineHeightMultiple - 1),
+            paragraph: ParagraphStyle(
+                // Gap between paragraphs, in line heights.
+                spacingFactor: 0.6,
+                lineHeightExtraSpacing: typography.lineHeightExtraSpacing
+            ),
             textInsets: TextInsets(horizontal: 0, vertical: 32),
             readingWidth: readingWidth,
             undo: undo,
@@ -116,7 +120,6 @@ public struct MarkdownStyler: Sendable, Equatable {
 /// is stage 2 (W9b), along with the language tag in the block's top-right.
 struct RectoCodeStyle: SyntaxHighlighter {
     let theme: RectoEditorTheme
-    let size: CGFloat
 
     func codeFont(size: CGFloat) -> NSFont {
         RectoFonts.register()
