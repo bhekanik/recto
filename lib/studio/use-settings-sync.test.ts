@@ -8,7 +8,10 @@ import {
 	type StudioSettings,
 	serializeSynced,
 } from "./settings-schema";
-import { SETTINGS_RETRY_BASE_MS } from "./use-settings-sync";
+import {
+	SETTINGS_DIRTY_STORAGE_KEY,
+	SETTINGS_RETRY_BASE_MS,
+} from "./use-settings-sync";
 
 /**
  * The Convex side is mocked rather than mounted: the behaviour under test is
@@ -182,6 +185,23 @@ describe("useSettingsSync", () => {
 		// Hydrating from another machine must not restyle this one.
 		expect(latest.appearance).toBe("dark");
 		expect(latest.readingScale).toBe(1.5);
+	});
+
+	it("keeps and re-sends a dirty value restored after an offline reload", () => {
+		window.localStorage.setItem(
+			SETTINGS_DIRTY_STORAGE_KEY,
+			JSON.stringify(["theme"]),
+		);
+		state.remote = {
+			json: serializeSynced({ ...DEFAULTS, theme: "dawn" }),
+			updatedAt: 10,
+		};
+		render({ ...DEFAULTS, theme: "moonlit" });
+
+		expect(latest.theme).toBe("moonlit");
+		flushDebounce();
+		expect(saveMock).toHaveBeenCalledTimes(1);
+		expect(sentJson(0).theme).toBe("moonlit");
 	});
 
 	it("does not push straight back what it just hydrated", () => {

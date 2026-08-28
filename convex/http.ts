@@ -86,11 +86,63 @@ const uploadImage = httpAction(async (ctx, request) => {
 	return json({ storageId, url }, 200, origin);
 });
 
+const uploadImageLegacy = httpAction(async (ctx, request) => {
+	const origin = request.headers.get("Origin");
+	const token = new URL(request.url).searchParams.get("token");
+	if (!token) return json({ error: "Invalid upload URL" }, 401, origin);
+
+	const declared = Number(request.headers.get("Content-Length") ?? "0");
+	if (Number.isFinite(declared) && declared > MAX_UPLOAD_BYTES) {
+		return json({ error: UPLOAD_TOO_LARGE_MESSAGE }, 413, origin);
+	}
+	const blob = await request.blob();
+	if (blob.size === 0) return json({ error: "Empty upload" }, 400, origin);
+	if (blob.size > MAX_UPLOAD_BYTES) {
+		return json({ error: UPLOAD_TOO_LARGE_MESSAGE }, 413, origin);
+	}
+
+	const storageId = await ctx.storage.store(blob);
+	try {
+		const claim = await ctx.runMutation(internal.files.consumeLegacyUpload, {
+			token,
+			storageId,
+		});
+		if (!claim.accepted || claim.url === null) {
+			await ctx.storage.delete(storageId);
+			return json({ error: "Upload URL expired" }, 401, origin);
+		}
+		return json({ storageId, url: claim.url }, 200, origin);
+	} catch (error) {
+		await ctx.storage.delete(storageId);
+		return json(
+			{ error: error instanceof Error ? error.message : "Upload failed" },
+			409,
+			origin,
+		);
+	}
+});
+
 const http = httpRouter();
 
 http.route({ path: "/upload-image", method: "POST", handler: uploadImage });
 http.route({
+	path: "/upload-image-legacy",
+	method: "POST",
+	handler: uploadImageLegacy,
+});
+http.route({
 	path: "/upload-image",
+	method: "OPTIONS",
+	handler: httpAction(
+		async (_ctx, request) =>
+			new Response(null, {
+				status: 204,
+				headers: corsHeaders(request.headers.get("Origin")),
+			}),
+	),
+});
+http.route({
+	path: "/upload-image-legacy",
 	method: "OPTIONS",
 	handler: httpAction(
 		async (_ctx, request) =>

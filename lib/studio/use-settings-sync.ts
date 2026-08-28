@@ -267,7 +267,9 @@ export function useSettingsSync(
 			serverJsonRef.current = remote.json;
 			serverStampRef.current = remote.updatedAt;
 			unknownRef.current = pickUnknown(remote.json);
-			setSettings((current) => mergeSyncedJson(current, remote.json));
+			const held = new Set(dirtyRef.current.keys());
+			setSettings((current) => mergeSyncedJson(current, remote.json, held));
+			if (held.size > 0) push();
 			return;
 		}
 

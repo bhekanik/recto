@@ -1,35 +1,51 @@
 import type { GenericMutationCtx } from "convex/server";
 import { v } from "convex/values";
 import type { DataModel, Id } from "./_generated/dataModel";
-import { internalMutation, mutation, query } from "./_generated/server";
+import {
+	internalMutation,
+	internalQuery,
+	mutation,
+	query,
+} from "./_generated/server";
 import { assertNotDeleting } from "./accountGuard";
 import { requireUserId } from "./documents";
 
 /**
  * Image (and other blob) storage lives in Convex's built-in `_storage` system
  * table — NOT inline in the Markdown string, whose ~1 MiB ceiling governs the
- * document text only (overview §8). The client uploads bytes to a signed,
- * short-lived URL and inserts a canonical `![alt](url)` reference.
+ * document text only (overview §8). The client uploads bytes through the HTTP
+ * action and inserts its canonical `![alt](url)` reference.
  */
 
 /**
- * LEGACY signed-upload URL. Superseded by the `/upload-image` HTTP action
- * (`convex/http.ts`), which stores the bytes and claims ownership in one
- * server-side step.
+ * Compatibility URL for tabs loaded before `/upload-image` shipped.
  *
- * The two-step protocol could not be made correct: the bytes land in
- * `_storage` when the client POSTs them, and ownership was only recorded by a
- * separate `registerUpload` call afterwards. A crash, a rejected mutation, a
- * closed tab — or a browser tab still running the code deployed before this
- * change — leaves a file nothing can attribute, which account deletion then
- * cannot find. Kept only so those tabs keep working until they age out; it is
- * not used by this build.
+ * Old code still asks this mutation for a URL and POSTs bytes to it. Returning
+ * another signed storage URL would preserve the account-deletion race, so this
+ * returns a one-hour capability URL handled by our own HTTP action. That action
+ * stores and claims the file before replying with the same `{storageId}` shape
+ * the old client expects.
  */
+export const LEGACY_UPLOAD_GRANT_MS = 60 * 60 * 1000;
+export const LEGACY_SIGNED_UPLOAD_CUTOVER_MS = 60 * 60 * 1000;
+const LEGACY_SIGNED_UPLOAD_CUTOVER = "signed-storage-upload-v1";
+
 export const generateUploadUrl = mutation({
 	args: {},
 	handler: async (ctx) => {
-		await requireUserId(ctx); // single-user; only the owner may upload
-		return await ctx.storage.generateUploadUrl();
+		const userId = await requireUserId(ctx);
+		const siteUrl = process.env.CONVEX_SITE_URL;
+		if (!siteUrl) throw new Error("CONVEX_SITE_URL is unavailable");
+		const token = crypto.randomUUID();
+		await ctx.db.insert("legacyUploadGrants", {
+			token,
+			userId,
+			expiresAt: Date.now() + LEGACY_UPLOAD_GRANT_MS,
+		});
+		return new URL(
+			`/upload-image-legacy?token=${encodeURIComponent(token)}`,
+			siteUrl,
+		).toString();
 	},
 });
 
@@ -67,6 +83,89 @@ export const claimUpload = internalMutation({
 			});
 		}
 		return await ctx.storage.getUrl(args.storageId);
+	},
+});
+
+/** Consume the capability returned to a pre-deploy browser tab. */
+export const consumeLegacyUpload = internalMutation({
+	args: { token: v.string(), storageId: v.id("_storage") },
+	handler: async (ctx, args) => {
+		const grant = await ctx.db
+			.query("legacyUploadGrants")
+			.withIndex("by_token", (q) => q.eq("token", args.token))
+			.unique();
+		if (!grant || grant.expiresAt <= Date.now()) {
+			if (grant) await ctx.db.delete(grant._id);
+			return { accepted: false as const, url: null };
+		}
+		await assertNotDeleting(ctx, grant.userId);
+		const url = await ctx.storage.getUrl(args.storageId);
+		if (url === null) {
+			await ctx.db.delete(grant._id);
+			return { accepted: false as const, url: null };
+		}
+		const existing = await ctx.db
+			.query("blobs")
+			.withIndex("by_storage", (q) => q.eq("storageId", args.storageId))
+			.unique();
+		if (!existing) {
+			await ctx.db.insert("blobs", {
+				storageId: args.storageId,
+				ownerUserId: grant.userId,
+				kind: "upload",
+				createdAt: Date.now(),
+			});
+		}
+		await ctx.db.delete(grant._id);
+		return {
+			accepted: true as const,
+			url,
+		};
+	},
+});
+
+export const sweepLegacyUploadGrants = internalMutation({
+	args: { limit: v.optional(v.number()) },
+	handler: async (ctx, args) => {
+		const expired = await ctx.db
+			.query("legacyUploadGrants")
+			.withIndex("by_expires", (q) => q.lte("expiresAt", Date.now()))
+			.take(Math.max(1, Math.min(args.limit ?? 256, 256)));
+		for (const grant of expired) await ctx.db.delete(grant._id);
+		return { deleted: expired.length };
+	},
+});
+
+/**
+ * Start the deploy cutover for signed URLs issued by the previous backend.
+ * Repeated cron/manual calls preserve the first timestamp; moving it forward
+ * would keep deletion disabled forever.
+ */
+export const startLegacyUploadCutover = internalMutation({
+	args: {},
+	handler: async (ctx) => {
+		const existing = await ctx.db
+			.query("legacyUploadCutovers")
+			.withIndex("by_name", (q) => q.eq("name", LEGACY_SIGNED_UPLOAD_CUTOVER))
+			.unique();
+		if (existing) return { safeAfter: existing.safeAfter, started: false };
+		const safeAfter = Date.now() + LEGACY_SIGNED_UPLOAD_CUTOVER_MS;
+		await ctx.db.insert("legacyUploadCutovers", {
+			name: LEGACY_SIGNED_UPLOAD_CUTOVER,
+			safeAfter,
+		});
+		return { safeAfter, started: true };
+	},
+});
+
+export const getLegacyUploadCutover = internalQuery({
+	args: {},
+	handler: async (ctx) => {
+		const row = await ctx.db
+			.query("legacyUploadCutovers")
+			.withIndex("by_name", (q) => q.eq("name", LEGACY_SIGNED_UPLOAD_CUTOVER))
+			.unique();
+		return row ? { safeAfter: row.safeAfter } : null;
 	},
 });
 

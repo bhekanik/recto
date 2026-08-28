@@ -12,6 +12,7 @@ import type * as account from "../account.js";
 import type * as accountGuard from "../accountGuard.js";
 import type * as accountPurge from "../accountPurge.js";
 import type * as ai_langsmithSmoke from "../ai/langsmithSmoke.js";
+import type * as blobReferences from "../blobReferences.js";
 import type * as crons from "../crons.js";
 import type * as docNodes from "../docNodes.js";
 import type * as documents from "../documents.js";
@@ -40,6 +41,7 @@ declare const fullApi: ApiFromModules<{
   accountGuard: typeof accountGuard;
   accountPurge: typeof accountPurge;
   "ai/langsmithSmoke": typeof ai_langsmithSmoke;
+  blobReferences: typeof blobReferences;
   crons: typeof crons;
   docNodes: typeof docNodes;
   documents: typeof documents;

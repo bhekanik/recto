@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internalQuery, mutation, query } from "./_generated/server";
 import { assertNotDeleting } from "./accountGuard";
+import { removeBlobReferences, syncBlobReferences } from "./blobReferences";
 
 type QueryCtx = GenericQueryCtx<import("./_generated/dataModel").DataModel>;
 type MutationCtx = GenericMutationCtx<
@@ -225,7 +226,10 @@ export const remove = mutation({
 			.query("docNodes")
 			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
 			.collect();
-		for (const node of nodes) await ctx.db.delete(node._id);
+		for (const node of nodes) {
+			await removeBlobReferences(ctx, "node", node._id);
+			await ctx.db.delete(node._id);
+		}
 
 		const versions = await ctx.db
 			.query("versions")
@@ -257,6 +261,7 @@ export const remove = mutation({
 			.collect();
 		for (const chunk of chunks) await ctx.db.delete(chunk._id);
 
+		await removeBlobReferences(ctx, "document", args.documentId);
 		await ctx.db.delete(args.documentId);
 	},
 });
@@ -317,6 +322,9 @@ export const updateCurrentNodeId = mutation({
 			// This writes the materialization of the node it is pointing at.
 			markdownHeadNodeId: args.currentNodeId,
 		});
+		await syncBlobReferences(ctx, doc.userId, "document", args.documentId, [
+			args.markdown,
+		]);
 		return {
 			applied: true as const,
 			currentNodeId: args.currentNodeId,
@@ -444,10 +452,14 @@ export const commitEdit = mutation({
 			)
 			.unique();
 		if (!existing) {
-			await ctx.db.insert("docNodes", {
+			const nodeRowId = await ctx.db.insert("docNodes", {
 				documentId: args.documentId,
 				...args.node,
 			});
+			await syncBlobReferences(ctx, doc.userId, "node", nodeRowId, [
+				args.node.patch,
+				args.node.snapshot ?? "",
+			]);
 		}
 
 		// The commit already landed (an earlier attempt got through); don't read
@@ -497,6 +509,9 @@ export const commitEdit = mutation({
 				pointerRevision,
 			},
 		});
+		await syncBlobReferences(ctx, doc.userId, "document", args.documentId, [
+			args.markdown,
+		]);
 
 		return {
 			committed: true as const,
@@ -592,6 +607,9 @@ export const updateMarkdown = mutation({
 		}
 
 		await ctx.db.patch(args.documentId, patch);
+		await syncBlobReferences(ctx, doc.userId, "document", args.documentId, [
+			args.markdown,
+		]);
 
 		return { updatedAt, stale: false as const, headMoved: false as const };
 	},

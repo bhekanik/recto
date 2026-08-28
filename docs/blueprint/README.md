@@ -164,11 +164,35 @@ blobs: {                    // ownership for stored files; _storage carries none
   createdAt: number,
 }                            // indexes: by_owner (ownerUserId), by_storage (storageId)
 
+blobRefSources: {           // exact references for one document/history row
+  ownerUserId: string,
+  source: "document" | "node",
+  sourceId: string,
+  tokens: string[],
+}                            // indexes: by_source, by_owner
+
+blobRefs: {                 // counted aggregate per storage token + owner
+  token: string,
+  ownerUserId: string,
+  count?: number,
+}                            // indexes: by_token, by_token_owner
+
 accountDeletions: {         // an in-flight or just-finished deletion (ADR-21)
   userId: string,           // while this row exists, every user mutation refuses
   phase: "blobs" | "rows" | "identity" | "purged",
   expiresAt?: number,       // set on completion; swept 24h later
 }                            // indexes: by_user (userId), by_expires (expiresAt)
+
+legacyUploadGrants: {       // one-hour upload capabilities for old browser tabs
+  token: string,
+  userId: string,
+  expiresAt: number,
+}                            // indexes: by_token, by_user, by_expires
+
+legacyUploadCutovers: {     // waits out signed URLs issued before the deploy
+  name: string,
+  safeAfter: number,
+}                            // index: by_name
 ```
 
 The pre-migration `workspaces` row — `paneTree` / `openDocumentIds` /

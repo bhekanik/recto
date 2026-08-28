@@ -1,6 +1,6 @@
 import { convexTest } from "convex-test";
-import { describe, expect, it } from "vitest";
-import { internal } from "./_generated/api";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { api, internal } from "./_generated/api";
 import { MAX_UPLOAD_BYTES } from "./files";
 import schema from "./schema";
 
@@ -11,12 +11,23 @@ const modules: Record<string, () => Promise<unknown>> = {
 	"./account.ts": () => import("./account"),
 	"./accountGuard.ts": () => import("./accountGuard"),
 	"./accountPurge.ts": () => import("./accountPurge"),
+	"./blobReferences.ts": () => import("./blobReferences"),
 	"./documents.ts": () => import("./documents"),
 	"./_generated/api.js": () => import("./_generated/api"),
 	"./_generated/server.js": () => import("./_generated/server"),
 };
 
 const OWNER = { subject: "owner-user", email: "owner@example.com" };
+const originalSiteUrl = process.env.CONVEX_SITE_URL;
+
+beforeEach(() => {
+	process.env.CONVEX_SITE_URL = "https://example.convex.site";
+});
+
+afterEach(() => {
+	if (originalSiteUrl === undefined) delete process.env.CONVEX_SITE_URL;
+	else process.env.CONVEX_SITE_URL = originalSiteUrl;
+});
 
 function upload(
 	t: ReturnType<typeof convexTest>,
@@ -122,5 +133,54 @@ describe("POST /upload-image", () => {
 		// No Origin reaches the handler here (the harness normalises it away), so
 		// this asserts the wildcard fallback rather than the echo.
 		expect(res.headers.get("Access-Control-Allow-Origin")).toBe("*");
+	});
+});
+
+describe("POST /upload-image-legacy", () => {
+	it("supports a pre-deploy tab without leaving an ownership gap", async () => {
+		const t = convexTest(schema, modules);
+		const uploadUrl = await t
+			.withIdentity(OWNER)
+			.mutation(api.files.generateUploadUrl, {});
+		const url = new URL(uploadUrl);
+		const res = await t.fetch(`${url.pathname}${url.search}`, {
+			method: "POST",
+			headers: { "Content-Type": "image/png" },
+			body: new Blob(["bytes"]),
+		});
+
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { storageId: string };
+		const blobs = await t.run((ctx) => ctx.db.query("blobs").collect());
+		expect(blobs).toHaveLength(1);
+		expect(blobs[0]).toMatchObject({
+			storageId: body.storageId,
+			ownerUserId: OWNER.subject,
+		});
+		expect(
+			await t.run((ctx) => ctx.db.query("legacyUploadGrants").collect()),
+		).toHaveLength(0);
+	});
+
+	it("deletes bytes from a preloaded upload URL after deletion begins", async () => {
+		const t = convexTest(schema, modules);
+		const uploadUrl = await t
+			.withIdentity(OWNER)
+			.mutation(api.files.generateUploadUrl, {});
+		await t.mutation(internal.account.beginDeletion, { userId: OWNER.subject });
+		const url = new URL(uploadUrl);
+		const res = await t.fetch(`${url.pathname}${url.search}`, {
+			method: "POST",
+			headers: { "Content-Type": "image/png" },
+			body: new Blob(["bytes"]),
+		});
+
+		expect(res.status).toBe(409);
+		expect(
+			await t.run((ctx) => ctx.db.system.query("_storage").collect()),
+		).toHaveLength(0);
+		expect(await t.run((ctx) => ctx.db.query("blobs").collect())).toHaveLength(
+			0,
+		);
 	});
 });

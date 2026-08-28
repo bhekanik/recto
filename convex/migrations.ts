@@ -3,7 +3,8 @@ import { v } from "convex/values";
 import type { DataModel } from "./_generated/dataModel";
 import { internalMutation } from "./_generated/server";
 import { claimBlob } from "./accountPurge";
-import { extractStorageTokens, storageFileTokens } from "./storageTokens";
+import { syncBlobReferences } from "./blobReferences";
+import { storageFileTokens } from "./storageTokens";
 
 type MutationCtx = GenericMutationCtx<DataModel>;
 
@@ -22,7 +23,15 @@ type MutationCtx = GenericMutationCtx<DataModel>;
  * incomplete for what came before — which is the right way round.
  */
 
-const BACKFILL_BATCH = 256;
+// Author rows carry the full patch/snapshot, so four legacy rows stay far
+// below the 16 MiB transaction read ceiling.
+const BACKFILL_BATCH = 4;
+const REFERENCE_SCAN_BYTES = 4 * 1024 * 1024;
+// A source can carry 512 tokens. Four rows keep the aggregate writes below
+// Convex's 16,000-document transaction ceiling even in the worst case.
+const REFERENCE_SCAN_ROWS = 4;
+const WALK_BYTES_RESERVE = 1024 * 1024;
+const WALK_QUERY_RESERVE = 16;
 
 /** `review:<userId>` is the origin `review.reviewerAppend` has always written. */
 const REVIEW_ORIGIN_PREFIX = "review:";
@@ -32,13 +41,24 @@ async function readCursor(ctx: MutationCtx, name: string): Promise<number> {
 		.query("migrationProgress")
 		.withIndex("by_name", (q) => q.eq("name", name))
 		.unique();
-	return row?.cursor ?? 0;
+	return typeof row?.cursor === "number" ? row.cursor : 0;
+}
+
+async function readPageCursor(
+	ctx: MutationCtx,
+	name: string,
+): Promise<string | null> {
+	const row = await ctx.db
+		.query("migrationProgress")
+		.withIndex("by_name", (q) => q.eq("name", name))
+		.unique();
+	return typeof row?.cursor === "string" ? row.cursor : null;
 }
 
 async function writeCursor(
 	ctx: MutationCtx,
 	name: string,
-	cursor: number,
+	cursor: number | string,
 	done: boolean,
 ): Promise<void> {
 	const row = await ctx.db
@@ -99,17 +119,17 @@ export const backfillNodeAuthors = internalMutation({
  * head back to its base — the only record of which nodes belong to a branch,
  * since branch membership was never stored.
  *
- * Without this, deletion falls back to the coarser "did this reviewer have ANY
- * accepted branch on this document" rule, which keeps a reviewer's rejected
- * work alongside their accepted work. Nodes whose branch cannot be derived
- * (the chain is broken, or the branch row is already gone) keep that fallback.
+ * Account deletion no longer depends on this metadata: partial acceptance
+ * makes branch status too coarse. The backfill remains for older runbooks and
+ * any future branch-history tooling.
  */
 export const backfillNodeBranches = internalMutation({
 	args: { limit: v.optional(v.number()) },
 	handler: async (ctx, args) => {
 		const name = "backfillNodeBranches";
-		// Each branch costs a walk of its own length, so far fewer per pass.
-		const limit = clampLimit(args.limit, 32);
+		// One branch per pass. Each node read includes its patch/snapshot, so the
+		// walk also stops from live transaction metrics before exhausting limits.
+		const limit = clampLimit(args.limit, 1);
 		const cursor = await readCursor(ctx, name);
 
 		const branches = await ctx.db
@@ -120,10 +140,15 @@ export const backfillNodeBranches = internalMutation({
 		let updated = 0;
 		for (const branch of branches) {
 			let nodeId: string | null = branch.headNodeId;
-			// Bounded: a branch deeper than this is not one this backfill will
-			// finish, and the fallback rule still covers it.
 			for (let step = 0; step < 512 && nodeId !== null; step += 1) {
 				if (nodeId === branch.baseNodeId) break;
+				const metrics = await ctx.meta.getTransactionMetrics();
+				if (
+					metrics.bytesRead.remaining < WALK_BYTES_RESERVE ||
+					metrics.databaseQueries.remaining < WALK_QUERY_RESERVE
+				) {
+					break;
+				}
 				const node = await ctx.db
 					.query("docNodes")
 					.withIndex("by_document_node", (q) =>
@@ -169,29 +194,24 @@ export const scanDocumentRefs = internalMutation({
 	args: { limit: v.optional(v.number()) },
 	handler: async (ctx, args) => {
 		const name = "scanDocumentRefs";
-		const limit = clampLimit(args.limit, BACKFILL_BATCH);
-		const cursor = await readCursor(ctx, name);
+		const limit = clampLimit(args.limit, REFERENCE_SCAN_ROWS);
+		const cursor = await readPageCursor(ctx, name);
 
-		const documents = await ctx.db
-			.query("documents")
-			.withIndex("by_creation_time", (q) => q.gt("_creationTime", cursor))
-			.take(limit);
+		const result = await ctx.db.query("documents").paginate({
+			numItems: limit,
+			cursor,
+			maximumRowsRead: limit,
+			maximumBytesRead: REFERENCE_SCAN_BYTES,
+		});
 
-		let recorded = 0;
-		for (const doc of documents) {
-			for (const token of extractStorageTokens(doc.markdown)) {
-				if (await recordRef(ctx, token, doc.userId)) recorded += 1;
-			}
+		for (const doc of result.page) {
+			await syncBlobReferences(ctx, doc.userId, "document", doc._id, [
+				doc.markdown,
+			]);
 		}
 
-		const done = documents.length < limit;
-		await writeCursor(
-			ctx,
-			name,
-			documents.at(-1)?._creationTime ?? cursor,
-			done,
-		);
-		return { scanned: documents.length, recorded, done };
+		await writeCursor(ctx, name, result.continueCursor, result.isDone);
+		return { scanned: result.page.length, done: result.isDone };
 	},
 });
 
@@ -200,53 +220,34 @@ export const scanNodeRefs = internalMutation({
 	args: { limit: v.optional(v.number()) },
 	handler: async (ctx, args) => {
 		const name = "scanNodeRefs";
-		const limit = clampLimit(args.limit, BACKFILL_BATCH);
-		const cursor = await readCursor(ctx, name);
+		const limit = clampLimit(args.limit, REFERENCE_SCAN_ROWS);
+		const cursor = await readPageCursor(ctx, name);
 
-		const nodes = await ctx.db
-			.query("docNodes")
-			.withIndex("by_creation_time", (q) => q.gt("_creationTime", cursor))
-			.take(limit);
+		const result = await ctx.db.query("docNodes").paginate({
+			numItems: limit,
+			cursor,
+			maximumRowsRead: limit,
+			maximumBytesRead: REFERENCE_SCAN_BYTES,
+		});
 
-		let recorded = 0;
 		const ownerCache = new Map<string, string | null>();
-		for (const node of nodes) {
+		for (const node of result.page) {
 			let owner = ownerCache.get(node.documentId);
 			if (owner === undefined) {
 				owner = (await ctx.db.get(node.documentId))?.userId ?? null;
 				ownerCache.set(node.documentId, owner);
 			}
 			if (owner === null) continue;
-			const texts = [node.patch];
-			if (node.snapshot !== undefined) texts.push(node.snapshot);
-			for (const text of texts) {
-				for (const token of extractStorageTokens(text)) {
-					if (await recordRef(ctx, token, owner)) recorded += 1;
-				}
-			}
+			await syncBlobReferences(ctx, owner, "node", node._id, [
+				node.patch,
+				node.snapshot ?? "",
+			]);
 		}
 
-		const done = nodes.length < limit;
-		await writeCursor(ctx, name, nodes.at(-1)?._creationTime ?? cursor, done);
-		return { scanned: nodes.length, recorded, done };
+		await writeCursor(ctx, name, result.continueCursor, result.isDone);
+		return { scanned: result.page.length, done: result.isDone };
 	},
 });
-
-async function recordRef(
-	ctx: MutationCtx,
-	token: string,
-	ownerUserId: string,
-): Promise<boolean> {
-	const existing = await ctx.db
-		.query("blobRefs")
-		.withIndex("by_token_owner", (q) =>
-			q.eq("token", token).eq("ownerUserId", ownerUserId),
-		)
-		.unique();
-	if (existing) return false;
-	await ctx.db.insert("blobRefs", { token, ownerUserId });
-	return true;
-}
 
 /**
  * Step 2: attribute stored files using the reference rows.
@@ -314,13 +315,8 @@ export const backfillBlobOwners = internalMutation({
 	},
 });
 
-/** Step 3: drop the scaffolding once the claims are in. Bounded; re-run until done. */
+/** Kept for older deploy runbooks. The reference index is permanent now. */
 export const cleanupBlobRefs = internalMutation({
-	args: { limit: v.optional(v.number()) },
-	handler: async (ctx, args) => {
-		const limit = clampLimit(args.limit, BACKFILL_BATCH);
-		const rows = await ctx.db.query("blobRefs").take(limit);
-		for (const row of rows) await ctx.db.delete(row._id);
-		return { deleted: rows.length, done: rows.length < limit };
-	},
+	args: {},
+	handler: async () => ({ deleted: 0, done: true }),
 });

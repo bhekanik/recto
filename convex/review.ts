@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
 import { assertNotDeleting } from "./accountGuard";
+import { syncBlobReferences } from "./blobReferences";
 import {
 	MARKDOWN_TOO_LARGE_MESSAGE,
 	MAX_MARKDOWN_LENGTH,
@@ -467,7 +468,7 @@ export const reviewerAppend = mutation({
 		// The node insert waited for the branch id. Both writes are in the same
 		// transaction, so a node can never exist without the branch it names.
 		if (mustInsertNode) {
-			await ctx.db.insert("docNodes", {
+			const nodeRowId = await ctx.db.insert("docNodes", {
 				documentId: args.documentId,
 				nodeId: args.nodeId,
 				parentNodeId: args.parentNodeId,
@@ -483,6 +484,10 @@ export const reviewerAppend = mutation({
 				branchId,
 				createdAt: args.createdAt,
 			});
+			await syncBlobReferences(ctx, doc.userId, "node", nodeRowId, [
+				args.patch,
+				args.snapshot ?? "",
+			]);
 		}
 
 		return { nodeId: args.nodeId, branchId };
@@ -554,7 +559,7 @@ export const aiSuggestBranch = mutation({
 		// Append the AI branch head off the owner's CURRENT node — append-only, never
 		// touches the documents row (the isolation boundary).
 		const newNodeId = crypto.randomUUID();
-		await ctx.db.insert("docNodes", {
+		const nodeRowId = await ctx.db.insert("docNodes", {
 			documentId: args.documentId,
 			nodeId: newNodeId,
 			parentNodeId: doc.currentNodeId,
@@ -568,6 +573,14 @@ export const aiSuggestBranch = mutation({
 			origin: `${AI_REVIEW_ORIGIN_PREFIX}${AI_REVIEW_MODEL}`,
 			createdAt: now,
 		});
+		await syncBlobReferences(ctx, doc.userId, "node", nodeRowId, [
+			JSON.stringify({
+				from: 0,
+				to: currentMarkdown.length,
+				insert: args.branchMarkdown,
+			}),
+			args.branchMarkdown,
+		]);
 
 		const branchId = await ctx.db.insert("reviewBranches", {
 			documentId: args.documentId,
@@ -641,7 +654,7 @@ export const acceptBranch = mutation({
 		const newNodeId = crypto.randomUUID();
 		const now = Date.now();
 
-		await ctx.db.insert("docNodes", {
+		const nodeRowId = await ctx.db.insert("docNodes", {
 			documentId: args.documentId,
 			nodeId: newNodeId,
 			parentNodeId,
@@ -655,6 +668,14 @@ export const acceptBranch = mutation({
 			origin: "review-accept",
 			createdAt: now,
 		});
+		await syncBlobReferences(ctx, doc.userId, "node", nodeRowId, [
+			JSON.stringify({
+				from: 0,
+				to: parentMarkdown.length,
+				insert: markdown,
+			}),
+			markdown,
+		]);
 
 		await ctx.db.patch(args.documentId, {
 			currentNodeId: newNodeId,
@@ -662,6 +683,9 @@ export const acceptBranch = mutation({
 			wordCount: roughWordCount(markdown),
 			updatedAt: now,
 		});
+		await syncBlobReferences(ctx, doc.userId, "document", args.documentId, [
+			markdown,
+		]);
 
 		await ctx.db.patch(branch._id, { status: "accepted", updatedAt: now });
 		return { newNodeId, markdown };
@@ -771,7 +795,7 @@ export const acceptHunks = mutation({
 		}
 
 		const newNodeId = crypto.randomUUID();
-		await ctx.db.insert("docNodes", {
+		const nodeRowId = await ctx.db.insert("docNodes", {
 			documentId: args.documentId,
 			nodeId: newNodeId,
 			parentNodeId,
@@ -785,6 +809,14 @@ export const acceptHunks = mutation({
 			origin: "review-accept",
 			createdAt: now,
 		});
+		await syncBlobReferences(ctx, doc.userId, "node", nodeRowId, [
+			JSON.stringify({
+				from: 0,
+				to: parentMarkdown.length,
+				insert: merged,
+			}),
+			merged,
+		]);
 
 		await ctx.db.patch(args.documentId, {
 			currentNodeId: newNodeId,
@@ -792,6 +824,9 @@ export const acceptHunks = mutation({
 			wordCount: roughWordCount(merged),
 			updatedAt: now,
 		});
+		await syncBlobReferences(ctx, doc.userId, "document", args.documentId, [
+			merged,
+		]);
 
 		await ctx.db.patch(branch._id, { status: "accepted", updatedAt: now });
 		return {

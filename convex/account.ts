@@ -61,6 +61,9 @@ export const ACCOUNT_DELETION_UNAVAILABLE_MESSAGE =
 export const CLERK_USER_UNREACHABLE_MESSAGE =
 	"Account deletion could not reach this user in Clerk, so nothing was deleted. This usually means the deployment's CLERK_SECRET_KEY belongs to a different Clerk instance.";
 
+export const ACCOUNT_DELETION_UPLOAD_CUTOVER_MESSAGE =
+	"Account deletion is temporarily unavailable while upload security is updated. Try again later; no data was deleted.";
+
 /**
  * Sign in with Apple token revocation: DETECTED HERE, NOT PERFORMED. Read this
  * before shipping the iOS app — it is an open item on plan 023 §10.
@@ -101,6 +104,8 @@ export type DeletionResult = {
 	userId: string;
 	rowsDeleted: number;
 	blobsDeleted: number;
+	/** Files kept only because another account still references them. */
+	blobsRetained: number;
 	clerkUserDeleted: boolean;
 	appleRevocation: AppleRevocation;
 };
@@ -181,6 +186,29 @@ async function drain(
 	return { deleted, done: false };
 }
 
+async function drainBlobs(
+	step: () => Promise<{ deleted: number; kept: number; done: boolean }>,
+): Promise<{ deleted: number; kept: number; done: boolean }> {
+	let deleted = 0;
+	let kept = 0;
+	for (let pass = 0; pass < MAX_PURGE_PASSES; pass += 1) {
+		const result = await step();
+		deleted += result.deleted;
+		kept += result.kept;
+		if (result.done) return { deleted, kept, done: true };
+	}
+	return { deleted, kept, done: false };
+}
+
+async function assertLegacyUploadsExpired(
+	ctx: GenericActionCtx<DataModel>,
+): Promise<void> {
+	const cutover = await ctx.runQuery(internal.files.getLegacyUploadCutover, {});
+	if (!cutover || cutover.safeAfter > Date.now()) {
+		throw new Error(ACCOUNT_DELETION_UPLOAD_CUTOVER_MESSAGE);
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Tombstone lifecycle
 // ---------------------------------------------------------------------------
@@ -208,11 +236,11 @@ export const beginDeletion = internalMutation({
 		const now = Date.now();
 
 		if (existing) {
-			// Clear any expiry: this deletion is running again, so the tombstone
-			// must not be swept out from under it.
+			// A response-lost retry after completion must not make the tombstone
+			// immortal by clearing the expiry it already earned.
 			await ctx.db.patch(existing._id, {
 				updatedAt: now,
-				expiresAt: undefined,
+				expiresAt: existing.phase === "purged" ? existing.expiresAt : undefined,
 				granteeEmail: args.granteeEmail ?? existing.granteeEmail,
 			});
 			return { phase: existing.phase, resumed: true as const };
@@ -260,6 +288,17 @@ export const setDeletionPhase = internalMutation({
 		if (!row) return { phase: null };
 
 		if (PHASE_ORDER.indexOf(args.phase) <= PHASE_ORDER.indexOf(row.phase)) {
+			if (
+				args.phase === "purged" &&
+				row.phase === "purged" &&
+				row.expiresAt === undefined
+			) {
+				const now = Date.now();
+				await ctx.db.patch(row._id, {
+					updatedAt: now,
+					expiresAt: now + TOMBSTONE_RETENTION_MS,
+				});
+			}
 			return { phase: row.phase };
 		}
 
@@ -333,32 +372,15 @@ async function runDeletion(
 	startPhase: "blobs" | "rows" | "identity" | "purged",
 ): Promise<DeletionResult> {
 	let blobsDeleted = 0;
+	let blobsRetained = 0;
 	let rowsDeleted = 0;
 
 	if (startPhase === "blobs") {
-		// The survey runs to completion before a single file is deleted: it is
-		// what says whether somebody ELSE's document points at one of this user's
-		// blobs. Deleting first and asking later is not recoverable.
-		const survey = await drain(async () => {
-			const result = await ctx.runMutation(
-				internal.accountPurge.surveyBlobRefs,
-				{ userId },
-			);
-			return { deleted: result.scanned, done: result.done };
-		});
-		if (!survey.done) {
-			throw new Error(
-				`Blob reference survey did not finish in ${MAX_PURGE_PASSES} passes. Run it again to continue.`,
-			);
-		}
-
-		const blobs = await drain(async () => {
-			const result = await ctx.runMutation(internal.accountPurge.purgeBlobs, {
-				userId,
-			});
-			return { deleted: result.deleted + result.kept, done: result.done };
-		});
+		const blobs = await drainBlobs(() =>
+			ctx.runMutation(internal.accountPurge.purgeBlobs, { userId }),
+		);
 		blobsDeleted += blobs.deleted;
+		blobsRetained += blobs.kept;
 		if (!blobs.done) {
 			// Deliberately before the row purge and the Clerk delete: files the
 			// purge has not reached are still fetchable by anyone holding their
@@ -423,33 +445,24 @@ async function runDeletion(
 	}
 
 	// Anything that landed between the last pass and the identity going away.
-	// The survey drain runs again first: it returns immediately once done, and a
-	// deletion resumed at `identity` (or carrying a tombstone from before the
-	// survey existed) would otherwise reach the blob sweep with nothing to
-	// decide against.
-	await drain(async () => {
-		const result = await ctx.runMutation(internal.accountPurge.surveyBlobRefs, {
-			userId,
-		});
-		return { deleted: result.scanned, done: result.done };
-	});
-
 	const tail = await drain(() =>
 		ctx.runMutation(internal.accountPurge.purgeData, { userId, granteeEmail }),
 	);
 	rowsDeleted += tail.deleted;
-	const tailBlobs = await drain(async () => {
-		const result = await ctx.runMutation(internal.accountPurge.purgeBlobs, {
-			userId,
-		});
-		return { deleted: result.deleted + result.kept, done: result.done };
-	});
+	const tailBlobs = await drainBlobs(() =>
+		ctx.runMutation(internal.accountPurge.purgeBlobs, { userId }),
+	);
 	blobsDeleted += tailBlobs.deleted;
+	blobsRetained += tailBlobs.kept;
+	const tailUnattributed = await drain(() =>
+		ctx.runMutation(internal.accountPurge.purgeUnattributedBlobs, { userId }),
+	);
+	blobsDeleted += tailUnattributed.deleted;
 
 	// Not `purged`: the phase stays `identity` so the scheduled continuation
 	// picks this up, rather than the tombstone starting to expire over work
 	// that is demonstrably unfinished.
-	if (!tail.done || !tailBlobs.done) {
+	if (!tail.done || !tailBlobs.done || !tailUnattributed.done) {
 		throw new Error(
 			"The final sweep did not finish; the account stays fenced and the deletion will be retried.",
 		);
@@ -464,6 +477,7 @@ async function runDeletion(
 		userId,
 		rowsDeleted,
 		blobsDeleted,
+		blobsRetained,
 		clerkUserDeleted: true,
 		appleRevocation,
 	};
@@ -518,6 +532,7 @@ export const deleteEverything = action({
 		// about; better to refuse while everything is still intact.
 		const secret = process.env.CLERK_SECRET_KEY;
 		if (!secret) throw new Error(ACCOUNT_DELETION_UNAVAILABLE_MESSAGE);
+		await assertLegacyUploadsExpired(ctx);
 
 		const userId = identity.subject;
 		const granteeEmail =
@@ -576,6 +591,7 @@ export const resumeDeletion = internalAction({
 		if (!secret) return; // nothing this job can do; the tombstone stays
 
 		try {
+			await assertLegacyUploadsExpired(ctx);
 			await runDeletion(
 				ctx,
 				secret,

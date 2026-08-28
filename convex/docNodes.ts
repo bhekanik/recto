@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
+import { syncBlobReferences } from "./blobReferences";
 import { requireOwnedDocument } from "./documents";
 
 const selectionValidator = v.union(
@@ -39,7 +40,7 @@ export const append = mutation({
 		createdAt: v.number(),
 	},
 	handler: async (ctx, args) => {
-		await requireOwnedDocument(ctx, args.documentId);
+		const doc = await requireOwnedDocument(ctx, args.documentId);
 
 		const existing = await ctx.db
 			.query("docNodes")
@@ -49,7 +50,7 @@ export const append = mutation({
 			.unique();
 		if (existing) return { nodeId: args.nodeId, duplicate: true };
 
-		await ctx.db.insert("docNodes", {
+		const nodeRowId = await ctx.db.insert("docNodes", {
 			documentId: args.documentId,
 			nodeId: args.nodeId,
 			parentNodeId: args.parentNodeId,
@@ -59,6 +60,10 @@ export const append = mutation({
 			origin: args.origin,
 			createdAt: args.createdAt,
 		});
+		await syncBlobReferences(ctx, doc.userId, "node", nodeRowId, [
+			args.patch,
+			args.snapshot ?? "",
+		]);
 		return { nodeId: args.nodeId, duplicate: false };
 	},
 });
@@ -97,7 +102,7 @@ export const ensureRoot = mutation({
 			.first();
 		if (existing) return { created: false, rootNodeId: doc.currentNodeId };
 
-		await ctx.db.insert("docNodes", {
+		const nodeRowId = await ctx.db.insert("docNodes", {
 			documentId: args.documentId,
 			nodeId: doc.currentNodeId,
 			parentNodeId: null,
@@ -107,6 +112,10 @@ export const ensureRoot = mutation({
 			origin: "server",
 			createdAt: Date.now(),
 		});
+		await syncBlobReferences(ctx, doc.userId, "node", nodeRowId, [
+			JSON.stringify({ from: 0, to: 0, insert: "" }),
+			doc.markdown,
+		]);
 		return { created: true, rootNodeId: doc.currentNodeId };
 	},
 });

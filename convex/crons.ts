@@ -31,6 +31,22 @@ crons.daily(
 	{},
 );
 
+crons.daily(
+	"expired legacy upload grants",
+	{ hourUTC: 10, minuteUTC: 30 },
+	internal.files.sweepLegacyUploadGrants,
+	{},
+);
+
+// On the first run after deploy, start the one-hour wait for signed storage
+// URLs issued by the previous backend. Later runs are no-ops.
+crons.interval(
+	"legacy signed upload cutover",
+	{ hours: 1 },
+	internal.files.startLegacyUploadCutover,
+	{},
+);
+
 // Drop account-deletion tombstones past their retention window (ADR-21). Until
 // then the row is what makes a mutation from a not-yet-expired JWT fail, so
 // this deliberately runs long after the deletion itself.

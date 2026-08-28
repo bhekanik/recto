@@ -127,13 +127,10 @@ export default defineSchema({
 		// ever suggested on. Absent on owner-authored nodes, and on reviewer
 		// nodes written before this field (see migrations.backfillNodeAuthors).
 		authorUserId: v.optional(v.string()),
-		// Which review branch this suggestion node belongs to. Account deletion
-		// decides per BRANCH — an accepted branch's nodes stay, an open or
-		// rejected one's go — and without this the only available grouping was
-		// (document, reviewer), so one accepted branch rescued every other branch
-		// that reviewer had on the same document. Absent on owner-authored nodes
-		// and on reviewer nodes whose branch could not be derived
-		// (migrations.backfillNodeBranches).
+		// Which review branch this suggestion node belongs to. Retained for branch
+		// attribution and older rows backfilled by migrations.backfillNodeBranches;
+		// account deletion does not use branch status because partial acceptance
+		// cannot prove which suggestion content became the owner's.
 		branchId: v.optional(v.id("reviewBranches")),
 	})
 		.index("by_document", ["documentId"])
@@ -263,6 +260,20 @@ export default defineSchema({
 		.index("by_owner", ["ownerUserId"])
 		.index("by_storage", ["storageId"]),
 
+	legacyUploadGrants: defineTable({
+		token: v.string(),
+		userId: v.string(),
+		expiresAt: v.number(),
+	})
+		.index("by_token", ["token"])
+		.index("by_user", ["userId"])
+		.index("by_expires", ["expiresAt"]),
+
+	legacyUploadCutovers: defineTable({
+		name: v.string(),
+		safeAfter: v.number(),
+	}).index("by_name", ["name"]),
+
 	/**
 	 * An account deletion in flight (ADR-21). Its existence is what makes
 	 * deletion atomic across the many transactions it takes: every user-facing
@@ -293,60 +304,44 @@ export default defineSchema({
 		),
 		/** When the tombstone may be swept. Set once the deletion finishes. */
 		expiresAt: v.optional(v.number()),
-		/**
-		 * Progress of the foreign-reference survey that runs before any blob is
-		 * deleted. A blob this user owns may still be referenced by SOMEONE
-		 * ELSE's document or history — a URL pasted across a shared review — and
-		 * deleting it would break their document. Answering that needs a scan of
-		 * everyone else's text, which is far too much for one transaction, so it
-		 * is paged: `blobSurveyCursor` is the `_creationTime` the last pass
-		 * stopped at and `retainedTokens` accumulates the storage tokens foreign
-		 * text mentions.
-		 */
-		blobSurveyCursor: v.optional(v.number()),
-		blobSurveyNodeCursor: v.optional(v.number()),
 		blobSurveyStorageCursor: v.optional(v.number()),
-		blobSurveyDone: v.optional(v.boolean()),
-		/** Tokens SOMEONE ELSE's text mentions. Those files are never deleted. */
-		retainedTokens: v.optional(v.array(v.string())),
-		/**
-		 * Tokens only this user's text mentions. Used to reclaim files uploaded
-		 * by a browser tab running the pre-`/upload-image` protocol, which could
-		 * complete an upload without ever recording ownership.
-		 */
-		ownTokens: v.optional(v.array(v.string())),
-		/**
-		 * The token set hit its cap, so it cannot be trusted as complete. Every
-		 * owned blob is then kept (its ownership row still goes); the daily
-		 * orphan sweep collects whatever nothing references.
-		 */
-		blobSurveyOverflow: v.optional(v.boolean()),
 	})
 		.index("by_user", ["userId"])
 		.index("by_expires", ["expiresAt"]),
 
 	/**
-	 * Migration-only scaffolding: which user's text mentions which storage token
-	 * (`blobRefs`), and how far each backfill has read (`migrationProgress`).
+	 * Current reference index plus migration progress. `blobRefSources` stores
+	 * the exact tokens in one document/node, while `blobRefs` keeps one counted
+	 * row per token and owner for account-deletion lookups.
 	 *
 	 * `migrations.backfillBlobOwners` used to read every document AND every
 	 * history node on each 64-file batch, which is exactly the shape that blows
 	 * the per-transaction read limits on any real corpus. Building the reference
 	 * rows first, in bounded passes with persisted progress, makes the claim
-	 * step a bounded index lookup per file. Both tables are dropped by
-	 * `migrations.cleanupBlobRefs` once the backfill is done.
+	 * step a bounded index lookup per file. The reference rows stay current after
+	 * the backfill so deletion never relies on a stale corpus scan.
 	 */
 	blobRefs: defineTable({
 		/** The `/api/storage/<token>` segment, or a raw `_storage` id. */
 		token: v.string(),
 		ownerUserId: v.string(),
+		count: v.optional(v.number()),
 	})
 		.index("by_token", ["token"])
 		.index("by_token_owner", ["token", "ownerUserId"]),
 
+	blobRefSources: defineTable({
+		ownerUserId: v.string(),
+		source: v.union(v.literal("document"), v.literal("node")),
+		sourceId: v.string(),
+		tokens: v.array(v.string()),
+	})
+		.index("by_source", ["source", "sourceId"])
+		.index("by_owner", ["ownerUserId"]),
+
 	migrationProgress: defineTable({
 		name: v.string(),
-		cursor: v.number(),
+		cursor: v.union(v.number(), v.string()),
 		done: v.boolean(),
 		updatedAt: v.number(),
 	}).index("by_name", ["name"]),

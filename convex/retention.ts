@@ -1,5 +1,6 @@
 import type { Doc } from "./_generated/dataModel";
 import { internalMutation } from "./_generated/server";
+import { removeBlobReferences } from "./blobReferences";
 
 const RETENTION_WINDOW_MS = 30 * 24 * 60 * 60 * 1000; // 30 days — generous backstop
 
@@ -124,6 +125,7 @@ export const sweep = internalMutation({
 			);
 			for (const node of nodes) {
 				if (!keep.has(node.nodeId)) {
+					await removeBlobReferences(ctx, "node", node._id);
 					await ctx.db.delete(node._id);
 					pruned += 1;
 				}
