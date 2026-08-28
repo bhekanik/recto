@@ -21,67 +21,10 @@ struct TextViewAdapterTests {
         suite = try Fixtures.suite()
     }
 
-    /// A text view in a window, wired to an engine over the built bundle.
-    ///
-    /// The window is not decoration: `NSTextView.undoManager` comes from the
-    /// responder chain, so a view with no window has **no undo manager at all**
-    /// and `u` silently does nothing. `allowsUndo` matters for the same reason —
-    /// without it `shouldChangeText` registers nothing.
-    @MainActor
-    final class Harness {
-        let window: NSWindow
-        let textView: BlockCaretTextView
-        let engine: VimEngine
-        let adapter: VimTextViewAdapter
-        private var clipboard = ""
-
-        init(_ text: String) throws {
-            window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
-                styleMask: [.titled], backing: .buffered, defer: false)
-            textView = BlockCaretTextView(frame: window.contentLayoutRect)
-            textView.isRichText = false
-            textView.allowsUndo = true
-            textView.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
-            textView.string = text
-            window.contentView?.addSubview(textView)
-            window.makeFirstResponder(textView)
-
-            let host = VimHost()
-            engine = try VimEngine(bundleURL: Fixtures.bundleURL, host: host)
-            adapter = VimTextViewAdapter(textView: textView, engine: engine, host: host)
-            // Keep the suite off the real pasteboard: `"+` and `"*` would
-            // otherwise clobber whatever the developer had copied.
-            host.pasteboardRead = { [unowned self] in clipboard }
-            host.pasteboardWrite = { [unowned self] in clipboard = $0 }
-            try adapter.start()
-        }
-
-        func press(_ spec: String) {
-            for key in VimKeys.parse(spec) {
-                if adapter.handle(key: key.key, modifiers: key.modifiers) { continue }
-                // What `super.keyDown` would do: the text view's input system
-                // turns a key vim declined into `insertText:`, which routes back
-                // through the adapter. Driving it here means the whole suite
-                // exercises the real input path rather than a synthetic one.
-                guard key.key.count == 1, !key.modifiers.contains(.control),
-                    !key.modifiers.contains(.command)
-                else { continue }
-                textView.insertText(
-                    key.key, replacementRange: NSRange(location: NSNotFound, length: 0))
-            }
-        }
-
-        func run(_ testCase: KeystrokeSuite.Case) throws {
-            try adapter.setCursor(line: testCase.cursor[0], column: testCase.cursor[1])
-            press(testCase.keys)
-        }
-    }
-
     @Test("the storage and the engine's mirror stay identical through the suite")
     func mirrorMatchesStorage() throws {
         for testCase in suite.cases {
-            let harness = try Harness(testCase.text)
+            let harness = try TextViewHarness(testCase.text)
             try harness.run(testCase)
             #expect(
                 sameCodeUnits(harness.textView.string, harness.engine.text()),
@@ -95,7 +38,7 @@ struct TextViewAdapterTests {
 
     @Test("undo runs through the text view, not through vim's own history")
     func undoGoesThroughTheHost() throws {
-        let harness = try Harness("the quick brown fox\n")
+        let harness = try TextViewHarness("the quick brown fox\n")
         harness.press("dw")
         #expect(harness.textView.string == "quick brown fox\n")
 
@@ -108,7 +51,7 @@ struct TextViewAdapterTests {
 
     @Test("a batch of edits is one undo step")
     func batchIsOneUndoStep() throws {
-        let harness = try Harness("one\ntwo\nthree\nfour\n")
+        let harness = try TextViewHarness("one\ntwo\nthree\nfour\n")
         harness.press("3dd")
         #expect(harness.textView.string == "four\n")
         harness.press("u")
@@ -118,7 +61,7 @@ struct TextViewAdapterTests {
 
     @Test("an external edit is adopted without echoing back")
     func externalEditSync() throws {
-        let harness = try Harness("one\n")
+        let harness = try TextViewHarness("one\n")
         harness.textView.string = "one\ntwo\n"
         harness.textView.setSelectedRange(NSRange(location: 4, length: 0))
         try harness.adapter.syncFromTextView()
@@ -131,7 +74,7 @@ struct TextViewAdapterTests {
     @Test("emoji clusters survive the round trip to the storage")
     func graphemeRoundTrip() throws {
         for testCase in suite.cases where testCase.text.utf16.count > testCase.text.count {
-            let harness = try Harness(testCase.text)
+            let harness = try TextViewHarness(testCase.text)
             try harness.run(testCase)
             #expect(
                 sameCodeUnits(harness.textView.string, testCase.expectText),
@@ -148,7 +91,7 @@ struct TextViewAdapterTests {
 
     @Test("the block caret is on in normal mode and off in insert mode")
     func caretShapeFollowsMode() throws {
-        let harness = try Harness("one\n")
+        let harness = try TextViewHarness("one\n")
         var statuses: [VimStatus] = []
         harness.adapter.onStatusChange = { statuses.append($0) }
 

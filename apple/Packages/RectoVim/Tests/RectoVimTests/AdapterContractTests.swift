@@ -12,50 +12,6 @@ import Testing
 @Suite("adapter contract")
 @MainActor
 struct AdapterContractTests {
-    @MainActor
-    final class Harness {
-        let window: NSWindow
-        let textView: BlockCaretTextView
-        let engine: VimEngine
-        let adapter: VimTextViewAdapter
-        var failures: [VimReplayFailure] = []
-        private var clipboard = ""
-
-        init(_ text: String, width: CGFloat = 600) throws {
-            window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: width, height: 400),
-                styleMask: [.titled], backing: .buffered, defer: false)
-            textView = BlockCaretTextView(frame: window.contentLayoutRect)
-            textView.isRichText = false
-            textView.allowsUndo = true
-            textView.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
-            textView.string = text
-            window.contentView?.addSubview(textView)
-            window.makeFirstResponder(textView)
-
-            let host = VimHost()
-            engine = try VimEngine(bundleURL: Fixtures.bundleURL, host: host)
-            adapter = VimTextViewAdapter(textView: textView, engine: engine, host: host)
-            host.pasteboardRead = { [unowned self] in clipboard }
-            host.pasteboardWrite = { [unowned self] in clipboard = $0 }
-            try adapter.start()
-            adapter.onReplayFailure = { [unowned self] in failures.append($0) }
-        }
-
-        /// Drives a key the way `keyDown` does: vim first, and whatever it
-        /// declines goes to the text view's input system.
-        func press(_ spec: String) {
-            for key in VimKeys.parse(spec) {
-                if adapter.handle(key: key.key, modifiers: key.modifiers) { continue }
-                guard key.key.count == 1, !key.modifiers.contains(.control),
-                    !key.modifiers.contains(.command)
-                else { continue }
-                textView.insertText(
-                    key.key, replacementRange: NSRange(location: NSNotFound, length: 0))
-            }
-        }
-    }
-
     // MARK: - Line endings
 
     @Test(
@@ -73,7 +29,7 @@ struct AdapterContractTests {
         // `a\r\nb` as {from: 2, to: 3}, which against the real storage deletes
         // the `\n` of the CRLF rather than the `b`. Both sides have to be
         // indexing the same string.
-        let harness = try Harness(document.text)
+        let harness = try TextViewHarness(document.text)
         harness.press(document.keys)
         #expect(
             sameCodeUnits(harness.textView.string, document.expected),
@@ -89,7 +45,7 @@ struct AdapterContractTests {
         // A `keyDown` reports one key name; the input system delivers `e` and
         // U+0301 as one `insertText`. Synthesising from the key name dropped the
         // mark entirely.
-        let harness = try Harness("ab\n")
+        let harness = try TextViewHarness("ab\n")
         harness.press("i")
         harness.textView.insertText(
             "e\u{0301}", replacementRange: NSRange(location: NSNotFound, length: 0))
@@ -99,7 +55,7 @@ struct AdapterContractTests {
 
     @Test("emoji and ZWJ sequences arrive whole")
     func emojiInput() throws {
-        let harness = try Harness("ab\n")
+        let harness = try TextViewHarness("ab\n")
         harness.press("i")
         for text in ["\u{1F3A9}", "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}"] {
             harness.textView.insertText(
@@ -117,7 +73,7 @@ struct AdapterContractTests {
         // AppKit owns the storage while marked text is up — modelling a
         // composition as vim edits would fight the input system — so the adapter
         // stands aside and takes the storage back afterwards.
-        let harness = try Harness("ab\n")
+        let harness = try TextViewHarness("ab\n")
         harness.press("i")
         harness.textView.setMarkedText(
             "ni", selectedRange: NSRange(location: 2, length: 0),
@@ -132,7 +88,7 @@ struct AdapterContractTests {
 
     @Test("dot repeats an insert that came through the input system")
     func dotRepeatsExternalInput() throws {
-        let harness = try Harness("ab\n")
+        let harness = try TextViewHarness("ab\n")
         harness.press("iXY")
         harness.press("<Esc>")
         #expect(harness.textView.string == "XYab\n")
@@ -155,7 +111,7 @@ struct AdapterContractTests {
 
     @Test("a vetoed edit stops replay and resyncs instead of drifting")
     func delegateVeto() throws {
-        let harness = try Harness("one two three\n")
+        let harness = try TextViewHarness("one two three\n")
         let delegate = VetoingDelegate()
         harness.textView.delegate = delegate
         harness.press("dw")
@@ -177,7 +133,7 @@ struct AdapterContractTests {
 
     @Test("an out-of-bounds range stops replay and resyncs")
     func rangeOutOfBounds() throws {
-        let harness = try Harness("one two three\n")
+        let harness = try TextViewHarness("one two three\n")
         // Someone changed the storage without telling the adapter — the exact
         // situation the invariant is there to catch.
         harness.textView.string = "hi\n"
@@ -198,7 +154,7 @@ struct AdapterContractTests {
         // Vim puts the caret at the start of the change it restored.
         // `NSUndoManager` restores whatever selection it recorded, which in the
         // spike's proof was two lines away.
-        let harness = try Harness("one\ntwo\nthree\n")
+        let harness = try TextViewHarness("one\ntwo\nthree\n")
         harness.press("jjdd")
         #expect(harness.textView.string == "one\ntwo\n")
 
@@ -230,7 +186,7 @@ struct AdapterContractTests {
         // offset, so every column looked like column zero and `gj` from the
         // middle of a wrapped line landed at its start.
         let paragraph = String(repeating: "word ", count: 60) + "end\n"
-        let harness = try Harness(paragraph, width: 220)
+        let harness = try TextViewHarness(paragraph, width: 220)
         harness.textView.textContainer?.widthTracksTextView = true
         harness.textView.textLayoutManager?.ensureLayout(
             for: harness.textView.textLayoutManager!.documentRange)
@@ -252,7 +208,7 @@ struct AdapterContractTests {
     @Test("offsetAtCoords answers on the display line under the point")
     func offsetAtCoordsUsesTheDisplayLine() throws {
         let paragraph = String(repeating: "word ", count: 60) + "end\n"
-        let harness = try Harness(paragraph, width: 220)
+        let harness = try TextViewHarness(paragraph, width: 220)
         harness.textView.textContainer?.widthTracksTextView = true
         harness.textView.textLayoutManager?.ensureLayout(
             for: harness.textView.textLayoutManager!.documentRange)

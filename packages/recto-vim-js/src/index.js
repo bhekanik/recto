@@ -181,12 +181,16 @@ class VimSession {
 	 */
 	insertText(text, from, to) {
 		const cm = this.cm;
+		// This is the boundary: the arguments come across from Swift through
+		// JSCore, where a missing `replacementRange` arrives as `undefined` and a
+		// `JSValue` that failed to convert arrives as something else entirely.
+		// Everything below this point deals in the parsed values.
 		if (typeof text !== "string" || text === "") return this._result(false);
+		const hasRange = typeof from === "number" && Number.isFinite(from);
+		const rangeEnd = typeof to === "number" && Number.isFinite(to) ? to : from;
 		cm.operation(() => {
-			if (typeof from === "number") {
-				const start = cm.posFromIndex(from);
-				const end = cm.posFromIndex(typeof to === "number" ? to : from);
-				cm.replaceRange(text, start, end);
+			if (hasRange) {
+				cm.replaceRange(text, cm.posFromIndex(from), cm.posFromIndex(rangeEnd));
 			} else if (cm.state.overwrite) {
 				cm.overWriteSelection(text);
 			} else {
