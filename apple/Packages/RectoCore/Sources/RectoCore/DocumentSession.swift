@@ -141,6 +141,10 @@ public actor DocumentSession {
   /// Load the document, seed the grouping controller, and start mirroring.
   /// Idempotent: a second window on the same document just increments the count.
   public func open() async throws {
+    try await withTransition { try await performOpen() }
+  }
+
+  private func performOpen() async throws {
     openCount += 1
 
     // Always re-read, even when a window already has this session open. The sync
@@ -187,11 +191,17 @@ public actor DocumentSession {
   /// Release one holder. The session shuts down when the last window closes,
   /// after flushing.
   public func close() async {
+    await withTransition { await performClose() }
+  }
+
+  private func performClose() async {
     openCount = max(openCount - 1, 0)
     guard openCount == 0 else { return }
-    // Through the queue like everything else: closing while a navigation is
-    // mid-flight would otherwise tear the controller down under it.
-    try? await withTransition { try await performFlush() }
+    try? await performFlush()
+    // Re-check: a new window can only have arrived before this transition
+    // started, but the flush above suspends, and tearing the controller down
+    // under a holder that just opened would leave it with a dead session.
+    guard openCount == 0 else { return }
     idleTask?.cancel()
     draftTask?.cancel()
     eventTask?.cancel()

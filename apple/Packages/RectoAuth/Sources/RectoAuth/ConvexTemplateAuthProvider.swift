@@ -45,26 +45,45 @@ public enum RectoAuthError: LocalizedError, Equatable {
 ///     token onto a templated session. The event is treated as a signal only: it
 ///     triggers a fresh, cache-first templated fetch, and only that token is
 ///     pushed — which also stops the event/fetch loop from running away.
+/// The single owner of every `login` / `logout` on the Convex client.
+///
+/// convex-swift replaces its `authBridge` and the FFI auth callback on each
+/// login, and neither replacement is synchronized (get-convex/convex-swift #21,
+/// #26). Overlapping calls corrupt the bridge — we saw it as an
+/// `EXC_ARM_DA_ALIGN` inside a concurrency job. Foreground resume, auth-error
+/// recovery, bind-time session login and explicit sign-out all reach the client
+/// through here, so no two can ever be in flight.
+///
+/// An actor rather than a Boolean on the provider: a flag only serializes the
+/// calls that happen to check it, and the calls come from three different
+/// isolation domains.
+public actor ConvexAuthCoordinator {
+  public static let shared = ConvexAuthCoordinator()
+
+  private var inFlight: Task<Void, Never>?
+
+  init() {}
+
+  /// Run `body` after any auth call already in flight has finished.
+  public func perform(_ body: @escaping @Sendable () async -> Void) async {
+    let previous = inFlight
+    let task = Task {
+      await previous?.value
+      await body()
+    }
+    inFlight = task
+    await task.value
+  }
+}
+
 @MainActor
 public final class ConvexTemplateAuthProvider: AuthProvider {
   public typealias T = String
 
   private let logger = Logger(subsystem: "com.bhekani.recto", category: "auth")
   private let template: String
-  private var onIdToken: (@Sendable (String?) -> Void)?
-  private var refreshListener: Task<Void, Never>?
   private var sessionListener: Task<Void, Never>?
-  private var lastPushedFingerprint: String?
   private var syncedSessionID: String?
-  /// A `loginFromCache` / `logout` is already in flight on the Convex client.
-  ///
-  /// convex-swift issues #21/#26: the FFI auth bridge is not safe against
-  /// concurrent logins, and overlapping them crashes with a misaligned access
-  /// inside the Rust callback. Our own startup calls `loginFromCache()` on the
-  /// transport at the same moment Clerk's `.sessionChanged` fires here, so the
-  /// two really do overlap unless they are serialized.
-  private var clientAuthInFlight = false
-  private var pendingSessionID: String??
   private weak var client: ConvexClientWithAuth<String>?
 
   public init(template: String = convexJWTTemplate) {
@@ -72,7 +91,6 @@ public final class ConvexTemplateAuthProvider: AuthProvider {
   }
 
   deinit {
-    refreshListener?.cancel()
     sessionListener?.cancel()
   }
 
@@ -115,10 +133,6 @@ public final class ConvexTemplateAuthProvider: AuthProvider {
   /// session that had already ended would otherwise leave Convex holding a dead
   /// token.
   public func logout() async throws {
-    refreshListener?.cancel()
-    refreshListener = nil
-    onIdToken = nil
-    lastPushedFingerprint = nil
     syncedSessionID = nil
     guard RectoAuth.isClerkConfigured, Clerk.shared.session != nil else { return }
     try await Clerk.shared.auth.signOut()
@@ -131,11 +145,14 @@ public final class ConvexTemplateAuthProvider: AuthProvider {
   private func authenticate(
     onIdToken: @Sendable @escaping (String?) -> Void, reason: String
   ) async throws -> String {
-    self.onIdToken = onIdToken
-    let token = try await fetchToken(reason: reason)
-    lastPushedFingerprint = JWTClaims(token: token)?.fingerprint
-    startRefreshListener()
-    return token
+    // The push path is deliberately NOT wired. `onIdToken` is invoked from a
+    // task the SDK owns, so it can replace the auth bridge while a login is in
+    // flight and nothing we write can serialize it (#21/#26). The pull path
+    // alone keeps a session authenticated — N0a measured 14 minutes across ~20
+    // token rotations on it — at the cost of one extra fetch when a token
+    // actually expires.
+    _ = onIdToken
+    return try await fetchToken(reason: reason)
   }
 
   private func fetchToken(reason: String) async throws -> String {
@@ -158,67 +175,32 @@ public final class ConvexTemplateAuthProvider: AuthProvider {
     return token
   }
 
-  /// Clerk emits `.tokenRefreshed` for any template whose token changed, so the
-  /// payload is deliberately ignored and a templated token is fetched instead.
-  /// The fetch is cache-first, so it only hits the network when the templated
-  /// token really did expire.
-  private func startRefreshListener() {
-    guard RectoAuth.isClerkConfigured else { return }
-    refreshListener?.cancel()
-    refreshListener = Task { [weak self] in
-      for await event in Clerk.shared.auth.events {
-        if Task.isCancelled { break }
-        guard case .tokenRefreshed = event else { continue }
-        await self?.pushFreshToken()
-      }
-    }
-  }
-
-  private func pushFreshToken() async {
-    guard let onIdToken else { return }
-    do {
-      let token = try await fetchToken(reason: "refresh")
-      let fingerprint = JWTClaims(token: token)?.fingerprint
-      guard fingerprint != lastPushedFingerprint else { return }
-      lastPushedFingerprint = fingerprint
-      onIdToken(token)
-    } catch {
-      logger.error("token refresh failed: \(error.localizedDescription, privacy: .public)")
-      onIdToken(nil)
-    }
-  }
-
   /// `.sessionChanged` also fires for in-place session updates, so only real
   /// transitions are forwarded to Convex.
   private func syncSession(_ session: Session?) async {
     guard let client else { return }
     let activeID = (session?.status == .active) ? session?.id : nil
     guard activeID != syncedSessionID else { return }
+    syncedSessionID = activeID
 
-    // Coalesce rather than overlap: remember the newest target and let the
-    // in-flight call pick it up when it finishes.
-    guard !clientAuthInFlight else {
-      pendingSessionID = .some(activeID)
-      return
-    }
-
-    clientAuthInFlight = true
-    defer { clientAuthInFlight = false }
-
-    var target = activeID
-    while true {
-      syncedSessionID = target
-      if target != nil {
+    let logger = self.logger
+    await ConvexAuthCoordinator.shared.perform {
+      if activeID != nil {
         logger.info("clerk session became active; logging Convex in from cache")
         _ = await client.loginFromCache()
       } else {
         logger.info("clerk session ended; logging Convex out")
         await client.logout()
       }
-      guard let queued = pendingSessionID else { return }
-      pendingSessionID = nil
-      guard queued != syncedSessionID else { return }
-      target = queued
     }
+  }
+
+  /// Log the Convex client out through the SDK, which is the only path that
+  /// clears the FFI auth callback. Signing out through Clerk alone leaves the
+  /// client holding a dead bridge.
+  public func logoutConvexClient() async {
+    guard let client else { return }
+    syncedSessionID = nil
+    await ConvexAuthCoordinator.shared.perform { await client.logout() }
   }
 }

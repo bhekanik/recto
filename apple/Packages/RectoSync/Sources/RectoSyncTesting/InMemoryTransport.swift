@@ -121,6 +121,8 @@ public actor InMemoryTransport: RectoTransport {
     /// on the message to decide whether to re-authenticate.
     case unauthenticated
     case documentNotFound
+    /// `documents.updateCurrentNodeId` refuses a head that is not in the DAG.
+    case unknownPointerTarget
   }
 
   // MARK: - Seeding
@@ -133,7 +135,9 @@ public actor InMemoryTransport: RectoTransport {
     let now = tick()
     documents[id] = Document(
       id: id, title: title, markdown: "", wordCount: 0, currentNodeId: rootNodeId,
-      markdownHeadNodeId: rootNodeId, pointerRevision: 0, createdAt: now, updatedAt: now,
+      // `documents.create` writes no `markdownHeadNodeId`: the body is empty and
+      // its provenance is genuinely unknown until something stamps it.
+      markdownHeadNodeId: nil, pointerRevision: 0, createdAt: now, updatedAt: now,
       lastCommit: nil)
     nodes[id] = [
       RemoteNode(
@@ -165,9 +169,36 @@ public actor InMemoryTransport: RectoTransport {
       documents[documentId]?.markdown = markdown
       documents[documentId]?.updatedAt = now
       documents[documentId]?.pointerRevision = document.pointerRevision + 1
+      // A commit writes body and head together, so the body's provenance is the
+      // node it just committed.
+      documents[documentId]?.markdownHeadNodeId = nodeId
     }
     notifyNodeSubscribers(documentId: documentId)
     notifyDocumentSubscribers()
+    return nodeId
+  }
+
+  /// Append a node whose patch cannot be decoded, and point the head at it.
+  /// Models a DAG that arrived corrupt or was written by a newer client.
+  @discardableResult
+  public func appendBrokenNode(documentId: String, parentNodeId: String, markdown: String) throws
+    -> String
+  {
+    guard var document = documents[documentId] else { throw TransportFault.documentNotFound }
+    let nodeId = ulid()
+    let now = tick()
+    nodes[documentId, default: []].append(
+      RemoteNode(
+        nodeId: nodeId, parentNodeId: parentNodeId, patch: "{ not a patch",
+        snapshot: nil, selection: nil, origin: "other", createdAt: now))
+    document.currentNodeId = nodeId
+    document.markdown = markdown
+    document.markdownHeadNodeId = nodeId
+    document.updatedAt = now
+    document.pointerRevision += 1
+    documents[documentId] = document
+    notifyDocumentSubscribers()
+    notifyNodeSubscribers(documentId: documentId)
     return nodeId
   }
 
@@ -268,6 +299,12 @@ public actor InMemoryTransport: RectoTransport {
   ) async throws -> UpdateCurrentNodeResponse {
     try applyPreFault()
     guard var document = documents[documentId] else { throw TransportFault.documentNotFound }
+    // The server validates the pointer target (`Unknown currentNodeId`). A fake
+    // that accepts anything lets a test pass against a state the deployment
+    // cannot produce.
+    guard (nodes[documentId] ?? []).contains(where: { $0.nodeId == currentNodeId }) else {
+      throw TransportFault.unknownPointerTarget
+    }
     if updatedAt < document.updatedAt {
       // Lost the last-write-wins check: hand back the head that won so the
       // caller reconciles instead of guessing.

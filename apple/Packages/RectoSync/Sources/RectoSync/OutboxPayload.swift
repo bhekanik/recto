@@ -68,12 +68,22 @@ public struct OutboxPayload: Codable, Sendable, Equatable {
 
   /// Fields this kind of job cannot be sent without. Guessing a default here is
   /// what makes a malformed row indistinguishable from real work.
-  public func validate(for kind: OutboxKind) throws {
+  ///
+  /// `baseHeadNodeId` lives on the job rather than the payload, but it is just as
+  /// load-bearing: a commit whose expected head we fell back to the CURRENT head
+  /// for is a commit onto a parent the user never chose.
+  public func validate(for kind: OutboxKind, baseHeadNodeId: String? = nil) throws {
     func require(_ condition: Bool, _ field: String) throws {
       guard condition else { throw OutboxPayloadError.missingField(kind: kind, field: field) }
     }
     switch kind {
-    case .commitEdit, .appendNode:
+    case .commitEdit:
+      try require(!(nodeId ?? "").isEmpty, "nodeId")
+      try require(!(patch ?? "").isEmpty, "patch")
+      try require(markdown != nil, "markdown")
+      try require(wordCount != nil, "wordCount")
+      try require(!(baseHeadNodeId ?? "").isEmpty, "baseHeadNodeId")
+    case .appendNode:
       try require(!(nodeId ?? "").isEmpty, "nodeId")
       try require(!(patch ?? "").isEmpty, "patch")
       try require(markdown != nil, "markdown")
@@ -81,6 +91,7 @@ public struct OutboxPayload: Codable, Sendable, Equatable {
     case .pointerMove:
       try require(!(nodeId ?? "").isEmpty, "nodeId")
       try require(markdown != nil, "markdown")
+      try require(wordCount != nil, "wordCount")
       try require(createdAt != nil, "createdAt")
     case .draftSave:
       try require(markdown != nil, "markdown")

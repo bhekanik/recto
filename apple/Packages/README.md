@@ -124,6 +124,10 @@ advanced — would be told `diverged` instead of getting its original answer.
   under continuous editing cannot starve the others.
 - **The backoff survives a relaunch.** `start()`, `resume()` and every completed
   drain schedule one wake for the persisted `earliestNextAttempt()`.
+- **The barrier is persisted.** `documents.queueBlockedReason` is written in the
+  same transaction as the divergence and enforced in the SQL that selects
+  drainable documents, so backgrounding the app cannot drop it and let the
+  pointer move queued behind a conflict drain on the next launch.
 - **A divergence holds the document's queue.** A diverged commit returns
   `completedAndBlock`; nothing else for that document is sent until a resolution
   or a fresh reconciliation releases it. Otherwise the pointer move queued behind
@@ -165,6 +169,11 @@ The client treats it as the only trustworthy signal:
 | stamp missing | untrusted: keep the DAG materialization, record only the timestamps |
 | stamp names another node | the body belongs to a branch that is not the head: same as missing |
 
+Hydration takes the same line: if the head cannot be materialized from the DAG,
+the document is **not** written at all. Falling back to `remote.markdown` there
+would promote a body of unknown provenance into the head — the one thing the
+stamp exists to prevent — so the row is left absent and pulled again next pass.
+
 `documents.list` carries no body, so a newer `updatedAt` on a document we already
 have triggers a `get` — bumping the timestamp and moving on is how another
 device's draft stayed invisible forever. A local draft always wins; the server's
@@ -180,6 +189,7 @@ its answer:
 |---|---|---|
 | `inSync` | heads agree | marks `synced` |
 | `uploadAncestors(missing:rebaseOnto:)` | the server is behind us | leaves the outbox to catch it up |
+| `adoptRemote(headNodeId:whenIdle:)` (remote head is an ancestor **and** `pointerRevision` advanced) | a remote **undo**: they moved back deliberately, after everything we sent. Ancestry alone cannot tell this from server lag — the revision counter can |
 | `adoptRemote(headNodeId:whenIdle:)` | someone built on our work | adopts when idle, keeping the caret; defers while there is pending local work. The adopt itself is a CAS inside one transaction (`RectoStore.adoptRemoteHead`) on the observed head plus "still no draft and no queued job", because materializing the target suspends and a keystroke can land in that gap |
 | `diverged(local:remote:)` | neither head reaches the other | keeps **both** branches, sets `divergedRemoteHeadNodeId`, emits `.diverged` |
 | `awaitingNodes(remoteHeadNodeId:)` | their head is not in our DAG yet | pulls the branch with `docNodes.listSince` and re-resolves once — it does **not** wait for the subscription to deliver it, because a Convex subscription that hit a server error never returns |
@@ -231,6 +241,12 @@ flush or call `signOut(discardingUnsynced: true)` as an explicit, user-visible
 decision. Sync is stopped before the purge either way, or a subscription tick
 re-inserts rows behind the delete.
 
+An owner mismatch on a mirror that still holds unsynced work does **not** purge:
+`status` becomes `.blockedByRetainedWork(owner:count:)` and the UI must offer
+either recovery as that owner or an explicit
+`discardRetainedWorkAndClaim(userId:)`. A revoked session's retained work would
+otherwise be deleted by the next person who signed in.
+
 An account switch stops sync, purges, and only **then** publishes the new
 `signedIn` status — a consumer reading the store in between would show the
 previous user's documents under the new session. A purge failure blocks the
@@ -251,6 +267,16 @@ Wire it all together with `RectoAuth.attach(sync:)` and
 `RectoAuth.attach(sessions:)`; `SyncEngine` conforms to `SyncControlling` and
 `DocumentSessionRegistry` to `EditSessionCoordinating`.
 
+**One coordinator owns every Convex auth call.** `ConvexAuthCoordinator` is the
+single path for `login`/`logout` on the client — foreground resume, auth-error
+recovery, bind-time session login and explicit sign-out all queue behind it —
+because convex-swift replaces its `authBridge` and FFI callback on each login and
+neither replacement is synchronized (#21/#26). The **push** token path is
+deliberately not wired: `onIdToken` is invoked from a task the SDK owns, so
+nothing we write can serialize it. The pull path alone keeps a session
+authenticated (N0a measured 14 minutes across ~20 rotations). Sign-out goes
+through the SDK's own `logout()`, the only path that drops the FFI callback.
+
 `SyncEngine.stop()` is `async` and **awaits** every task it cancels. Cancellation
 does not abort an in-flight network call, and returning early let a stale task
 resume after an account switch and write the previous account's data. Each task
@@ -262,10 +288,10 @@ also carries a lifecycle generation it re-checks after every external await.
 
 ```
 swift test --package-path apple/Packages/RectoHistory   # 37 — web parity
-swift test --package-path apple/Packages/RectoStore     # 25 — incl. a v1→v3 upgrade
-swift test --package-path apple/Packages/RectoAuth      # 17
-swift test --package-path apple/Packages/RectoSync      # 36 — server contract + live flows
-swift test --package-path apple/Packages/RectoCore      # 39 — acceptance, provenance, repros
+swift test --package-path apple/Packages/RectoStore     # 26 — incl. a v1→v4 upgrade
+swift test --package-path apple/Packages/RectoAuth      # 20
+swift test --package-path apple/Packages/RectoSync      # 40 — server contract + live flows
+swift test --package-path apple/Packages/RectoCore      # 46 — acceptance, provenance, repros
 ```
 
 SwiftPM has served a **stale cross-package module** here more than once: editing

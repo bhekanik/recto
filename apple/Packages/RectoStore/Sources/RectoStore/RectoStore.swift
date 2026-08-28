@@ -100,6 +100,35 @@ public actor RectoStore {
     }
   }
 
+  /// Apply a remote title change without touching anything else.
+  ///
+  /// A whole-record `save` from a copy read before the edit silently reverts the
+  /// draft, head, revision and sync state that a session wrote in between —
+  /// `documents.list` only ever tells us about the title.
+  public func updateRemoteTitle(documentLocalId: String, title: String, remoteUpdatedAt: Double?)
+    throws
+  {
+    try writer.write { db in
+      try db.execute(
+        sql: """
+          UPDATE documents
+          SET title = ?, remoteUpdatedAt = COALESCE(?, remoteUpdatedAt)
+          WHERE localId = ?
+          """,
+        arguments: [title, remoteUpdatedAt, documentLocalId])
+    }
+  }
+
+  /// Hold or release a document's queue. Set inside the same transaction as the
+  /// divergence it describes; cleared only by a resolver or a reconciliation.
+  public func setQueueBlocked(documentLocalId: String, reason: String?) throws {
+    try writer.write { db in
+      try db.execute(
+        sql: "UPDATE documents SET queueBlockedReason = ? WHERE localId = ?",
+        arguments: [reason, documentLocalId])
+    }
+  }
+
   public func save(_ document: DocumentRecord) throws {
     try writer.write { try document.save($0) }
   }
@@ -408,6 +437,7 @@ public actor RectoStore {
       document.markdown = markdown
       document.wordCount = wordCount
       document.divergedRemoteHeadNodeId = nil
+      document.queueBlockedReason = nil
       document.syncState = .synced
       document.updatedAt = now
       try document.update(db)
@@ -506,6 +536,7 @@ public actor RectoStore {
       document.draftSelectionAnchor = nil
       document.draftSelectionHead = nil
       document.divergedRemoteHeadNodeId = nil
+      document.queueBlockedReason = nil
       document.draftRevision += 1
       document.syncState =
         try OutboxJob.filter(Column("documentLocalId") == documentLocalId).fetchCount(db) == 0
@@ -570,6 +601,7 @@ public actor RectoStore {
       document.draftSelectionAnchor = nil
       document.draftSelectionHead = nil
       document.divergedRemoteHeadNodeId = nil
+      document.queueBlockedReason = nil
       document.draftRevision += 1
       document.syncState = .pending
       document.updatedAt = now
@@ -820,9 +852,16 @@ public actor RectoStore {
   /// document stuck on a divergence does not hold up every other document.
   public func documentsWithPendingJobs() throws -> [String] {
     try writer.read { db in
+      // Blocked documents are excluded here rather than in memory, so the
+      // barrier survives a relaunch.
       try String.fetchAll(
         db,
-        sql: "SELECT documentLocalId FROM outbox GROUP BY documentLocalId ORDER BY MIN(id)")
+        sql: """
+          SELECT o.documentLocalId FROM outbox o
+          LEFT JOIN documents d ON d.localId = o.documentLocalId
+          WHERE d.queueBlockedReason IS NULL
+          GROUP BY o.documentLocalId ORDER BY MIN(o.id)
+          """)
     }
   }
 
@@ -934,6 +973,9 @@ public actor RectoStore {
         throw StoreError.documentNotFound(documentLocalId)
       }
       document.syncState = state
+      // A divergence and its barrier are one fact; writing them separately is
+      // what let a restart drain past an unresolved conflict.
+      if state == .diverged { document.queueBlockedReason = "diverged" }
       if let remoteHeadNodeId { document.remoteHeadNodeId = remoteHeadNodeId }
       if let remoteUpdatedAt { document.remoteUpdatedAt = remoteUpdatedAt }
       if let remotePointerRevision { document.remotePointerRevision = remotePointerRevision }

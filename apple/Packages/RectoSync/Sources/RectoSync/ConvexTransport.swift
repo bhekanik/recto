@@ -140,14 +140,23 @@ public actor ConvexTransport: RectoTransport {
   var liveSubscriptionCountForTesting: Int { 0 }
 
   /// Re-authenticate from the keychain session. Safe to call repeatedly.
+  ///
+  /// Through the coordinator: foreground resume and auth-error recovery both
+  /// land here while Clerk's `.sessionChanged` may be driving a login of its
+  /// own, and convex-swift's auth bridge does not survive two at once.
   @discardableResult
   public func loginFromCache() async -> Bool {
-    if case .success = await client.loginFromCache() { return true }
-    return false
+    let outcome = OutcomeBox()
+    let client = self.client
+    await ConvexAuthCoordinator.shared.perform {
+      if case .success = await client.loginFromCache() { await outcome.succeed() }
+    }
+    return await outcome.value
   }
 
   public func logout() async {
-    await client.logout()
+    let client = self.client
+    await ConvexAuthCoordinator.shared.perform { await client.logout() }
   }
 
   // MARK: - Subscriptions
@@ -296,4 +305,10 @@ private final class CancellationBox: @unchecked Sendable {
   init(_ cancellable: AnyCancellable) { self.cancellable = cancellable }
 
   func cancel() { cancellable.cancel() }
+}
+
+/// Carries a result out of the coordinator's `@Sendable` closure.
+private actor OutcomeBox {
+  private(set) var value = false
+  func succeed() { value = true }
 }

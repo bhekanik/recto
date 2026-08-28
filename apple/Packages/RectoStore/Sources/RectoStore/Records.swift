@@ -48,6 +48,13 @@ public struct DocumentRecord: Codable, Sendable, FetchableRecord, PersistableRec
   /// (`documents.markdownHeadNodeId`). `nil` means the provenance is unknown and
   /// the text must NOT be treated as the head's — the DAG materialization wins.
   public var remoteMarkdownHeadNodeId: String?
+  /// Why this document's queue is held, or `nil` when it drains normally.
+  ///
+  /// Persisted rather than kept in memory: backgrounding the app tears the sync
+  /// engine down, and a barrier that lived only in a `Set` let the pointer move
+  /// queued behind a divergence drain on the next launch and walk the server off
+  /// the branch the user was still deciding about.
+  public var queueBlockedReason: String?
   /// Bumped on every write that changes the draft or the head. A scheduled
   /// timer captures it and the store refuses the write if it has moved, so a
   /// 250 ms task cannot resurrect the text it was scheduled with over a newer one.
@@ -74,6 +81,7 @@ public struct DocumentRecord: Codable, Sendable, FetchableRecord, PersistableRec
     remoteUpdatedAt: Double? = nil,
     remotePointerRevision: Double? = nil,
     remoteMarkdownHeadNodeId: String? = nil,
+    queueBlockedReason: String? = nil,
     draftRevision: Int = 0,
     syncState: SyncState = .pending,
     divergedRemoteHeadNodeId: String? = nil,
@@ -94,6 +102,7 @@ public struct DocumentRecord: Codable, Sendable, FetchableRecord, PersistableRec
     self.remoteUpdatedAt = remoteUpdatedAt
     self.remotePointerRevision = remotePointerRevision
     self.remoteMarkdownHeadNodeId = remoteMarkdownHeadNodeId
+    self.queueBlockedReason = queueBlockedReason
     self.draftRevision = draftRevision
     self.syncState = syncState
     self.divergedRemoteHeadNodeId = divergedRemoteHeadNodeId

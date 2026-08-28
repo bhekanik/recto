@@ -18,6 +18,9 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
   private let origin: String
   private let countWords: @Sendable (String) -> Int
   private var sessions: [String: DocumentSession] = [:]
+  /// Holder counts live here, not behind an await on the session, so
+  /// check-and-remove is never split across a suspension.
+  private var holders: [String: Int] = [:]
 
   public init(
     store: RectoStore,
@@ -33,22 +36,51 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
 
   /// The session for a document, opening it if this is the first holder.
   /// Every caller must pair this with `release`.
+  ///
+  /// The map is written BEFORE the first `await`, so two concurrent first opens
+  /// cannot each construct a session (and each start an event listener).
   public func session(for documentLocalId: String) async throws -> DocumentSession {
-    let session =
-      sessions[documentLocalId]
-      ?? DocumentSession(
+    let session: DocumentSession
+    if let existing = sessions[documentLocalId] {
+      session = existing
+    } else {
+      session = DocumentSession(
         documentLocalId: documentLocalId, store: store, sync: sync, origin: origin,
         countWords: countWords)
-    sessions[documentLocalId] = session
-    try await session.open()
+      sessions[documentLocalId] = session
+    }
+    holders[documentLocalId, default: 0] += 1
+    do {
+      try await session.open()
+    } catch {
+      releaseHolder(documentLocalId)
+      throw error
+    }
     return session
   }
 
   /// Drop one holder. The session flushes and tears down when the last one goes.
+  ///
+  /// The holder count is decremented synchronously, before any await, so an
+  /// open arriving during the close cannot be lost between a check and a removal.
   public func release(_ documentLocalId: String) async {
     guard let session = sessions[documentLocalId] else { return }
+    let isLast = releaseHolder(documentLocalId)
     await session.close()
-    if await session.isIdle { sessions[documentLocalId] = nil }
+    // Only drop the map entry if nobody re-opened while we were closing.
+    if isLast, holders[documentLocalId] == nil { sessions[documentLocalId] = nil }
+  }
+
+  /// Returns true when that was the last holder.
+  @discardableResult
+  private func releaseHolder(_ documentLocalId: String) -> Bool {
+    guard let count = holders[documentLocalId] else { return true }
+    if count <= 1 {
+      holders[documentLocalId] = nil
+      return true
+    }
+    holders[documentLocalId] = count - 1
+    return false
   }
 
   /// Flush every open document — app termination, background, log out.

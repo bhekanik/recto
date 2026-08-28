@@ -7,6 +7,7 @@ enum Migrations {
   static let v1 = "v1-core"
   static let v2 = "v2-pointer-revision"
   static let v3 = "v3-draft-provenance"
+  static let v4 = "v4-queue-barrier"
 
   static func migrator() -> DatabaseMigrator {
     // Deliberately NOT `eraseDatabaseOnSchemaChange`, even in DEBUG: BK
@@ -161,6 +162,14 @@ enum Migrations {
       try db.alter(table: "documents") { t in
         t.add(column: "remoteMarkdownHeadNodeId", .text)
         t.add(column: "draftRevision", .integer).notNull().defaults(to: 0)
+      }
+    }
+
+    // The divergence barrier has to outlive the process: `stop()` used to drop
+    // it, and the next launch drained the pointer move queued behind a conflict.
+    migrator.registerMigration(v4) { db in
+      try db.alter(table: "documents") { t in
+        t.add(column: "queueBlockedReason", .text)
       }
     }
 

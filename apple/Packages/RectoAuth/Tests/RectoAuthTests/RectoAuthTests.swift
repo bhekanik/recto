@@ -308,3 +308,63 @@ struct Round3AuthTests {
     #expect(try await store.mirrorOwner() == "user_A")
   }
 }
+
+@Suite("round-4 auth")
+struct Round4AuthTests {
+  @Test("signing in as another owner is blocked while retained work exists")
+  func ownerMismatchWithRetainedWorkIsBlocked() async throws {
+    let store = try RectoStore.inMemory()
+    try await store.setMirrorOwner("user_A")
+    try await store.save(
+      DocumentRecord(
+        localId: "doc-1", title: "A's work", markdown: "", wordCount: 0,
+        localHeadNodeId: "root", updatedAt: 0, createdAt: 0))
+    _ = try await store.enqueue(
+      OutboxJob(
+        documentLocalId: "doc-1", kind: .commitEdit, clientMutationId: "m1", payload: "{}",
+        createdAt: 0))
+
+    let auth = await RectoAuth(store: store)
+    // A's session was revoked and their work retained; B must not be able to
+    // take the mirror over by simply signing in.
+    #expect(try await auth.claimMirrorForTesting(userId: "user_B") == false)
+    #expect(try await store.pendingJobCount() == 1, "A's only copy is still here")
+    #expect(try await store.mirrorOwner() == "user_A")
+    #expect(await auth.status == .blockedByRetainedWork(owner: "user_A", count: 1))
+    #expect(await auth.retainedUnsyncedWork == 1)
+  }
+
+  @Test("an explicit discard lets the new owner take the mirror")
+  func ownerMismatchWithExplicitDiscard() async throws {
+    let store = try RectoStore.inMemory()
+    try await store.setMirrorOwner("user_A")
+    try await store.save(
+      DocumentRecord(
+        localId: "doc-1", title: "A's work", markdown: "", wordCount: 0,
+        localHeadNodeId: "root", updatedAt: 0, createdAt: 0))
+    _ = try await store.enqueue(
+      OutboxJob(
+        documentLocalId: "doc-1", kind: .commitEdit, clientMutationId: "m1", payload: "{}",
+        createdAt: 0))
+
+    let auth = await RectoAuth(store: store)
+    #expect(await auth.discardRetainedWorkAndClaim(userId: "user_B"))
+    #expect(try await store.documents().isEmpty)
+    #expect(try await store.mirrorOwner() == "user_B")
+  }
+
+  @Test("a clean mirror still transfers without ceremony")
+  func ownerMismatchOnCleanMirror() async throws {
+    let store = try RectoStore.inMemory()
+    try await store.setMirrorOwner("user_A")
+    try await store.save(
+      DocumentRecord(
+        localId: "doc-1", title: "synced", markdown: "x", wordCount: 1,
+        localHeadNodeId: "root", syncState: .synced, updatedAt: 0, createdAt: 0))
+
+    let auth = await RectoAuth(store: store)
+    #expect(try await auth.claimMirrorForTesting(userId: "user_B"))
+    #expect(try await store.documents().isEmpty)
+    #expect(try await store.mirrorOwner() == "user_B")
+  }
+}

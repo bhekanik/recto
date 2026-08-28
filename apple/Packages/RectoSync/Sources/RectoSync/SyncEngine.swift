@@ -46,10 +46,7 @@ public actor SyncEngine: SyncControlling {
   /// can resume afterwards and write the OLD account's data. Every task checks
   /// this after each external await and before each store write.
   private var lifecycle = 0
-  /// Documents whose queue is held until a conflict is resolved. A diverged
-  /// commit must not be followed by the pointer move behind it — that would push
-  /// the server back to the branch the user is still deciding about.
-  private var blockedDocuments: Set<String> = []
+
   /// Documents a window has open. Held separately from the subscription tasks
   /// so `stop()` / `resume()` can tear the sockets down and bring the same set
   /// back up.
@@ -119,7 +116,6 @@ public actor SyncEngine: SyncControlling {
     // the generation check before it writes.
     lifecycle += 1
     isRunning = false
-    blockedDocuments.removeAll()
 
     var pending: [Task<Void, Never>] = []
     if let libraryTask { pending.append(libraryTask) }
@@ -179,7 +175,7 @@ public actor SyncEngine: SyncControlling {
 
     for summary in summaries {
       guard isCurrent(generation) else { return }
-      guard var local = byConvexId[summary.id] else {
+      guard let local = byConvexId[summary.id] else {
         try await hydrate(convexId: summary.id, generation: generation)
         continue
       }
@@ -188,8 +184,10 @@ public actor SyncEngine: SyncControlling {
       guard titleChanged || bodyMayHaveChanged else { continue }
 
       if titleChanged {
-        local.title = summary.title
-        try await store.save(local)
+        // Title only. `local` was read before this loop and a session may have
+        // written a draft or a new head since; a whole-record save would revert it.
+        try await store.updateRemoteTitle(
+          documentLocalId: local.localId, title: summary.title, remoteUpdatedAt: nil)
       }
       // `documents.list` carries no body. A newer `updatedAt` on a document we
       // already have can be another device's draft save, which only `get`
@@ -231,22 +229,37 @@ public actor SyncEngine: SyncControlling {
       isCurrent(generation)
     else { return }
 
+    // `updateCurrentNodeId` moves the document row WITHOUT writing `docNodes`,
+    // so a remote undo or redo never fires the node subscription. Recording the
+    // head and stopping here left the local head on the old branch forever.
+    let headMoved = remote.currentNodeId != document.localHeadNodeId
+
     guard let stamp = remote.markdownHeadNodeId, stamp == remote.currentNodeId else {
       // Unstamped or stamped for another branch: record the timestamps, never
       // the text.
-      try await store.setSyncState(
-        documentLocalId: localId, document.syncState, remoteHeadNodeId: remote.currentNodeId,
-        remoteUpdatedAt: remote.updatedAt, remotePointerRevision: remote.pointerRevision)
+      if headMoved {
+        // Reconcile FIRST: it compares the freshly fetched revision against the
+        // one still on the row, and recording it here would erase that signal.
+        try await reconcileHead(localId: localId)
+      } else {
+        try await store.setSyncState(
+          documentLocalId: localId, document.syncState, remoteHeadNodeId: remote.currentNodeId,
+          remoteUpdatedAt: remote.updatedAt, remotePointerRevision: remote.pointerRevision)
+      }
       return
     }
 
     let adopted = try await store.adoptServerDraft(
       documentLocalId: localId, markdown: remote.markdown, wordCount: Int(remote.wordCount),
       stampedHeadNodeId: stamp, remoteUpdatedAt: remote.updatedAt)
-    try await store.setSyncState(
-      documentLocalId: localId, document.syncState, remoteHeadNodeId: remote.currentNodeId,
-      remoteUpdatedAt: remote.updatedAt, remotePointerRevision: remote.pointerRevision)
     if adopted { emit(.documentChanged(localId: localId)) }
+    if headMoved {
+      try await reconcileHead(localId: localId)
+    } else {
+      try await store.setSyncState(
+        documentLocalId: localId, document.syncState, remoteHeadNodeId: remote.currentNodeId,
+        remoteUpdatedAt: remote.updatedAt, remotePointerRevision: remote.pointerRevision)
+    }
   }
 
   /// Pull a document this device has never seen.
@@ -288,8 +301,17 @@ public actor SyncEngine: SyncControlling {
     // server's stored body is only the head's text when it is stamped with the
     // head; otherwise it belongs to some other branch and is carried as a
     // pending draft rather than promoted into the head.
+    // The row's `markdown` must be whatever the HEAD materializes to. If the
+    // chain cannot be replayed the document is incomplete, not "close enough" —
+    // adopting an unstamped body here is exactly the untrusted promotion this
+    // whole path exists to prevent. Leave it unwritten and let the next pass
+    // pull it again.
     let index = indexNodes(nodes.map { $0.record(documentLocalId: localId).docNode })
-    let materialized = (try? materialize(remote.currentNodeId, index)) ?? remote.markdown
+    guard let materialized = try? materialize(remote.currentNodeId, index) else {
+      logger.error(
+        "refusing to hydrate \(convexId, privacy: .public): the head does not materialize")
+      return
+    }
     document.markdown = materialized
     if remote.markdownHeadNodeId == remote.currentNodeId, remote.markdown != materialized {
       document.draftMarkdown = remote.markdown
@@ -390,12 +412,18 @@ public actor SyncEngine: SyncControlling {
       return failing ? .failed : candidate
     }
 
+    // Compared against what we had observed BEFORE this fetch: a bumped
+    // revision means the server's pointer position is newer than anything we
+    // produced, so an ancestor head is a remote undo rather than server lag.
+    let remotePointerIsNewer = remote.pointerRevision > (document.remotePointerRevision ?? -1)
+
     switch ConflictResolver.resolve(
       localHead: document.localHeadNodeId, remoteHead: remote.currentNodeId,
-      nodesById: nodesById, hasPendingWork: hasPendingWork)
+      nodesById: nodesById, hasPendingWork: hasPendingWork,
+      remotePointerIsNewer: remotePointerIsNewer)
     {
     case .inSync:
-      blockedDocuments.remove(localId)
+      try await store.setQueueBlocked(documentLocalId: localId, reason: nil)
       try await store.setSyncState(
         documentLocalId: localId, await settled(hasPendingWork ? .pending : .synced),
         remoteHeadNodeId: remote.currentNodeId, remoteUpdatedAt: remote.updatedAt,
@@ -453,7 +481,7 @@ public actor SyncEngine: SyncControlling {
           remoteUpdatedAt: remote.updatedAt, remotePointerRevision: remote.pointerRevision)
         return
       }
-      blockedDocuments.remove(localId)
+      try await store.setQueueBlocked(documentLocalId: localId, reason: nil)
       emit(.documentChanged(localId: localId))
       emit(.syncStateChanged(localId: localId, state: .synced))
 
@@ -464,9 +492,8 @@ public actor SyncEngine: SyncControlling {
         documentLocalId: localId, .diverged, remoteHeadNodeId: remoteHead,
         remoteUpdatedAt: remote.updatedAt, remotePointerRevision: remote.pointerRevision,
         divergedRemoteHeadNodeId: remoteHead)
-      // Held until the user decides. Draining on would push the server back to
-      // the branch under dispute.
-      blockedDocuments.insert(localId)
+      // The barrier is written by `setSyncState(.diverged)` in the same
+      // transaction as the divergence itself.
       emit(.diverged(localId: localId, local: local, remote: remoteHead))
       emit(.syncStateChanged(localId: localId, state: .diverged))
     }
@@ -533,7 +560,9 @@ public actor SyncEngine: SyncControlling {
       guard !documents.isEmpty else { break }
 
       var progressed = false
-      for localId in documents where !blockedDocuments.contains(localId) {
+      // `documentsWithPendingJobs` already excludes blocked documents in SQL, so
+      // the barrier survives a stop, a relaunch and a new lifecycle.
+      for localId in documents {
         if Task.isCancelled { return }
         touched.insert(localId)
         if await drainOneJob(localId: localId) { progressed = true }
@@ -638,7 +667,7 @@ public actor SyncEngine: SyncControlling {
     let payload: OutboxPayload
     do {
       payload = try OutboxPayload.decode(job.payload)
-      try payload.validate(for: job.kind)
+      try payload.validate(for: job.kind, baseHeadNodeId: job.baseHeadNodeId)
     } catch {
       await parkUnsendableJob(job: job, jobId: jobId, reason: String(describing: error))
       return false
@@ -653,7 +682,6 @@ public actor SyncEngine: SyncControlling {
         return true
       case .completedAndBlock:
         try await store.completeJob(id: jobId)
-        blockedDocuments.insert(localId)
         return true
       case .stop:
         return false
@@ -681,8 +709,8 @@ public actor SyncEngine: SyncControlling {
 
   /// Release a document whose conflict has been resolved (or which reconciled
   /// back to a non-diverged state).
-  public func releaseDocument(localId: String) {
-    blockedDocuments.remove(localId)
+  public func releaseDocument(localId: String) async {
+    try? await store.setQueueBlocked(documentLocalId: localId, reason: nil)
   }
 
   /// Hold this document's queue and wait for any in-flight send to finish.
@@ -697,17 +725,18 @@ public actor SyncEngine: SyncControlling {
   /// will let us do safely.
   @discardableResult
   public func beginExclusiveQueue(localId: String) async -> Bool {
-    let wasBlocked = blockedDocuments.contains(localId)
-    blockedDocuments.insert(localId)
+    let wasBlocked =
+      ((try? await store.document(localId: localId))?.queueBlockedReason) != nil
+    try? await store.setQueueBlocked(documentLocalId: localId, reason: "resolving")
     // One owned drain task, so awaiting it is enough to know nothing is in
     // flight for any document.
     await drainTask?.value
     return !wasBlocked
   }
 
-  public func endExclusiveQueue(localId: String, release: Bool) {
+  public func endExclusiveQueue(localId: String, release: Bool) async {
     guard release else { return }
-    blockedDocuments.remove(localId)
+    try? await store.setQueueBlocked(documentLocalId: localId, reason: nil)
   }
 
   /// The queue for this document drained. Reconcile BEFORE claiming `synced`: an
@@ -799,8 +828,8 @@ public actor SyncEngine: SyncControlling {
       // the server's last-write-wins check against a newer pointer move.
       let response = try await transport.updateCurrentNodeId(
         documentId: convexId, currentNodeId: nodeId,
-        markdown: payload.markdown ?? document.markdown,
-        wordCount: payload.wordCount ?? document.wordCount,
+        markdown: payload.markdown ?? "",
+        wordCount: payload.wordCount ?? 0,
         updatedAt: payload.createdAt ?? job.createdAt)
       try await store.setSyncState(
         documentLocalId: document.localId, document.syncState,
@@ -873,7 +902,9 @@ public actor SyncEngine: SyncControlling {
       createdAt: payload.createdAt ?? job.createdAt,
       markdown: payload.markdown ?? document.markdown,
       wordCount: payload.wordCount ?? document.wordCount,
-      expectedHeadNodeId: job.baseHeadNodeId ?? document.localHeadNodeId,
+      // Validated before we got here: a commit whose base head we had to guess
+      // is a commit onto the wrong parent.
+      expectedHeadNodeId: job.baseHeadNodeId ?? "",
       clientMutationId: job.clientMutationId)
   }
 

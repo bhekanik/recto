@@ -659,3 +659,34 @@ struct MigrationTests {
     #expect(try await store.document(localId: "doc-1")?.remotePointerRevision == 0)
   }
 }
+
+@Suite("remote field updates")
+struct RemoteFieldUpdateTests {
+  @Test("a remote title update touches only the title")
+  func titleUpdateIsSurgical() async throws {
+    let store = try RectoStore.inMemory()
+    _ = try await seedDocument(store)
+
+    // What `mirrorLibrary` would have read before a session wrote.
+    let stale = try #require(try await store.document(localId: "doc-1"))
+
+    try await store.saveDraft(
+      documentLocalId: "doc-1", markdown: "typed after the list arrived", selection: nil,
+      wordCount: 5, job: nil)
+    try await store.setSyncState(documentLocalId: "doc-1", .pending)
+    let afterEdit = try #require(try await store.document(localId: "doc-1"))
+
+    try await store.updateRemoteTitle(
+      documentLocalId: "doc-1", title: "renamed elsewhere", remoteUpdatedAt: 99)
+
+    let updated = try #require(try await store.document(localId: "doc-1"))
+    #expect(updated.title == "renamed elsewhere")
+    #expect(updated.remoteUpdatedAt == 99)
+    // Everything a whole-record save from `stale` would have reverted:
+    #expect(updated.draftMarkdown == "typed after the list arrived")
+    #expect(updated.draftRevision == afterEdit.draftRevision)
+    #expect(updated.syncState == afterEdit.syncState)
+    #expect(updated.localHeadNodeId == afterEdit.localHeadNodeId)
+    #expect(stale.draftMarkdown == nil, "the stale copy really did predate the edit")
+  }
+}

@@ -53,6 +53,10 @@ public enum AuthStatus: Sendable, Equatable {
   case loading
   case signedOut
   case signedIn(userId: String)
+  /// A different account's mirror is on this disk and it still holds work that
+  /// exists nowhere else. The UI must offer "recover as \(owner)" or an explicit
+  /// discard; signing in over it would delete that work.
+  case blockedByRetainedWork(owner: String, count: Int)
 
   public var userId: String? {
     if case .signedIn(let userId) = self { return userId }
@@ -177,18 +181,31 @@ public final class RectoAuth {
 
   /// Make sure the mirror belongs to `userId` before anything is published or
   /// started. Returns false when the transition must not proceed.
-  private func claimMirror(for userId: String?) async -> Bool {
+  private func claimMirror(for userId: String?, discardingRetainedWork: Bool = false) async
+    -> Bool
+  {
     do {
       let owner = try await store.mirrorOwner()
       switch (owner, userId) {
       case (let owner?, let userId?) where owner != userId:
-        // Somebody else's documents are on this disk. They are not this user's
-        // to read, and they are not ours to silently destroy either — but a
-        // signed-in session cannot proceed over them.
-        logger.error("mirror belongs to another account; purging before publishing the session")
+        // Somebody else's documents are on this disk. A signed-in session
+        // cannot proceed over them — but if the previous owner has work that
+        // reached nowhere else (a revoked session retains exactly that), purging
+        // to make room would destroy it without anyone consenting.
         await sync?.stop()
+        let retained = (try? await store.unsyncedWorkCount()) ?? 0
+        guard retained == 0 || discardingRetainedWork else {
+          logger.error(
+            "mirror belongs to \(owner, privacy: .public) and holds \(retained) unsynced change(s); refusing to sign in as another account"
+          )
+          retainedUnsyncedWork = retained
+          status = .blockedByRetainedWork(owner: owner, count: retained)
+          return false
+        }
+        logger.error("mirror belongs to another account; purging before publishing the session")
         try await store.purgeEverything()
         try await store.setMirrorOwner(userId)
+        retainedUnsyncedWork = 0
       case (nil, let userId?):
         try await store.setMirrorOwner(userId)
       case (let owner?, nil):
@@ -211,8 +228,10 @@ public final class RectoAuth {
 
   /// Test seam for the cold-start ownership check, which is otherwise only
   /// reachable through `start()` and therefore through Clerk.
-  func claimMirrorForTesting(userId: String?) async throws -> Bool {
-    await claimMirror(for: userId)
+  func claimMirrorForTesting(userId: String?, discardingRetainedWork: Bool = false) async throws
+    -> Bool
+  {
+    await claimMirror(for: userId, discardingRetainedWork: discardingRetainedWork)
   }
 
   /// Test seam for a session Clerk revoked externally.
@@ -301,6 +320,10 @@ public final class RectoAuth {
     }
 
     do {
+      // The Convex client first, through the SDK's own `logout()`: it is the
+      // only path that drops the FFI auth callback. Ending the Clerk session
+      // alone leaves the client holding a dead bridge.
+      await convexAuthProvider.logoutConvexClient()
       if Self.isClerkConfigured { try await convexAuthProvider.logout() }
     } catch {
       logger.error("clerk sign-out failed: \(error.localizedDescription, privacy: .public)")
@@ -381,6 +404,12 @@ public final class RectoAuth {
 
   private func emitRetainedWork(count: Int) {
     retainedUnsyncedWork = count
+  }
+
+  /// The user chose to discard the previous account's retained work. Only then
+  /// may a different account take the mirror over.
+  public func discardRetainedWorkAndClaim(userId: String) async -> Bool {
+    await claimMirror(for: userId, discardingRetainedWork: true)
   }
 
   private func handleAccountDeleted() async {

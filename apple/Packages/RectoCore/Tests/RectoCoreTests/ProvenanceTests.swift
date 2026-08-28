@@ -146,4 +146,23 @@ struct ProvenanceTests {
       try await mac.store.document(localId: localId)?.draftMarkdown
         == "what I am typing right now")
   }
+
+  @Test("a head that cannot be materialized is not hydrated from the server body")
+  func unmaterializableHeadIsNotHydrated() async throws {
+    let server = InMemoryTransport()
+    let seeded = await server.seedDocument(title: "native-spike-broken-dag")
+    // A node whose patch cannot be decoded: the chain to the head is unreplayable.
+    _ = try await server.appendBrokenNode(
+      documentId: seeded.documentId, parentNodeId: seeded.rootNodeId,
+      markdown: "server body nobody can verify")
+
+    let directory = Harness.makeDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let mac = try Harness(directory: directory, transport: server, origin: "mac")
+    try await mac.sync.mirrorLibrary(await server.summaries())
+
+    // Adopting `remote.markdown` here would promote a body of unknown
+    // provenance into the head — the exact thing the stamp exists to prevent.
+    #expect(try await mac.store.documents().isEmpty)
+  }
 }

@@ -1,5 +1,6 @@
 import Foundation
 import RectoAuth
+import RectoSyncTesting
 import Testing
 
 @testable import RectoSync
@@ -169,5 +170,66 @@ struct TransportConstructionTests {
     await #expect(throws: RectoAuthError.clerkNotLoaded) {
       try await provider.loginFromCache(onIdToken: { _ in })
     }
+  }
+}
+
+@Suite("fake matches the deployed contract")
+struct FakeContractTests {
+  @Test("a pointer move to a node the server does not have is refused")
+  func unknownPointerTargetIsRefused() async throws {
+    // `convex/documents.ts` throws `Unknown currentNodeId`. A fake that accepted
+    // it would let a test pass against a state the deployment cannot produce.
+    let transport = InMemoryTransport()
+    let seeded = await transport.seedDocument()
+    await #expect(throws: InMemoryTransport.TransportFault.unknownPointerTarget) {
+      _ = try await transport.updateCurrentNodeId(
+        documentId: seeded.documentId, currentNodeId: "never-existed", markdown: "x",
+        wordCount: 1, updatedAt: Date().timeIntervalSince1970 * 1000)
+    }
+    #expect(
+      try await transport.getDocument(documentId: seeded.documentId)?.currentNodeId
+        == seeded.rootNodeId)
+  }
+
+  @Test("documents.create leaves the body's provenance absent")
+  func createLeavesProvenanceAbsent() async throws {
+    let transport = InMemoryTransport()
+    let created = try await transport.createDocument(title: "native-spike")
+    let document = try #require(try await transport.getDocument(documentId: created.documentId))
+    // The body is empty and nothing has vouched for which node it belongs to.
+    #expect(document.markdownHeadNodeId == nil)
+    #expect(document.markdown == "")
+  }
+
+  @Test("a successful commit stamps the body with the node it committed")
+  func commitStampsProvenance() async throws {
+    let transport = InMemoryTransport()
+    let seeded = await transport.seedDocument()
+    let node = try await transport.commitFromOtherClient(
+      documentId: seeded.documentId, parentNodeId: seeded.rootNodeId, markdown: "committed")
+    let document = try #require(try await transport.getDocument(documentId: seeded.documentId))
+    #expect(document.markdownHeadNodeId == node)
+    #expect(document.currentNodeId == node)
+  }
+
+  @Test("a draft save stamps with the head it was written against")
+  func draftSaveStampsProvenance() async throws {
+    let transport = InMemoryTransport()
+    let seeded = await transport.seedDocument()
+    let current = try #require(try await transport.getDocument(documentId: seeded.documentId))
+    _ = try await transport.updateMarkdown(
+      documentId: seeded.documentId, markdown: "typed", wordCount: 1,
+      expectedUpdatedAt: current.updatedAt, expectedHeadNodeId: seeded.rootNodeId, title: nil)
+    #expect(
+      try await transport.getDocument(documentId: seeded.documentId)?.markdownHeadNodeId
+        == seeded.rootNodeId)
+
+    // A legacy caller that passes no head CLEARS the stamp rather than leaving
+    // a stale one another device could promote.
+    let after = try #require(try await transport.getDocument(documentId: seeded.documentId))
+    _ = try await transport.updateMarkdown(
+      documentId: seeded.documentId, markdown: "typed again", wordCount: 2,
+      expectedUpdatedAt: after.updatedAt, expectedHeadNodeId: nil, title: nil)
+    #expect(try await transport.getDocument(documentId: seeded.documentId)?.markdownHeadNodeId == nil)
   }
 }

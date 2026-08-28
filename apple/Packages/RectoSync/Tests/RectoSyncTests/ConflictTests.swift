@@ -116,9 +116,20 @@ struct OutboxPayloadTests {
     let good = OutboxPayload(
       nodeId: "n1", parentNodeId: "root", patch: "{}", origin: "d", createdAt: 1,
       markdown: "x", wordCount: 1)
-    try good.validate(for: .commitEdit)
+    try good.validate(for: .commitEdit, baseHeadNodeId: "root")
     try good.validate(for: .appendNode)
     try good.validate(for: .pointerMove)
+
+    // The base head lives on the job, not the payload, but a commit sent without
+    // it lands on whatever the head happens to be — not the parent the user
+    // actually edited.
+    #expect(throws: OutboxPayloadError.self) { try good.validate(for: .commitEdit) }
+    #expect(throws: OutboxPayloadError.self) {
+      try good.validate(for: .commitEdit, baseHeadNodeId: "")
+    }
+    // A pointer move without a word count would write 0 over the real one.
+    let noWords = OutboxPayload(nodeId: "n1", createdAt: 1, markdown: "x")
+    #expect(throws: OutboxPayloadError.self) { try noWords.validate(for: .pointerMove) }
   }
 }
 
