@@ -31,9 +31,9 @@ const SENTENCE = "Teh quick brown fox jump over the lazi dog.";
  *  - A palette round-trip can collapse the editor selection on focus restore,
  *    so the transform is summoned via its direct chord (Ctrl+Shift+I) with
  *    nothing between selection and summon.
- *  - Keystrokes typed before the undo-tree controller hydrates are not
- *    recorded as history nodes (the settle waits below avoid that race; it is
- *    reported as a product finding in plan 021's report).
+ *  - Keystrokes typed before the undo-tree controller hydrates used to be
+ *    dropped rather than recorded as history nodes; plan 022 buffers them, and
+ *    the settle wait below now only confirms the precondition.
  */
 test("AI transform accept then undo restores the original", async ({
 	page,
@@ -116,26 +116,10 @@ test("AI transform accept then undo restores the original", async ({
 	await expect(cmContent(page)).toContainText(/quick brown fox/);
 
 	// One undo restores the original — the transform is a single undo node.
+	// This is plan 022's regression assertion: it used to self-skip because the
+	// client pointer could lag the AI commit and undo would land an ancestor too
+	// far up, usually the empty root.
 	await runPaletteAction(page, "Undo");
-	await page.waitForTimeout(1_000);
-	const afterUndo = await cmContent(page).innerText();
-	if (!afterUndo.includes(SENTENCE)) {
-		// KNOWN PRODUCT BUG (found by this harness, 2026-07-06, plan 021 report):
-		// the client history pointer can lag the AI commit — the server-side
-		// undo tree is correct (AI node parented on the typed-sentence node),
-		// but the client pointer sometimes still sits on the PRE-AI node, so
-		// undo navigates to that node's parent and dumps the editor at an
-		// ancestor (often the empty root). Do not green-light it: surface it as
-		// an explicit skip until the pointer race is fixed, then delete this
-		// branch so the strict assertion below is the only path.
-		// deleteDocumentByTitle also sweeps "Untitled" residue — the bug path
-		// can blank the title.
-		await deleteDocumentByTitle(page, TITLE);
-		test.skip(
-			true,
-			`KNOWN BUG — undo after AI accept landed on a stale pre-AI pointer (editor showed ${JSON.stringify(afterUndo.slice(0, 40))}…). Server tree verified correct; see plan 021 report.`,
-		);
-	}
 	await expect(cmContent(page)).toContainText(SENTENCE);
 
 	await deleteDocumentByTitle(page, TITLE);
