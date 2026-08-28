@@ -1,3 +1,4 @@
+import { ConvexError } from "convex/values";
 import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
 import { api } from "./_generated/api";
@@ -601,6 +602,29 @@ describe("documents.commitEdit", () => {
 			applied: false,
 			currentNodeId: accepted.newNodeId,
 		});
+	});
+
+	it("deterministic refusals carry a ConvexError code the client can classify", async () => {
+		const t = convexTest(schema, modules);
+		const { owner, documentId, rootNodeId } = await newDocument(t);
+
+		let caught: unknown;
+		try {
+			await owner.mutation(api.documents.commitEdit, {
+				documentId,
+				node: nodeFor("node-1", "elsewhere", "", "hello"),
+				markdown: "hello",
+				wordCount: 1,
+				expectedHeadNodeId: rootNodeId,
+				clientMutationId: "commit-1",
+			});
+		} catch (error) {
+			caught = error;
+		}
+		expect(caught).toBeInstanceOf(ConvexError);
+		expect((caught as ConvexError<{ code: string }>).data.code).toBe(
+			"parent_mismatch",
+		);
 	});
 
 	it("refuses to point the head at a node that does not exist", async () => {
