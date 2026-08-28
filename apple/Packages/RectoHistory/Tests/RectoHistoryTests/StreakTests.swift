@@ -9,6 +9,7 @@ struct StreakCases: Decodable {
       let date: String
       let words: Int
     }
+    let name: String
     let stats: [Stat]
     let today: String
     let streak: Int
@@ -35,7 +36,7 @@ struct StreakTests {
     let fixture: StreakCases = try Fixtures.load("streak-cases")
     for testCase in fixture.streaks {
       let stats = testCase.stats.map { DailyStat(date: $0.date, words: $0.words) }
-      #expect(currentStreak(stats, today: testCase.today) == testCase.streak, "\(testCase.today)")
+      #expect(currentStreak(stats, today: testCase.today) == testCase.streak, "\(testCase.name)")
     }
   }
 
@@ -59,5 +60,29 @@ struct StreakTests {
     #expect(previousDateKey("2026-08-01", calendar: calendar) == "2026-07-31")
     #expect(previousDateKey("2026-01-01", calendar: calendar) == "2025-12-31")
     #expect(previousDateKey("2028-03-01", calendar: calendar) == "2028-02-29")
+  }
+
+  @Test("a 25-hour DST day is still one calendar day back")
+  func dstFallBack() {
+    var calendar = Calendar(identifier: .gregorian)
+    // 2026-11-01 is the US fall-back: local midnight minus 86_400 s lands at
+    // 2026-10-31 01:00, which happens to read correctly — but the spring-forward
+    // direction and 24-hour-shift zones do not, so the step is by .day.
+    calendar.timeZone = TimeZone(identifier: "America/New_York")!
+    #expect(previousDateKey("2026-11-02", calendar: calendar) == "2026-11-01")
+    #expect(previousDateKey("2026-03-09", calendar: calendar) == "2026-03-08")
+
+    // Lord Howe shifts by 30 minutes; Chatham by 60 on a different date. Both
+    // are calendar days either way.
+    calendar.timeZone = TimeZone(identifier: "Australia/Lord_Howe")!
+    #expect(previousDateKey("2026-10-05", calendar: calendar) == "2026-10-04")
+
+    let stats = [
+      DailyStat(date: "2026-11-01", words: 10),
+      DailyStat(date: "2026-11-02", words: 10),
+    ]
+    var newYork = Calendar(identifier: .gregorian)
+    newYork.timeZone = TimeZone(identifier: "America/New_York")!
+    #expect(currentStreak(stats, today: "2026-11-02", calendar: newYork) == 2)
   }
 }

@@ -29,17 +29,21 @@ public func localDateKey(_ date: Date = Date(), calendar: Calendar = .current) -
 
 /// The local date key one calendar day before `key`.
 ///
-/// Deliberately reproduces the web's arithmetic — midnight minus exactly 86 400 s,
-/// re-read in local time — including its behaviour across a DST transition, so
-/// the two clients never disagree about which day a streak broke on.
+/// A real calendar step, not `midnight - 86_400_000 ms`. The web computes it by
+/// subtracting a fixed day in milliseconds, which lands on the wrong wall-clock
+/// day whenever a DST transition makes the local day 23 or 25 hours long; the
+/// contract everything else assumes — and that `packages/editor-fixtures/streak.json`
+/// asserts — is consecutive *calendar* days.
 func previousDateKey(_ key: String, calendar: Calendar = .current) -> String {
   let parts = key.split(separator: "-").map { Int($0) ?? 0 }
   var components = DateComponents()
   components.year = parts.count > 0 ? parts[0] : 1970
   components.month = parts.count > 1 ? parts[1] : 1
   components.day = parts.count > 2 ? parts[2] : 1
-  guard let midnight = calendar.date(from: components) else { return key }
-  return localDateKey(midnight.addingTimeInterval(-86_400), calendar: calendar)
+  guard let midnight = calendar.date(from: components),
+    let previous = calendar.date(byAdding: .day, value: -1, to: midnight)
+  else { return key }
+  return localDateKey(previous, calendar: calendar)
 }
 
 /// Current streak length counting back from `today`, counting only days with

@@ -19,14 +19,20 @@ import { diffRuns, groupHunks, applyAcceptedHunks, diffLines, nodeLabel } from "
 import { GroupingController } from "../../lib/history/grouping";
 import { materialize, type DocNode } from "../../lib/history/materialize";
 import { applyPatch, computePatch, encodePatch } from "../../lib/history/patch";
-import { currentStreak, goalProgress, type GoalKind } from "../../lib/stats/streak";
+import {
+	currentStreak,
+	goalProgress,
+	type DailyStat,
+	type GoalKind,
+} from "../../lib/stats/streak";
 
 const repoRoot = join(import.meta.dir, "..", "..");
 const outDir = join(
 	repoRoot,
 	"apple/Packages/RectoHistory/Tests/RectoHistoryTests/Fixtures",
 );
-const sharedFixtures = join(repoRoot, "packages/editor-fixtures");
+const sharedFixtures =
+	process.env.EDITOR_FIXTURES_DIR ?? join(repoRoot, "packages/editor-fixtures");
 
 /** Pairs that stress the patch algorithm, including the UTF-16 boundary cases. */
 const defaultPatchPairs: Array<[string, string]> = [
@@ -282,44 +288,51 @@ async function diffFixtures() {
 	});
 }
 
+type SharedStreakCase = {
+	name: string;
+	days: DailyStat[];
+	today: string;
+	streak: number;
+};
+
 async function streakFixtures() {
-	const cases = [
-		{ stats: [], today: "2026-08-28" },
-		{ stats: [{ date: "2026-08-28", words: 120 }], today: "2026-08-28" },
-		{ stats: [{ date: "2026-08-27", words: 120 }], today: "2026-08-28" },
+	const shared = await readShared<{ cases: SharedStreakCase[] }>("streak.json");
+	// Extra cases the shared fixture does not cover: the leap-day and year
+	// boundaries that catch a "subtract 86_400_000 ms" implementation.
+	const extra: SharedStreakCase[] = [
 		{
-			stats: [
-				{ date: "2026-08-26", words: 10 },
-				{ date: "2026-08-27", words: 10 },
-				{ date: "2026-08-28", words: 10 },
-			],
-			today: "2026-08-28",
-		},
-		{
-			stats: [
-				{ date: "2026-08-25", words: 10 },
-				{ date: "2026-08-27", words: 10 },
-			],
-			today: "2026-08-28",
-		},
-		{ stats: [{ date: "2026-08-28", words: 0 }], today: "2026-08-28" },
-		{
-			// spans a month boundary
-			stats: [
-				{ date: "2026-07-31", words: 5 },
-				{ date: "2026-08-01", words: 5 },
-			],
-			today: "2026-08-01",
-		},
-		{
-			// leap-day boundary
-			stats: [
+			name: "leap-day boundary",
+			days: [
 				{ date: "2028-02-28", words: 5 },
 				{ date: "2028-02-29", words: 5 },
 			],
 			today: "2028-02-29",
+			streak: 2,
+		},
+		{
+			name: "year boundary",
+			days: [
+				{ date: "2025-12-31", words: 5 },
+				{ date: "2026-01-01", words: 5 },
+			],
+			today: "2026-01-01",
+			streak: 2,
 		},
 	];
+
+	const cases = [...(shared?.cases ?? []), ...extra].map((c) => {
+		const computed = currentStreak(c.days, c.today);
+		// The fixture's asserted answer and the web implementation must agree. If
+		// they stop agreeing that is a web bug, and this script says so rather than
+		// baking the disagreement into the Swift expectations.
+		if (computed !== c.streak) {
+			throw new Error(
+				`streak fixture "${c.name}" expects ${c.streak}, lib/stats/streak.ts computes ${computed}`,
+			);
+		}
+		return { name: c.name, stats: c.days, today: c.today, streak: c.streak };
+	});
+
 	const goals = [
 		{ words: 0, target: 500, kind: "at-least" },
 		{ words: 500, target: 500, kind: "at-least" },
@@ -328,8 +341,10 @@ async function streakFixtures() {
 		{ words: 550, target: 500, kind: "at-most" },
 		{ words: 10, target: 0, kind: "at-least" },
 	] as const;
+
 	await write("streak-cases.json", {
-		streaks: cases.map((c) => ({ ...c, streak: currentStreak(c.stats, c.today) })),
+		source: shared ? "editor-fixtures" : "builtin",
+		streaks: cases,
 		goals: goals.map((g) => ({
 			...g,
 			progress: goalProgress(g.words, g.target, g.kind as GoalKind),

@@ -1,87 +1,127 @@
 {
+	"source": "editor-fixtures",
 	"streaks": [
 		{
+			"name": "empty list",
 			"stats": [],
-			"today": "2026-08-28",
+			"today": "2026-06-17",
 			"streak": 0
 		},
 		{
+			"name": "wrote today only",
 			"stats": [
 				{
-					"date": "2026-08-28",
+					"date": "2026-06-17",
 					"words": 120
 				}
 			],
-			"today": "2026-08-28",
+			"today": "2026-06-17",
 			"streak": 1
 		},
 		{
+			"name": "three consecutive days including today",
 			"stats": [
 				{
-					"date": "2026-08-27",
-					"words": 120
-				}
-			],
-			"today": "2026-08-28",
-			"streak": 1
-		},
-		{
-			"stats": [
-				{
-					"date": "2026-08-26",
-					"words": 10
+					"date": "2026-06-15",
+					"words": 200
 				},
 				{
-					"date": "2026-08-27",
-					"words": 10
+					"date": "2026-06-16",
+					"words": 200
 				},
 				{
-					"date": "2026-08-28",
-					"words": 10
+					"date": "2026-06-17",
+					"words": 200
 				}
 			],
-			"today": "2026-08-28",
+			"today": "2026-06-17",
 			"streak": 3
 		},
 		{
+			"name": "wrote yesterday but not yet today (no break-shame)",
 			"stats": [
 				{
-					"date": "2026-08-25",
-					"words": 10
+					"date": "2026-06-15",
+					"words": 200
 				},
 				{
-					"date": "2026-08-27",
-					"words": 10
+					"date": "2026-06-16",
+					"words": 200
 				}
 			],
-			"today": "2026-08-28",
-			"streak": 1
-		},
-		{
-			"stats": [
-				{
-					"date": "2026-08-28",
-					"words": 0
-				}
-			],
-			"today": "2026-08-28",
-			"streak": 0
-		},
-		{
-			"stats": [
-				{
-					"date": "2026-07-31",
-					"words": 5
-				},
-				{
-					"date": "2026-08-01",
-					"words": 5
-				}
-			],
-			"today": "2026-08-01",
+			"today": "2026-06-17",
 			"streak": 2
 		},
 		{
+			"name": "a skipped day ends the backward walk",
+			"stats": [
+				{
+					"date": "2026-06-14",
+					"words": 200
+				},
+				{
+					"date": "2026-06-17",
+					"words": 200
+				}
+			],
+			"today": "2026-06-17",
+			"streak": 1
+		},
+		{
+			"name": "a zero-word day counts as unwritten",
+			"stats": [
+				{
+					"date": "2026-06-15",
+					"words": 200
+				},
+				{
+					"date": "2026-06-16",
+					"words": 0
+				},
+				{
+					"date": "2026-06-17",
+					"words": 200
+				}
+			],
+			"today": "2026-06-17",
+			"streak": 1
+		},
+		{
+			"name": "duplicate date entries do not double-count",
+			"stats": [
+				{
+					"date": "2026-06-16",
+					"words": 200
+				},
+				{
+					"date": "2026-06-16",
+					"words": 50
+				},
+				{
+					"date": "2026-06-17",
+					"words": 200
+				}
+			],
+			"today": "2026-06-17",
+			"streak": 2
+		},
+		{
+			"name": "rolls over a month boundary",
+			"stats": [
+				{
+					"date": "2026-05-31",
+					"words": 200
+				},
+				{
+					"date": "2026-06-01",
+					"words": 200
+				}
+			],
+			"today": "2026-06-01",
+			"streak": 2
+		},
+		{
+			"name": "leap-day boundary",
 			"stats": [
 				{
 					"date": "2028-02-28",
@@ -93,6 +133,21 @@
 				}
 			],
 			"today": "2028-02-29",
+			"streak": 2
+		},
+		{
+			"name": "year boundary",
+			"stats": [
+				{
+					"date": "2025-12-31",
+					"words": 5
+				},
+				{
+					"date": "2026-01-01",
+					"words": 5
+				}
+			],
+			"today": "2026-01-01",
 			"streak": 2
 		}
 	],
