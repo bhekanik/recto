@@ -9,7 +9,7 @@
 			"!.next",
 			"!packages/editor-fixtures/*.json",
 			"!packages/design-tokens/generated",
-			"!apple/Packages/*/Tests/**/Fixtures"
+			"!apple/Spikes/**/*.js"
 		]
 	},
 	"formatter": { "enabled": true, "indentStyle": "tab" },
