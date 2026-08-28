@@ -207,7 +207,7 @@ in-flight workers are producing (§4).
 | W8 js-cores | N3 | 023/js-cores | round 3 (Codex r2: 9 of 14 fixed, 5 partial; 4 blocking: grapheme splitter is not UAX #29 (Hangul/Indic/CRLF), keyHook never wired + marked-text bypass, replace mode joins CR lines, device perf target does not compile) | #10 | Claude r1 / Codex r1 | n/a (CI) |
 | W9a editor-engine stage 1 (fork plumbing + dialect + RectoEditor skeleton) | N5 | 023/editor-engine | round 3 (Codex r2: 5 blocking: controller swap leaves the view on the old doc; Writing Tools republishes concurrent edits; same-length edits leave other views' parse caches stale; shared attributes corrupt rich/raw across windows; incremental setext splice; 5 should-fix) | #9 + fork PR #1 (`2cec4d8`) | Claude r1 / Codex r1+r2 | n/a (CI) |
 | W9b editor-engine stage 2 (blocks, features, undo-tree, typewriter) | N5 | 023/editor-engine-2 | blocked on W9a | | | |
-| W10 native-core | N4 | 023/native-core | round 4 fixed (11/11; 169 tests; live ×4); orchestrator verifying; Codex r4 running | #7 | Claude r1 / Codex r1+r2 | n/a (CI) |
+| W10 native-core | N4 | 023/native-core | round 4 fixed (verified by orchestrator: 169 tests, full RectoCore with live env ×2, no SIGBUS); Codex r4 running | #7 | Claude r1 / Codex r1+r2 | n/a (CI) |
 | W11 ai-on-convex | N2 | 023/ai-convex | blocked on W7 | | | |
 | W12 mac-alpha | N6 | 023/mac-alpha | blocked on W9, W10, W8, W2 | | | |
 | W13 mac-beta | N7 | 023/mac-beta | blocked on W12, W11 | | | |
