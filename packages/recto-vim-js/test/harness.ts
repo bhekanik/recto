@@ -7,37 +7,9 @@
  * is a much smaller place to look.
  */
 
-export type KeySpec = { key: string; mods: number };
+import type { KeySpec, RectoVimApi, VimHost, VimResult } from "../types";
 
-export type VimResult = {
-	handled: boolean;
-	edits: { from: number; to: number; insert: string }[];
-	selections: { anchor: number; head: number }[];
-	mainIndex: number;
-	mode: string;
-	subMode: string;
-	pending: string;
-	insertMode: boolean;
-	visualMode: boolean;
-	prompt: { prefix: string; value: string } | null;
-	notification: { text: string } | null;
-	search: string | null;
-	resynced: boolean;
-};
-
-export type RectoVimApi = {
-	version: string;
-	/** `host` is the object JS calls back into; Swift passes its `JSExport`
-	 *  bridge, this harness passes a `TestHost`. */
-	init: (text: string, host: TestHost | null) => string;
-	handleKey: (key: string, mods: number) => string;
-	setCursor: (line: number, ch: number) => string;
-	getText: () => string;
-	getState: () => string;
-	/** Registers and marks as JSON, for persistence across a relaunch. */
-	saveState: () => string;
-	restoreState: (json: string) => string;
-};
+export type { KeySpec, RectoVimApi, VimHost, VimResult } from "../types";
 
 const MOD_CTRL = 1;
 const MOD_ALT = 2;
@@ -119,7 +91,7 @@ export function parseKeys(spec: string): KeySpec[] {
  * and hands the new buffer back. This models that with a snapshot stack, which
  * is enough to prove the round trip and the resync path.
  */
-export class TestHost {
+export class TestHost implements VimHost {
 	private undoStack: Snapshot[] = [];
 	private redoStack: Snapshot[] = [];
 	private pending: Snapshot | null = null;
@@ -184,7 +156,11 @@ export async function loadBundle(path: string): Promise<RectoVimApi> {
 	// evaluated rather than imported — the same thing `JSContext.evaluateScript`
 	// does on the Swift side. `Function` keeps it out of this module's scope.
 	new Function(source)();
-	const api = (globalThis as unknown as { RectoVim?: RectoVimApi }).RectoVim;
+	// SAFETY: reads back what the IIFE just assigned. The shape is checked on the
+	// next line rather than trusted — a bundler misconfiguration would leave it
+	// undefined — and every method on it is exercised by the suites below, so a
+	// signature that drifted from `types.ts` fails there rather than here.
+	const api = (globalThis as { RectoVim?: RectoVimApi }).RectoVim;
 	if (!api) throw new Error(`bundle at ${path} did not define RectoVim`);
 	return api;
 }

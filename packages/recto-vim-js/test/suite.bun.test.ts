@@ -82,6 +82,9 @@ test("grapheme clusters are covered by more than one case", () => {
 	// flagged; a suite that quietly lost those cases would still be green.
 	const multiCodepoint =
 		/\p{Emoji_Modifier}|\u200d|\p{Regional_Indicator}|\p{Mn}/u;
+	// SAFETY: same cast as the loop above, for the same reason — `Case` is the
+	// contract the Swift suite decodes this file into, so a shape mismatch fails
+	// there rather than passing silently here.
 	const cases = (suite.cases as Case[]).filter((c) =>
 		multiCodepoint.test(c.text),
 	);

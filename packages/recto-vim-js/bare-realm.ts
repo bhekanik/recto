@@ -17,7 +17,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createContext, runInContext } from "node:vm";
 
-import type { RectoVimApi } from "./test/harness";
+import type { RectoVimApi } from "./types";
 
 export const BUNDLE_PATH = join(
 	dirname(fileURLToPath(import.meta.url)),

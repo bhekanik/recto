@@ -151,32 +151,28 @@ public final class RectoCore: @unchecked Sendable {
     /// `serialize(parse(md))` with the canonical stringify options — the one
     /// MDAST↔string crossing, and the contract the web shares.
     public func normalize(_ markdown: String) async throws -> String {
-        try await string("normalize", [markdown])
+        try await string("normalize", [.string(markdown)])
     }
 
     /// Prose words, markdown syntax excluded. The authority for `WordCount`.
     public func countWords(_ markdown: String) async throws -> Int {
-        try await integer("countWords", [markdown])
+        try await integer("countWords", [.string(markdown)])
     }
 
     /// Flat heading list in document order. The authority for `Outline`.
     public func parseOutline(_ markdown: String) async throws -> [OutlineHeading] {
-        let elements = try await array("parseOutline", [markdown])
-        return try elements.enumerated().map { index, element in
-            guard let dictionary = element as? [String: Any],
-                let depth = dictionary["depth"] as? NSNumber,
+        try await array("parseOutline", [.string(markdown)]) { dictionary in
+            // Never skip a malformed element: a dropped one makes the outline
+            // shorter, which reads as "no headings here" rather than "the
+            // bridge is broken".
+            guard let depth = dictionary["depth"] as? NSNumber,
                 let text = dictionary["text"] as? String,
                 let offset = dictionary["offset"] as? NSNumber,
-                let headingIndex = dictionary["index"] as? NSNumber
-            else {
-                // Never skip: a dropped element makes the outline shorter, which
-                // reads as "no headings here" rather than "the bridge is broken".
-                throw RectoCoreError.unexpectedResult(
-                    call: "parseOutline", detail: "a malformed heading at \(index): \(element)")
-            }
+                let index = dictionary["index"] as? NSNumber
+            else { return nil }
             return OutlineHeading(
                 depth: depth.intValue, text: text,
-                offset: offset.intValue, index: headingIndex.intValue)
+                offset: offset.intValue, index: index.intValue)
         }
     }
 
@@ -184,12 +180,12 @@ public final class RectoCore: @unchecked Sendable {
     /// export renderer — that one absolutizes URLs against `window.location` and
     /// stays on the web.
     public func htmlFromMarkdown(_ markdown: String) async throws -> String {
-        try await string("htmlFromMarkdown", [markdown])
+        try await string("htmlFromMarkdown", [.string(markdown)])
     }
 
     /// Smart paste: HTML in, canonical markdown out.
     public func markdownFromHtml(_ html: String) async throws -> String {
-        try await string("markdownFromHtml", [html])
+        try await string("markdownFromHtml", [.string(html)])
     }
 
     /// Prose lint. `categories: nil` enables all of them; `[]` returns nothing.
@@ -204,68 +200,85 @@ public final class RectoCore: @unchecked Sendable {
     public func lint(
         _ markdown: String, categories: [LintCategory]? = nil
     ) async throws -> [LintIssue] {
-        let arguments = UncheckedBox<[Any]>(
-            categories.map { [markdown, $0.map(\.rawValue)] } ?? [markdown])
-        let boxed = try await run("lint") { engine -> UncheckedBox<[Any]> in
-            let promise = try Self.call(engine, "lint", arguments.value)
-            var settled: [Any]?
-            var problem: String?
-            let onFulfilled: @convention(block) (JSValue) -> Void = { issues in
-                guard issues.isArray, let array = issues.toArray() else {
-                    problem = "resolved with a non-array"
-                    return
-                }
-                settled = array
-            }
-            let onRejected: @convention(block) (JSValue) -> Void = { error in
-                problem = error.toString() ?? "an unknown rejection"
-            }
-            promise.invokeMethod(
-                "then",
-                withArguments: [
-                    unsafeBitCast(onFulfilled, to: AnyObject.self),
-                    unsafeBitCast(onRejected, to: AnyObject.self),
-                ])
-            if let problem {
-                throw RectoCoreError.javaScript(call: "lint", message: problem)
-            }
-            guard let settled else {
-                throw RectoCoreError.unexpectedResult(
-                    call: "lint", detail: "a promise that had not settled when invokeMethod returned")
-            }
-            return UncheckedBox(settled)
-        }
-        let elements = boxed.value
-
-        return try elements.enumerated().map { index, element in
-            guard let dictionary = element as? [String: Any],
-                let from = dictionary["from"] as? NSNumber,
+        var arguments: [Argument] = [.string(markdown)]
+        if let categories { arguments.append(.strings(categories.map(\.rawValue))) }
+        return try await array("lint", arguments, call: Self.settle) { dictionary in
+            guard let from = dictionary["from"] as? NSNumber,
                 let to = dictionary["to"] as? NSNumber,
                 let category = dictionary["category"] as? String,
                 let message = dictionary["message"] as? String,
                 let text = dictionary["text"] as? String
-            else {
-                throw RectoCoreError.unexpectedResult(
-                    call: "lint", detail: "a malformed issue at \(index): \(element)")
-            }
+            else { return nil }
             return LintIssue(
                 from: from.intValue, to: to.intValue,
                 category: category, message: message, text: text)
         }
     }
 
+    /// Reads the array out of the promise `lint` returns.
+    ///
+    /// JSC drains the microtask queue before returning to native code, and the
+    /// bundle's lazy `write-good` import resolves inside the bundle, so the
+    /// `then` registered here has already run by the time `invokeMethod`
+    /// returns. If that ever stops holding, `settled` is nil and this throws
+    /// rather than reporting an empty lint.
+    private static func settle(_ promise: JSValue) throws -> JSValue {
+        var settled: JSValue?
+        var problem: String?
+        let onFulfilled: @convention(block) (JSValue) -> Void = { settled = $0 }
+        let onRejected: @convention(block) (JSValue) -> Void = { error in
+            problem = error.toString() ?? "an unknown rejection"
+        }
+        promise.invokeMethod(
+            "then",
+            withArguments: [
+                unsafeBitCast(onFulfilled, to: AnyObject.self),
+                unsafeBitCast(onRejected, to: AnyObject.self),
+            ])
+        if let problem {
+            throw RectoCoreError.javaScript(call: "lint", message: problem)
+        }
+        guard let settled else {
+            throw RectoCoreError.unexpectedResult(
+                call: "lint",
+                detail: "a promise that had not settled when invokeMethod returned")
+        }
+        return settled
+    }
+
     /// Consecutive written days counting back from `today`, which is a local
     /// calendar key (`"YYYY-MM-DD"`), not an instant.
     public func streak(_ days: [WritingDay], today: String) async throws -> Int {
-        let payload = days.map { ["date": $0.date, "words": $0.words] as [String: Any] }
-        return try await integer("streak", [payload, today])
+        try await integer("streak", [.days(days), .string(today)])
     }
 
     // MARK: - Bridge
 
-    private func run<T>(
+    /// One argument on its way into JavaScript.
+    ///
+    /// `invokeMethod` takes `[Any]` of Foundation values, none of which are
+    /// `Sendable`, so an argument list cannot be captured by a closure that
+    /// hops to the JS queue under Swift 6. Describing the arguments as data and
+    /// materialising them *on* that queue removes the crossing instead of
+    /// silencing it with an unchecked box.
+    private enum Argument: Sendable {
+        case string(String)
+        case strings([String])
+        case days([WritingDay])
+
+        var bridged: Any {
+            switch self {
+            case .string(let value): return value
+            case .strings(let values): return values
+            case .days(let days):
+                return days.map { ["date": $0.date, "words": $0.words] as [String: Any] }
+            }
+        }
+    }
+
+    private func run<T: Sendable>(
         _ call: String, _ body: @escaping @Sendable (Engine) throws -> T
-    ) async throws -> T where T: Sendable {
+    ) async throws -> T {
         let engine = engine
         return try await withCheckedThrowingContinuation { continuation in
             queue.async {
@@ -277,11 +290,12 @@ public final class RectoCore: @unchecked Sendable {
     /// The single crossing point. Clearing `context.exception` before and after
     /// each call is what keeps one failure from being reported against the next
     /// call — a JS throw leaves the exception standing on the context.
-    private static func call(_ engine: Engine, _ method: String, _ arguments: [Any]) throws
+    private static func call(_ engine: Engine, _ method: String, _ arguments: [Argument]) throws
         -> JSValue
     {
         engine.context.exception = nil
-        guard let result = engine.api.invokeMethod(method, withArguments: arguments) else {
+        guard let result = engine.api.invokeMethod(method, withArguments: arguments.map(\.bridged))
+        else {
             throw RectoCoreError.unexpectedResult(call: method, detail: "nothing")
         }
         if let exception = engine.context.exception {
@@ -295,10 +309,9 @@ public final class RectoCore: @unchecked Sendable {
         return result
     }
 
-    private func string(_ method: String, _ arguments: [Any]) async throws -> String {
-        let arguments = UncheckedBox(arguments)
-        return try await run(method) { engine in
-            let result = try Self.call(engine, method, arguments.value)
+    private func string(_ method: String, _ arguments: [Argument]) async throws -> String {
+        try await run(method) { engine in
+            let result = try Self.call(engine, method, arguments)
             guard result.isString, let string = result.toString() else {
                 throw RectoCoreError.unexpectedResult(call: method, detail: "a non-string")
             }
@@ -306,10 +319,9 @@ public final class RectoCore: @unchecked Sendable {
         }
     }
 
-    private func integer(_ method: String, _ arguments: [Any]) async throws -> Int {
-        let arguments = UncheckedBox(arguments)
-        return try await run(method) { engine in
-            let result = try Self.call(engine, method, arguments.value)
+    private func integer(_ method: String, _ arguments: [Argument]) async throws -> Int {
+        try await run(method) { engine in
+            let result = try Self.call(engine, method, arguments)
             guard result.isNumber, let number = result.toNumber(),
                 let exact = Int(exactly: number.doubleValue)
             else {
@@ -320,31 +332,38 @@ public final class RectoCore: @unchecked Sendable {
         }
     }
 
-    private func array(_ method: String, _ arguments: [Any]) async throws -> [Any] {
-        // `[Any]` is not Sendable; it is decoded into a Sendable value by the
-        // caller on the way out, and never touched on the JS queue afterwards.
-        let arguments = UncheckedBox(arguments)
-        let boxed = try await run(method) { engine -> UncheckedBox<[Any]> in
-            let result = try Self.call(engine, method, arguments.value)
-            guard result.isArray, let array = result.toArray() else {
+    /// An array of dictionaries, decoded **on the JS queue**.
+    ///
+    /// `toArray()` hands back `NSDictionary`/`NSNumber`/`NSString`, which are
+    /// not `Sendable`; decoding them here means the awaiting task only ever
+    /// receives the finished `[T]`. `decode` returning nil is a malformed
+    /// element and throws — never a skip, because a shorter array reads as an
+    /// empty document rather than a broken bridge.
+    ///
+    /// `call` is a seam for `lint`, whose result arrives inside a promise.
+    private func array<T: Sendable>(
+        _ method: String, _ arguments: [Argument],
+        call transform: @escaping @Sendable (JSValue) throws -> JSValue = { $0 },
+        decoding decode: @escaping @Sendable ([String: Any]) -> T?
+    ) async throws -> [T] {
+        try await run(method) { engine in
+            let result = try transform(Self.call(engine, method, arguments))
+            guard result.isArray, let elements = result.toArray() else {
                 throw RectoCoreError.unexpectedResult(call: method, detail: "a non-array")
             }
-            return UncheckedBox(array)
+            return try elements.enumerated().map { index, element in
+                guard let dictionary = element as? [String: Any],
+                    let decoded = decode(dictionary)
+                else {
+                    throw RectoCoreError.unexpectedResult(
+                        call: method, detail: "a malformed element at \(index): \(element)")
+                }
+                return decoded
+            }
         }
-        return boxed.value
     }
 
     static func seconds(since start: DispatchTime) -> TimeInterval {
         TimeInterval(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000_000
     }
-}
-
-/// Carries a JSON-derived `[Any]` off the JS queue.
-///
-/// `toArray()` returns Foundation values (`NSNumber`, `NSString`, `NSDictionary`)
-/// that are immutable and value-like but not `Sendable`. They are read once, on
-/// the awaiting task, and never handed back to JavaScript.
-private struct UncheckedBox<Value>: @unchecked Sendable {
-    let value: Value
-    init(_ value: Value) { self.value = value }
 }

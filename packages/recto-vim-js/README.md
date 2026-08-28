@@ -28,6 +28,11 @@ bun run vim:build                  # extract + bundle -> dist/recto-vim.js
 bun run vim:test                   # keystroke suite + grapheme unit tests
 ```
 
+The suites are named `*.bun.test.ts` because they use `bun:test`, which vitest
+cannot bundle; that is the same convention `spikes/undo-tree` follows. They are
+still typechecked — `tsconfig.json` no longer excludes the pattern, and nothing
+else matched it.
+
 `build.ts` re-extracts, bundles, then **evaluates the fresh bundle in a realm
 with no DOM** (`bare-realm.ts`) and drives a real keystroke through it. A
 dependency that reaches for a browser global fails the build, not the app.
@@ -267,5 +272,5 @@ src/dom-shim.js           the four host things the core needs
 src/host.js               Swift-side contract, JSON wire
 src/index.js              the RectoVim global
 fixtures/                 shared with the Swift suite
-test/                     Bun runner over dist/recto-vim.js
+test/*.bun.test.ts        Bun runner over dist/recto-vim.js
 ```
