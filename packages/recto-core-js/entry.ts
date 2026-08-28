@@ -35,6 +35,29 @@ function requireString(value: unknown, fn: string, arg: string): string {
 	return value;
 }
 
+const DATE_KEY = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Streak arithmetic walks backwards a calendar day at a time by string key, so
+ * a malformed key does not throw — it silently matches nothing and returns a
+ * streak of 0. Reject it here instead of handing back a plausible wrong number.
+ */
+function requireDateKey(value: unknown, fn: string, arg: string): string {
+	const key = requireString(value, fn, arg);
+	if (!DATE_KEY.test(key)) {
+		throw new TypeError(`RectoCore.${fn}: ${arg} must be "YYYY-MM-DD"`);
+	}
+	return key;
+}
+
+/** JSC bridges a Swift `Int` as a JS number; anything else is a caller bug. */
+function requireFiniteNumber(value: unknown, fn: string, arg: string): number {
+	if (typeof value !== "number" || !Number.isFinite(value)) {
+		throw new TypeError(`RectoCore.${fn}: ${arg} must be a finite number`);
+	}
+	return value;
+}
+
 const CATEGORY_SET = new Set<string>(ALL_CATEGORIES);
 
 /**
@@ -109,7 +132,20 @@ const RectoCore = {
 		if (!Array.isArray(days)) {
 			throw new TypeError("RectoCore.streak: days must be an array");
 		}
-		return currentStreak([...days], requireString(today, "streak", "today"));
+		const stats: DailyStat[] = days.map((day, i) => {
+			if (day === null || typeof day !== "object") {
+				throw new TypeError(`RectoCore.streak: days[${i}] must be an object`);
+			}
+			// SAFETY: `day` is a non-null object (checked above) and the assertion
+			// only widens both fields to `unknown`; the two `require*` calls below
+			// are what actually establish their types.
+			const { date, words } = day as { date: unknown; words: unknown };
+			return {
+				date: requireDateKey(date, "streak", `days[${i}].date`),
+				words: requireFiniteNumber(words, "streak", `days[${i}].words`),
+			};
+		});
+		return currentStreak(stats, requireDateKey(today, "streak", "today"));
 	},
 } as const;
 
