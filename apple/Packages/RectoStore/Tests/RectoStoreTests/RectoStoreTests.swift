@@ -739,3 +739,132 @@ struct RemoteFieldUpdateTests {
     #expect(stale.draftMarkdown == nil, "the stale copy really did predate the edit")
   }
 }
+
+@Suite("round-6 store")
+struct Round6StoreTests {
+  private func seedTwoDocuments(_ store: RectoStore) async throws {
+    _ = try await seedDocument(store, localId: "doc-1")
+    _ = try await seedDocument(store, localId: "doc-2")
+  }
+
+  @Test("a ready job behind a backed-off head does not become a wake time")
+  func backedOffHeadHidesItsTail() async throws {
+    let store = try makeStore()
+    _ = try await seedDocument(store)
+    let head = try await store.enqueue(
+      OutboxJob(
+        documentLocalId: "doc-1", kind: .commitEdit, clientMutationId: ulid(), payload: "1",
+        createdAt: 0))
+    // The tail carries the default zero timestamp. `MIN` over every row answered
+    // with it, so the drain loop woke immediately, found a head it may not send,
+    // and armed another zero-delay wake.
+    _ = try await store.enqueue(
+      OutboxJob(
+        documentLocalId: "doc-1", kind: .commitEdit, clientMutationId: ulid(), payload: "2",
+        createdAt: 0))
+
+    try await store.failJob(id: try #require(head.id), error: "boom", retryAfter: 4, now: 1_000)
+
+    #expect(try await store.earliestNextAttempt() == 5_000)
+    #expect(try await store.nextJob(documentLocalId: "doc-1", now: 1_000) == nil)
+  }
+
+  @Test("a blocked document arms no wake at all")
+  func blockedDocumentHasNoWakeTime() async throws {
+    let store = try makeStore()
+    _ = try await seedDocument(store)
+    _ = try await store.enqueue(
+      OutboxJob(
+        documentLocalId: "doc-1", kind: .rename, clientMutationId: ulid(), payload: "{}",
+        createdAt: 0))
+    try await store.setQueueBlocked(documentLocalId: "doc-1", reason: "diverged")
+
+    // The queue cannot drain until the divergence is resolved, so a wake for it
+    // is a spin: it can only ever request a drain that skips this document.
+    #expect(try await store.earliestNextAttempt() == nil)
+  }
+
+  @Test("another document's ready head is still a wake time")
+  func unblockedDocumentsStillWake() async throws {
+    let store = try makeStore()
+    try await seedTwoDocuments(store)
+    let blockedJob = try await store.enqueue(
+      OutboxJob(
+        documentLocalId: "doc-1", kind: .rename, clientMutationId: ulid(), payload: "{}",
+        createdAt: 0))
+    try await store.failJob(id: try #require(blockedJob.id), error: "boom", retryAfter: 60, now: 0)
+    try await store.setQueueBlocked(documentLocalId: "doc-1", reason: "diverged")
+
+    let ready = try await store.enqueue(
+      OutboxJob(
+        documentLocalId: "doc-2", kind: .rename, clientMutationId: ulid(), payload: "{}",
+        createdAt: 0))
+    try await store.failJob(id: try #require(ready.id), error: "boom", retryAfter: 2, now: 1_000)
+
+    #expect(try await store.earliestNextAttempt() == 3_000)
+  }
+
+  @Test("a parked head is not a wake time")
+  func parkedJobsAreNotWakeTimes() async throws {
+    let store = try makeStore()
+    _ = try await seedDocument(store)
+    let job = try await store.enqueue(
+      OutboxJob(
+        documentLocalId: "doc-1", kind: .commitEdit, clientMutationId: ulid(), payload: "{}",
+        createdAt: 0))
+    try await store.parkJob(id: try #require(job.id), reason: "unsendable")
+
+    #expect(try await store.earliestNextAttempt() == nil)
+  }
+
+  @Test("a failed VACUUM does not fail the purge that already committed")
+  func maintenanceFailureDoesNotFailTheTransition() async throws {
+    let store = try makeStore()
+    _ = try await seedDocument(store, markdown: "A's only copy")
+    _ = try await store.enqueue(
+      OutboxJob(
+        documentLocalId: "doc-1", kind: .commitEdit, clientMutationId: ulid(), payload: "{}",
+        createdAt: 0))
+    try await store.setMirrorOwner("user_A")
+
+    struct MaintenanceFailure: Error {}
+    await store.setMaintenanceFailureForTesting(MaintenanceFailure())
+
+    // The rows and the ownership marker move in one transaction that has already
+    // committed by the time maintenance runs. Reporting its failure would tell
+    // the caller to retry a decision whose destructive half already happened.
+    try await store.purgeAndSetMirrorOwner("user_B")
+
+    #expect(try await store.documents().isEmpty)
+    #expect(try await store.pendingJobCount() == 0)
+    #expect(try await store.mirrorOwner() == "user_B")
+  }
+
+  @Test("a purge keeps the device id but not the account's settings")
+  func purgeKeepsTheDeviceIdentity() async throws {
+    let store = try makeStore()
+    try await store.saveSetting(key: RectoStore.deviceOriginKey, json: "device-1", dirty: false)
+    try await store.saveSetting(key: "theme", json: "paper")
+    try await store.setMirrorOwner("user_A")
+
+    try await store.purgeAndSetMirrorOwner("user_B")
+
+    // Minting a new origin on every sign-in would show one Mac as several
+    // devices in the history panel.
+    #expect(try await store.setting(RectoStore.deviceOriginKey)?.json == "device-1")
+    #expect(try await store.setting("theme") == nil)
+    #expect(try await store.mirrorOwner() == "user_B")
+  }
+
+  @Test("signing out clears the owner but keeps the device id")
+  func signOutClearsOwnership() async throws {
+    let store = try makeStore()
+    try await store.saveSetting(key: RectoStore.deviceOriginKey, json: "device-1", dirty: false)
+    try await store.setMirrorOwner("user_A")
+
+    try await store.purgeAndSetMirrorOwner(nil)
+
+    #expect(try await store.mirrorOwner() == nil)
+    #expect(try await store.setting(RectoStore.deviceOriginKey)?.json == "device-1")
+  }
+}

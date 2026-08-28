@@ -1,5 +1,6 @@
 import Foundation
 import GRDB
+import OSLog
 import RectoHistory
 
 public enum StoreError: Error, Equatable, Sendable {
@@ -27,6 +28,7 @@ public actor RectoStore {
   /// instantaneous while keeping the mirror small.
   static let materializationCacheSize = 24
 
+  private let logger = Logger(subsystem: "com.bhekani.recto", category: "store")
   private let writer: any DatabaseWriter
   public nonisolated let path: String
 
@@ -867,9 +869,28 @@ public actor RectoStore {
 
   /// When the earliest backed-off job becomes eligible, so the drain loop can
   /// sleep exactly that long instead of polling.
+  ///
+  /// Only the HEAD row of each UNBLOCKED document counts, because only a head
+  /// row can ever be sent. `MIN` over every row answers with a later job's
+  /// default zero timestamp, and the woken drain then finds nothing it may send
+  /// and arms another zero-delay wake — a spin that consumes a core until the
+  /// head becomes eligible, or forever behind a barrier. Parked rows are
+  /// excluded for the same reason: nothing will retry them, so their year-2100
+  /// timestamp is not a wake time.
   public func earliestNextAttempt() throws -> Double? {
     try writer.read { db in
-      try Double.fetchOne(db, sql: "SELECT MIN(nextAttemptAt) FROM outbox")
+      try Double.fetchOne(
+        db,
+        sql: """
+          SELECT MIN(o.nextAttemptAt) FROM outbox o
+          LEFT JOIN documents d ON d.localId = o.documentLocalId
+          WHERE d.queueBlockedReason IS NULL
+            AND o.nextAttemptAt < ?
+            AND o.id = (
+              SELECT MIN(h.id) FROM outbox h WHERE h.documentLocalId = o.documentLocalId
+            )
+          """,
+        arguments: [Self.parkedForever])
     }
   }
 
@@ -1133,6 +1154,13 @@ public actor RectoStore {
   /// "user B opened an app whose database belongs to A" from "A came back".
   public static let mirrorOwnerKey = "mirror-owner"
 
+  /// This device's provenance id (`docNodes.origin`), owned by `SyncEngine`.
+  ///
+  /// Named here because a purge has to keep it: it identifies the Mac, not the
+  /// account, and minting a new one on every sign-in would make the history
+  /// panel show one machine as several.
+  public static let deviceOriginKey = "device-origin"
+
   public func mirrorOwner() throws -> String? {
     try setting(Self.mirrorOwnerKey)?.json
   }
@@ -1148,7 +1176,10 @@ public actor RectoStore {
       try db.execute(sql: "DELETE FROM documents")
       try db.execute(sql: "DELETE FROM outbox")
       try db.execute(sql: "DELETE FROM writing_stats")
-      try db.execute(sql: "DELETE FROM settings")
+      // The device id is not the account's data; keeping it stops one Mac
+      // reappearing as a new device in the history panel after every sign-in.
+      try db.execute(
+        sql: "DELETE FROM settings WHERE key <> ?", arguments: [Self.deviceOriginKey])
       try db.execute(sql: "DELETE FROM window_state")
       try db.execute(sql: "DELETE FROM ai_runs")
       if let userId {
@@ -1158,8 +1189,7 @@ public actor RectoStore {
         ).insert(db)
       }
     }
-    // Reclaim the pages so the deleted text is not still sitting in the file.
-    try writer.writeWithoutTransaction { try $0.execute(sql: "VACUUM") }
+    reclaimSpace()
   }
 
   public func setMirrorOwner(_ userId: String?) throws {
@@ -1187,14 +1217,45 @@ public actor RectoStore {
       try db.execute(sql: "DELETE FROM outbox")
       try db.execute(sql: "DELETE FROM writing_stats")
       // Every setting except the ownership marker, which has to outlive the
-      // purge so a later cold start can still tell whose database this is.
+      // purge so a later cold start can still tell whose database this is, and
+      // the device id, which belongs to the machine rather than the account.
       try db.execute(
-        sql: "DELETE FROM settings WHERE key <> ?", arguments: [Self.mirrorOwnerKey])
+        sql: "DELETE FROM settings WHERE key NOT IN (?, ?)",
+        arguments: [Self.mirrorOwnerKey, Self.deviceOriginKey])
       try db.execute(sql: "DELETE FROM window_state")
       try db.execute(sql: "DELETE FROM ai_runs")
     }
-    // Reclaim the pages so the deleted text is not still sitting in the file.
-    try writer.writeWithoutTransaction { try $0.execute(sql: "VACUUM") }
+    reclaimSpace()
+  }
+
+  /// Reclaim the pages the purge freed, so the deleted text is not still
+  /// sitting in the file.
+  ///
+  /// Deliberately NOT `throws`. It runs after the purge transaction has
+  /// committed, so reporting its failure as the failure of the identity
+  /// transition would tell the caller to retry a decision whose destructive
+  /// half already happened — `claimMirror` saying "could not claim" over a
+  /// store the new user already owns, or sign-out throwing with Clerk already
+  /// signed out and the rows already gone. Maintenance that did not run is
+  /// logged and picked up by the next purge.
+  private func reclaimSpace() {
+    do {
+      if let injected = maintenanceFailureForTesting { throw injected }
+      try writer.writeWithoutTransaction { try $0.execute(sql: "VACUUM") }
+    } catch {
+      logger.error(
+        "VACUUM after a purge failed; the transition itself committed: \(error.localizedDescription, privacy: .public)"
+      )
+    }
+  }
+
+  /// Forces `reclaimSpace()` to fail. There is no portable way to make SQLite
+  /// refuse a `VACUUM` on demand, and the property under test is precisely that
+  /// a post-commit failure is not reported as a failed transition.
+  var maintenanceFailureForTesting: (any Error)?
+
+  func setMaintenanceFailureForTesting(_ error: (any Error)?) {
+    maintenanceFailureForTesting = error
   }
 
   // MARK: - File protection
