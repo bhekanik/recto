@@ -156,28 +156,30 @@ function isSuccessfulWrite(result: unknown): boolean {
 }
 
 /**
- * Answer every outstanding mutation in the order the client sent them, taking
- * each answer from `answers` by function name.
+ * Answer every outstanding mutation in the order the client sent them, one
+ * answer per CALL rather than per function: two saves in a row leave the
+ * document in different states, and reusing one answer for both describes a
+ * backend that forgot the first.
  *
  * A successful write MUST supply a snapshot. On the real client a write that
  * landed is already reflected in the reactive queries by the time its result
- * arrives, so a test that reports success while leaving the queries on the old
- * document is describing a state the backend cannot produce — and that is
- * exactly the state in which stale-pointer bugs hide.
+ * arrives, so reporting success while leaving the queries on the old document
+ * is a state the backend cannot produce — and the state stale-pointer bugs hide
+ * in.
  */
-async function drain(answers: Record<string, Answer>): Promise<void> {
-	let next = mutationCalls.find((c) => !c.settled);
-	while (next) {
-		const answer = answers[next.name];
-		if (!answer) throw new Error(`no answer supplied for ${next.name}`);
+async function drain(answers: Array<Answer & { name: string }>): Promise<void> {
+	for (const answer of answers) {
+		const next = mutationCalls.find((c) => !c.settled);
+		if (!next) throw new Error(`no unanswered mutation for ${answer.name}`);
 		if (isSuccessfulWrite(answer.result) && !answer.snapshot) {
 			throw new Error(
-				`${next.name} reports success with no query snapshot; a landed write is always already visible to the queries`,
+				`${answer.name} reports success with no query snapshot; a landed write is always already visible to the queries`,
 			);
 		}
-		await respond(next.name, answer.result, answer.snapshot);
-		next = mutationCalls.find((c) => !c.settled);
+		await respond(answer.name, answer.result, answer.snapshot);
 	}
+	const leftover = mutationCalls.find((c) => !c.settled);
+	if (leftover) throw new Error(`no answer supplied for ${leftover.name}`);
 }
 
 // SAFETY: Id<"documents"> is a branded string; the mocked Convex client never
@@ -270,6 +272,8 @@ function mountStudio(handle: ReturnType<typeof fakeHandle>) {
 	let history!: HistoryController;
 	let sync!: ReturnType<typeof useDocumentSync>;
 	let syncStatus = "";
+	/** What workspace-context would hand the panes to render. */
+	let projectedMarkdown: string | null = null;
 	let onEditorChange: () => void = () => {};
 	const pointerLog: Array<string | null> = [];
 
@@ -310,9 +314,22 @@ function mountStudio(handle: ReturnType<typeof fakeHandle>) {
 			serverPointerRevision: server?.pointerRevision,
 			serverMarkdownHeadNodeId: server?.markdownHeadNodeId,
 			getBaselineUpdatedAt: syncHook.getBaselineUpdatedAt,
+			getRecoveredDraft: syncHook.getRecoveredDraft,
 			enabled: server !== undefined,
 			origin: "test-device",
-			onRemoteProjection: syncHook.acceptRemoteProjection,
+			onProjection: (projection) => {
+				// Mirrors workspace-context: publish for the panes, then decide
+				// whether it counts as saved.
+				projectedMarkdown = projection.markdown;
+				if (projection.serverDerived) {
+					syncHook.acceptRemoteProjection(
+						projection.markdown,
+						projection.serverUpdatedAt,
+					);
+				} else {
+					syncHook.adoptRecoveredDraft(projection.markdown);
+				}
+			},
 		});
 		historyApiRef.current = h;
 		history = h;
@@ -363,6 +380,9 @@ function mountStudio(handle: ReturnType<typeof fakeHandle>) {
 		},
 		get syncStatus() {
 			return syncStatus;
+		},
+		get projectedMarkdown() {
+			return projectedMarkdown;
 		},
 		/** Type, exactly as the studio reports it: one handler, both hooks. */
 		type(text: string) {
@@ -512,8 +532,14 @@ describe("studio sync + history contract", () => {
 			rootNode(),
 			...s.history.nodes.filter((n) => n.nodeId !== ROOT),
 		];
-		await drain({
-			[NAMES.commitEdit]: {
+		await drain([
+			{
+				name: NAMES.updateMarkdown,
+				result: OK_SAVE,
+				snapshot: { server: afterCommit, dag: dagAfterCommit },
+			},
+			{
+				name: NAMES.commitEdit,
 				result: {
 					committed: true,
 					headNodeId: typedNodeId,
@@ -522,11 +548,7 @@ describe("studio sync + history contract", () => {
 				},
 				snapshot: { server: afterCommit, dag: dagAfterCommit },
 			},
-			[NAMES.updateMarkdown]: {
-				result: OK_SAVE,
-				snapshot: { server: afterCommit, dag: dagAfterCommit },
-			},
-		});
+		]);
 		s.render(afterCommit);
 
 		// The AI transform's own commit path: seed, record, flush, one node.
@@ -593,11 +615,13 @@ describe("studio sync + history contract", () => {
 		// Only clears caused by the divergence count; an earlier no-op flush
 		// legitimately clears an empty draft on open.
 		const clearsBefore = removedKeys.length;
-		await drain({
-			[NAMES.updateMarkdown]: {
+		await drain([
+			{
+				name: NAMES.updateMarkdown,
 				result: { updatedAt: 5_000, stale: true, headMoved: true },
 			},
-			[NAMES.commitEdit]: {
+			{
+				name: NAMES.commitEdit,
 				result: {
 					committed: false,
 					diverged: true,
@@ -605,7 +629,7 @@ describe("studio sync + history contract", () => {
 					remotePointerRevision: 5,
 				},
 			},
-		});
+		]);
 
 		// The draft must never be DISCARDED here: only a completed projection may
 		// retire it, and nothing has replaced this text yet. Asserting on the
@@ -666,8 +690,14 @@ describe("studio sync + history contract", () => {
 			rootNode(),
 			...s.history.nodes.filter((n) => n.nodeId !== ROOT),
 		];
-		await drain({
-			[NAMES.commitEdit]: {
+		await drain([
+			{
+				name: NAMES.updateMarkdown,
+				result: OK_SAVE,
+				snapshot: { server: afterTyping, dag: dagAfterTyping },
+			},
+			{
+				name: NAMES.commitEdit,
 				result: {
 					committed: true,
 					headNodeId: typedHead,
@@ -676,11 +706,7 @@ describe("studio sync + history contract", () => {
 				},
 				snapshot: { server: afterTyping, dag: dagAfterTyping },
 			},
-			[NAMES.updateMarkdown]: {
-				result: OK_SAVE,
-				snapshot: { server: afterTyping, dag: dagAfterTyping },
-			},
-		});
+		]);
 
 		dagRows = [rootNode(), remoteNode()];
 		s.render({
@@ -740,8 +766,9 @@ describe("studio sync + history contract", () => {
 		// another device owns the head, and its node is NOT in this client's DAG
 		// yet, so the projection cannot run.
 		const savedHead = s.history.currentNodeId ?? ROOT;
-		await drain({
-			[NAMES.updateMarkdown]: {
+		await drain([
+			{
+				name: NAMES.updateMarkdown,
 				result: OK_SAVE,
 				snapshot: {
 					server: {
@@ -753,7 +780,8 @@ describe("studio sync + history contract", () => {
 					},
 				},
 			},
-			[NAMES.commitEdit]: {
+			{
+				name: NAMES.commitEdit,
 				result: {
 					committed: false,
 					diverged: true,
@@ -761,7 +789,7 @@ describe("studio sync + history contract", () => {
 					remotePointerRevision: 5,
 				},
 			},
-		});
+		]);
 		await settle(0);
 
 		const savesBefore = callsTo(NAMES.updateMarkdown).length;
@@ -976,9 +1004,9 @@ describe("studio sync + history contract", () => {
 		s.unmount();
 	});
 
-	it("Y4: defers projection while the pane has no writable editor", async () => {
+	it("V2: a preview-only pane receives the projection through the published markdown", async () => {
 		const preview = fakeHandle();
-		preview.readOnly = true; // a preview-only pane
+		preview.readOnly = true; // a preview pane registers no writable handle
 		const s = mountStudio(preview);
 		dagRows = [rootNode()];
 		s.render(AT_ROOT);
@@ -993,19 +1021,19 @@ describe("studio sync + history contract", () => {
 		});
 		await settle();
 
-		// Seeding a preview handle is a no-op, so advancing the pointer here would
-		// leave the tree claiming a projection no editor ever received.
-		expect(s.history.currentNodeId).toBe(ROOT);
-		expect(s.history.getHeadNodeId()).toBeNull();
-
-		// Switching to an editable lens must complete it, without a stale flush.
-		preview.readOnly = false;
-		await settle();
-
+		// Y4 used to DEFER here, because seeding a preview handle is a no-op and
+		// advancing the pointer would have claimed a projection no surface
+		// received. The pane now renders the published projection, so it does
+		// reach the writer — deferring would strand a preview pane on stale text
+		// for as long as it stayed in preview.
+		expect(s.projectedMarkdown).toBe(REMOTE_TEXT);
 		expect(s.history.currentNodeId).toBe(REMOTE);
-		expect(preview.text).toBe(REMOTE_TEXT);
+		// Nothing was seeded into the read-only surface.
+		expect(preview.seeds).not.toContain(REMOTE_TEXT);
+
+		// And switching to a writable lens must not flush stale text back.
 		const staleFlush = callsTo(NAMES.updateMarkdown).some(
-			(c) => c.args.markdown === REMOTE_TEXT,
+			(c) => c.args.markdown === "",
 		);
 		expect(staleFlush).toBe(false);
 		s.unmount();
@@ -1032,6 +1060,8 @@ describe("studio sync + history contract", () => {
 		// never reach the editor at all, not even for a frame before a correction.
 		expect(handle.text).toBe(LOCAL_TEXT);
 		expect(handle.seeds).not.toContain(LEGACY);
+		// V2: this is what the panes render, so preview cannot show it either.
+		expect(s.projectedMarkdown).toBe(LOCAL_TEXT);
 
 		// And nothing may turn the legacy body into a node under this head.
 		s.type(`${LOCAL_TEXT} typed after opening`);
@@ -1140,8 +1170,9 @@ describe("studio sync + history contract", () => {
 
 		// A's own commit loses the head, so its draft stops blocking and the
 		// projection finally runs.
-		await drain({
-			[NAMES.commitEdit]: {
+		await drain([
+			{
+				name: NAMES.commitEdit,
 				result: {
 					committed: false,
 					diverged: true,
@@ -1149,13 +1180,153 @@ describe("studio sync + history contract", () => {
 					remotePointerRevision: 2,
 				},
 			},
-			[NAMES.updateMarkdown]: {
-				result: { updatedAt: 3_000, stale: true, headMoved: true },
-			},
-		});
+		]);
 		await settle();
 
 		expect(handle.text).toBe(AHEAD_TEXT);
+		s.unmount();
+	});
+
+	it("V1: recovers a draft on a preview-only reload, and does not delete it", async () => {
+		const preview = fakeHandle();
+		preview.readOnly = true; // the only pane is preview: no editor handle
+		const DRAFT = "unsaved words from the session that crashed";
+		window.localStorage.setItem(
+			`recto:draft:${DOC_ID}`,
+			JSON.stringify({ markdown: DRAFT, updatedAt: 9_999, origin: "other" }),
+		);
+
+		dagRows = [rootNode(), localNode()];
+		const s = mountStudio(preview);
+		s.render({
+			currentNodeId: LOCAL_NODE,
+			markdown: LOCAL_TEXT,
+			updatedAt: 1_000,
+			pointerRevision: 2,
+			markdownHeadNodeId: LOCAL_NODE,
+		});
+		await settle(0);
+
+		// Recovery used to be gated on an editor handle, so with no pane to seed
+		// it never ran; history then read "no local input", took the server text
+		// and cleared the draft from storage.
+		expect(s.projectedMarkdown).toBe(DRAFT);
+		expect(loadDraft(DOC_ID)?.markdown).toBe(DRAFT);
+		s.unmount();
+	});
+
+	it("V1: treats an intentionally empty recovered draft as a draft", async () => {
+		const handle = fakeHandle();
+		window.localStorage.setItem(
+			`recto:draft:${DOC_ID}`,
+			JSON.stringify({ markdown: "", updatedAt: 9_999, origin: "other" }),
+		);
+
+		dagRows = [rootNode(), localNode()];
+		const s = mountStudio(handle);
+		s.render({
+			currentNodeId: LOCAL_NODE,
+			markdown: LOCAL_TEXT,
+			updatedAt: 1_000,
+			pointerRevision: 2,
+			markdownHeadNodeId: LOCAL_NODE,
+		});
+		await settle(0);
+
+		// Deleting everything is a draft the writer meant to keep; reading it as
+		// "no draft" silently restored the text they had removed.
+		expect(handle.text).toBe("");
+		expect(s.projectedMarkdown).toBe("");
+		s.unmount();
+	});
+
+	it("V3: a recovered draft is unsaved, and is written rather than dropped", async () => {
+		const handle = fakeHandle();
+		const DRAFT = "recovered but never sent";
+		window.localStorage.setItem(
+			`recto:draft:${DOC_ID}`,
+			JSON.stringify({ markdown: DRAFT, updatedAt: 9_999, origin: "other" }),
+		);
+
+		dagRows = [rootNode(), localNode()];
+		const s = mountStudio(handle);
+		s.render({
+			currentNodeId: LOCAL_NODE,
+			markdown: LOCAL_TEXT,
+			updatedAt: 1_000,
+			pointerRevision: 2,
+			markdownHeadNodeId: LOCAL_NODE,
+		});
+		await settle(0);
+
+		// Marked as flushed, it would be cleared from storage and never written:
+		// the draft would simply vanish. It must be dirty — in flight or waiting,
+		// but never already "saved".
+		expect(s.syncStatus).not.toBe("saved");
+		await settle();
+		const sent = callsTo(NAMES.updateMarkdown).some(
+			(c) => c.args.markdown === DRAFT,
+		);
+		const committed = callsTo(NAMES.commitEdit).some(
+			(c) => c.args.markdown === DRAFT,
+		);
+		expect(sent || committed).toBe(true);
+		s.unmount();
+	});
+
+	it("V4: an AI commit tags the AI node, not the draft it replaced", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode()];
+		const s = mountStudio(handle);
+		s.render(AT_ROOT);
+
+		// An open draft the writer typed, then an AI transform accepted on top.
+		s.type(TYPED);
+		s.run(() => {
+			s.history.commitProgrammatic(AI, { origin: "ai:grammar" });
+		});
+
+		const commits = callsTo(NAMES.commitEdit).map(
+			(c) => c.args.node as { origin: string },
+		);
+		const typedNode = callsTo(NAMES.commitEdit).find(
+			(c) => c.args.markdown === TYPED,
+		);
+		const aiNode = callsTo(NAMES.commitEdit).find(
+			(c) => c.args.markdown === AI,
+		);
+		expect(commits).toHaveLength(2);
+		// Claiming the origin before flushing gave the writer's own text the AI
+		// tag and left the AI's node looking like an ordinary device edit.
+		expect((typedNode?.args.node as { origin: string }).origin).toBe(
+			"test-device",
+		);
+		expect((aiNode?.args.node as { origin: string }).origin).toBe("ai:grammar");
+		s.unmount();
+	});
+
+	it("V4: an AI result identical to the current text commits nothing", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode()];
+		const s = mountStudio(handle);
+		s.render(AT_ROOT);
+
+		// An OPEN draft, then an AI result identical to it. Reading the head
+		// before the flush made the flush's own node look like the AI's work.
+		s.type(TYPED);
+		const before = callsTo(NAMES.commitEdit).length;
+
+		let returned: string | null = "not-null";
+		s.run(() => {
+			returned = s.history.commitProgrammatic(TYPED, { origin: "ai:grammar" });
+		});
+
+		// Reading the head before the flush made an unchanged AI result look like
+		// it had committed a node.
+		expect(returned).toBeNull();
+		// The draft's own node is expected; the AI must not add a second one.
+		expect(callsTo(NAMES.commitEdit).length).toBe(before + 1);
+		expect(lastCallTo(NAMES.commitEdit)?.args.markdown).toBe(TYPED);
 		s.unmount();
 	});
 
