@@ -54,8 +54,59 @@ public struct OutboxPayload: Codable, Sendable, Equatable {
     return String(decoding: data, as: UTF8.self)
   }
 
-  public static func decode(_ raw: String) -> OutboxPayload {
-    (try? JSONDecoder().decode(OutboxPayload.self, from: Data(raw.utf8))) ?? OutboxPayload()
+  /// Decoding THROWS. It used to return an all-empty payload, which turned a
+  /// corrupt row into a valid destructive mutation: a commit with an empty
+  /// `nodeId` and `patch` passes the server's `v.string()` validators, inserts
+  /// that node, and can move `currentNodeId` to `""`.
+  public static func decode(_ raw: String) throws -> OutboxPayload {
+    do {
+      return try JSONDecoder().decode(OutboxPayload.self, from: Data(raw.utf8))
+    } catch {
+      throw OutboxPayloadError.undecodable(underlying: String(describing: error))
+    }
+  }
+
+  /// Fields this kind of job cannot be sent without. Guessing a default here is
+  /// what makes a malformed row indistinguishable from real work.
+  public func validate(for kind: OutboxKind) throws {
+    func require(_ condition: Bool, _ field: String) throws {
+      guard condition else { throw OutboxPayloadError.missingField(kind: kind, field: field) }
+    }
+    switch kind {
+    case .commitEdit, .appendNode:
+      try require(!(nodeId ?? "").isEmpty, "nodeId")
+      try require(!(patch ?? "").isEmpty, "patch")
+      try require(markdown != nil, "markdown")
+      try require(wordCount != nil, "wordCount")
+    case .pointerMove:
+      try require(!(nodeId ?? "").isEmpty, "nodeId")
+      try require(markdown != nil, "markdown")
+      try require(createdAt != nil, "createdAt")
+    case .draftSave:
+      try require(markdown != nil, "markdown")
+      try require(wordCount != nil, "wordCount")
+    case .createDocument, .rename:
+      try require(title != nil, "title")
+    case .writingStats:
+      try require(!(date ?? "").isEmpty, "date")
+      try require(words != nil, "words")
+    case .remove:
+      break
+    }
+  }
+}
+
+/// Why a queued row cannot be sent.
+public enum OutboxPayloadError: Error, Equatable, Sendable, LocalizedError {
+  case undecodable(underlying: String)
+  case missingField(kind: OutboxKind, field: String)
+
+  public var errorDescription: String? {
+    switch self {
+    case .undecodable(let underlying): "Queued work could not be decoded: \(underlying)"
+    case .missingField(let kind, let field):
+      "Queued \(kind.rawValue) work is missing \(field)"
+    }
   }
 }
 

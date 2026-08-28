@@ -15,6 +15,12 @@ public enum SyncEvent: Sendable, Equatable {
   case diverged(localId: String, local: String, remote: String)
   /// A document appeared or disappeared remotely.
   case libraryChanged
+  /// The server no longer has this document, but it still holds work that exists
+  /// nowhere else. The UI has to offer a decision — it is not ours to make.
+  case unsyncedWorkOnRemovedDocument(localId: String)
+  /// A queued mutation cannot be sent and never will be. It is parked, not
+  /// dropped; the UI needs an export/recovery path.
+  case jobUnsendable(localId: String, reason: String)
 }
 
 /// Drains the outbox and mirrors Convex into `RectoStore` (plan 023 §4.3, §4.4).
@@ -35,6 +41,15 @@ public actor SyncEngine: SyncControlling {
   /// `start()` has been called. Until then `requestDrain()` only records that
   /// work is waiting: an engine nobody started must not reach the network.
   private var isRunning = false
+  /// Bumped by every `stop()`. Cancellation does not cancel an in-flight network
+  /// call, so a task that was awaiting the transport when an account switch ran
+  /// can resume afterwards and write the OLD account's data. Every task checks
+  /// this after each external await and before each store write.
+  private var lifecycle = 0
+  /// Documents whose queue is held until a conflict is resolved. A diverged
+  /// commit must not be followed by the pointer move behind it — that would push
+  /// the server back to the branch the user is still deciding about.
+  private var blockedDocuments: Set<String> = []
   /// Documents a window has open. Held separately from the subscription tasks
   /// so `stop()` / `resume()` can tear the sockets down and bring the same set
   /// back up.
@@ -87,9 +102,11 @@ public actor SyncEngine: SyncControlling {
   /// comes back on its own (N0a).
   public func start() {
     isRunning = true
+    let generation = lifecycle
     libraryTask?.cancel()
     libraryTask = Task { [weak self] in await self?.runLibrarySubscription() }
     for localId in openDocumentIds { subscribeToNodes(localId: localId) }
+    Task { [weak self] in await self?.rehydrateIncompleteDocuments(generation: generation) }
     requestDrain()
   }
 
@@ -97,18 +114,31 @@ public actor SyncEngine: SyncControlling {
   /// of it.
   /// Tear down every socket. `openDocumentIds` and the outbox survive — that is
   /// what lets `resume()` bring the same documents back after a suspend.
-  public func stop() {
+  public func stop() async {
+    // Bump FIRST: anything already past its cancellation check must still fail
+    // the generation check before it writes.
+    lifecycle += 1
     isRunning = false
-    libraryTask?.cancel()
+    blockedDocuments.removeAll()
+
+    var pending: [Task<Void, Never>] = []
+    if let libraryTask { pending.append(libraryTask) }
+    pending.append(contentsOf: nodeSubscriptions.values)
+    pending.append(contentsOf: retryTasks.values)
+    if let drainTask { pending.append(drainTask) }
+    if let backoffWake { pending.append(backoffWake) }
+
     libraryTask = nil
-    for task in nodeSubscriptions.values { task.cancel() }
     nodeSubscriptions.removeAll()
-    for task in retryTasks.values { task.cancel() }
     retryTasks.removeAll()
-    drainTask?.cancel()
     drainTask = nil
-    backoffWake?.cancel()
     backoffWake = nil
+
+    for task in pending { task.cancel() }
+    // Awaiting is the point: cancellation does not abort a network call, and
+    // returning early lets a stale task resume after the caller has purged and
+    // switched accounts.
+    for task in pending { await task.value }
   }
 
   /// The socket reconnected, the network changed, or the app came to the
@@ -117,7 +147,7 @@ public actor SyncEngine: SyncControlling {
     _ = await transport.loginFromCache()
     // `stop()` keeps `openDocumentIds`, so `start()` brings the same documents
     // back up on the new socket.
-    stop()
+    await stop()
     start()
   }
 
@@ -138,31 +168,85 @@ public actor SyncEngine: SyncControlling {
   /// Apply a `documents.list` result. Public so a caller can force a refresh
   /// without waiting for the subscription to tick.
   public func mirrorLibrary(_ summaries: [RemoteDocumentSummary]) async throws {
+    let generation = lifecycle
+    await rehydrateIncompleteDocuments(generation: generation)
+    guard isCurrent(generation) else { return }
+
     let known = try await store.documents()
     let byConvexId = Dictionary(
-      known.compactMap { doc in doc.convexId.map { ($0, doc) } }, uniquingKeysWith: { first, _ in first })
+      known.compactMap { doc in doc.convexId.map { ($0, doc) } },
+      uniquingKeysWith: { first, _ in first })
 
     for summary in summaries {
-      if var local = byConvexId[summary.id] {
-        guard local.title != summary.title || local.remoteUpdatedAt != summary.updatedAt else {
-          continue
-        }
+      guard isCurrent(generation) else { return }
+      guard var local = byConvexId[summary.id] else {
+        try await hydrate(convexId: summary.id, generation: generation)
+        continue
+      }
+      let titleChanged = local.title != summary.title
+      let bodyMayHaveChanged = summary.updatedAt > (local.remoteUpdatedAt ?? -1)
+      guard titleChanged || bodyMayHaveChanged else { continue }
+
+      if titleChanged {
         local.title = summary.title
-        local.remoteUpdatedAt = summary.updatedAt
         try await store.save(local)
-      } else {
-        try await hydrate(convexId: summary.id)
+      }
+      // `documents.list` carries no body. A newer `updatedAt` on a document we
+      // already have can be another device's draft save, which only `get`
+      // reveals — and which stays invisible forever if we just bump the
+      // timestamp and move on.
+      if bodyMayHaveChanged {
+        try await adoptServerBodyIfTrusted(localId: local.localId, generation: generation)
       }
     }
 
     // A document that vanished from the server is gone — unless this device
-    // still has unsent work for it, in which case the outbox wins.
+    // still holds work that exists nowhere else.
     let remoteIds = Set(summaries.map(\.id))
-    for local in known {
-      guard let convexId = local.convexId, !remoteIds.contains(convexId) else { continue }
-      guard try await store.pendingJobs(documentLocalId: local.localId).isEmpty else { continue }
-      try await store.deleteDocumentRow(localId: local.localId)
+    for local in known where local.convexId.map({ !remoteIds.contains($0) }) ?? false {
+      guard isCurrent(generation) else { return }
+      // One transaction: the write-ahead path persists a draft BEFORE its outbox
+      // job, so a queue check alone can delete the user's only copy, and a
+      // separate check followed by a separate delete can be interleaved by a
+      // live edit.
+      if try await !store.deleteRemotelyRemovedDocument(localId: local.localId) {
+        logger.info(
+          "keeping \(local.localId, privacy: .public): removed remotely but it still holds local work"
+        )
+        emit(.unsyncedWorkOnRemovedDocument(localId: local.localId))
+      }
     }
+  }
+
+  /// Pull the body and adopt it as a pending draft — but only when the server
+  /// vouches for which node it belongs to.
+  ///
+  /// `documents.markdownHeadNodeId` is that stamp. Absent means the provenance is
+  /// unknown; a mismatch means the text belongs to another branch. In both cases
+  /// the DAG materialization is the head's text and this body is not.
+  func adoptServerBodyIfTrusted(localId: String, generation: Int) async throws {
+    guard let document = try await store.document(localId: localId),
+      let convexId = document.convexId,
+      let remote = try await transport.getDocument(documentId: convexId),
+      isCurrent(generation)
+    else { return }
+
+    guard let stamp = remote.markdownHeadNodeId, stamp == remote.currentNodeId else {
+      // Unstamped or stamped for another branch: record the timestamps, never
+      // the text.
+      try await store.setSyncState(
+        documentLocalId: localId, document.syncState, remoteHeadNodeId: remote.currentNodeId,
+        remoteUpdatedAt: remote.updatedAt, remotePointerRevision: remote.pointerRevision)
+      return
+    }
+
+    let adopted = try await store.adoptServerDraft(
+      documentLocalId: localId, markdown: remote.markdown, wordCount: Int(remote.wordCount),
+      stampedHeadNodeId: stamp, remoteUpdatedAt: remote.updatedAt)
+    try await store.setSyncState(
+      documentLocalId: localId, document.syncState, remoteHeadNodeId: remote.currentNodeId,
+      remoteUpdatedAt: remote.updatedAt, remotePointerRevision: remote.pointerRevision)
+    if adopted { emit(.documentChanged(localId: localId)) }
   }
 
   /// Pull a document this device has never seen.
@@ -171,7 +255,10 @@ public actor SyncEngine: SyncControlling {
   /// go in together: a document whose head node never arrived can never
   /// materialize, and `mirrorLibrary` would skip re-pulling it because the title
   /// and `remoteUpdatedAt` already match.
-  func hydrate(convexId: String, into existingLocalId: String? = nil) async throws {
+  func hydrate(convexId: String, into existingLocalId: String? = nil, generation: Int? = nil)
+    async throws
+  {
+    let generation = generation ?? lifecycle
     guard let remote = try await transport.getDocument(documentId: convexId) else { return }
     let nodes = try await transport.listNodes(documentId: remote.id, sinceCreatedAt: nil)
     guard nodes.contains(where: { $0.nodeId == remote.currentNodeId }) else {
@@ -180,8 +267,9 @@ public actor SyncEngine: SyncControlling {
       return
     }
 
+    guard isCurrent(generation) else { return }
     let localId = existingLocalId ?? UUID().uuidString
-    let document = DocumentRecord(
+    var document = DocumentRecord(
       localId: localId,
       convexId: remote.id,
       title: remote.title,
@@ -191,16 +279,28 @@ public actor SyncEngine: SyncControlling {
       remoteHeadNodeId: remote.currentNodeId,
       remoteUpdatedAt: remote.updatedAt,
       remotePointerRevision: remote.pointerRevision,
+      remoteMarkdownHeadNodeId: remote.markdownHeadNodeId,
       syncState: .synced,
       updatedAt: remote.updatedAt,
       createdAt: remote.createdAt)
+
+    // The row's `markdown` must be whatever the HEAD materializes to. The
+    // server's stored body is only the head's text when it is stamped with the
+    // head; otherwise it belongs to some other branch and is carried as a
+    // pending draft rather than promoted into the head.
+    let index = indexNodes(nodes.map { $0.record(documentLocalId: localId).docNode })
+    let materialized = (try? materialize(remote.currentNodeId, index)) ?? remote.markdown
+    document.markdown = materialized
+    if remote.markdownHeadNodeId == remote.currentNodeId, remote.markdown != materialized {
+      document.draftMarkdown = remote.markdown
+    }
     try await store.hydrate(
       document: document, nodes: nodes.map { $0.record(documentLocalId: localId) })
   }
 
   /// Re-pull any row whose head node is missing — an interrupted hydration that
   /// would otherwise be a document that cannot be opened.
-  func rehydrateIncompleteDocuments() async {
+  func rehydrateIncompleteDocuments(generation: Int) async {
     guard let incomplete = try? await store.incompleteDocumentIds(), !incomplete.isEmpty else {
       return
     }
@@ -208,8 +308,9 @@ public actor SyncEngine: SyncControlling {
       guard let document = try? await store.document(localId: localId),
         let convexId = document.convexId
       else { continue }
+      guard isCurrent(generation) else { return }
       logger.info("rehydrating incomplete document \(localId, privacy: .public)")
-      try? await hydrate(convexId: convexId, into: localId)
+      try? await hydrate(convexId: convexId, into: localId, generation: generation)
     }
   }
 
@@ -294,6 +395,7 @@ public actor SyncEngine: SyncControlling {
       nodesById: nodesById, hasPendingWork: hasPendingWork)
     {
     case .inSync:
+      blockedDocuments.remove(localId)
       try await store.setSyncState(
         documentLocalId: localId, await settled(hasPendingWork ? .pending : .synced),
         remoteHeadNodeId: remote.currentNodeId, remoteUpdatedAt: remote.updatedAt,
@@ -351,6 +453,7 @@ public actor SyncEngine: SyncControlling {
           remoteUpdatedAt: remote.updatedAt, remotePointerRevision: remote.pointerRevision)
         return
       }
+      blockedDocuments.remove(localId)
       emit(.documentChanged(localId: localId))
       emit(.syncStateChanged(localId: localId, state: .synced))
 
@@ -361,6 +464,9 @@ public actor SyncEngine: SyncControlling {
         documentLocalId: localId, .diverged, remoteHeadNodeId: remoteHead,
         remoteUpdatedAt: remote.updatedAt, remotePointerRevision: remote.pointerRevision,
         divergedRemoteHeadNodeId: remoteHead)
+      // Held until the user decides. Draining on would push the server back to
+      // the branch under dispute.
+      blockedDocuments.insert(localId)
       emit(.diverged(localId: localId, local: local, remote: remoteHead))
       emit(.syncStateChanged(localId: localId, state: .diverged))
     }
@@ -427,7 +533,7 @@ public actor SyncEngine: SyncControlling {
       guard !documents.isEmpty else { break }
 
       var progressed = false
-      for localId in documents {
+      for localId in documents where !blockedDocuments.contains(localId) {
         if Task.isCancelled { return }
         touched.insert(localId)
         if await drainOneJob(localId: localId) { progressed = true }
@@ -472,6 +578,10 @@ public actor SyncEngine: SyncControlling {
 
   /// A local-store failure during a drain is not "nothing to send" — it means the
   /// mirror is unreadable, and sync would otherwise sit silently idle forever.
+  /// True when this task still belongs to the current lifecycle. Checked after
+  /// every external await and before every store write.
+  private func isCurrent(_ generation: Int) -> Bool { generation == lifecycle }
+
   private func storeFailed(_ error: any Error, while action: String) {
     logger.error(
       "local store failed while \(action, privacy: .public): \(error.localizedDescription, privacy: .public)"
@@ -481,9 +591,11 @@ public actor SyncEngine: SyncControlling {
   private enum JobOutcome {
     /// Delete the job and continue with the next one.
     case completed
-    /// Delete the job but stop draining this document (a conflict is now in
-    /// charge of what happens next).
-    case completedAndStop
+    /// Delete the job AND hold this document's queue until a conflict is
+    /// resolved or a reconciliation releases it. Everything behind the job
+    /// belongs to the branch under dispute; sending it would push the server
+    /// back to the branch the user is still deciding about.
+    case completedAndBlock
     /// Leave the job queued and stop.
     case stop
   }
@@ -500,6 +612,7 @@ public actor SyncEngine: SyncControlling {
   /// exactly one and a pipelined replay would be answered `diverged`.
   @discardableResult
   func drainOneJob(localId: String) async -> Bool {
+    let generation = lifecycle
     let job: OutboxJob?
     let document: DocumentRecord?
     do {
@@ -509,7 +622,7 @@ public actor SyncEngine: SyncControlling {
       storeFailed(error, while: "reading the queue for \(localId)")
       return false
     }
-
+    guard isCurrent(generation) else { return false }
     guard let job, let jobId = job.id else { return false }
 
     guard let document else {
@@ -519,18 +632,82 @@ public actor SyncEngine: SyncControlling {
       return true
     }
 
+    // A row that cannot be decoded, or that is missing a field its kind needs,
+    // is NOT sent with guessed defaults: an empty `nodeId` and `patch` pass the
+    // server's validators and can move `currentNodeId` to "". It is parked.
+    let payload: OutboxPayload
     do {
-      switch try await send(job, document: document) {
-      case .completed, .completedAndStop:
+      payload = try OutboxPayload.decode(job.payload)
+      try payload.validate(for: job.kind)
+    } catch {
+      await parkUnsendableJob(job: job, jobId: jobId, reason: String(describing: error))
+      return false
+    }
+
+    do {
+      let outcome = try await send(job, payload: payload, document: document)
+      guard isCurrent(generation) else { return false }
+      switch outcome {
+      case .completed:
         try await store.completeJob(id: jobId)
+        return true
+      case .completedAndBlock:
+        try await store.completeJob(id: jobId)
+        blockedDocuments.insert(localId)
         return true
       case .stop:
         return false
       }
     } catch {
+      guard isCurrent(generation) else { return false }
       await handleSendFailure(job: job, jobId: jobId, error: error)
       return false
     }
+  }
+
+  /// Park a job that can never succeed.
+  ///
+  /// Deleting it would destroy work; retrying it forever would block everything
+  /// behind it. It goes into a terminal failed state with the reason recorded,
+  /// and the UI is told so it can offer an export.
+  private func parkUnsendableJob(job: OutboxJob, jobId: Int64, reason: String) async {
+    logger.error(
+      "outbox job \(jobId) is unsendable and has been parked: \(reason, privacy: .public)")
+    try? await store.parkJob(id: jobId, reason: reason)
+    try? await store.setSyncState(documentLocalId: job.documentLocalId, .failed)
+    emit(.jobUnsendable(localId: job.documentLocalId, reason: reason))
+    emit(.syncStateChanged(localId: job.documentLocalId, state: .failed))
+  }
+
+  /// Release a document whose conflict has been resolved (or which reconciled
+  /// back to a non-diverged state).
+  public func releaseDocument(localId: String) {
+    blockedDocuments.remove(localId)
+  }
+
+  /// Hold this document's queue and wait for any in-flight send to finish.
+  ///
+  /// A queue rewrite must not race the row currently being sent: the send would
+  /// come back and delete a row the rewrite had already replaced. Returns
+  /// whether the caller should release the block afterwards — a document that was
+  /// already blocked by a divergence stays blocked until it is resolved.
+  ///
+  /// Not a `with…` closure on purpose: the work happens on the session actor, and
+  /// handing an actor-isolated closure to this actor is not something Swift 6
+  /// will let us do safely.
+  @discardableResult
+  public func beginExclusiveQueue(localId: String) async -> Bool {
+    let wasBlocked = blockedDocuments.contains(localId)
+    blockedDocuments.insert(localId)
+    // One owned drain task, so awaiting it is enough to know nothing is in
+    // flight for any document.
+    await drainTask?.value
+    return !wasBlocked
+  }
+
+  public func endExclusiveQueue(localId: String, release: Bool) {
+    guard release else { return }
+    blockedDocuments.remove(localId)
   }
 
   /// The queue for this document drained. Reconcile BEFORE claiming `synced`: an
@@ -558,9 +735,9 @@ public actor SyncEngine: SyncControlling {
     }
   }
 
-  private func send(_ job: OutboxJob, document: DocumentRecord) async throws -> JobOutcome {
-    let payload = OutboxPayload.decode(job.payload)
-
+  private func send(_ job: OutboxJob, payload: OutboxPayload, document: DocumentRecord)
+    async throws -> JobOutcome
+  {
     switch job.kind {
     case .createDocument:
       // A retry that already has a Convex id finishes the adoption rather than
@@ -603,7 +780,7 @@ public actor SyncEngine: SyncControlling {
           documentLocalId: document.localId, document.syncState,
           remotePointerRevision: remotePointerRevision)
         try await resolveDivergence(document: document, remoteHeadNodeId: remoteHeadNodeId)
-        return .completedAndStop
+        return .completedAndBlock
       }
 
     case .appendNode:
@@ -636,7 +813,7 @@ public actor SyncEngine: SyncControlling {
           "pointer move rejected for \(document.localId, privacy: .public); server head is \(response.currentNodeId, privacy: .public)"
         )
         try await reconcileHead(localId: document.localId)
-        return .completedAndStop
+        return .completedAndBlock
       }
       return .completed
 
@@ -657,7 +834,7 @@ public actor SyncEngine: SyncControlling {
         // retrying would do it again — so drop it and reconcile. No text is
         // lost: the draft row stays local and the next commit carries it.
         try await reconcileHead(localId: document.localId)
-        return .completedAndStop
+        return .completedAndBlock
       }
       // A merely stale `updatedAt` is not an error; the refreshed value is what
       // the next CAS uses.
@@ -672,7 +849,7 @@ public actor SyncEngine: SyncControlling {
       guard let convexId = document.convexId else { return .completed }
       try await transport.remove(documentId: convexId)
       try await store.deleteDocumentRow(localId: document.localId)
-      return .completedAndStop
+      return .completedAndBlock
 
     case .writingStats:
       guard let date = payload.date, let words = payload.words else { return .completed }
@@ -709,11 +886,21 @@ public actor SyncEngine: SyncControlling {
     try await store.finishOfflineCreate(
       documentLocalId: document.localId, convexId: convexId,
       serverRootNodeId: serverRootNodeId,
-      rewritePayloadParent: { raw, oldRoot, newRoot in
-        var payload = OutboxPayload.decode(raw)
-        guard payload.parentNodeId == oldRoot else { return raw }
-        payload.parentNodeId = newRoot
-        return payload.encoded
+      rewritePayloadNodeIds: { raw, oldRoot, newRoot in
+        // EVERY node-id reference, not just the parent: a queued pointer move
+        // targets `nodeId`, and the server does not check that a pointer target
+        // exists, so sending the deleted local root silently corrupts the head.
+        guard var payload = try? OutboxPayload.decode(raw) else { return raw }
+        var changed = false
+        if payload.parentNodeId == oldRoot {
+          payload.parentNodeId = newRoot
+          changed = true
+        }
+        if payload.nodeId == oldRoot {
+          payload.nodeId = newRoot
+          changed = true
+        }
+        return changed ? payload.encoded : raw
       })
   }
 

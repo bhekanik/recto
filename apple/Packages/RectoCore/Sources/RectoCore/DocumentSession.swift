@@ -31,6 +31,8 @@ public struct Divergence: Sendable, Equatable {
 
 public enum SessionError: Error, Equatable, Sendable {
   case notOpen
+  /// The session is frozen while sign-out decides what to do with unsent work.
+  case frozen
   case documentMissing(String)
 }
 
@@ -82,6 +84,9 @@ public actor DocumentSession {
   /// selection-only change and is silently dropped. This is the native shape of
   /// the web's `navigatingRef` guard.
   private var isRepositioning = false
+  /// Editing is refused. Set while sign-out decides, so no new text can arrive
+  /// between "how much is unsynced?" and the purge that answers it.
+  private var isFrozen = false
 
   /// Tail of the transition queue. Actor isolation does NOT prevent reentrancy:
   /// every `await` is a place another window's keystroke can run a whole edit.
@@ -184,7 +189,9 @@ public actor DocumentSession {
   public func close() async {
     openCount = max(openCount - 1, 0)
     guard openCount == 0 else { return }
-    try? await flush()
+    // Through the queue like everything else: closing while a navigation is
+    // mid-flight would otherwise tear the controller down under it.
+    try? await withTransition { try await performFlush() }
     idleTask?.cancel()
     draftTask?.cancel()
     eventTask?.cancel()
@@ -252,9 +259,19 @@ public actor DocumentSession {
     }
   }
 
+  /// Refuse further edits. Returns once nothing else will write.
+  public func freeze() async {
+    await withTransition { isFrozen = true }
+  }
+
+  public func resume() async {
+    await withTransition { isFrozen = false }
+  }
+
   private func performLocalChange(
     markdown: String, selection: NodeSelection?, structural: Bool
   ) async throws {
+    guard !isFrozen else { throw SessionError.frozen }
     guard controller != nil, let document else { throw SessionError.notOpen }
     let timestamp = now()
 
@@ -262,7 +279,7 @@ public actor DocumentSession {
     // between here and the commit loses nothing, and a store failure below
     // leaves a draft row that `open()` restores rather than a controller
     // advanced past a node SQLite rejected.
-    try await store.saveDraft(
+    let generation = try await store.saveDraft(
       documentLocalId: documentLocalId, markdown: markdown, selection: selection,
       wordCount: countWords(markdown), job: nil, now: timestamp)
 
@@ -290,8 +307,11 @@ public actor DocumentSession {
     }
 
     try await reload()
-    scheduleIdleCommit()
-    scheduleDraftSave(markdown: markdown, selection: selection)
+    // The revision the write-ahead save produced, or whatever the commits left
+    // behind — either way it is the token a later timer must still match.
+    let scheduled = self.document?.draftRevision ?? generation
+    scheduleIdleCommit(generation: scheduled)
+    scheduleDraftSave(markdown: markdown, selection: selection, generation: scheduled)
     publish()
     if !commits.isEmpty { await sync?.requestDrain() }
   }
@@ -316,24 +336,50 @@ public actor DocumentSession {
   }
 
   /// The idle boundary elapsed (500 ms since the last keystroke).
-  public func tickIdle() async throws {
-    guard let document, let commit = controller?.tick() else { return }
-    _ = try await persist(commit, base: document.localHeadNodeId, at: now())
-    try await reload()
-    publish()
-    await sync?.requestDrain()
+  /// `expectedDraftRevision` is the token the scheduling change captured. A timer
+  /// that fires after a newer change has already been persisted must not commit
+  /// the older text and clear the newer draft row along with it.
+  public func tickIdle(expectedDraftRevision: Int? = nil) async throws {
+    try await withTransition {
+      guard let document else { return }
+      if let expectedDraftRevision, document.draftRevision != expectedDraftRevision { return }
+      // Staged: the controller only advances once the node is on disk.
+      var staged = controller
+      guard let commit = staged?.tick() else { return }
+      do {
+        _ = try await persist(commit, base: document.localHeadNodeId, at: now())
+        controller = staged
+      } catch {
+        logger.error(
+          "idle commit failed for \(self.documentLocalId, privacy: .public): \(error.localizedDescription, privacy: .public)"
+        )
+        try? await rebuildControllerFromStore()
+        return
+      }
+      try await reload()
+      publish()
+      await sync?.requestDrain()
+    }
   }
 
   /// Force-commit the pending draft and push the queue. Called on background,
   /// window close, scene disconnect and mode switch.
   public func flush() async throws {
+    try await withTransition { try await performFlush() }
+  }
+
+  private func performFlush() async throws {
     idleTask?.cancel()
     idleTask = nil
     draftTask?.cancel()
     draftTask = nil
 
-    if let document, let commit = controller?.flush() {
+    // Staged, like every other commit path: the controller only advances once
+    // the node is on disk.
+    var staged = controller
+    if let document, let commit = staged?.flush() {
       _ = try await persist(commit, base: document.localHeadNodeId, at: now())
+      controller = staged
       try await reload()
       publish()
     }
@@ -374,24 +420,27 @@ public actor DocumentSession {
   /// Move to the parent node. Returns false at the root.
   @discardableResult
   public func undo() async throws -> Bool {
-    try await flush()
-
-    guard let document, let parent = nodesById[document.localHeadNodeId]?.parentNodeId,
-      nodesById[parent] != nil
-    else { return false }
-    try await navigate(to: parent)
-    return true
+    try await withTransition {
+      try await performFlush()
+      guard let document, let parent = nodesById[document.localHeadNodeId]?.parentNodeId,
+        nodesById[parent] != nil
+      else { return false }
+      try await performNavigate(to: parent)
+      return true
+    }
   }
 
   /// Move to the most recently created child — vim's behaviour, and the web's.
   @discardableResult
   public func redo() async throws -> Bool {
-    try await flush()
-    guard let document, let target = children(of: document.localHeadNodeId).last else {
-      return false
+    try await withTransition {
+      try await performFlush()
+      guard let document, let target = children(of: document.localHeadNodeId).last else {
+        return false
+      }
+      try await performNavigate(to: target)
+      return true
     }
-    try await navigate(to: target)
-    return true
   }
 
   /// Jump anywhere in the DAG. A pointer move: it never grows the tree.
@@ -449,73 +498,118 @@ public actor DocumentSession {
 
   /// Keep the local branch: re-commit its text as a child of the remote head so
   /// the server's pointer catches up. Both branches stay in the DAG.
+  ///
+  /// One store transaction, with the queue held: the old branch's commits become
+  /// node-only uploads, its drafts and pointer moves are dropped, the remote head
+  /// is adopted, and the rebased commit is queued BEHIND those uploads. Leaving
+  /// the old jobs in front is what let them replay against the discarded base and
+  /// recreate the divergence the user just resolved.
   public func resolveDivergenceKeepingLocal() async throws {
     try await withTransition {
       isRepositioning = true
       defer { isRepositioning = false }
-      // The divergence is written by the sync engine on its own actor; the
-      // session hears about it through an event that may not have arrived yet.
-      try await reload()
-      guard let document, let remoteHead = document.divergedRemoteHeadNodeId,
-        nodesById[remoteHead] != nil
-      else { return }
-
-      let localMarkdown = try await store.materializedMarkdown(
-        documentLocalId: documentLocalId, nodeId: document.localHeadNodeId)
-      let remoteMarkdown = try await store.materializedMarkdown(
-        documentLocalId: documentLocalId, nodeId: remoteHead)
-
-      _ = try await store.moveHead(
-        documentLocalId: documentLocalId, to: remoteHead, markdown: remoteMarkdown,
-        wordCount: countWords(remoteMarkdown), expectedHeadNodeId: document.localHeadNodeId,
-        job: nil, clearDivergence: true, now: now())
-      controller?.setCurrent(
-        nodeId: remoteHead, markdown: remoteMarkdown,
-        depthSinceSnapshot: depthSinceSnapshot(remoteHead, nodesById))
-      try await reload()
-      // Re-applying the local text as a child of the remote head is exactly a
-      // structural edit: one node, parented where the server is.
-      try await performLocalChange(
-        markdown: localMarkdown, selection: nil, structural: true)
+      try await performResolve(keepingLocal: true)
     }
   }
 
   /// Take the server's branch. The local branch stays reachable in the history
   /// panel — nothing is deleted — but every queued job that would push its
-  /// pointer back is rewritten or dropped, in the same transaction, or the next
-  /// drain simply recreates the divergence.
+  /// pointer back is rewritten or dropped in the same transaction.
   public func resolveDivergenceKeepingRemote() async throws {
     try await withTransition {
       isRepositioning = true
       defer { isRepositioning = false }
-      try await reload()
-      guard let document, let remoteHead = document.divergedRemoteHeadNodeId,
-        nodesById[remoteHead] != nil
-      else { return }
-
-      let markdown = try await store.materializedMarkdown(
-        documentLocalId: documentLocalId, nodeId: remoteHead)
-      try await store.resolveKeepingRemote(
-        documentLocalId: documentLocalId, remoteHeadNodeId: remoteHead, markdown: markdown,
-        wordCount: countWords(markdown), now: now())
-      controller?.setCurrent(
-        nodeId: remoteHead, markdown: markdown,
-        depthSinceSnapshot: depthSinceSnapshot(remoteHead, nodesById))
-      try await reload()
-      publish()
-      await sync?.requestDrain()
+      try await performResolve(keepingLocal: false)
     }
+  }
+
+  private func performResolve(keepingLocal: Bool) async throws {
+    // The divergence is written by the sync engine on its own actor; the session
+    // hears about it through an event that may not have arrived yet.
+    try await reload()
+    guard let document, let remoteHead = document.divergedRemoteHeadNodeId,
+      nodesById[remoteHead] != nil
+    else { return }
+
+    // Everything the choice was made against. Materializing suspends, and
+    // another client can advance to a different head in that window; applying
+    // the stale choice would adopt the wrong branch AND clear a divergence the
+    // user never saw.
+    let expectation = RectoStore.ResolutionExpectation(
+      localHeadNodeId: document.localHeadNodeId,
+      divergedRemoteHeadNodeId: remoteHead,
+      remotePointerRevision: document.remotePointerRevision)
+
+    let remoteMarkdown = try await store.materializedMarkdown(
+      documentLocalId: documentLocalId, nodeId: remoteHead)
+    let remoteWords = countWords(remoteMarkdown)
+
+    // Hold the queue so the transaction cannot rewrite a row that is in flight.
+    let shouldRelease = await sync?.beginExclusiveQueue(localId: documentLocalId) ?? false
+    do {
+      if keepingLocal {
+        let localMarkdown = try await store.materializedMarkdown(
+          documentLocalId: documentLocalId, nodeId: document.localHeadNodeId)
+        let timestamp = now()
+        let nodeId = ulid()
+        let patch = computePatch(remoteMarkdown, localMarkdown)
+        let node = DocNodeRecord(
+          documentLocalId: documentLocalId, nodeId: nodeId, parentNodeId: remoteHead,
+          patch: patch.encoded, snapshot: nil, selection: nil, origin: origin,
+          createdAt: timestamp)
+        let words = countWords(localMarkdown)
+        let job = OutboxJob(
+          documentLocalId: documentLocalId, kind: .commitEdit, clientMutationId: ulid(),
+          baseHeadNodeId: remoteHead,
+          payload: OutboxPayload(
+            nodeId: nodeId, parentNodeId: remoteHead, patch: patch.encoded, snapshot: nil,
+            selection: nil, origin: origin, createdAt: timestamp, markdown: localMarkdown,
+            wordCount: words
+          ).encoded,
+          createdAt: timestamp)
+
+        try await store.resolveKeepingLocal(
+          documentLocalId: documentLocalId, expecting: expectation,
+          remoteMarkdown: remoteMarkdown, remoteWordCount: remoteWords,
+          rebasedNode: node, rebasedMarkdown: localMarkdown, rebasedWordCount: words,
+          rebasedJob: job, now: timestamp)
+      } else {
+        try await store.resolveKeepingRemote(
+          documentLocalId: documentLocalId, expecting: expectation,
+          markdown: remoteMarkdown, wordCount: remoteWords, now: now())
+      }
+    } catch {
+      await sync?.endExclusiveQueue(localId: documentLocalId, release: shouldRelease)
+      throw error
+    }
+    await sync?.endExclusiveQueue(localId: documentLocalId, release: shouldRelease)
+
+    try await reload()
+    if let settled = self.document {
+      let markdown = try await store.materializedMarkdown(
+        documentLocalId: documentLocalId, nodeId: settled.localHeadNodeId)
+      controller?.setCurrent(
+        nodeId: settled.localHeadNodeId, markdown: markdown,
+        depthSinceSnapshot: depthSinceSnapshot(settled.localHeadNodeId, nodesById))
+    }
+    await sync?.releaseDocument(localId: documentLocalId)
+    publish()
+    await sync?.requestDrain()
   }
 
   // MARK: - Private
 
   private func handle(_ event: SyncEvent) async {
+    await withTransition { await performHandle(event) }
+  }
+
+  private func performHandle(_ event: SyncEvent) async {
     switch event {
     case .documentChanged(let localId), .syncStateChanged(let localId, _):
       guard localId == documentLocalId else { return }
     case .diverged(let localId, _, _):
       guard localId == documentLocalId else { return }
-    case .libraryChanged:
+    case .libraryChanged, .unsyncedWorkOnRemovedDocument, .jobUnsendable:
       return
     }
     do {
@@ -552,29 +646,47 @@ public actor DocumentSession {
       .map(\.nodeId)
   }
 
-  private func scheduleIdleCommit() {
+  private func scheduleIdleCommit(generation: Int) {
     guard schedulesTimers, let deadline = controller?.idleDeadline else { return }
     idleTask?.cancel()
     let delay = max(deadline - now(), 0)
     idleTask = Task { [weak self] in
       try? await Task.sleep(for: .milliseconds(Int(delay)))
       guard !Task.isCancelled else { return }
-      try? await self?.tickIdle()
+      try? await self?.tickIdle(expectedDraftRevision: generation)
     }
   }
 
-  private func scheduleDraftSave(markdown: String, selection: NodeSelection?) {
+  private func scheduleDraftSave(
+    markdown: String, selection: NodeSelection?, generation: Int
+  ) {
     guard schedulesTimers else { return }
     draftTask?.cancel()
     draftTask = Task { [weak self] in
       try? await Task.sleep(for: Self.draftDebounce)
       guard !Task.isCancelled else { return }
-      await self?.writeDraft(markdown: markdown, selection: selection)
+      await self?.writeDraft(
+        markdown: markdown, selection: selection, expectedDraftRevision: generation)
     }
   }
 
   /// The debounced draft row plus the server-side draft save.
-  func writeDraft(markdown: String, selection: NodeSelection?) async {
+  ///
+  /// `expectedDraftRevision` is the token captured when this was scheduled. The
+  /// store refuses the write if the document has moved on, which is what stops a
+  /// 250 ms task from writing change A back over change B.
+  func writeDraft(
+    markdown: String, selection: NodeSelection?, expectedDraftRevision: Int? = nil
+  ) async {
+    await withTransition {
+      await performWriteDraft(
+        markdown: markdown, selection: selection, expectedDraftRevision: expectedDraftRevision)
+    }
+  }
+
+  private func performWriteDraft(
+    markdown: String, selection: NodeSelection?, expectedDraftRevision: Int?
+  ) async {
     guard let document else { return }
     let words = countWords(markdown)
     let job = OutboxJob(
@@ -585,10 +697,13 @@ public actor DocumentSession {
       payload: OutboxPayload(markdown: markdown, wordCount: words).encoded,
       createdAt: now())
     do {
-      try await store.saveDraft(
+      _ = try await store.saveDraft(
         documentLocalId: documentLocalId, markdown: markdown, selection: selection,
-        wordCount: words, job: job, now: now())
+        wordCount: words, job: job, expectedDraftRevision: expectedDraftRevision, now: now())
       try await reload()
+    } catch StoreError.staleGeneration {
+      // A newer change already landed. Dropping this is the point.
+      return
     } catch {
       // The draft row is the crash-recovery guarantee; losing it silently is the
       // one failure the user would never be warned about.

@@ -1,5 +1,6 @@
 import Foundation
 import RectoHistory
+import RectoAuth
 import RectoStore
 import RectoSync
 
@@ -11,7 +12,7 @@ import RectoSync
 /// commit sibling nodes for the same keystrokes, forking the tree on every
 /// character. The registry is what makes "shared state" true rather than
 /// hopeful.
-public actor DocumentSessionRegistry {
+public actor DocumentSessionRegistry: EditSessionCoordinating {
   private let store: RectoStore
   private let sync: SyncEngine?
   private let origin: String
@@ -53,6 +54,17 @@ public actor DocumentSessionRegistry {
   /// Flush every open document — app termination, background, log out.
   public func flushAll() async {
     for session in sessions.values { try? await session.flush() }
+  }
+
+  /// Stop accepting edits and flush. Sign-out cannot honestly count unsynced
+  /// work while an open document can still write into the gap.
+  public func freezeAndFlushAll() async {
+    for session in sessions.values { await session.freeze() }
+    for session in sessions.values { try? await session.flush() }
+  }
+
+  public func resumeAll() async {
+    for session in sessions.values { await session.resume() }
   }
 
   public var openDocumentIds: [String] { Array(sessions.keys) }

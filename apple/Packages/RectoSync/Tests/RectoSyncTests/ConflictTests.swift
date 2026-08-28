@@ -79,20 +79,46 @@ struct ConflictTests {
 @Suite("outbox payload")
 struct OutboxPayloadTests {
   @Test("round-trips through JSON")
-  func roundTrip() {
+  func roundTrip() throws {
     let payload = OutboxPayload(
       nodeId: "n1", parentNodeId: "root", patch: #"{"from":0,"to":0,"insert":"hi 😀"}"#,
       snapshot: nil, selection: NodeSelection(anchor: 3, head: 5), origin: "device",
       createdAt: 12, markdown: "hi 😀", wordCount: 2)
-    #expect(OutboxPayload.decode(payload.encoded) == payload)
-    #expect(OutboxPayload.decode(payload.encoded).selection == NodeSelection(anchor: 3, head: 5))
+    #expect(try OutboxPayload.decode(payload.encoded) == payload)
+    #expect(
+      try OutboxPayload.decode(payload.encoded).selection == NodeSelection(anchor: 3, head: 5))
   }
 
-  @Test("an undecodable payload degrades to empty rather than stranding the row")
-  func degrades() {
-    // The alternative — refusing to decode — would leave offline work queued
-    // behind a row that can never be sent.
-    #expect(OutboxPayload.decode("not json") == OutboxPayload())
+  @Test("an undecodable payload throws instead of becoming an empty mutation")
+  func undecodableThrows() {
+    // Returning an all-empty payload turned a corrupt row into a VALID
+    // destructive mutation: `v.string()` accepts "", so an empty nodeId and
+    // patch would be inserted and could move `currentNodeId` to "".
+    #expect(throws: OutboxPayloadError.self) { try OutboxPayload.decode("not json") }
+  }
+
+  @Test("each kind's required fields are checked before anything is sent")
+  func validation() throws {
+    let empty = OutboxPayload()
+    #expect(throws: OutboxPayloadError.self) { try empty.validate(for: .commitEdit) }
+    #expect(throws: OutboxPayloadError.self) { try empty.validate(for: .pointerMove) }
+    #expect(throws: OutboxPayloadError.self) { try empty.validate(for: .draftSave) }
+    #expect(throws: OutboxPayloadError.self) { try empty.validate(for: .writingStats) }
+    #expect(throws: OutboxPayloadError.self) { try empty.validate(for: .rename) }
+    // `remove` genuinely needs nothing.
+    try empty.validate(for: .remove)
+
+    // An empty-string nodeId is exactly as unsendable as a missing one.
+    let blank = OutboxPayload(
+      nodeId: "", parentNodeId: "root", patch: "", markdown: "x", wordCount: 1)
+    #expect(throws: OutboxPayloadError.self) { try blank.validate(for: .commitEdit) }
+
+    let good = OutboxPayload(
+      nodeId: "n1", parentNodeId: "root", patch: "{}", origin: "d", createdAt: 1,
+      markdown: "x", wordCount: 1)
+    try good.validate(for: .commitEdit)
+    try good.validate(for: .appendNode)
+    try good.validate(for: .pointerMove)
   }
 }
 

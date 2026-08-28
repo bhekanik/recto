@@ -56,6 +56,15 @@ public final class ConvexTemplateAuthProvider: AuthProvider {
   private var sessionListener: Task<Void, Never>?
   private var lastPushedFingerprint: String?
   private var syncedSessionID: String?
+  /// A `loginFromCache` / `logout` is already in flight on the Convex client.
+  ///
+  /// convex-swift issues #21/#26: the FFI auth bridge is not safe against
+  /// concurrent logins, and overlapping them crashes with a misaligned access
+  /// inside the Rust callback. Our own startup calls `loginFromCache()` on the
+  /// transport at the same moment Clerk's `.sessionChanged` fires here, so the
+  /// two really do overlap unless they are serialized.
+  private var clientAuthInFlight = false
+  private var pendingSessionID: String??
   private weak var client: ConvexClientWithAuth<String>?
 
   public init(template: String = convexJWTTemplate) {
@@ -71,6 +80,11 @@ public final class ConvexTemplateAuthProvider: AuthProvider {
   /// session stream has to drive `loginFromCache()` / `logout()` on the client.
   public func bind(client: ConvexClientWithAuth<String>) {
     self.client = client
+    // `Clerk.shared` calls `fatalError` when the SDK was never configured, and
+    // constructing the transport reaches this immediately — so a debug build, a
+    // widget or a test that never called `configureClerk` would crash here
+    // rather than simply having no session.
+    guard RectoAuth.isClerkConfigured else { return }
     sessionListener?.cancel()
     sessionListener = Task { [weak self] in
       await self?.syncSession(Clerk.shared.session)
@@ -106,7 +120,7 @@ public final class ConvexTemplateAuthProvider: AuthProvider {
     onIdToken = nil
     lastPushedFingerprint = nil
     syncedSessionID = nil
-    guard Clerk.shared.session != nil else { return }
+    guard RectoAuth.isClerkConfigured, Clerk.shared.session != nil else { return }
     try await Clerk.shared.auth.signOut()
   }
 
@@ -125,6 +139,7 @@ public final class ConvexTemplateAuthProvider: AuthProvider {
   }
 
   private func fetchToken(reason: String) async throws -> String {
+    guard RectoAuth.isClerkConfigured else { throw RectoAuthError.clerkNotLoaded }
     guard Clerk.shared.isLoaded else { throw RectoAuthError.clerkNotLoaded }
     guard let session = Clerk.shared.session, session.status == .active else {
       throw RectoAuthError.noActiveSession
@@ -148,6 +163,7 @@ public final class ConvexTemplateAuthProvider: AuthProvider {
   /// The fetch is cache-first, so it only hits the network when the templated
   /// token really did expire.
   private func startRefreshListener() {
+    guard RectoAuth.isClerkConfigured else { return }
     refreshListener?.cancel()
     refreshListener = Task { [weak self] in
       for await event in Clerk.shared.auth.events {
@@ -179,13 +195,30 @@ public final class ConvexTemplateAuthProvider: AuthProvider {
     let activeID = (session?.status == .active) ? session?.id : nil
     guard activeID != syncedSessionID else { return }
 
-    syncedSessionID = activeID
-    if activeID != nil {
-      logger.info("clerk session became active; logging Convex in from cache")
-      _ = await client.loginFromCache()
-    } else {
-      logger.info("clerk session ended; logging Convex out")
-      await client.logout()
+    // Coalesce rather than overlap: remember the newest target and let the
+    // in-flight call pick it up when it finishes.
+    guard !clientAuthInFlight else {
+      pendingSessionID = .some(activeID)
+      return
+    }
+
+    clientAuthInFlight = true
+    defer { clientAuthInFlight = false }
+
+    var target = activeID
+    while true {
+      syncedSessionID = target
+      if target != nil {
+        logger.info("clerk session became active; logging Convex in from cache")
+        _ = await client.loginFromCache()
+      } else {
+        logger.info("clerk session ended; logging Convex out")
+        await client.logout()
+      }
+      guard let queued = pendingSessionID else { return }
+      pendingSessionID = nil
+      guard queued != syncedSessionID else { return }
+      target = queued
     }
   }
 }

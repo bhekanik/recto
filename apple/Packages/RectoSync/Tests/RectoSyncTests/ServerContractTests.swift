@@ -1,4 +1,5 @@
 import Foundation
+import RectoAuth
 import Testing
 
 @testable import RectoSync
@@ -143,5 +144,30 @@ struct ServerContractTests {
       #"[{"date":"2026-08-28","words":812}]"#)
     #expect(stats[0].date == "2026-08-28")
     #expect(stats[0].words == 812)
+  }
+}
+
+@Suite("transport construction")
+struct TransportConstructionTests {
+  @Test("building the transport without a configured Clerk does not trap")
+  func constructionIsSafeWithoutClerk() async {
+    // `ConvexClientWithAuth`'s init calls `authProvider.bind`, which reads
+    // `Clerk.shared` — and that is a `fatalError` when the SDK was never
+    // configured. A widget, a share extension or a test that builds the stack
+    // before `configureClerk` must not die here.
+    #expect(await RectoAuth.isClerkConfigured == false)
+    let provider = await ConvexTemplateAuthProvider()
+    let transport = await ConvexTransport(
+      deploymentURL: "https://example.convex.cloud", authProvider: provider)
+    #expect(await transport.liveSubscriptionCountForTesting == 0)
+
+    // `bind` starts a listener task; give it a turn. Unguarded it reaches
+    // `Clerk.shared` and traps the whole process.
+    try? await Task.sleep(for: .milliseconds(50))
+
+    // And the token paths report the condition instead of touching the SDK.
+    await #expect(throws: RectoAuthError.clerkNotLoaded) {
+      try await provider.loginFromCache(onIdToken: { _ in })
+    }
   }
 }

@@ -2,13 +2,19 @@ import Foundation
 import GRDB
 
 enum Migrations {
+  /// Named so a test can migrate a database only as far as v1 and then run the
+  /// rest over real rows, which is the path an upgrading user takes.
+  static let v1 = "v1-core"
+  static let v2 = "v2-pointer-revision"
+  static let v3 = "v3-draft-provenance"
+
   static func migrator() -> DatabaseMigrator {
     // Deliberately NOT `eraseDatabaseOnSchemaChange`, even in DEBUG: BK
     // daily-drives a Debug build from N6 on, and the outbox holds offline work
     // that exists nowhere else. Schema changes get a real migration.
     var migrator = DatabaseMigrator()
 
-    migrator.registerMigration("v1-core") { db in
+    migrator.registerMigration(v1) { db in
       try db.create(table: "documents") { t in
         t.primaryKey("localId", .text)
         t.column("convexId", .text).unique()
@@ -142,9 +148,19 @@ enum Migrations {
     // Additive: the server's pointer revision is a monotonic counter, unlike
     // `updatedAt`, so it settles which of two pointer writes is newer without
     // trusting either device's clock (`documents.pointerRevision`, PR #1).
-    migrator.registerMigration("v2-pointer-revision") { db in
+    migrator.registerMigration(v2) { db in
       try db.alter(table: "documents") { t in
         t.add(column: "remotePointerRevision", .double)
+      }
+    }
+
+    // Additive. `markdownHeadNodeId` is the server's provenance stamp for the
+    // stored body; `draftRevision` is the token a scheduled write must still
+    // match to be allowed to land.
+    migrator.registerMigration(v3) { db in
+      try db.alter(table: "documents") { t in
+        t.add(column: "remoteMarkdownHeadNodeId", .text)
+        t.add(column: "draftRevision", .integer).notNull().defaults(to: 0)
       }
     }
 

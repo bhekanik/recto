@@ -135,6 +135,10 @@ public actor ConvexTransport: RectoTransport {
     await authProvider.bind(client: client)
   }
 
+  /// Only exists so a test can prove construction completed without touching
+  /// an unconfigured Clerk.
+  var liveSubscriptionCountForTesting: Int { 0 }
+
   /// Re-authenticate from the keychain session. Safe to call repeatedly.
   @discardableResult
   public func loginFromCache() async -> Bool {

@@ -75,6 +75,12 @@ pointing at a node SQLite rejected.
 A draft that was persisted but never reached a node boundary is restored by
 `open()` (`GroupingController.restorePendingDraft`), so the text the user last
 typed is what a relaunched window shows — not the head it was typed on top of.
+
+**Every entry point is serialized**, including the timers: `applyLocalChange`,
+`tickIdle`, `writeDraft`, `flush`, `undo`, `redo`, both resolvers, close-flush
+and sync-event repositioning all queue behind each other. Scheduled work also
+carries a `draftRevision` token that the store refuses if the document has moved
+on, so a 250 ms debounce cannot write its old text back over a newer change.
 | `resolveDivergenceKeepingLocal()` / `…KeepingRemote()` | The two non-manual outcomes of the compare sheet. Neither deletes anything. |
 
 `DocumentState` carries `markdown`, `head`, `wordCount`, `syncState`,
@@ -118,6 +124,16 @@ advanced — would be told `diverged` instead of getting its original answer.
   under continuous editing cannot starve the others.
 - **The backoff survives a relaunch.** `start()`, `resume()` and every completed
   drain schedule one wake for the persisted `earliestNextAttempt()`.
+- **A divergence holds the document's queue.** A diverged commit returns
+  `completedAndBlock`; nothing else for that document is sent until a resolution
+  or a fresh reconciliation releases it. Otherwise the pointer move queued behind
+  it pushes the server back to the branch the user is still deciding about.
+- **Malformed work is parked, never guessed at.** Payload decoding throws and
+  each kind's required fields are checked before anything is sent — an empty
+  `nodeId`/`patch` passes the server's `v.string()` validators and can move
+  `currentNodeId` to `""`. A row that cannot be sent goes to a terminal state
+  (`RectoStore.parkedJobs()`) with its reason, and the UI is told via
+  `.jobUnsendable` so it can offer an export. It is never deleted.
 - **Job kinds.** `commitEdit` sends node + head together; `appendNode` sends the
   node ALONE through `docNodes.append` — what a commit becomes when its branch
   loses a divergence, so the text is preserved without contesting the pointer.
@@ -135,6 +151,25 @@ documents back up.
 
 ---
 
+## Server draft provenance
+
+`documents.markdownHeadNodeId` is the server's statement about which node its
+stored `markdown` belongs to. `updateMarkdown` sets it to the caller's
+`expectedHeadNodeId`, so a legacy caller that passed none **clears** it.
+
+The client treats it as the only trustworthy signal:
+
+| Server state | What the client does |
+|---|---|
+| stamp == `currentNodeId`, `updatedAt` newer than our baseline | adopt the body as a **pending draft** — it is another device's unsaved text and must be shown |
+| stamp missing | untrusted: keep the DAG materialization, record only the timestamps |
+| stamp names another node | the body belongs to a branch that is not the head: same as missing |
+
+`documents.list` carries no body, so a newer `updatedAt` on a document we already
+have triggers a `get` — bumping the timestamp and moving on is how another
+device's draft stayed invisible forever. A local draft always wins; the server's
+copy never replaces one.
+
 ## Conflict states (plan 023 §4.4)
 
 `DocumentRecord.syncState` is one of `synced`, `pending`, `syncing`, `diverged`,
@@ -148,6 +183,14 @@ its answer:
 | `adoptRemote(headNodeId:whenIdle:)` | someone built on our work | adopts when idle, keeping the caret; defers while there is pending local work. The adopt itself is a CAS inside one transaction (`RectoStore.adoptRemoteHead`) on the observed head plus "still no draft and no queued job", because materializing the target suspends and a keystroke can land in that gap |
 | `diverged(local:remote:)` | neither head reaches the other | keeps **both** branches, sets `divergedRemoteHeadNodeId`, emits `.diverged` |
 | `awaitingNodes(remoteHeadNodeId:)` | their head is not in our DAG yet | pulls the branch with `docNodes.listSince` and re-resolves once — it does **not** wait for the subscription to deliver it, because a Convex subscription that hit a server error never returns |
+
+Both resolvers take a `ResolutionExpectation` — expected local head, expected
+divergent remote head, expected remote pointer revision — checked inside the
+transaction. The user chooses against a snapshot and the sheet then suspends
+while materializing; without the CAS a resolution can adopt a stale head *and*
+clear a divergence nobody ever saw. `resolveDivergenceKeepingLocal()` also
+demotes the old branch's commits to `appendNode` and queues the rebased commit
+behind them, so nothing replays against the discarded base.
 
 `resolveDivergenceKeepingRemote()` runs as one store transaction: pointer and
 draft jobs for the discarded branch are deleted, its commits are rewritten to
@@ -177,8 +220,11 @@ failure this design exists to avoid.
 
 ## Sign-out and account switches
 
-`signOut()` **refuses** by default while the outbox or a draft row holds text,
-throwing `RectoAuthError.unsyncedWork(count:)`. Offline commits are not
+`signOut()` freezes and flushes every open session, stops sync, and only THEN
+counts unsynced work — immediately before the purge. Checking first and purging
+after two awaits let an open document write into the gap and lose that text.
+It **refuses** by default while the outbox or a draft row holds text, throwing
+`RectoAuthError.unsyncedWork(count:)`, and puts the app back the way it was. Offline commits are not
 re-derivable from Convex — they are the user's only copy — so signing out on a
 train would delete them silently. Ask first with `unsyncedWork()`, then either
 flush or call `signOut(discardingUnsynced: true)` as an explicit, user-visible
@@ -190,8 +236,25 @@ An account switch stops sync, purges, and only **then** publishes the new
 previous user's documents under the new session. A purge failure blocks the
 transition rather than leaking the rows.
 
-Wire the two together with `RectoAuth.attach(sync:)`; `SyncEngine` conforms to
-`SyncControlling`.
+A session Clerk revoked externally (another device, an admin, a refused token)
+cannot ask for consent. If unsynced work exists it is **retained**, not deleted:
+the mirror stays owned by the previous account, so nobody else can open it and a
+later sign-in by the same user recovers it (`RectoAuth.retainedUnsyncedWork`).
+
+**Cold start checks ownership.** The mirror records its owner in a settings row
+that survives a purge, because `status` begins as `.loading` and there is
+otherwise no "previous user" to compare against — user B opening an app whose
+database belongs to A would simply read A's documents. The check runs before any
+session is published or sync is started, and a failure blocks the transition.
+
+Wire it all together with `RectoAuth.attach(sync:)` and
+`RectoAuth.attach(sessions:)`; `SyncEngine` conforms to `SyncControlling` and
+`DocumentSessionRegistry` to `EditSessionCoordinating`.
+
+`SyncEngine.stop()` is `async` and **awaits** every task it cancels. Cancellation
+does not abort an in-flight network call, and returning early let a stale task
+resume after an account switch and write the previous account's data. Each task
+also carries a lifecycle generation it re-checks after every external await.
 
 ---
 
@@ -199,10 +262,10 @@ Wire the two together with `RectoAuth.attach(sync:)`; `SyncEngine` conforms to
 
 ```
 swift test --package-path apple/Packages/RectoHistory   # 37 — web parity
-swift test --package-path apple/Packages/RectoStore     # 24
-swift test --package-path apple/Packages/RectoAuth      # 12
-swift test --package-path apple/Packages/RectoSync      # 32 — incl. server-contract + live flows
-swift test --package-path apple/Packages/RectoCore      # 24 — incl. the N4 acceptance list
+swift test --package-path apple/Packages/RectoStore     # 25 — incl. a v1→v3 upgrade
+swift test --package-path apple/Packages/RectoAuth      # 17
+swift test --package-path apple/Packages/RectoSync      # 36 — server contract + live flows
+swift test --package-path apple/Packages/RectoCore      # 39 — acceptance, provenance, repros
 ```
 
 SwiftPM has served a **stale cross-package module** here more than once: editing

@@ -29,6 +29,9 @@ struct LiveFlowTests {
     let engine = SyncEngine(store: store, transport: transport, origin: "mac")
 
     await engine.start()
+    // Wait for the subscription to exist FIRST: seeding before it attaches would
+    // only prove the initial snapshot works, not that a mutation invalidates.
+    try await waitFor("the document subscription") { await transport.liveSubscriptionCount >= 1 }
     _ = await transport.seedDocument(title: "native-spike-live")
 
     try await waitFor("the document to be mirrored") {
@@ -195,4 +198,74 @@ struct LiveFlowTests {
     #expect(await transport.commitAttempts == ["MUT-ONCE"])
     #expect(try await store.pendingJobCount() == 0)
   }
+
+  @Test("stop() does not return while a call is still in flight")
+  func stopAwaitsInFlightWork() async throws {
+    let transport = InMemoryTransport()
+    _ = await transport.seedDocument(title: "native-spike-before-switch")
+    let store = try RectoStore.inMemory()
+    let engine = SyncEngine(store: store, transport: transport, origin: "mac")
+    try await engine.mirrorLibrary(await transport.summaries())
+    let localId = try #require(try await store.documents().first?.localId)
+
+    _ = try await store.enqueue(
+      OutboxJob(
+        documentLocalId: localId, kind: .rename, clientMutationId: ulid(),
+        payload: OutboxPayload(title: "native-spike-renamed").encoded, createdAt: 0))
+
+    // Park the rename mid-flight.
+    await transport.delayCalls()
+    await engine.start()
+    try await waitFor("the drain to reach the transport") {
+      await transport.delayedCallsStarted >= 1
+    }
+
+    // Cancellation does not abort a network call. `stop()` must WAIT for it —
+    // returning early is what let the old task resume after an account switch
+    // and write the previous account's data into the new one's store.
+    let finished = StopFlag()
+    let stopping = Task {
+      await engine.stop()
+      await finished.mark()
+    }
+
+    try await Task.sleep(for: .milliseconds(120))
+    #expect(
+      await finished.isSet == false,
+      "stop() returned while a transport call was still in flight")
+
+    await transport.releaseDelayedCalls()
+    await stopping.value
+    #expect(await finished.isSet)
+    #expect(await transport.liveSubscriptionCount == 0)
+  }
+
+  @Test("work from a stopped lifecycle does not write into the next one")
+  func staleTaskDoesNotWriteAfterRestart() async throws {
+    let transport = InMemoryTransport()
+    _ = await transport.seedDocument(title: "native-spike-lifecycle")
+    let store = try RectoStore.inMemory()
+    let engine = SyncEngine(store: store, transport: transport, origin: "mac")
+
+    await engine.start()
+    try await waitFor("hydration") { ((try? await store.documents().count) ?? 0) == 1 }
+    await engine.stop()
+
+    // A new account's store: anything the old lifecycle resumes into must not
+    // land here.
+    try await store.purgeEverything()
+    await engine.start()
+    try await Task.sleep(for: .milliseconds(50))
+    await engine.stop()
+
+    // Re-hydrating the SAME server is expected; the point is that the count is
+    // driven by the current lifecycle, not by a leftover task racing it.
+    #expect(try await store.documents().count <= 1)
+  }
+}
+
+/// One-shot flag, so a test can observe whether an `await` has returned yet.
+actor StopFlag {
+  private(set) var isSet = false
+  func mark() { isSet = true }
 }

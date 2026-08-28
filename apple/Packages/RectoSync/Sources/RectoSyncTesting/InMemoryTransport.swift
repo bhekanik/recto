@@ -19,6 +19,9 @@ public actor InMemoryTransport: RectoTransport {
     public var markdown: String
     public var wordCount: Double
     public var currentNodeId: String
+    /// Which node `markdown` belongs to. `nil` means unknown provenance — what a
+    /// legacy `updateMarkdown` without the head CAS leaves behind.
+    public var markdownHeadNodeId: String?
     public var pointerRevision: Double
     public var createdAt: Double
     public var updatedAt: Double
@@ -45,6 +48,15 @@ public actor InMemoryTransport: RectoTransport {
   public private(set) var loginCount = 0
 
   private var faults: [Fault] = []
+  /// Held open until `releaseDelayedCalls()`. Lets a test park a mutation
+  /// mid-flight and then run a sign-out or account switch underneath it.
+  ///
+  /// Deliberately NOT cancellation-aware: a real Convex call does not abort when
+  /// its Task is cancelled, and a gate that did would make `stop()` look correct
+  /// when it is not.
+  private var gateWaiters: [CheckedContinuation<Void, Never>] = []
+  private var gateIsOpen = false
+  public private(set) var delayedCallsStarted = 0
   private var clock: Double
 
   /// Epoch milliseconds by default. `updateCurrentNodeId` is last-write-wins on
@@ -70,6 +82,24 @@ public actor InMemoryTransport: RectoTransport {
 
   private func takeFault() -> Fault? {
     faults.isEmpty ? nil : faults.removeFirst()
+  }
+
+  /// Every mutation waits here first once `delayCalls()` is on.
+  public func delayCalls() { gateIsOpen = true }
+
+  public func releaseDelayedCalls() {
+    gateIsOpen = false
+    let waiters = gateWaiters
+    gateWaiters.removeAll()
+    for waiter in waiters { waiter.resume() }
+  }
+
+  private func awaitGate() async {
+    guard gateIsOpen else { return }
+    delayedCallsStarted += 1
+    await withCheckedContinuation { continuation in
+      gateWaiters.append(continuation)
+    }
   }
 
   private func applyPreFault() throws {
@@ -103,13 +133,17 @@ public actor InMemoryTransport: RectoTransport {
     let now = tick()
     documents[id] = Document(
       id: id, title: title, markdown: "", wordCount: 0, currentNodeId: rootNodeId,
-      pointerRevision: 0, createdAt: now, updatedAt: now, lastCommit: nil)
+      markdownHeadNodeId: rootNodeId, pointerRevision: 0, createdAt: now, updatedAt: now,
+      lastCommit: nil)
     nodes[id] = [
       RemoteNode(
         nodeId: rootNodeId, parentNodeId: nil,
         patch: TextPatch(from: 0, to: 0, insert: "").encoded, snapshot: "", selection: nil,
         origin: "server", createdAt: now)
     ]
+    // Convex invalidates `documents.list` and this document's node query.
+    notifyDocumentSubscribers()
+    notifyNodeSubscribers(documentId: id)
     return CreateDocumentResponse(documentId: id, rootNodeId: rootNodeId)
   }
 
@@ -194,6 +228,9 @@ public actor InMemoryTransport: RectoTransport {
     document.wordCount = Double(request.wordCount)
     document.updatedAt = updatedAt
     document.pointerRevision = pointerRevision
+    // `commitEdit` writes the body and the head together, so the body's
+    // provenance is exactly the node it just committed.
+    document.markdownHeadNodeId = request.nodeId
     document.lastCommit = (request.clientMutationId, request.nodeId, updatedAt, pointerRevision)
     documents[request.documentId] = document
 
@@ -202,6 +239,8 @@ public actor InMemoryTransport: RectoTransport {
       throw TransportFault.offline
     }
 
+    notifyDocumentSubscribers()
+    notifyNodeSubscribers(documentId: request.documentId)
     return CommitEditResponse(
       committed: true, headNodeId: request.nodeId, updatedAt: updatedAt,
       pointerRevision: pointerRevision)
@@ -243,6 +282,7 @@ public actor InMemoryTransport: RectoTransport {
     document.wordCount = Double(wordCount)
     document.updatedAt = now
     document.pointerRevision = pointerRevision
+    document.markdownHeadNodeId = currentNodeId
     documents[documentId] = document
     notifyDocumentSubscribers()
     return UpdateCurrentNodeResponse(
@@ -270,6 +310,10 @@ public actor InMemoryTransport: RectoTransport {
     document.markdown = markdown
     document.wordCount = Double(wordCount)
     document.updatedAt = now
+    // A caller that passed the CAS proved which head this text belongs to; a
+    // legacy caller has not, so its write CLEARS the stamp rather than leaving a
+    // stale one another device could promote into the wrong branch.
+    document.markdownHeadNodeId = expectedHeadNodeId
     if let title { document.title = title }
     documents[documentId] = document
     notifyDocumentSubscribers()
@@ -280,6 +324,7 @@ public actor InMemoryTransport: RectoTransport {
   public private(set) var renameOrder: [String] = []
 
   public func rename(documentId: String, title: String) async throws {
+    await awaitGate()
     try applyPreFault()
     documents[documentId]?.title = title
     documents[documentId]?.updatedAt = tick()
@@ -291,6 +336,8 @@ public actor InMemoryTransport: RectoTransport {
     try applyPreFault()
     documents[documentId] = nil
     nodes[documentId] = nil
+    notifyDocumentSubscribers()
+    notifyNodeSubscribers(documentId: documentId)
   }
 
   public func recordWritingStat(date: String, words: Int) async throws {
@@ -309,6 +356,7 @@ public actor InMemoryTransport: RectoTransport {
     return RemoteDocument(
       id: document.id, title: document.title, markdown: document.markdown,
       wordCount: document.wordCount, currentNodeId: document.currentNodeId,
+      markdownHeadNodeId: document.markdownHeadNodeId,
       pointerRevision: document.pointerRevision, createdAt: document.createdAt,
       updatedAt: document.updatedAt)
   }
@@ -371,6 +419,19 @@ public actor InMemoryTransport: RectoTransport {
   }
 
   public var liveSubscriptionCount: Int { documentSubscribers.count + nodeSubscribers.count }
+
+  /// Write a body the way another device's draft save would, stamped with the
+  /// node it belongs to (or deliberately unstamped, for the untrusted case).
+  public func writeServerDraft(
+    documentId: String, markdown: String, stampedHeadNodeId: String?
+  ) throws {
+    guard var document = documents[documentId] else { throw TransportFault.documentNotFound }
+    document.markdown = markdown
+    document.markdownHeadNodeId = stampedHeadNodeId
+    document.updatedAt = tick()
+    documents[documentId] = document
+    notifyDocumentSubscribers()
+  }
 
   public func loginFromCache() async -> Bool {
     loginCount += 1

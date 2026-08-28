@@ -466,8 +466,13 @@ struct StoreTransactionTests {
           baseHeadNodeId: "root", payload: "{}", createdAt: 0))
     }
 
+    try await store.setSyncState(
+      documentLocalId: "doc-1", .diverged, divergedRemoteHeadNodeId: "remote")
     try await store.resolveKeepingRemote(
-      documentLocalId: "doc-1", remoteHeadNodeId: "remote", markdown: "theirs", wordCount: 1)
+      documentLocalId: "doc-1",
+      expecting: .init(
+        localHeadNodeId: "root", divergedRemoteHeadNodeId: "remote", remotePointerRevision: nil),
+      markdown: "theirs", wordCount: 1)
 
     let queued = try await store.pendingJobs(documentLocalId: "doc-1")
     #expect(queued.count == 2)
@@ -507,7 +512,7 @@ struct StoreTransactionTests {
 
     try await store.finishOfflineCreate(
       documentLocalId: "doc-1", convexId: "j57abc", serverRootNodeId: "server-root",
-      rewritePayloadParent: { raw, oldRoot, newRoot in
+      rewritePayloadNodeIds: { raw, oldRoot, newRoot in
         raw.replacingOccurrences(of: "\"parentNodeId\":\"\(oldRoot)\"", with: "\"parentNodeId\":\"\(newRoot)\"")
       })
 
@@ -539,7 +544,7 @@ struct StoreTransactionTests {
       ])
     try await store.finishOfflineCreate(
       documentLocalId: "doc-1", convexId: "j57abc", serverRootNodeId: "server-root",
-      rewritePayloadParent: { raw, _, _ in raw })
+      rewritePayloadNodeIds: { raw, _, _ in raw })
     #expect(try await store.nodes(documentLocalId: "doc-1").count == 1)
     #expect(try await store.document(localId: "doc-1")?.localHeadNodeId == "server-root")
   }
@@ -579,5 +584,78 @@ struct StoreTransactionTests {
         documentLocalId: "doc-1", kind: .commitEdit, clientMutationId: ulid(), payload: "{}",
         createdAt: 0))
     #expect(try await store.unsyncedWorkCount() == 2)
+  }
+}
+
+@Suite("schema upgrades")
+struct MigrationTests {
+  @Test("a populated v1 database upgrades with its rows and queue order intact")
+  func upgradesFromV1() async throws {
+    let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appending(path: "recto-migration-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: directory) }
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let url = directory.appending(path: "recto.sqlite")
+
+    // A real file at v1, with the rows an upgrading user would actually have —
+    // not a fresh database that runs every migration at once.
+    do {
+      let pool = try RectoStore.openAtSchemaVersion(url: url, target: Migrations.v1)
+      try await pool.write { db in
+        try db.execute(
+          sql: """
+            INSERT INTO documents
+              (localId, convexId, title, markdown, draftMarkdown, wordCount, localHeadNodeId,
+               syncState, updatedAt, createdAt)
+            VALUES ('doc-1', 'j57abc', 'native-spike', 'body', 'a draft', 1, 'n2', 'pending', 5, 1)
+            """)
+        for (nodeId, parent, order) in [("root", nil as String?, 0.0), ("n1", "root", 1.0), ("n2", "n1", 2.0)] {
+          try db.execute(
+            sql: """
+              INSERT INTO doc_nodes
+                (documentLocalId, nodeId, parentNodeId, patch, snapshot, origin, createdAt, synced)
+              VALUES ('doc-1', ?, ?, '{"from":0,"to":0,"insert":""}', NULL, 'local', ?, 0)
+              """,
+            arguments: [nodeId, parent, order])
+        }
+        for (index, key) in ["MUT-1", "MUT-2", "MUT-3"].enumerated() {
+          try db.execute(
+            sql: """
+              INSERT INTO outbox
+                (documentLocalId, kind, clientMutationId, baseHeadNodeId, payload, attempts,
+                 nextAttemptAt, createdAt)
+              VALUES ('doc-1', 'commitEdit', ?, 'n1', ?, 0, 0, ?)
+              """,
+            arguments: [key, "payload-\(index)", Double(index)])
+        }
+      }
+      try pool.close()
+    }
+
+    // Now the upgrade the user's next launch performs.
+    let store = try RectoStore(url: url)
+
+    let document = try #require(try await store.document(localId: "doc-1"))
+    #expect(document.markdown == "body")
+    #expect(document.draftMarkdown == "a draft")
+    #expect(document.localHeadNodeId == "n2")
+    // New columns default rather than losing the row.
+    #expect(document.remotePointerRevision == nil)
+    #expect(document.remoteMarkdownHeadNodeId == nil)
+    #expect(document.draftRevision == 0)
+
+    #expect(try await store.nodes(documentLocalId: "doc-1").count == 3)
+
+    // FIFO across the upgrade: the queue is the ordering guarantee the server's
+    // single-slot replay window depends on.
+    let queued = try await store.pendingJobs(documentLocalId: "doc-1")
+    #expect(queued.map(\.clientMutationId) == ["MUT-1", "MUT-2", "MUT-3"])
+    let head = try await store.nextJob(documentLocalId: "doc-1", now: 1_000)
+    #expect(head?.clientMutationId == "MUT-1")
+
+    // And the first remote observation fills the new column in.
+    try await store.setSyncState(
+      documentLocalId: "doc-1", .pending, remotePointerRevision: 0)
+    #expect(try await store.document(localId: "doc-1")?.remotePointerRevision == 0)
   }
 }

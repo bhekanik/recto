@@ -185,3 +185,126 @@ struct SignOutTests {
     #expect(await auth.status == .signedOut)
   }
 }
+
+@Suite("round-3 auth")
+struct Round3AuthTests {
+  /// Records the ordering of everything auth drives, and can write into the
+  /// store from inside `freezeAndFlushAll` to reproduce the check-to-purge race.
+  private actor Coordinator: SyncControlling, EditSessionCoordinating {
+    private(set) var events: [String] = []
+    private var onFreeze: (@Sendable () async -> Void)?
+
+    init(onFreeze: (@Sendable () async -> Void)? = nil) { self.onFreeze = onFreeze }
+
+    func stop() async { events.append("sync.stop") }
+    func start() async { events.append("sync.start") }
+    func freezeAndFlushAll() async {
+      events.append("sessions.freeze")
+      await onFreeze?()
+    }
+    func resumeAll() async { events.append("sessions.resume") }
+  }
+
+  private func store(withDocument markdown: String = "") throws -> RectoStore {
+    let store = try RectoStore.inMemory()
+    return store
+  }
+
+  @Test("editing is frozen and flushed before the unsynced count is taken")
+  func freezesBeforeCounting() async throws {
+    let store = try RectoStore.inMemory()
+    try await store.save(
+      DocumentRecord(
+        localId: "doc-1", title: "native-spike", markdown: "", wordCount: 0,
+        localHeadNodeId: "root", updatedAt: 0, createdAt: 0))
+
+    // A draft persisted DURING the freeze — the race the old order allowed:
+    // count, then two awaits, then purge.
+    let coordinator = Coordinator {
+      try? await store.saveDraft(
+        documentLocalId: "doc-1", markdown: "typed while signing out", selection: nil,
+        wordCount: 4, job: nil)
+    }
+    let auth = await RectoAuth(store: store)
+    await auth.attach(sync: coordinator)
+    await auth.attach(sessions: coordinator)
+
+    await #expect(throws: RectoAuthError.unsyncedWork(count: 1)) { try await auth.signOut() }
+    #expect(try await store.document(localId: "doc-1")?.draftMarkdown == "typed while signing out")
+    // Refused, so the app is put back the way it was.
+    #expect(await coordinator.events == [
+      "sessions.freeze", "sync.stop", "sessions.resume", "sync.start",
+    ])
+  }
+
+  @Test("a cold start refuses to open a mirror that belongs to someone else")
+  func coldStartOwnership() async throws {
+    let store = try RectoStore.inMemory()
+    try await store.setMirrorOwner("user_A")
+    try await store.save(
+      DocumentRecord(
+        localId: "doc-1", title: "A's document", markdown: "A's private text", wordCount: 3,
+        localHeadNodeId: "root", updatedAt: 0, createdAt: 0))
+
+    // `claimMirror` is what `start()` calls before publishing a restored session.
+    let auth = await RectoAuth(store: store)
+    let coordinator = Coordinator()
+    await auth.attach(sync: coordinator)
+    #expect(try await auth.claimMirrorForTesting(userId: "user_B"))
+
+    #expect(try await store.documents().isEmpty, "B never sees A's rows")
+    #expect(try await store.mirrorOwner() == "user_B")
+  }
+
+  @Test("the same user coming back keeps their data")
+  func coldStartSameOwner() async throws {
+    let store = try RectoStore.inMemory()
+    try await store.setMirrorOwner("user_A")
+    try await store.save(
+      DocumentRecord(
+        localId: "doc-1", title: "A's document", markdown: "still here", wordCount: 2,
+        localHeadNodeId: "root", updatedAt: 0, createdAt: 0))
+
+    let auth = await RectoAuth(store: store)
+    #expect(try await auth.claimMirrorForTesting(userId: "user_A"))
+    #expect(try await store.documents().count == 1)
+  }
+
+  @Test("an ownership marker survives a purge so the next launch still knows")
+  func ownerSurvivesPurge() async throws {
+    let store = try RectoStore.inMemory()
+    try await store.setMirrorOwner("user_A")
+    try await store.saveSetting(key: "theme", json: "paper")
+    try await store.purgeEverything()
+    #expect(try await store.mirrorOwner() == "user_A")
+    #expect(try await store.setting("theme") == nil)
+  }
+
+  @Test("a revoked session with unsent work retains it instead of deleting it")
+  func revokedSessionRetainsWork() async throws {
+    let store = try RectoStore.inMemory()
+    try await store.setMirrorOwner("user_A")
+    try await store.save(
+      DocumentRecord(
+        localId: "doc-1", title: "native-spike", markdown: "", wordCount: 0,
+        localHeadNodeId: "root", updatedAt: 0, createdAt: 0))
+    _ = try await store.enqueue(
+      OutboxJob(
+        documentLocalId: "doc-1", kind: .commitEdit, clientMutationId: "m1", payload: "{}",
+        createdAt: 0))
+
+    let auth = await RectoAuth(store: store)
+    let coordinator = Coordinator()
+    await auth.attach(sync: coordinator)
+    await auth.attach(sessions: coordinator)
+
+    // Clerk ended the session elsewhere: no chance to ask for consent.
+    await auth.handleSessionRevokedForTesting(previousUserId: "user_A")
+
+    #expect(await auth.status == .signedOut)
+    #expect(try await store.pendingJobCount() == 1, "the work is retained, not deleted")
+    #expect(await auth.retainedUnsyncedWork == 1)
+    // Still owned by A, so `claimMirror` keeps anyone else out of it.
+    #expect(try await store.mirrorOwner() == "user_A")
+  }
+}

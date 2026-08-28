@@ -125,7 +125,7 @@ struct ReviewerRepros {
     let queued = try #require(
       try await mac.store.pendingJobs(documentLocalId: localId)
         .first { $0.kind == .pointerMove })
-    var payload = OutboxPayload.decode(queued.payload)
+    var payload = try OutboxPayload.decode(queued.payload)
     payload.createdAt = Date().timeIntervalSince1970 * 1000 - 600_000  // ten minutes ago
     var rewritten = queued
     rewritten.payload = payload.encoded

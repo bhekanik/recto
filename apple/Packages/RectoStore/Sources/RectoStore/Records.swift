@@ -44,6 +44,14 @@ public struct DocumentRecord: Codable, Sendable, FetchableRecord, PersistableRec
   /// The server's `pointerRevision` as last observed. `updatedAt` is a clock and
   /// two devices disagree about it; the revision is a counter and does not.
   public var remotePointerRevision: Double?
+  /// The node the server says its stored `markdown` belongs to
+  /// (`documents.markdownHeadNodeId`). `nil` means the provenance is unknown and
+  /// the text must NOT be treated as the head's — the DAG materialization wins.
+  public var remoteMarkdownHeadNodeId: String?
+  /// Bumped on every write that changes the draft or the head. A scheduled
+  /// timer captures it and the store refuses the write if it has moved, so a
+  /// 250 ms task cannot resurrect the text it was scheduled with over a newer one.
+  public var draftRevision: Int
   public var syncState: SyncState
   /// Set when `syncState == .diverged`: the remote head we refused to adopt.
   public var divergedRemoteHeadNodeId: String?
@@ -65,6 +73,8 @@ public struct DocumentRecord: Codable, Sendable, FetchableRecord, PersistableRec
     remoteHeadNodeId: String? = nil,
     remoteUpdatedAt: Double? = nil,
     remotePointerRevision: Double? = nil,
+    remoteMarkdownHeadNodeId: String? = nil,
+    draftRevision: Int = 0,
     syncState: SyncState = .pending,
     divergedRemoteHeadNodeId: String? = nil,
     updatedAt: Double,
@@ -83,6 +93,8 @@ public struct DocumentRecord: Codable, Sendable, FetchableRecord, PersistableRec
     self.remoteHeadNodeId = remoteHeadNodeId
     self.remoteUpdatedAt = remoteUpdatedAt
     self.remotePointerRevision = remotePointerRevision
+    self.remoteMarkdownHeadNodeId = remoteMarkdownHeadNodeId
+    self.draftRevision = draftRevision
     self.syncState = syncState
     self.divergedRemoteHeadNodeId = divergedRemoteHeadNodeId
     self.updatedAt = updatedAt

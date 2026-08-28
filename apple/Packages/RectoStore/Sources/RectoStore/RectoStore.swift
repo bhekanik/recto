@@ -7,6 +7,12 @@ public enum StoreError: Error, Equatable, Sendable {
   case nodeNotFound(document: String, node: String)
   case headMoved(expected: String, actual: String)
   case rootSnapshotMismatch(String)
+  /// A scheduled write arrived with a draft revision the document has moved past.
+  case staleGeneration(expected: Int, actual: Int)
+  /// A resolution's expectations no longer hold — the divergence moved under it.
+  case resolutionRaced(String)
+  /// The row still holds work that exists nowhere else.
+  case hasLocalWork(String)
 }
 
 /// The local SQLite mirror (plan 023 §4.2).
@@ -41,6 +47,14 @@ public actor RectoStore {
     self.path = url.path
     try Migrations.migrator().migrate(writer)
     try Self.protect(url)
+  }
+
+  /// Open a database migrated only as far as `target`, so a test can create a
+  /// realistic older file and then upgrade it.
+  static func openAtSchemaVersion(url: URL, target: String) throws -> DatabasePool {
+    let pool = try DatabasePool(path: url.path, configuration: Self.configuration)
+    try Migrations.migrator().migrate(pool, upTo: target)
+    return pool
   }
 
   /// An in-memory mirror, for tests. A `DatabaseQueue`, not a pool: WAL needs a
@@ -157,6 +171,7 @@ public actor RectoStore {
       document.draftSelectionAnchor = nil
       document.draftSelectionHead = nil
       document.updatedAt = now
+      document.draftRevision += 1
       if document.syncState != .diverged { document.syncState = .pending }
       try document.update(db)
 
@@ -209,6 +224,7 @@ public actor RectoStore {
       document.draftSelectionAnchor = nil
       document.draftSelectionHead = nil
       document.updatedAt = now
+      document.draftRevision += 1
       if clearDivergence {
         document.divergedRemoteHeadNodeId = nil
         document.syncState = job == nil ? .synced : .pending
@@ -224,25 +240,95 @@ public actor RectoStore {
   }
 
   /// The debounced draft row: text that has no node yet.
+  /// The debounced draft row: text that has no node yet.
+  ///
+  /// `expectedDraftRevision` is how a scheduled task proves it is not stale. A
+  /// 250 ms debounce fired for change A can otherwise land after change B has
+  /// already been persisted and write A back over it — and a crash before B's
+  /// next debounce would then lose B entirely.
+  @discardableResult
   public func saveDraft(
     documentLocalId: String,
     markdown: String,
     selection: NodeSelection?,
     wordCount: Int,
     job: OutboxJob?,
+    expectedDraftRevision: Int? = nil,
     now: Double = Date().timeIntervalSince1970 * 1000
-  ) throws {
+  ) throws -> Int {
     try writer.write { db in
       guard var document = try DocumentRecord.fetchOne(db, key: documentLocalId) else {
         throw StoreError.documentNotFound(documentLocalId)
+      }
+      if let expectedDraftRevision, document.draftRevision != expectedDraftRevision {
+        throw StoreError.staleGeneration(
+          expected: expectedDraftRevision, actual: document.draftRevision)
       }
       document.draftMarkdown = markdown == document.markdown ? nil : markdown
       document.draftSelectionAnchor = selection?.anchor
       document.draftSelectionHead = selection?.head
       document.wordCount = wordCount
       document.updatedAt = now
+      document.draftRevision += 1
       try document.update(db)
       if var job { try job.insert(db) }
+      return document.draftRevision
+    }
+  }
+
+  /// Adopt the server's stored body as a pending draft.
+  ///
+  /// Only ever called when the server stamped that body with the node it belongs
+  /// to (`documents.markdownHeadNodeId`) AND that stamp is our head AND the
+  /// server's `updatedAt` is ahead of what we have seen. Text whose provenance is
+  /// unknown or points at another branch is NOT the head's text, and treating it
+  /// as such is how one device's draft silently overwrites another's branch.
+  public func adoptServerDraft(
+    documentLocalId: String,
+    markdown: String,
+    wordCount: Int,
+    stampedHeadNodeId: String,
+    remoteUpdatedAt: Double,
+    now: Double = Date().timeIntervalSince1970 * 1000
+  ) throws -> Bool {
+    try writer.write { db in
+      guard var document = try DocumentRecord.fetchOne(db, key: documentLocalId) else {
+        throw StoreError.documentNotFound(documentLocalId)
+      }
+      guard document.localHeadNodeId == stampedHeadNodeId,
+        document.draftMarkdown == nil,
+        try OutboxJob.filter(Column("documentLocalId") == documentLocalId).fetchCount(db) == 0,
+        remoteUpdatedAt > (document.remoteUpdatedAt ?? -1)
+      else { return false }
+
+      document.draftMarkdown = markdown == document.markdown ? nil : markdown
+      document.draftSelectionAnchor = nil
+      document.draftSelectionHead = nil
+      document.wordCount = wordCount
+      document.remoteMarkdownHeadNodeId = stampedHeadNodeId
+      document.remoteUpdatedAt = remoteUpdatedAt
+      document.draftRevision += 1
+      document.updatedAt = now
+      try document.update(db)
+      return true
+    }
+  }
+
+  /// Delete a document that vanished from the server — but only if this device
+  /// holds nothing that exists nowhere else.
+  ///
+  /// The write-ahead path persists a draft BEFORE its outbox job, so checking
+  /// the queue alone can delete the user's only copy; and a separate check
+  /// followed by a separate delete can be interleaved by a live edit.
+  @discardableResult
+  public func deleteRemotelyRemovedDocument(localId: String) throws -> Bool {
+    try writer.write { db in
+      guard let document = try DocumentRecord.fetchOne(db, key: localId) else { return true }
+      guard document.draftMarkdown == nil,
+        try OutboxJob.filter(Column("documentLocalId") == localId).fetchCount(db) == 0
+      else { return false }
+      _ = try DocumentRecord.deleteOne(db, key: localId)
+      return true
     }
   }
 
@@ -330,17 +416,66 @@ public actor RectoStore {
     }
   }
 
+  /// What a divergence resolution asserts about the world before it acts.
+  ///
+  /// The user chooses against a snapshot, then the sheet suspends while the
+  /// target is materialized. If another client advances in that window, applying
+  /// the old choice adopts a stale head AND clears a divergence the user never
+  /// saw. Every field here is compared inside the transaction.
+  public struct ResolutionExpectation: Sendable, Equatable {
+    public var localHeadNodeId: String
+    public var divergedRemoteHeadNodeId: String
+    public var remotePointerRevision: Double?
+
+    public init(
+      localHeadNodeId: String, divergedRemoteHeadNodeId: String,
+      remotePointerRevision: Double?
+    ) {
+      self.localHeadNodeId = localHeadNodeId
+      self.divergedRemoteHeadNodeId = divergedRemoteHeadNodeId
+      self.remotePointerRevision = remotePointerRevision
+    }
+  }
+
+  private static func checkResolution(
+    _ db: Database, _ document: DocumentRecord, _ expected: ResolutionExpectation
+  ) throws {
+    guard document.localHeadNodeId == expected.localHeadNodeId,
+      document.divergedRemoteHeadNodeId == expected.divergedRemoteHeadNodeId,
+      document.remotePointerRevision == expected.remotePointerRevision
+    else {
+      throw StoreError.resolutionRaced(document.localId)
+    }
+  }
+
+  /// Rewrite the queue of a branch that is no longer the head.
+  ///
+  /// Commits become node-only uploads (`docNodes.append`) so the text survives
+  /// without contesting the pointer; drafts and pointer moves are dropped
+  /// outright, because both would push the discarded branch back.
+  private static func demoteBranchJobs(_ db: Database, documentLocalId: String) throws {
+    try db.execute(
+      sql: "DELETE FROM outbox WHERE documentLocalId = ? AND kind IN (?, ?)",
+      arguments: [
+        documentLocalId, OutboxKind.pointerMove.rawValue, OutboxKind.draftSave.rawValue,
+      ])
+    try db.execute(
+      sql:
+        "UPDATE outbox SET kind = ?, baseHeadNodeId = NULL WHERE documentLocalId = ? AND kind = ?",
+      arguments: [
+        OutboxKind.appendNode.rawValue, documentLocalId, OutboxKind.commitEdit.rawValue,
+      ])
+  }
+
   /// Take the remote branch after a divergence, in one transaction (§4.4).
   ///
   /// The local branch is NOT deleted — the DAG is append-only and the user can
   /// still reach it from the history panel — but every queued job that would
   /// push its pointer back has to go, or the next drain simply recreates the
-  /// divergence. Commits for nodes the server has not seen are rewritten to
-  /// `appendNode`, which uploads the node through `docNodes.append` without
-  /// touching `currentNodeId`.
+  /// divergence.
   public func resolveKeepingRemote(
     documentLocalId: String,
-    remoteHeadNodeId: String,
+    expecting: ResolutionExpectation,
     markdown: String,
     wordCount: Int,
     now: Double = Date().timeIntervalSince1970 * 1000
@@ -349,6 +484,8 @@ public actor RectoStore {
       guard var document = try DocumentRecord.fetchOne(db, key: documentLocalId) else {
         throw StoreError.documentNotFound(documentLocalId)
       }
+      try Self.checkResolution(db, document, expecting)
+      let remoteHeadNodeId = expecting.divergedRemoteHeadNodeId
       guard
         var node = try DocNodeRecord.fetchOne(
           db, key: ["documentLocalId": documentLocalId, "nodeId": remoteHeadNodeId])
@@ -356,19 +493,7 @@ public actor RectoStore {
         throw StoreError.nodeNotFound(document: documentLocalId, node: remoteHeadNodeId)
       }
 
-      // Pointer moves and draft saves belong to the branch being discarded.
-      try db.execute(
-        sql: "DELETE FROM outbox WHERE documentLocalId = ? AND kind IN (?, ?)",
-        arguments: [
-          documentLocalId, OutboxKind.pointerMove.rawValue, OutboxKind.draftSave.rawValue,
-        ])
-      // Commits keep the text safe but must stop advancing the head.
-      try db.execute(
-        sql:
-          "UPDATE outbox SET kind = ?, baseHeadNodeId = NULL WHERE documentLocalId = ? AND kind = ?",
-        arguments: [
-          OutboxKind.appendNode.rawValue, documentLocalId, OutboxKind.commitEdit.rawValue,
-        ])
+      try Self.demoteBranchJobs(db, documentLocalId: documentLocalId)
 
       node.materialized = markdown
       node.materializedAt = now
@@ -381,9 +506,72 @@ public actor RectoStore {
       document.draftSelectionAnchor = nil
       document.draftSelectionHead = nil
       document.divergedRemoteHeadNodeId = nil
+      document.draftRevision += 1
       document.syncState =
         try OutboxJob.filter(Column("documentLocalId") == documentLocalId).fetchCount(db) == 0
         ? .synced : .pending
+      document.updatedAt = now
+      try document.update(db)
+      try Self.trimMaterializationCache(db, documentLocalId: documentLocalId)
+    }
+  }
+
+  /// Keep the local branch: adopt the remote head as the base, demote the old
+  /// branch's jobs, and queue the rebased commit BEHIND those node uploads —
+  /// all in one transaction.
+  ///
+  /// Leaving the old jobs in front of the rebase is what let them replay against
+  /// the discarded base and recreate the divergence the user just resolved.
+  public func resolveKeepingLocal(
+    documentLocalId: String,
+    expecting: ResolutionExpectation,
+    remoteMarkdown: String,
+    remoteWordCount: Int,
+    rebasedNode: DocNodeRecord,
+    rebasedMarkdown: String,
+    rebasedWordCount: Int,
+    rebasedJob: OutboxJob,
+    now: Double = Date().timeIntervalSince1970 * 1000
+  ) throws {
+    try writer.write { db in
+      guard var document = try DocumentRecord.fetchOne(db, key: documentLocalId) else {
+        throw StoreError.documentNotFound(documentLocalId)
+      }
+      try Self.checkResolution(db, document, expecting)
+      let remoteHeadNodeId = expecting.divergedRemoteHeadNodeId
+      guard
+        var base = try DocNodeRecord.fetchOne(
+          db, key: ["documentLocalId": documentLocalId, "nodeId": remoteHeadNodeId])
+      else {
+        throw StoreError.nodeNotFound(document: documentLocalId, node: remoteHeadNodeId)
+      }
+
+      try Self.demoteBranchJobs(db, documentLocalId: documentLocalId)
+
+      base.materialized = remoteMarkdown
+      base.materializedAt = now
+      try base.update(db)
+      _ = remoteWordCount
+
+      var node = rebasedNode
+      node.materialized = rebasedMarkdown
+      node.materializedAt = now
+      try node.save(db)
+
+      // Enqueued last, so it drains after the node-only uploads that carry the
+      // discarded branch's text.
+      var job = rebasedJob
+      try job.insert(db)
+
+      document.localHeadNodeId = node.nodeId
+      document.markdown = rebasedMarkdown
+      document.wordCount = rebasedWordCount
+      document.draftMarkdown = nil
+      document.draftSelectionAnchor = nil
+      document.draftSelectionHead = nil
+      document.divergedRemoteHeadNodeId = nil
+      document.draftRevision += 1
+      document.syncState = .pending
       document.updatedAt = now
       try document.update(db)
       try Self.trimMaterializationCache(db, documentLocalId: documentLocalId)
@@ -403,7 +591,8 @@ public actor RectoStore {
     documentLocalId: String,
     convexId: String,
     serverRootNodeId: String,
-    rewritePayloadParent: @Sendable (_ payload: String, _ oldRoot: String, _ newRoot: String) -> String
+    rewritePayloadNodeIds: @Sendable (_ payload: String, _ oldRoot: String, _ newRoot: String)
+      -> String
   ) throws {
     try writer.write { db in
       guard var document = try DocumentRecord.fetchOne(db, key: documentLocalId) else {
@@ -439,20 +628,32 @@ public actor RectoStore {
           sql: "UPDATE outbox SET baseHeadNodeId = ? WHERE documentLocalId = ? AND baseHeadNodeId = ?",
           arguments: [serverRootNodeId, documentLocalId, localRoot.nodeId])
 
-        // The encoded payload carries its own copy of the parent; rewriting only
-        // the node row would still send the deleted root as the parent.
+        // The encoded payload carries its own copies of node ids — a commit's
+        // `parentNodeId` and a pointer move's `nodeId`. Rewriting only the node
+        // rows would still send the deleted root, and the server does not
+        // validate that a pointer target exists.
         for var job in try OutboxJob
           .filter(Column("documentLocalId") == documentLocalId)
           .fetchAll(db)
         {
-          let rewritten = rewritePayloadParent(job.payload, localRoot.nodeId, serverRootNodeId)
+          let rewritten = rewritePayloadNodeIds(job.payload, localRoot.nodeId, serverRootNodeId)
           guard rewritten != job.payload else { continue }
           job.payload = rewritten
           try job.update(db)
         }
 
+        try db.execute(
+          sql: "UPDATE versions SET nodeId = ? WHERE documentLocalId = ? AND nodeId = ?",
+          arguments: [serverRootNodeId, documentLocalId, localRoot.nodeId])
+        try db.execute(
+          sql: "UPDATE review_branches SET baseNodeId = CASE WHEN baseNodeId = ?2 THEN ?1 ELSE baseNodeId END, headNodeId = CASE WHEN headNodeId = ?2 THEN ?1 ELSE headNodeId END WHERE documentLocalId = ?3",
+          arguments: [serverRootNodeId, localRoot.nodeId, documentLocalId])
+
         if document.localHeadNodeId == localRoot.nodeId {
           document.localHeadNodeId = serverRootNodeId
+        }
+        if document.divergedRemoteHeadNodeId == localRoot.nodeId {
+          document.divergedRemoteHeadNodeId = serverRootNodeId
         }
         try db.execute(
           sql: "DELETE FROM doc_nodes WHERE documentLocalId = ? AND nodeId = ?",
@@ -661,6 +862,33 @@ public actor RectoStore {
     try writer.read { try OutboxJob.fetchCount($0) }
   }
 
+  /// Park a job that can never succeed: keep the row (it is the only copy of
+  /// that work) but stop it blocking the queue forever.
+  ///
+  /// `nextAttemptAt` is set beyond any plausible retry rather than deleting the
+  /// row, so an export/recovery path can still reach it.
+  public func parkJob(id: Int64, reason: String) throws {
+    try writer.write { db in
+      try db.execute(
+        sql: "UPDATE outbox SET lastError = ?, nextAttemptAt = ?, attempts = attempts + 1 WHERE id = ?",
+        arguments: [reason, Self.parkedForever, id])
+    }
+  }
+
+  /// Far enough in the future that nothing retries it, near enough that it is an
+  /// obviously artificial value in the database.
+  static let parkedForever: Double = 4_102_444_800_000  // 2100-01-01
+
+  /// Jobs parked because they cannot be sent — what an export/recovery UI lists.
+  public func parkedJobs() throws -> [OutboxJob] {
+    try writer.read { db in
+      try OutboxJob
+        .filter(Column("nextAttemptAt") >= Self.parkedForever)
+        .order(Column("id"))
+        .fetchAll(db)
+    }
+  }
+
   public func completeJob(id: Int64) throws {
     _ = try writer.write { db in try OutboxJob.deleteOne(db, key: id) }
   }
@@ -836,6 +1064,30 @@ public actor RectoStore {
     try writer.read { try $0.tableExists(name) }
   }
 
+  /// Which Clerk user this mirror belongs to.
+  ///
+  /// Kept out of the user-keyed tables on purpose: it has to survive a purge and
+  /// be readable before any session is published, so a cold start can tell
+  /// "user B opened an app whose database belongs to A" from "A came back".
+  public static let mirrorOwnerKey = "mirror-owner"
+
+  public func mirrorOwner() throws -> String? {
+    try setting(Self.mirrorOwnerKey)?.json
+  }
+
+  public func setMirrorOwner(_ userId: String?) throws {
+    try writer.write { db in
+      guard let userId else {
+        _ = try SettingRecord.deleteOne(db, key: Self.mirrorOwnerKey)
+        return
+      }
+      try SettingRecord(
+        key: Self.mirrorOwnerKey, json: userId,
+        updatedAt: Date().timeIntervalSince1970 * 1000, dirty: false
+      ).save(db)
+    }
+  }
+
   // MARK: - Sign-out
 
   /// Purge every user-keyed row. Sign-out must leave nothing readable behind
@@ -847,7 +1099,10 @@ public actor RectoStore {
       try db.execute(sql: "DELETE FROM documents")
       try db.execute(sql: "DELETE FROM outbox")
       try db.execute(sql: "DELETE FROM writing_stats")
-      try db.execute(sql: "DELETE FROM settings")
+      // Every setting except the ownership marker, which has to outlive the
+      // purge so a later cold start can still tell whose database this is.
+      try db.execute(
+        sql: "DELETE FROM settings WHERE key <> ?", arguments: [Self.mirrorOwnerKey])
       try db.execute(sql: "DELETE FROM window_state")
       try db.execute(sql: "DELETE FROM ai_runs")
     }

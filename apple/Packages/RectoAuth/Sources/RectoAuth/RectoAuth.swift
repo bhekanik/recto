@@ -35,6 +35,19 @@ public protocol SyncControlling: Sendable {
   func start() async
 }
 
+/// The open editor sessions, from auth's point of view.
+///
+/// Sign-out has to stop new text arriving before it can honestly say how much is
+/// unsynced: a check followed by a purge is otherwise separated by two awaits an
+/// open document can write in.
+public protocol EditSessionCoordinating: Sendable {
+  /// Stop accepting edits and flush what is pending. Returns once no session
+  /// will write again.
+  func freezeAndFlushAll() async
+  /// Let editing continue — a refused sign-out must not leave the app frozen.
+  func resumeAll() async
+}
+
 public enum AuthStatus: Sendable, Equatable {
   /// Clerk has not finished restoring a keychain session yet.
   case loading
@@ -73,6 +86,7 @@ public final class RectoAuth {
   private let store: RectoStore
   private let features: AuthFeatures
   private var sync: (any SyncControlling)?
+  private var sessions: (any EditSessionCoordinating)?
   private var statusContinuations: [UUID: AsyncStream<AuthStatus>.Continuation] = [:]
   private var eventListener: Task<Void, Never>?
 
@@ -96,6 +110,11 @@ public final class RectoAuth {
   /// object owns, so the two cannot be constructed in one step).
   public func attach(sync: any SyncControlling) {
     self.sync = sync
+  }
+
+  /// Wire the session registry in so sign-out can freeze editing first.
+  public func attach(sessions: any EditSessionCoordinating) {
+    self.sessions = sessions
   }
 
   deinit {
@@ -129,6 +148,12 @@ public final class RectoAuth {
     while !Clerk.shared.isLoaded {
       try? await Task.sleep(for: .milliseconds(50))
     }
+
+    // Cold start: the database on disk may belong to somebody else. `status`
+    // begins as `.loading`, so there is no "previous user" to compare against
+    // and nothing else would ever notice.
+    let restored = Self.activeUserId(of: Clerk.shared.session)
+    guard await claimMirror(for: restored) else { return }
     updateStatus(from: Clerk.shared.session)
 
     eventListener?.cancel()
@@ -150,6 +175,52 @@ public final class RectoAuth {
     }
   }
 
+  /// Make sure the mirror belongs to `userId` before anything is published or
+  /// started. Returns false when the transition must not proceed.
+  private func claimMirror(for userId: String?) async -> Bool {
+    do {
+      let owner = try await store.mirrorOwner()
+      switch (owner, userId) {
+      case (let owner?, let userId?) where owner != userId:
+        // Somebody else's documents are on this disk. They are not this user's
+        // to read, and they are not ours to silently destroy either — but a
+        // signed-in session cannot proceed over them.
+        logger.error("mirror belongs to another account; purging before publishing the session")
+        await sync?.stop()
+        try await store.purgeEverything()
+        try await store.setMirrorOwner(userId)
+      case (nil, let userId?):
+        try await store.setMirrorOwner(userId)
+      case (let owner?, nil):
+        // Signed out with data still on disk: leave it, it belongs to `owner`
+        // and they may come back.
+        _ = owner
+      default:
+        break
+      }
+      return true
+    } catch {
+      // Failing to establish ownership must block the transition, not open the
+      // previous account's documents under a new session.
+      logger.error(
+        "could not establish mirror ownership: \(error.localizedDescription, privacy: .public)")
+      status = .signedOut
+      return false
+    }
+  }
+
+  /// Test seam for the cold-start ownership check, which is otherwise only
+  /// reachable through `start()` and therefore through Clerk.
+  func claimMirrorForTesting(userId: String?) async throws -> Bool {
+    await claimMirror(for: userId)
+  }
+
+  /// Test seam for a session Clerk revoked externally.
+  func handleSessionRevokedForTesting(previousUserId: String) async {
+    status = .signedIn(userId: previousUserId)
+    await handleSessionChanged(nil)
+  }
+
   /// Status changes, for the UI and for `RectoSync` (which must re-subscribe on
   /// every transition: a Convex subscription that hit a server error is a
   /// terminated Combine publisher and never comes back on its own).
@@ -167,6 +238,7 @@ public final class RectoAuth {
   // MARK: - Sign in
 
   public func signInWithEmailCode(emailAddress: String) async throws -> EmailCodeChallenge {
+    guard Self.isClerkConfigured else { throw RectoAuthError.clerkNotLoaded }
     let signIn = try await Clerk.shared.auth.signInWithEmailCode(emailAddress: emailAddress)
     return EmailCodeChallenge(signIn: signIn, emailAddress: emailAddress)
   }
@@ -175,16 +247,19 @@ public final class RectoAuth {
   /// `{bundleIdentifier}://callback`, so `com.bhekani.recto://callback` must be
   /// registered on the Clerk instance and as a URL type in the app.
   public func signInWithGoogle() async throws {
+    guard Self.isClerkConfigured else { throw RectoAuthError.clerkNotLoaded }
     _ = try await Clerk.shared.auth.signInWithOAuth(provider: .google)
   }
 
   public func signInWithApple() async throws {
     guard features.appleSignIn else { throw RectoAuthError.featureDisabled("Sign in with Apple") }
+    guard Self.isClerkConfigured else { throw RectoAuthError.clerkNotLoaded }
     _ = try await Clerk.shared.auth.signInWithApple()
   }
 
   public func signInWithPasskey() async throws {
     guard features.passkeys else { throw RectoAuthError.featureDisabled("Passkeys") }
+    guard Self.isClerkConfigured else { throw RectoAuthError.clerkNotLoaded }
     _ = try await Clerk.shared.auth.signInWithPasskey()
   }
 
@@ -204,19 +279,27 @@ public final class RectoAuth {
   /// End the Clerk session and purge the local mirror.
   ///
   /// Refuses by default when the outbox or a draft row still holds text: those
-  /// are the user's ONLY copy — offline commits are not re-derivable from
-  /// Convex, whatever the old comment here claimed — and signing out on a train
-  /// would delete them silently. The caller must either flush first or pass
-  /// `discardingUnsynced: true` as an explicit, user-visible decision.
+  /// are the user's ONLY copy — offline commits are not re-derivable from Convex
+  /// — and signing out on a train would delete them silently.
+  ///
+  /// The order matters. Editing is frozen and flushed FIRST, then sync stops,
+  /// and only then is the final count taken, immediately before the purge in the
+  /// same breath. Checking before those awaits let an open document persist a
+  /// new draft into the gap and lose it without consent.
   public func signOut(discardingUnsynced: Bool = false) async throws {
+    await sessions?.freezeAndFlushAll()
+    await sync?.stop()
+
     if !discardingUnsynced {
-      let pending = try await store.unsyncedWorkCount()
-      guard pending == 0 else { throw RectoAuthError.unsyncedWork(count: pending) }
+      let pending = (try? await store.unsyncedWorkCount()) ?? 0
+      guard pending == 0 else {
+        // Refused: put the app back the way it was.
+        await sessions?.resumeAll()
+        await sync?.start()
+        throw RectoAuthError.unsyncedWork(count: pending)
+      }
     }
 
-    // Stop sync before purging, or a subscription tick can re-insert rows behind
-    // the delete.
-    await sync?.stop()
     do {
       if Self.isClerkConfigured { try await convexAuthProvider.logout() }
     } catch {
@@ -224,10 +307,12 @@ public final class RectoAuth {
       // The text still has to go: a network error must not leave a signed-out
       // user's drafts readable on a shared Mac.
       try await store.purgeEverything()
+      try? await store.setMirrorOwner(nil)
       status = .signedOut
       throw error
     }
     try await store.purgeEverything()
+    try? await store.setMirrorOwner(nil)
     status = .signedOut
   }
 
@@ -238,11 +323,36 @@ public final class RectoAuth {
     let nextUserId = Self.activeUserId(of: session)
     guard previousUserId != nextUserId else { return }
 
+    // Clerk revoked the session out from under us (another device signed out,
+    // an admin ended it, the token was refused). We cannot ask for consent, and
+    // deleting offline work without it is not ours to do.
+    if nextUserId == nil, previousUserId != nil {
+      await sessions?.freezeAndFlushAll()
+      await sync?.stop()
+      let pending = (try? await store.unsyncedWorkCount()) ?? 0
+      if pending > 0 {
+        // Retained, not deleted, and not readable: the data stays owned by the
+        // previous account, so `claimMirror` refuses to open it under anyone
+        // else and a later sign-in by the same user recovers it.
+        logger.error(
+          "session revoked with \(pending) unsynced change(s); retaining them for the previous account"
+        )
+        status = .signedOut
+        emitRetainedWork(count: pending)
+        return
+      }
+      try? await store.purgeEverything()
+      try? await store.setMirrorOwner(nil)
+      status = .signedOut
+      return
+    }
+
     // A different user on the same device must never see the previous one's
     // documents. Stop sync, purge, and only THEN publish the new identity: a
     // consumer that reads the store between those steps would show the old
     // user's text under the new session.
     if previousUserId != nil, nextUserId != previousUserId {
+      await sessions?.freezeAndFlushAll()
       await sync?.stop()
       do {
         try await store.purgeEverything()
@@ -257,8 +367,20 @@ public final class RectoAuth {
       }
     }
 
+    guard await claimMirror(for: nextUserId) else { return }
     status = nextUserId.map { AuthStatus.signedIn(userId: $0) } ?? .signedOut
-    if nextUserId != nil { await sync?.start() }
+    if nextUserId != nil {
+      await sessions?.resumeAll()
+      await sync?.start()
+    }
+  }
+
+  /// Unsynced work that outlived a revoked session. The UI surfaces it on the
+  /// next sign-in by the same account.
+  public private(set) var retainedUnsyncedWork = 0
+
+  private func emitRetainedWork(count: Int) {
+    retainedUnsyncedWork = count
   }
 
   private func handleAccountDeleted() async {

@@ -45,6 +45,12 @@ public struct RemoteDocument: Decodable, Sendable, Equatable {
   public let markdown: String
   public let wordCount: Double
   public let currentNodeId: String
+  /// The node the server says `markdown` belongs to.
+  ///
+  /// `nil` means the provenance is unknown — a legacy `updateMarkdown` that
+  /// passed no `expectedHeadNodeId` CLEARS the stamp — and unknown provenance
+  /// must be treated as untrusted, never as "this is the head's text".
+  public let markdownHeadNodeId: String?
   /// Monotonic counter bumped by every pointer write. Rows predating it read as
   /// 0. Unlike `updatedAt` it does not depend on either device's clock, so it is
   /// what decides which of two pointer writes is newer.
@@ -54,7 +60,8 @@ public struct RemoteDocument: Decodable, Sendable, Equatable {
 
   private enum CodingKeys: String, CodingKey {
     case id = "_id"
-    case title, markdown, wordCount, currentNodeId, pointerRevision, createdAt, updatedAt
+    case title, markdown, wordCount, currentNodeId, markdownHeadNodeId, pointerRevision
+    case createdAt, updatedAt
   }
 
   public init(from decoder: any Decoder) throws {
@@ -64,6 +71,7 @@ public struct RemoteDocument: Decodable, Sendable, Equatable {
     markdown = try container.decode(String.self, forKey: .markdown)
     wordCount = try container.decode(Double.self, forKey: .wordCount)
     currentNodeId = try container.decode(String.self, forKey: .currentNodeId)
+    markdownHeadNodeId = try container.decodeIfPresent(String.self, forKey: .markdownHeadNodeId)
     // Optional on the wire: a deployment that predates PR #1 does not send it.
     pointerRevision = try container.decodeIfPresent(Double.self, forKey: .pointerRevision) ?? 0
     createdAt = try container.decode(Double.self, forKey: .createdAt)
@@ -72,13 +80,15 @@ public struct RemoteDocument: Decodable, Sendable, Equatable {
 
   public init(
     id: String, title: String, markdown: String, wordCount: Double, currentNodeId: String,
-    pointerRevision: Double = 0, createdAt: Double, updatedAt: Double
+    markdownHeadNodeId: String? = nil, pointerRevision: Double = 0, createdAt: Double,
+    updatedAt: Double
   ) {
     self.id = id
     self.title = title
     self.markdown = markdown
     self.wordCount = wordCount
     self.currentNodeId = currentNodeId
+    self.markdownHeadNodeId = markdownHeadNodeId
     self.pointerRevision = pointerRevision
     self.createdAt = createdAt
     self.updatedAt = updatedAt
