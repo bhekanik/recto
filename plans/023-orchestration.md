@@ -198,7 +198,7 @@ in-flight workers are producing (§4).
 
 | Worker | Phase | Branch | Status | PR | Reviews (Claude / Codex) | Deployed |
 |---|---|---|---|---|---|---|
-| W1 history-commit (client half) | N1a | 023/history-commit | **split** after Codex r10 (4 blocking, 3 of them R9-incomplete): round 11 in progress on the client; e2e ×5 proof still blocked on CLERK_SECRET_KEY | #1 | Claude r1+r2 / Codex r1 done | |
+| W1 history-commit (client half) | N1a | 023/history-commit | round 11 fixed (verified: 505 tests; sequential commit outbox, kind-aware retirement); waiting to rebase on PR #11, then Codex r11; e2e ×5 proof still blocked on CLERK_SECRET_KEY | #1 | Claude r1+r2 / Codex r1 done | |
 | W1b history-backend (backend half, cut by the orchestrator from W1's head `9cf1e94`) | N1a + N0e | 023/history-backend | Codex: no blocking (2 mediums fixed: parent must equal expected head; already-head replay recorded); CI green; merge + deploy chain running | #11 | orchestrator / Codex | pending |
 | W2 light-theme | N1c | 023/light-theme | **merged + deployed** 2026-08-28 (`b9fe11b`, `vercel deploy --prod`) | #3 | Claude r1+r2 / Codex r1 | prod `recto-dusky.vercel.app` |
 | W3 core-js | N1d + N0d | 023/core-js | **merged** 2026-08-28 (`42acd0c`); main CI green (ci, core-js) | #6 | Claude r1+r2 / Codex r1 | n/a (CI) |
@@ -207,7 +207,7 @@ in-flight workers are producing (§4).
 | W6 vim-spike | N0c | spike/vim-jsc | **done: GO** (verbatim core split, ~20× latency headroom) | #5 (draft, not merged) | n/a | n/a |
 | W7 settings-workspaces-deletion | N1b | 023/settings | blocked on W1 | | | |
 | W8 js-cores | N3 | 023/js-cores | round 3 (Codex r2: 9 of 14 fixed, 5 partial; 4 blocking: grapheme splitter is not UAX #29 (Hangul/Indic/CRLF), keyHook never wired + marked-text bypass, replace mode joins CR lines, device perf target does not compile) | #10 | Claude r1 / Codex r1 | n/a (CI) |
-| W9a editor-engine stage 1 (fork plumbing + dialect + RectoEditor skeleton) | N5 | 023/editor-engine | round 3 fixed (verified by orchestrator: RectoEditor 61 ×2, fork 422 with 0 build warnings); Codex r3 running | #9 + fork PR #1 (`5e6a00e`) | Claude r1 / Codex r1+r2 | n/a (CI) |
+| W9a editor-engine stage 1 (fork plumbing + dialect + RectoEditor skeleton) | N5 | 023/editor-engine | round 4 (Codex r3: 6 fixed, 3 partial, 1 not fixed; 4 blocking: controller swap SIGTRAPs on the old selection, presentation lock is advisory, Writing Tools overlap publishes nothing, suffix extension is quadratic (9 KB alternating doc → 0.5 s/keystroke)) | #9 + fork PR #1 (`5e6a00e`) | Claude r1 / Codex r1+r2 | n/a (CI) |
 | W9b editor-engine stage 2 (blocks, features, undo-tree, typewriter) | N5 | 023/editor-engine-2 | blocked on W9a | | | |
 | W10 native-core | N4 | 023/native-core | round 5 (Codex r4: 4 fixed, 6 partial; 8 blocking: eager purge on direct A→B switch, fail-open on count errors, registry freeze misses new sessions, FFI bridge replacement on foreground resume, discard flow leaves auth blocked, pointer revision consumed before resolution, completedAndBlock writes no barrier, v4 migration no backfill) | #7 | Claude r1 / Codex r1+r2 | n/a (CI) |
 | W11 ai-on-convex | N2 | 023/ai-convex | blocked on W7 | | | |
