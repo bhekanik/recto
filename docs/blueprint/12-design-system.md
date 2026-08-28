@@ -93,7 +93,7 @@ These are measured, not assumed: OKLCH lightness is perceptually uniform but is 
 
 Two deliberate exclusions, both recorded there:
 
-- **`--color-line-strong` is not held to 3:1.** It is a decorative hairline, which WCAG 1.4.11 exempts; the 3:1 non-text obligation is carried by `--color-focus-ring`, which is asserted against all four layers.
+- **`--color-line-strong` is not held to 3:1.** It is a decorative hairline, which WCAG 1.4.11 exempts; the 3:1 non-text obligation is carried by `--color-focus-ring`, which is asserted against all four layers. The exemption is a **skipped test**, not an omission, so the reporter names it on every run — un-skip it and retune both palettes if `line-strong` ever becomes load-bearing for state.
 - **`--color-on-accent` on `--color-accent-muted` clears 4.5:1 on Paper but measures 3.15:1 on Twilight.** Pre-existing; fixing it means darkening `accent-muted` in all four dark palettes, which is a separate change.
 
 ---

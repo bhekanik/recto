@@ -65,20 +65,18 @@ describe("generated outputs are in sync with tokens.json", () => {
 
 /**
  * WCAG ratios are measured, never inferred from OKLCH lightness (design system
- * §2.5). `line-strong` is deliberately absent: it is a decorative hairline, and
- * WCAG 1.4.11 exempts it — holding it to 3:1 would force a heavy grey rule on
- * paper and would change Twilight, which plan 023 fixes. `focus-ring` carries
- * the 3:1 non-text obligation instead, and it is asserted below.
+ * §2.5). The one exemption — `line-strong` — is a skipped test rather than an
+ * omission, so the reporter names it on every run.
  */
 describe("contrast", () => {
 	const ratio = (fg: string, bg: string) =>
 		Math.round(wcagContrast(fg, bg) * 100) / 100;
 
 	for (const [name, colors, onAccentFloor] of [
-		// Dark's floor is 3, not 4.5: ink-primary on the accent-muted fill measures
-		// 3.15:1 today and clearing AA would mean darkening accent-muted in all four
-		// dark palettes. Twilight's values are locked by plan 023, so that fix is the
-		// orchestrator's call, not this PR's. Paper is new, so it gets the real bar.
+		// Dark's floor is 3, not 4.5: on-accent on the accent-muted fill measures
+		// 3.15:1 today, and clearing AA would mean darkening accent-muted in all four
+		// dark palettes. Ruled pre-existing and out of scope in plan 023 review round
+		// 1, and tracked as a follow-up. Paper is new, so it gets the real bar.
 		["Twilight (dark)", twilight, 3],
 		["Paper (light)", paper, 4.5],
 	] as const) {
@@ -100,6 +98,20 @@ describe("contrast", () => {
 			it("ink-tertiary clears non-text (3:1) — and in fact AA", () => {
 				expect(ratio(v("ink-tertiary"), app)).toBeGreaterThanOrEqual(3);
 				expect(ratio(v("ink-tertiary"), surface)).toBeGreaterThanOrEqual(4.5);
+			});
+
+			/**
+			 * EXEMPTION (orchestrator ruling, plan 023 review round 1). `line-strong`
+			 * measures 1.87:1 on Paper and 2.52:1 on Twilight. It is a decorative
+			 * hairline — the pane divider, a blockquote rule, a toolbar edge — and
+			 * WCAG 1.4.11 exempts decoration, so the 3:1 non-text obligation is
+			 * carried by `focus-ring` in the test below instead. Holding this token
+			 * to 3:1 would put a heavy grey rule on paper AND change Twilight, whose
+			 * values plan 023 locks. Skipped, not deleted: if `line-strong` ever
+			 * becomes load-bearing for state, un-skip this and retune both palettes.
+			 */
+			it.skip("line-strong clears non-text contrast (3:1) — EXEMPT", () => {
+				expect(ratio(v("line-strong"), app)).toBeGreaterThanOrEqual(3);
 			});
 
 			it("focus-ring clears non-text contrast (3:1) on every layer", () => {
