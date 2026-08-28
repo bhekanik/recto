@@ -31,6 +31,12 @@ public final class VimTextViewAdapter: NSObject, VimGeometryProvider, VimHistory
     /// own change notifications do not bounce back into JS as external edits.
     private var applyingEdits = false
 
+    /// The same, for the selection: the text view reports every selection change
+    /// back to us, and a vim command's own answer must not come round again as
+    /// if the user had moved the caret. See `selectionDidChangeExternally`.
+    private var applyingSelection = false
+    private var lastAppliedSelection: NSRange?
+
     /// The undo group currently open across keystrokes, if any.
     ///
     /// Vim's undo unit is one *command*, and an insert session is one command:
@@ -389,18 +395,11 @@ public final class VimTextViewAdapter: NSObject, VimGeometryProvider, VimHistory
         range.location = min(range.location, length)
         range.length = min(range.length, length - range.location)
         assertClampIsIdentity(range, "selection")
-        // Remembered, and suppressed on the way out: the text view reports every
-        // selection change back to us, and a vim command's own answer must not
-        // come round again as if the user had moved the caret.
         lastAppliedSelection = range
         applyingSelection = true
         defer { applyingSelection = false }
         textView.setSelectedRange(range)
     }
-
-    /// True while `applySelection` is writing; see `selectionDidChangeExternally`.
-    private var applyingSelection = false
-    private var lastAppliedSelection: NSRange?
 
     /// Debug-only check that the JS mirror and ICU agree about cluster
     /// boundaries. A disagreement is a real bug — the two buffers would drift —

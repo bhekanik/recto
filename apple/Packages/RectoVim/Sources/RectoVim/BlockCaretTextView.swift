@@ -120,12 +120,18 @@ public final class BlockCaretTextView: NSTextView {
         // Whoever is about to mutate the storage has not said who they are, so
         // they are not the input system: give the adapter its chance to close
         // the vim undo group before the mutation registers one of its own.
-        if pendingChangeSource == nil {
+        let announced = pendingChangeSource != nil
+        if !announced {
             pendingChangeSource = .external
             willChangeTextExternally?()
         }
-        return super.shouldChangeText(
+        let allowed = super.shouldChangeText(
             in: affectedCharRange, replacementString: replacementString)
+        // A refused change never reaches `didChangeText`, and nothing else would
+        // clear the source: every later selection change would then look like
+        // part of a change still in flight and be swallowed.
+        if !allowed && !announced { pendingChangeSource = nil }
+        return allowed
     }
 
     public override func didChangeText() {

@@ -233,6 +233,25 @@ struct InsertModeHandoffTests {
         RunLoop.current.run(until: Date())
     }
 
+    @Test("a refused change does not leave the caret handoff switched off")
+    func vetoedChangeDoesNotStallTheHandoff() throws {
+        // `shouldChangeText` marks a change in flight so the selections AppKit
+        // moves in the middle of it are ignored; `didChangeText` clears the mark.
+        // A vetoed change never reaches `didChangeText`, so nothing cleared it
+        // and every later click was swallowed.
+        let harness = try TextViewHarness("one two three\n")
+        let delegate = AdapterContractTests.VetoingDelegate()
+        harness.textView.delegate = delegate
+        harness.press("dw")
+        #expect(harness.failures.count == 1)
+
+        harness.textView.delegate = nil
+        harness.textView.setSelectedRanges(
+            [NSValue(range: NSRange(location: 8, length: 0))],
+            affinity: .downstream, stillSelecting: false)
+        #expect(try harness.engine.state().primarySelection.head == 8)
+    }
+
     @Test("an external edit mid-insert is its own undo step")
     func externalEditMidInsertIsItsOwnStep() throws {
         // The external undo action used to be registered while the vim insert

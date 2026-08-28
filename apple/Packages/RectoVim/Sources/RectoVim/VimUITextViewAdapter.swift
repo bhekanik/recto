@@ -33,6 +33,12 @@ public final class VimUITextViewAdapter: NSObject, VimGeometryProvider, VimHisto
 
     private var applyingEdits = false
 
+    /// The same, for the selection: a vim command's own answer must not come
+    /// round again as if the user had moved the caret. See
+    /// `selectionDidChangeExternally`.
+    private var applyingSelection = false
+    private var lastAppliedSelection: NSRange?
+
     /// Same contract as `VimTextViewAdapter`: an insert session is one undo
     /// group, and the caret travels inside the transaction rather than beside it.
     private var openInsertGroup: InsertGroup?
@@ -307,17 +313,11 @@ public final class VimUITextViewAdapter: NSObject, VimGeometryProvider, VimHisto
         var range = result.primarySelection.range
         range.location = min(range.location, length)
         range.length = min(range.length, length - range.location)
-        // Remembered, and suppressed on the way out: a vim command's own answer
-        // must not come round again as if the user had moved the caret.
         lastAppliedSelection = range
         applyingSelection = true
         defer { applyingSelection = false }
         textView.selectedRange = range
     }
-
-    /// True while `applySelection` is writing; see `selectionDidChangeExternally`.
-    private var applyingSelection = false
-    private var lastAppliedSelection: NSRange?
 
     private func applyScroll(_ scroll: VimScrollRequest) {
         switch scroll.kind {
