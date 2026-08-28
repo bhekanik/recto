@@ -16,12 +16,23 @@ guard arguments.count >= 2 else {
         Data("usage: jsc-perf <recto-core.js> [repetitions]\n".utf8))
     exit(2)
 }
-let repetitions = arguments.count >= 3 ? Int(arguments[2]) ?? 5 : 5
+let extra = Array(arguments.dropFirst(2))
+// `--samples` emits one machine-readable line per sample so a caller can pool
+// them across fresh processes; a single process cannot produce a cold engine
+// twice, so the aggregation has to happen outside.
+let emitSamples = extra.contains("--samples")
+let repetitions = extra.compactMap(Int.init).first ?? 5
 
 /// What this process is actually allowed to do, since that is the variable under
 /// test. Reported rather than assumed: a run whose entitlements are not recorded
 /// cannot be compared with another one.
 func entitlements() -> String {
+    // `Process` is macOS-only, and so is the entitlement question: iOS has no
+    // JIT entitlement to carry. The target still has to *compile* for iOS
+    // because the package declares both platforms for the test target.
+    #if !os(macOS)
+    return "n/a (iOS has no JIT entitlement)"
+    #else
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
     process.arguments = ["-d", "--entitlements", "-", "--xml", Bundle.main.executablePath ?? ""]
@@ -35,12 +46,24 @@ func entitlements() -> String {
     let keys = ["com.apple.security.cs.allow-jit", "com.apple.security.app-sandbox"]
         .filter { text.contains($0) }
     return keys.isEmpty ? "none" : keys.joined(separator: ", ")
+    #endif
 }
 
 do {
     let bundle = try String(contentsOfFile: arguments[1], encoding: .utf8)
     print("entitlements \(entitlements())")
     let report = try JSCPerf.run(bundle: bundle, repetitions: repetitions)
+    if emitSamples {
+        print(
+            String(
+                format: "JIT probe   10^8 add loop: %.0f ms  →  %@",
+                report.addLoopMilliseconds,
+                report.jitEnabled ? "JIT is running" : "INTERPRETER ONLY (no JIT)"))
+        for line in report.sampleLines(run: ProcessInfo.processInfo.processIdentifier) {
+            print(line)
+        }
+        exit(0)
+    }
     print(report.text)
     // The N3 budget: 50 kB normalize under one second.
     if let fifty = report.measurements.first(where: { $0.label == "50 kB" }) {

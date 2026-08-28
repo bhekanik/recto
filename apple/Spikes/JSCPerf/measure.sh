@@ -6,12 +6,14 @@
 #
 #   apple/Spikes/JSCPerf/measure.sh [processes]
 #
-# Each configuration runs in several **fresh processes** (default 3), because a
+# Each configuration runs in several **fresh processes** (default 3) and the
+# samples from all of them are pooled before the median and p95 are taken. A
 # process that has already normalized a document is a different machine from one
-# that has not, and only a new process can produce a cold engine. Within a
-# process the sizes are re-shuffled each round and the report carries median and
-# p95 — see `JSCPerfCore` for why a single fixed-order sample per size measures
-# the engine tiering up rather than the document.
+# that has not, so only a new process gives a cold engine — and reporting each
+# process separately, as this used to, is not the aggregate it claimed to be.
+# Within a process the sizes are re-shuffled each round; see `JSCPerfCore` for
+# why a single fixed-order sample per size measures the engine tiering up rather
+# than the document.
 #
 # Requires `bun run core:build` first.
 set -euo pipefail
@@ -32,14 +34,50 @@ binary="$here/.build/release/jsc-perf"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
+# `sample <run> <label> <kilobytes> <milliseconds> jit=<0|1>` lines from every
+# process, pooled per size.
+aggregate() {
+	awk '
+		$1 == "sample" {
+			label = $3; kb[label] = $4; jit[label] = $6
+			values[label, count[label]++] = $5
+		}
+		END {
+			printf "%-8s %10s %10s %10s %8s %6s\n", "size", "median", "p95", "best", "ms/kB", "n"
+			split("8kB 50kB 64kB 250kB", order, " ")
+			for (o = 1; o <= 4; o++) {
+				label = order[o]
+				n = count[label]
+				if (n == 0) continue
+				for (i = 0; i < n; i++) sorted[i] = values[label, i]
+				for (i = 1; i < n; i++) {
+					v = sorted[i]; j = i - 1
+					while (j >= 0 && sorted[j] > v) { sorted[j + 1] = sorted[j]; j-- }
+					sorted[j + 1] = v
+				}
+				median = sorted[int((n - 1) * 0.5 + 0.5)]
+				p95 = sorted[int((n - 1) * 0.95 + 0.5)]
+				printf "%-8s %10.1f %10.1f %10.1f %8.1f %6d\n", \
+					label, median, p95, sorted[0], median / kb[label], n
+			}
+		}
+	'
+}
+
 run_configuration() {
 	local label="$1" path="$2"
 	echo
 	echo "=== $label ==="
-	for run in $(seq 1 "$processes"); do
-		echo "--- fresh process $run/$processes"
-		"$path" "$bundle"
+	local pooled="$work/samples.txt"
+	: >"$pooled"
+	for _ in $(seq 1 "$processes"); do
+		"$path" "$bundle" --samples >>"$pooled"
 	done
+	# The entitlements and the JIT probe come from the last process; they are a
+	# property of the binary, not of the run.
+	grep -E '^(entitlements|JIT probe)' "$pooled" || true
+	echo "pooled over $processes fresh processes:"
+	aggregate <"$pooled"
 }
 
 cp "$binary" "$work/no-jit"

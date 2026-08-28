@@ -19,9 +19,12 @@
 # reproduces the same bytes, and `cmp` below keeps an unchanged bundle from
 # touching the file and invalidating the rest of the build.
 #
-# Without `bun` on PATH it falls back to verifying whatever is already in
-# `dist/`, and says out loud that it could not check staleness. That is a real
-# degradation, not a pass — the message is the point.
+# Without `bun` on PATH it **fails**. Verifying the existing bundle against its
+# own manifest would prove only that nobody corrupted it since it was built,
+# which is not the question — and a gate that passes when it cannot check is
+# worse than no gate, because it reads as a check. Xcode Cloud installs a pinned
+# bun in `ci_scripts/ci_post_clone.sh` before this runs; a developer machine has
+# one because the repo is a Bun project.
 #
 # Why a copy and not a symlink: SwiftPM does not follow symlinks when it stages
 # resources, and Xcode's resource copier does not either.
@@ -99,6 +102,18 @@ read_manifest_sha() {
 	sed -n 's/.*"sha256"[[:space:]]*:[[:space:]]*"\([0-9a-f]*\)".*/\1/p' "$1"
 }
 
+stage_copy() {
+	local source="$1" target_dir="$2" name
+	name="$(basename "$source")"
+	mkdir -p "$target_dir"
+	if ! cmp -s "$source" "$target_dir/$name"; then
+		cp "$source" "$target_dir/$name"
+		echo "installed $name -> ${target_dir#"$repo"/}"
+	else
+		echo "up to date $name in ${target_dir#"$repo"/}"
+	fi
+}
+
 install_bundle() {
 	local package="$1" file="$2" script="$3" target_dir="$4"
 	local source="$repo/packages/$package/dist/$file"
@@ -113,9 +128,13 @@ install_bundle() {
 			fail "\`bun run $script\` failed:
 $log"
 	else
-		[ -f "$source" ] ||
-			fail "$package: bun is not on PATH and there is no bundle to fall back on — run \`bun install && bun run $script\` from $repo"
-		echo "warning: bun is not on PATH; using the existing $file WITHOUT checking it against its sources" >&2
+		# No silent acceptance of a bundle nobody can prove is current. Without
+		# bun there is no way to tell a matching pair that is up to date from a
+		# matching pair built before someone edited `lib/`, and shipping the
+		# second one is the failure this script exists to prevent.
+		fail "$package: bun is not on PATH, so $file cannot be proven current.
+Install it and re-run, or run \`bun install && bun run $script\` from $repo first.
+Xcode Cloud installs a pinned bun in ci_scripts/ci_post_clone.sh before this runs."
 	fi
 
 	[ -f "$manifest" ] || fail "$package: $manifest is missing"
@@ -141,3 +160,9 @@ install_bundle recto-core-js recto-core.js core:build \
 	"$repo/apple/Packages/RectoCoreJS/Sources/RectoCoreJS/JS"
 install_bundle recto-vim-js recto-vim.js vim:build \
 	"$repo/apple/Packages/RectoVim/Sources/RectoVim/JS"
+
+# The device perf spike bundles the core as a test resource: on a phone there
+# is no checkout to read it from, and the device number is the point of the
+# spike. Already verified and scanned above.
+stage_copy "$repo/packages/recto-core-js/dist/recto-core.js" \
+	"$repo/apple/Spikes/JSCPerf/Tests/JSCPerfTests/JS"

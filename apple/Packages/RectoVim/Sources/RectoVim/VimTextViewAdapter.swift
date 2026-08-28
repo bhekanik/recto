@@ -31,6 +31,12 @@ public final class VimTextViewAdapter: NSObject, VimGeometryProvider, VimHistory
     /// own change notifications do not bounce back into JS as external edits.
     private var applyingEdits = false
 
+    /// What each undo step will restore, so `u` can put the caret where vim
+    /// does. `NSUndoManager` reports that an undo happened and not what it
+    /// touched, and comparing the two full strings cannot recover the location
+    /// when the surrounding text repeats.
+    private let patches = VimUndoPatchLog()
+
     private static let log = Logger(subsystem: "com.bhekani.recto", category: "RectoVim")
 
     public init(textView: NSTextView, engine: VimEngine, host: VimHost) {
@@ -217,6 +223,7 @@ public final class VimTextViewAdapter: NSObject, VimGeometryProvider, VimHistory
             textView.breakUndoCoalescing()
         }
 
+        var applied: [NSRange] = []
         for edit in edits {
             // Bounds before the cluster check: a range that does not fit the
             // document is the two sides already out of step, and the clamp
@@ -235,7 +242,12 @@ public final class VimTextViewAdapter: NSObject, VimGeometryProvider, VimHistory
             }
             storage.replaceCharacters(in: edit.range, with: edit.insert)
             textView.didChangeText()
+            // Post-edit coordinates: this is where the text ends up, which is
+            // where the caret goes when the step is undone.
+            applied.append(
+                NSRange(location: edit.range.location, length: edit.insert.utf16.count))
         }
+        patches.record(applied)
         return nil
     }
 
@@ -481,18 +493,21 @@ public final class VimTextViewAdapter: NSObject, VimGeometryProvider, VimHistory
     /// to the text view's undo manager; the product routes to `RectoHistory`,
     /// which is why this is a protocol rather than a direct call.
     ///
-    /// The caret is **vim's**, not `NSUndoManager`'s. Vim puts it at the start of
-    /// the change it just restored; the undo manager restores whatever selection
-    /// it happened to record, which in the text-view proof was two lines away.
-    /// The start of the change is the first offset at which the two versions
-    /// differ, which needs no cooperation from whoever owns undo — the same
-    /// derivation `RectoHistory` will use from its own patch.
-    public func performHistory(_ kind: String) -> (text: String, anchor: Int, head: Int)? {
+    /// The caret is **vim's**, and it comes from the patch.
+    ///
+    /// Vim puts the cursor at the start of the change it just restored. The undo
+    /// manager restores whatever selection it recorded — two lines away, in the
+    /// spike's proof — and diffing the two full strings, which is what this did
+    /// before, cannot recover the location when the surrounding text repeats:
+    /// on `"aa"`, `ia<Esc>u` put the caret at offset 1 where the patch started
+    /// at 0. `VimUndoPatchLog` carries the range each step wrote, so this reads
+    /// it back instead of guessing. That is the same thing `RectoHistory` will
+    /// do with its own patch.
+    public func performHistory(_ kind: String) -> VimHistoryResult? {
         guard let undoManager = textView.undoManager else { return nil }
         applyingEdits = true
         defer { applyingEdits = false }
 
-        let before = textView.string
         if kind == "undo" {
             guard undoManager.canUndo else { return nil }
             undoManager.undo()
@@ -500,20 +515,11 @@ public final class VimTextViewAdapter: NSObject, VimGeometryProvider, VimHistory
             guard undoManager.canRedo else { return nil }
             undoManager.redo()
         }
-        let after = textView.string
-        let caret = GraphemeClamp.caret(
-            in: after as NSString, offset: Self.firstDifference(before, after))
-        return (after, caret, caret)
-    }
-
-    /// The first UTF-16 offset at which two versions of the document differ, or
-    /// the end of the shorter one when it is a prefix of the longer.
-    static func firstDifference(_ before: String, _ after: String) -> Int {
-        let a = Array(before.utf16)
-        let b = Array(after.utf16)
-        var index = 0
-        while index < a.count, index < b.count, a[index] == b[index] { index += 1 }
-        return index
+        let after = textView.string as NSString
+        let recorded = patches.take(kind)?.location ?? textView.selectedRange().location
+        return VimHistoryResult(
+            text: after as String,
+            patchStart: GraphemeClamp.caret(in: after, offset: recorded))
     }
 }
 #endif

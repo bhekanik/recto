@@ -46,6 +46,22 @@ public enum JSCPerf {
         public let repetitions: Int
         public let measurements: [Measurement]
 
+        /// One line per sample, for a caller that wants to aggregate across
+        /// processes. `measure.sh` collects these; a single process cannot
+        /// produce a cold engine twice, so the aggregation has to happen outside.
+        ///
+        ///     sample <run> <label> <kilobytes> <milliseconds> jit=<0|1>
+        public func sampleLines(run: Int32) -> [String] {
+            measurements.flatMap { measurement in
+                measurement.samples.map { sample in
+                    String(
+                        format: "sample %d %@ %.3f %.3f jit=%d", run,
+                        measurement.label.replacingOccurrences(of: " ", with: "") as NSString,
+                        measurement.kilobytes, sample, jitEnabled ? 1 : 0)
+                }
+            }
+        }
+
         public var text: String {
             var lines = [
                 String(

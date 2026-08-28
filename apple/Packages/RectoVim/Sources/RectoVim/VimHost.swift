@@ -56,12 +56,78 @@ public protocol VimGeometryProvider: AnyObject {
 }
 
 /// Implemented by whatever owns undo. In the product this is the document's
-/// undo tree; in the spike it is `NSTextView`'s undo manager.
+/// undo tree; in the adapters it is the text view's undo manager.
+///
+/// **The caret is vim's, and it comes from the patch.** Vim puts the cursor at
+/// the start of the change it just restored. `NSUndoManager` restores whatever
+/// selection it recorded, which in the spike's proof was two lines away, and
+/// comparing the two full strings cannot recover the location when the
+/// surrounding text repeats — on `"aa"`, `ia<Esc>u` leaves a caret at offset 1
+/// where the patch started at 0. So an implementation must carry the range it
+/// actually applied.
 @MainActor
 public protocol VimHistoryProvider: AnyObject {
-    /// Perform the undo/redo and return the resulting buffer and caret, or nil
-    /// if there was nothing to do.
-    func performHistory(_ kind: String) -> (text: String, anchor: Int, head: Int)?
+    /// Perform the undo or redo and describe what it did, or nil when there was
+    /// nothing to do.
+    func performHistory(_ kind: String) -> VimHistoryResult?
+}
+
+/// The buffer after an undo or redo, and where vim should put the caret.
+public struct VimHistoryResult: Sendable, Equatable {
+    public let text: String
+    /// UTF-16 offset of the start of the restored change.
+    public let patchStart: Int
+
+    public init(text: String, patchStart: Int) {
+        self.text = text
+        self.patchStart = patchStart
+    }
+}
+
+/// Records what an undo transaction changed, so its start can be reported
+/// rather than inferred.
+///
+/// `NSUndoManager` and `UIUndoManager` both tell us *when* an undo happened and
+/// neither tells us *what* it touched, so the adapters register the range
+/// alongside the edit and read it back here. Shared between AppKit and UIKit
+/// because the contract is the same and a second copy would drift.
+@MainActor
+public final class VimUndoPatchLog {
+    private var undoStack: [NSRange] = []
+    private var redoStack: [NSRange] = []
+
+    public init() {}
+
+    /// The union of the ranges one keystroke wrote, in post-edit coordinates.
+    public func record(_ ranges: [NSRange]) {
+        guard let union = ranges.reduce(nil, Self.union) else { return }
+        undoStack.append(union)
+        redoStack.removeAll()
+    }
+
+    /// Pops the range an undo (or redo) is about to restore.
+    public func take(_ kind: String) -> NSRange? {
+        if kind == "undo" {
+            guard let range = undoStack.popLast() else { return nil }
+            redoStack.append(range)
+            return range
+        }
+        guard let range = redoStack.popLast() else { return nil }
+        undoStack.append(range)
+        return range
+    }
+
+    public func clear() {
+        undoStack.removeAll()
+        redoStack.removeAll()
+    }
+
+    private static func union(_ lhs: NSRange?, _ rhs: NSRange) -> NSRange {
+        guard let lhs else { return rhs }
+        let lower = min(lhs.location, rhs.location)
+        let upper = max(NSMaxRange(lhs), NSMaxRange(rhs))
+        return NSRange(location: lower, length: upper - lower)
+    }
 }
 
 /// The object handed to `RectoVim.init()` as the JS-side `host`.
@@ -156,7 +222,10 @@ public final class VimHost: NSObject, VimHostExport, @unchecked Sendable {
                 data: (try? JSONEncoder().encode(result.text)) ?? Data(),
                 encoding: .utf8
             ) ?? "\"\""
-            return "{\"text\":\(text),\"anchor\":\(result.anchor),\"head\":\(result.head)}"
+            // A caret, not a selection: vim leaves the cursor at the start of
+            // the restored change.
+            let caret = result.patchStart
+            return "{\"text\":\(text),\"anchor\":\(caret),\"head\":\(caret)}"
         }
     }
 

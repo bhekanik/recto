@@ -113,17 +113,19 @@ final class SnapshotHistory: VimHistoryProvider {
         pending = nil
     }
 
-    func performHistory(_ kind: String) -> (text: String, anchor: Int, head: Int)? {
+    func performHistory(_ kind: String) -> VimHistoryResult? {
         let target: Snapshot?
         if kind == "undo" {
             target = undoStack.popLast()
-            if let target { redoStack.append(capture()); _ = target }
+            if target != nil { redoStack.append(capture()) }
         } else {
             target = redoStack.popLast()
             if target != nil { undoStack.append(capture()) }
         }
         guard let target else { return nil }
-        return (target.text, target.anchor, target.head)
+        // A snapshot host has no patch, so it reports the caret it saved. The
+        // adapters carry the real range; this only has to prove the round trip.
+        return VimHistoryResult(text: target.text, patchStart: target.anchor)
     }
 }
 

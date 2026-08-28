@@ -21,6 +21,12 @@ let package = Package(
     targets: [
         .target(name: "JSCPerfCore"),
         .executableTarget(name: "jsc-perf", dependencies: ["JSCPerfCore"]),
-        .testTarget(name: "JSCPerfTests", dependencies: ["JSCPerfCore"]),
+        // `JS/recto-core.js` is staged by `apple/scripts/copy-js-bundles.sh` and
+        // is not committed. It has to be a bundled resource rather than a path
+        // into the checkout, because on a device there is no checkout — and the
+        // device number is the whole point of this spike.
+        .testTarget(
+            name: "JSCPerfTests", dependencies: ["JSCPerfCore"],
+            resources: [.copy("JS")]),
     ]
 )

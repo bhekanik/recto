@@ -66,6 +66,13 @@ struct SwiftPortAdversarialTests {
         ("unclosed frontmatter", "---\ntitle: X\n# Heading\n"),
         ("ordered list paragraph interruption", "alpha\n2. beta\n\nalpha\n1. beta\n\nalpha\n2.\n"),
         ("named and numeric character references", "# A &amp; B &#38; C &#x26; D\n"),
+        ("em space reference splits words", "one&emsp;two\n"),
+        ("em space reference in heading", "# one&emsp;two\n"),
+        ("space invalidates bare link destination", "a[foo](bar baz)b\n"),
+        (
+            "invalid numeric references become replacement characters",
+            "a&#0;b a&#xD800;b a&#x110000;b\n"
+        ),
         (
             "html block types 3 4 and 5",
             "<?php hidden words ?>\n\n<!DOCTYPE hidden words>\n\n<![CDATA[ hidden words ]]>\n\nVisible.\n"

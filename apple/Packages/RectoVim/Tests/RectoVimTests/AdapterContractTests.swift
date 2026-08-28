@@ -170,12 +170,70 @@ struct AdapterContractTests {
         #expect(try harness.engine.state().primarySelection.head == 8)
     }
 
-    @Test("the first difference is where the patch starts")
-    func firstDifference() {
-        #expect(VimTextViewAdapter.firstDifference("abc", "abc") == 3)
-        #expect(VimTextViewAdapter.firstDifference("abc", "abd") == 2)
-        #expect(VimTextViewAdapter.firstDifference("abc", "ab") == 2)
-        #expect(VimTextViewAdapter.firstDifference("", "abc") == 0)
+    @Test("the undo caret survives repeated text around the patch")
+    func undoCaretWithRepeatedText() throws {
+        // Why the caret comes from the patch and not from diffing the two
+        // versions: every one of these documents is made of the same character,
+        // so the first offset at which the versions differ says nothing about
+        // where the edit was.
+
+        // Inserted at the start. A diff would say 1.
+        let atStart = try TextViewHarness("aa\n")
+        atStart.press("ia")
+        atStart.press("<Esc>")
+        #expect(atStart.textView.string == "aaa\n")
+        atStart.press("u")
+        #expect(atStart.textView.string == "aa\n")
+        #expect(try atStart.engine.state().primarySelection.head == 0)
+
+        // Inserted in the middle. A diff would still say 0.
+        let inMiddle = try TextViewHarness("aaaa\n")
+        inMiddle.press("lli")
+        inMiddle.press("a")
+        inMiddle.press("<Esc>")
+        #expect(inMiddle.textView.string == "aaaaa\n")
+        inMiddle.press("u")
+        #expect(inMiddle.textView.string == "aaaa\n")
+        #expect(try inMiddle.engine.state().primarySelection.head == 2)
+    }
+
+    @Test("a patch at the end of a line clamps to the last character")
+    func undoCaretAtEndOfLine() throws {
+        // The patch starts at offset 2 — past the last character — and normal
+        // mode does not let the caret sit there, so it lands on the `a`. The
+        // clamp is vim's, applied after the patch position, not instead of it.
+        let harness = try TextViewHarness("aa\n")
+        harness.press("A")
+        harness.press("a")
+        harness.press("<Esc>")
+        #expect(harness.textView.string == "aaa\n")
+        harness.press("u")
+        #expect(harness.textView.string == "aa\n")
+        #expect(try harness.engine.state().primarySelection.head == 1)
+    }
+
+    @Test("redo puts the caret at the patch too")
+    func redoCaret() throws {
+        let harness = try TextViewHarness("one\ntwo\nthree\n")
+        harness.press("jjdd")
+        harness.press("u")
+        #expect(harness.textView.string == "one\ntwo\nthree\n")
+        harness.press("<C-r>")
+        #expect(harness.textView.string == "one\ntwo\n")
+        // The redone deletion starts where the third line began.
+        #expect(try harness.engine.state().primarySelection.head == 8)
+    }
+
+    @Test("a multi-line change reports the start of the whole patch")
+    func undoCaretForVisualBlock() throws {
+        // `3>>` writes three separate edits; the caret goes to the start of
+        // their union, not to the last one the journal happened to contain.
+        let harness = try TextViewHarness("one\ntwo\nthree\nfour\n")
+        harness.press("j3>>")
+        #expect(harness.textView.string == "one\n  two\n  three\n  four\n")
+        harness.press("u")
+        #expect(harness.textView.string == "one\ntwo\nthree\nfour\n")
+        #expect(try harness.engine.state().primarySelection.head == 4)
     }
 
     // MARK: - Geometry

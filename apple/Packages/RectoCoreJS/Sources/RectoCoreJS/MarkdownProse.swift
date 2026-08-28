@@ -23,16 +23,17 @@ import Foundation
 /// ## Where it is checked
 ///
 /// `SwiftPortTests` runs fixtures and the shared corpus. The seeded differential
-/// gate adds 256 mixed documents and calls `RectoCore.countWords` and
+/// gate adds 384 mixed documents and calls `RectoCore.countWords` and
 /// `RectoCore.parseOutline` for each one. The JS core remains the authority and
 /// corrects the typing-path values at document boundaries. Any divergence found
 /// in a real document belongs in that gate before this scanner changes.
 ///
 /// ## Known approximations
 ///
-/// The block and link-definition grammars cover the tested forms rather than a
-/// full micromark state machine. Named character references use the common prose
-/// subset documented beside the table; numeric references are complete.
+/// The block grammar covers the tested forms rather than a full micromark state
+/// machine. Named character references come from the same `character-entities`
+/// dependency as micromark; numeric references follow micromark's replacement
+/// rules.
 /// Multiline inline HTML tags are not implemented. MDX, math, and directive
 /// extensions are also omitted because Recto's canonical parser does not enable
 /// them.

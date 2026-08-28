@@ -114,6 +114,122 @@ private enum ASCII {
     static let tilde: UInt16 = 0x7E
 }
 
+/// Keeps inline links and reference definitions on the same destination and
+/// title rules. Micromark uses the same factories for both constructs, except
+/// inline destinations cap nested parentheses at 32 levels.
+private enum CommonMarkLinkGrammar {
+    static func inlineSuffixEnd(in units: [UInt16], after start: Int) -> Int? {
+        guard start < units.count, units[start] == ASCII.leftParenthesis else { return nil }
+        var cursor = whitespaceEnd(in: units, after: start + 1, limit: units.count)
+        if cursor < units.count, units[cursor] == ASCII.rightParenthesis { return cursor + 1 }
+
+        guard let destinationEnd = destinationEnd(
+            in: units, from: cursor, limit: units.count, maximumParenthesisDepth: 32)
+        else { return nil }
+        cursor = destinationEnd
+        if cursor < units.count, units[cursor] == ASCII.rightParenthesis { return cursor + 1 }
+
+        guard cursor < units.count, isWhitespace(units[cursor]) else { return nil }
+        cursor = whitespaceEnd(in: units, after: cursor, limit: units.count)
+        if cursor < units.count, units[cursor] == ASCII.rightParenthesis { return cursor + 1 }
+
+        guard let titleEnd = titleEnd(in: units, from: cursor, limit: units.count) else {
+            return nil
+        }
+        cursor = whitespaceEnd(in: units, after: titleEnd, limit: units.count)
+        return cursor < units.count && units[cursor] == ASCII.rightParenthesis
+            ? cursor + 1 : nil
+    }
+
+    static func destinationEnd(
+        in units: [UInt16], from start: Int, limit: Int, maximumParenthesisDepth: Int?
+    ) -> Int? {
+        guard start < limit else { return nil }
+        if units[start] == ASCII.lessThan {
+            var cursor = start + 1
+            while cursor < limit {
+                let value = units[cursor]
+                if value == ASCII.greaterThan { return cursor + 1 }
+                if value == ASCII.lessThan || isLineEnding(value) { return nil }
+                if value == ASCII.backslash, cursor + 1 < limit,
+                    units[cursor + 1] == ASCII.lessThan
+                        || units[cursor + 1] == ASCII.greaterThan
+                        || units[cursor + 1] == ASCII.backslash
+                {
+                    cursor += 2
+                } else {
+                    cursor += 1
+                }
+            }
+            return nil
+        }
+
+        var depth = 0
+        var cursor = start
+        while cursor < limit {
+            let value = units[cursor]
+            if value == ASCII.backslash, cursor + 1 < limit {
+                let escaped = units[cursor + 1]
+                if escaped == ASCII.leftParenthesis || escaped == ASCII.rightParenthesis
+                    || escaped == ASCII.backslash
+                {
+                    cursor += 2
+                    continue
+                }
+            }
+            if value == ASCII.rightParenthesis {
+                if depth == 0 { return cursor }
+                depth -= 1
+            } else if value == ASCII.leftParenthesis {
+                if let maximumParenthesisDepth, depth >= maximumParenthesisDepth { return nil }
+                depth += 1
+            } else if isWhitespace(value) {
+                return depth == 0 ? cursor : nil
+            } else if value < ASCII.space || value == 0x7F {
+                return nil
+            }
+            cursor += 1
+        }
+        return depth == 0 && cursor > start ? cursor : nil
+    }
+
+    static func titleEnd(in units: [UInt16], from start: Int, limit: Int) -> Int? {
+        guard start < limit else { return nil }
+        let opening = units[start]
+        guard opening == ASCII.quote || opening == ASCII.apostrophe
+                || opening == ASCII.leftParenthesis
+        else { return nil }
+        let closing = opening == ASCII.leftParenthesis ? ASCII.rightParenthesis : opening
+        var cursor = start + 1
+        while cursor < limit {
+            let value = units[cursor]
+            if value == closing { return cursor + 1 }
+            if value == ASCII.backslash, cursor + 1 < limit,
+                units[cursor + 1] == closing || units[cursor + 1] == ASCII.backslash
+            {
+                cursor += 2
+            } else {
+                cursor += 1
+            }
+        }
+        return nil
+    }
+
+    static func whitespaceEnd(in units: [UInt16], after start: Int, limit: Int) -> Int {
+        var cursor = start
+        while cursor < limit, isWhitespace(units[cursor]) { cursor += 1 }
+        return cursor
+    }
+
+    private static func isWhitespace(_ value: UInt16) -> Bool {
+        isSpaceOrTab(value) || isLineEnding(value)
+    }
+
+    private static func isLineEnding(_ value: UInt16) -> Bool {
+        value == ASCII.lineFeed || value == ASCII.carriageReturn
+    }
+}
+
 /// One physical source line, with absolute UTF-16 boundaries into the document.
 ///
 /// `start` is the first unit of the physical line. `contentStart` is the first
@@ -986,7 +1102,11 @@ private struct BlockScanner {
         while cursor < line.end, isSpaceOrTab(source[cursor]) { cursor += 1 }
         guard cursor < line.end else { return nil }
 
-        while cursor < line.end, !isSpaceOrTab(source[cursor]) { cursor += 1 }
+        guard let destinationEnd = CommonMarkLinkGrammar.destinationEnd(
+            in: source, from: cursor, limit: line.end, maximumParenthesisDepth: nil)
+        else { return nil }
+        cursor = destinationEnd
+        let titleSeparatorStart = cursor
         while cursor < line.end, isSpaceOrTab(source[cursor]) { cursor += 1 }
         if cursor == line.end {
             if lineIndex + 1 < lines.count,
@@ -997,17 +1117,17 @@ private struct BlockScanner {
             }
             return ReferenceDefinition(label: label, endIndex: lineIndex + 1)
         }
+        guard cursor > titleSeparatorStart else { return nil }
         return isLinkTitle(cursor..<line.end)
             ? ReferenceDefinition(label: label, endIndex: lineIndex + 1) : nil
     }
 
     private func isLinkTitle(_ range: Range<Int>) -> Bool {
-        guard range.count >= 2 else { return false }
-        let first = source[range.lowerBound]
-        let last = source[range.upperBound - 1]
-        return (first == ASCII.quote && last == ASCII.quote)
-            || (first == ASCII.apostrophe && last == ASCII.apostrophe)
-            || (first == ASCII.leftParenthesis && last == ASCII.rightParenthesis)
+        guard let titleEnd = CommonMarkLinkGrammar.titleEnd(
+            in: source, from: range.lowerBound, limit: range.upperBound)
+        else { return false }
+        return CommonMarkLinkGrammar.whitespaceEnd(
+            in: source, after: titleEnd, limit: range.upperBound) == range.upperBound
     }
 
     private func trimmedRange(of line: SourceLine) -> Range<Int> {
@@ -1082,20 +1202,6 @@ private struct InlineScanner {
         let canOpen: Bool
         let canClose: Bool
     }
-
-    /// The bundle reads the full `character-entities` table, but shipping its
-    /// 2,125 names in the typing-path scanner would add more source than the
-    /// scanner itself. This covers the HTML5 names used in ordinary prose and
-    /// Recto's generated markdown. Numeric references below remain complete.
-    private static let namedCharacterReferences: [String: String] = [
-        "AMP": "&", "COPY": "©", "GT": ">", "LT": "<", "QUOT": "\"",
-        "amp": "&", "apos": "'", "bull": "•", "cent": "¢", "copy": "©",
-        "deg": "°", "divide": "÷", "euro": "€", "gt": ">", "hellip": "…",
-        "laquo": "«", "ldquo": "“", "lsquo": "‘", "lt": "<", "mdash": "—",
-        "middot": "·", "nbsp": "\u{00A0}", "ndash": "–", "plusmn": "±",
-        "pound": "£", "quot": "\"", "raquo": "»", "rdquo": "”", "reg": "®",
-        "rsquo": "’", "times": "×", "trade": "™", "yen": "¥",
-    ]
 
     /// A delayed inline emission. The cases preserve the distinction between
     /// MDAST text children, non-text nodes, and nodes whose `value` is visible
@@ -1429,7 +1535,7 @@ private struct InlineScanner {
             return nil
         }
         let name = String(decoding: units[nameStart..<cursor], as: UTF16.self)
-        guard let decoded = Self.namedCharacterReferences[name] else { return nil }
+        guard let decoded = GeneratedHTML5CharacterEntities.named[name] else { return nil }
         return (Array(decoded.utf16), cursor + 1)
     }
 
@@ -1533,33 +1639,13 @@ private struct InlineScanner {
         return nil
     }
 
-    /// Accepts either an inline link suffix with balanced parentheses and quoted
-    /// text, or a full reference suffix `[label]`. A missing suffix leaves the
-    /// bracketed text as a shortcut or collapsed reference candidate.
+    /// Accepts either a CommonMark inline resource or a full reference suffix.
+    /// A missing or invalid suffix leaves the bracketed text as a shortcut or
+    /// collapsed reference candidate.
     private func referenceSuffixEnd(after start: Int) -> Int? {
         guard start < units.count else { return nil }
         if units[start] == ASCII.leftParenthesis {
-            var depth = 1
-            var quote: UInt16?
-            var cursor = start + 1
-            while cursor < units.count {
-                let value = units[cursor]
-                if value == ASCII.backslash, cursor + 1 < units.count {
-                    cursor += 2
-                    continue
-                }
-                if let activeQuote = quote {
-                    if value == activeQuote { quote = nil }
-                } else if value == ASCII.quote || value == ASCII.apostrophe {
-                    quote = value
-                } else if value == ASCII.leftParenthesis {
-                    depth += 1
-                } else if value == ASCII.rightParenthesis {
-                    depth -= 1
-                    if depth == 0 { return cursor + 1 }
-                }
-                cursor += 1
-            }
+            return CommonMarkLinkGrammar.inlineSuffixEnd(in: units, after: start)
         } else if units[start] == ASCII.leftBracket,
             let close = first(ASCII.rightBracket, after: start + 1)
         {

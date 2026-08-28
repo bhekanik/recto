@@ -32,6 +32,10 @@ public final class VimUITextViewAdapter: NSObject, VimGeometryProvider, VimHisto
     public var onReplayFailure: ((VimReplayFailure) -> Void)?
 
     private var applyingEdits = false
+
+    /// See `VimTextViewAdapter`: the undo caret is read from the patch, not
+    /// inferred from the platform's restored selection.
+    private let patches = VimUndoPatchLog()
     private static let log = Logger(subsystem: "com.bhekani.recto", category: "RectoVim")
 
     public init(textView: UITextView, engine: VimEngine, host: VimHost) {
@@ -156,6 +160,7 @@ public final class VimUITextViewAdapter: NSObject, VimGeometryProvider, VimHisto
         textView.undoManager?.beginUndoGrouping()
         defer { textView.undoManager?.endUndoGrouping() }
 
+        var applied: [NSRange] = []
         for edit in edits {
             let length = ((textView.text ?? "") as NSString).length
             guard edit.range.location >= 0, NSMaxRange(edit.range) <= length,
@@ -173,7 +178,10 @@ public final class VimUITextViewAdapter: NSObject, VimGeometryProvider, VimHisto
                 return .rejectedByDelegate(edit.range)
             }
             textView.replace(range, withText: edit.insert)
+            applied.append(
+                NSRange(location: edit.range.location, length: edit.insert.utf16.count))
         }
+        patches.record(applied)
         return nil
     }
 
@@ -274,7 +282,8 @@ public final class VimUITextViewAdapter: NSObject, VimGeometryProvider, VimHisto
 
     // MARK: - VimHistoryProvider
 
-    public func performHistory(_ kind: String) -> (text: String, anchor: Int, head: Int)? {
+    /// Same contract as the AppKit adapter: vim's caret, read from the patch.
+    public func performHistory(_ kind: String) -> VimHistoryResult? {
         guard let undoManager = textView.undoManager else { return nil }
         applyingEdits = true
         defer { applyingEdits = false }
@@ -286,9 +295,11 @@ public final class VimUITextViewAdapter: NSObject, VimGeometryProvider, VimHisto
             guard undoManager.canRedo else { return nil }
             undoManager.redo()
         }
-        let text = textView.text ?? ""
-        let selection = GraphemeClamp.range(in: text as NSString, textView.selectedRange)
-        return (text, selection.location, NSMaxRange(selection))
+        let after = (textView.text ?? "") as NSString
+        let recorded = patches.take(kind)?.location ?? textView.selectedRange.location
+        return VimHistoryResult(
+            text: after as String,
+            patchStart: GraphemeClamp.caret(in: after, offset: recorded))
     }
 }
 #endif

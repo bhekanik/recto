@@ -3,11 +3,19 @@ import Foundation
 struct DifferentialDocument {
     let name: String
     let markdown: String
+    let isMutated: Bool
+
+    init(name: String, markdown: String, isMutated: Bool = false) {
+        self.name = name
+        self.markdown = markdown
+        self.isMutated = isMutated
+    }
 }
 
 enum MarkdownDifferentialGenerator {
     static let seed: UInt64 = 0x5EED_C0DE_2026_0828
-    static let documentCount = 256
+    static let documentCount = 384
+    static let mutatedDocumentCount = documentCount / 4
     static let maximumDocumentCharacters = 2_048
 
     static func documents(unicodeCases: [CorpusCase]) -> [DifferentialDocument] {
@@ -47,7 +55,36 @@ enum MarkdownDifferentialGenerator {
             documents.append(
                 DifferentialDocument(name: "seeded \(documentIndex)", markdown: markdown))
         }
-        return documents
+        return applyingMutations(to: documents)
+    }
+
+    /// Every mutation kind runs twice under LF, CRLF, and lone CR. Keeping the
+    /// share fixed makes coverage changes visible instead of depending on random
+    /// selection luck.
+    private static func applyingMutations(
+        to documents: [DifferentialDocument]
+    ) -> [DifferentialDocument] {
+        let kinds = NearMissMutation.allCases
+        let lineEndings = [(name: "LF", value: "\n"), (name: "CRLF", value: "\r\n"),
+            (name: "CR", value: "\r")]
+        let stride = documentCount / mutatedDocumentCount
+        let offset = Int(seed % UInt64(stride))
+
+        return documents.enumerated().map { index, document in
+            guard index % stride == offset else { return document }
+            let ordinal = index / stride
+            let kind = kinds[ordinal % kinds.count]
+            let lineEnding = lineEndings[(ordinal / kinds.count) % lineEndings.count]
+            let fragment = kind.corruptedFragment.replacingOccurrences(
+                of: "\n", with: lineEnding.value)
+            let separator = lineEnding.value + lineEnding.value
+            let baseLimit = max(0, maximumDocumentCharacters - separator.count - fragment.count)
+            let base = String(document.markdown.prefix(baseLimit))
+            return DifferentialDocument(
+                name: "mutated (kind.name), (lineEnding.name), from (document.name)",
+                markdown: base + separator + fragment,
+                isMutated: true)
+        }
     }
 
     private static func paragraph(using random: inout SplitMix64) -> String {
@@ -197,6 +234,93 @@ enum MarkdownDifferentialGenerator {
         "NBSP\u{00A0}split ZWSP\u{200B}joined",
         "👨‍👩‍👧‍👦 🇿🇦 👋🏽 👋",
     ]
+}
+
+private enum NearMissMutation: Int, CaseIterable {
+    case linkDestinationSpace
+    case linkTitleSpace
+    case missingInlineLinkClose
+    case missingReferenceClose
+    case missingCodeSpanClose
+    case missingFenceClose
+    case undefinedReference
+    case normalizedDefinedReference
+    case entityInHeading
+    case entityInTableCell
+    case entityInLinkText
+    case entityInCodeSpan
+    case unterminatedHTMLComment
+    case unterminatedScript
+    case listFenceWrongIndent
+    case nonOneOrderedListAfterParagraph
+
+    var name: String {
+        switch self {
+        case .linkDestinationSpace: "space in link destination"
+        case .linkTitleSpace: "space in link title"
+        case .missingInlineLinkClose: "missing link parenthesis"
+        case .missingReferenceClose: "missing reference bracket"
+        case .missingCodeSpanClose: "missing code span backtick"
+        case .missingFenceClose: "missing fence"
+        case .undefinedReference: "undefined reference"
+        case .normalizedDefinedReference: "normalized defined reference"
+        case .entityInHeading: "entity in heading"
+        case .entityInTableCell: "entity in table cell"
+        case .entityInLinkText: "entity in link text"
+        case .entityInCodeSpan: "entity in code span"
+        case .unterminatedHTMLComment: "unterminated HTML comment"
+        case .unterminatedScript: "unterminated script"
+        case .listFenceWrongIndent: "list fence wrong indent"
+        case .nonOneOrderedListAfterParagraph: "non-one ordered list after paragraph"
+        }
+    }
+
+    var corruptedFragment: String {
+        switch self {
+        case .linkDestinationSpace:
+            return "a[foo](barbaz)b\n".replacingOccurrences(of: "barbaz", with: "bar baz")
+        case .linkTitleSpace:
+            return "a[foo](bar \"title\")b\n".replacingOccurrences(
+                of: "title", with: "title space")
+        case .missingInlineLinkClose:
+            return "a[foo](bar)b\n".replacingOccurrences(of: ")b", with: "b")
+        case .missingReferenceClose:
+            return "a[foo][ref]b\n\n[ref]: /url\n".replacingOccurrences(
+                of: "[ref]b", with: "[refb")
+        case .missingCodeSpanClose:
+            return "a `code` b\n".replacingOccurrences(of: "` b", with: " b")
+        case .missingFenceClose:
+            return "```\nhidden prose\n```\nafter\n".replacingOccurrences(
+                of: "\n```\nafter", with: "\nafter")
+        case .undefinedReference:
+            return "a[foo][ref]b\n\n[ref]: /url\n".replacingOccurrences(
+                of: "\n\n[ref]: /url", with: "")
+        case .normalizedDefinedReference:
+            return "a[foo bar][foo bar]b\n\n[foo bar]: /url\n".replacingOccurrences(
+                of: "[foo bar]b", with: "[ FOO \t BAR ]b")
+        case .entityInHeading:
+            return "# one two\n".replacingOccurrences(of: "one two", with: "one&emsp;two")
+        case .entityInTableCell:
+            return "| value |\n| - |\n| one two |\n".replacingOccurrences(
+                of: "one two", with: "one&emsp;two")
+        case .entityInLinkText:
+            return "[one two](/url)\n".replacingOccurrences(
+                of: "one two", with: "one&emsp;two")
+        case .entityInCodeSpan:
+            return "`one two`\n".replacingOccurrences(of: "one two", with: "one&emsp;two")
+        case .unterminatedHTMLComment:
+            return "<!-- hidden prose -->\nafter\n".replacingOccurrences(of: " -->", with: "")
+        case .unterminatedScript:
+            return "<script>hidden prose</script>\nafter\n".replacingOccurrences(
+                of: "</script>", with: "")
+        case .listFenceWrongIndent:
+            return "- item\n  ```\n  hidden prose\n  ```\n- after\n".replacingOccurrences(
+                of: "\n  ```\n- after", with: "\n ```\n- after")
+        case .nonOneOrderedListAfterParagraph:
+            return "paragraph\n1. list item\n".replacingOccurrences(
+                of: "\n1.", with: "\n2.")
+        }
+    }
 }
 
 /// Swift has no seeded random generator. SplitMix64 is small, deterministic,
