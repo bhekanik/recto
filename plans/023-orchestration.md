@@ -198,7 +198,7 @@ in-flight workers are producing (§4).
 | W8 js-cores | N3 | 023/js-cores | launched 2026-08-28 | | | |
 | W9a editor-engine stage 1 (fork plumbing + dialect + RectoEditor skeleton) | N5 | 023/editor-engine | in review (orchestrator verifying; Codex running) | #9 + fork PR #1 (`8646430`) | Codex running | n/a (CI) |
 | W9b editor-engine stage 2 (blocks, features, undo-tree, typewriter) | N5 | 023/editor-engine-2 | blocked on W9a | | | |
-| W10 native-core | N4 | 023/native-core | round 2 (Codex: 12 blocking: draft restore, write-ahead durability, actor reentrancy, offline-create idempotency, draft head CAS, adoption races, keep-remote queue rewrite, pointer retries, double drain, sign-out purge, account-switch ordering, CI Xcode path; F2 streak folded in) | #7 | Claude r1 / Codex r1 | n/a (CI) |
+| W10 native-core | N4 | 023/native-core | round 2 fixed (17/17, revert-verified; 129 tests); orchestrator verifying; Codex r2 running | #7 | Claude r1 / Codex r1 | n/a (CI) |
 | W11 ai-on-convex | N2 | 023/ai-convex | blocked on W7 | | | |
 | W12 mac-alpha | N6 | 023/mac-alpha | blocked on W9, W10, W8, W2 | | | |
 | W13 mac-beta | N7 | 023/mac-beta | blocked on W12, W11 | | | |
