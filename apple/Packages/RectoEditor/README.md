@@ -235,6 +235,12 @@ renders them is stage 2; the data it will read is here now, and
   selection last. Splitting the styler into document-shared base attributes and a
   per-view overlay needs a hiding technique that does not affect layout — a
   stage-2 design question, not a patch.
+- **A view the document refuses is isolated, not broken.** Admission is decided
+  before the view touches the shared storage; a refused one gets a text storage
+  of its own, shows the text it was given, and reaches nobody. The request is
+  remembered and applied when the lock lifts — removing the blocking peer and
+  switching the survivor's presentation can arrive in one SwiftUI transaction,
+  and then no further update pass comes to notice the peer has gone.
 - **Switching which document a window shows resets the selection twice.** A
   selection from the outgoing document can be out of range for the incoming one,
   and AppKit fixes attributes over the selected range on the next attribute
@@ -277,6 +283,8 @@ drives `applyPatch` for undo and redo.
 `.vim` joins `Presentation` after the N0c spike; it is a key-handling layer over
 `.raw`, not a fourth rendering path.
 
+Three review findings are deliberately stage 2:
+
 Two review findings are deliberately stage 2, because both need a
 source-to-visible range map that does not exist yet:
 
@@ -289,3 +297,8 @@ source-to-visible range map that does not exist yet:
   find search the raw string, so searching preview for `**` or a hidden URL
   reports matches and highlights a zero-width range. Rich and preview need to
   search a visible-text projection and map results back to source coordinates.
+- **`onAttach` can hand back another window's view** when two wrappers mount in
+  one update pass, because it resolves through the controller rather than the
+  wrapper that built the view. Attachment should be delivered by that wrapper,
+  with a token identifying it. Related: selection delegate callbacks can fire
+  against the outgoing document's closure during a controller transfer.
