@@ -14,7 +14,7 @@ struct RectoCoreTests {
     let corpus: Corpus
 
     init() throws {
-        core = try Fixtures.core()
+        core = try Fixtures.shared()
         corpus = try Fixtures.load(Corpus.self, "markdown-corpus.json")
     }
 

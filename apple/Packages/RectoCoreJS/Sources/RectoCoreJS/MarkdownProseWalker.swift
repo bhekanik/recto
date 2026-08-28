@@ -208,16 +208,18 @@ private struct BlockScanner {
         "title", "tr", "track", "ul",
     ]
 
-    /// Scans blocks in precedence order.
+    /// Scans blocks in precedence order — the order *is* part of the parse.
     ///
-    /// Only the root walker enables frontmatter. Nested scanners leave it off
-    /// because remark-frontmatter recognises a fence only at the document's
-    /// first line, where it must win over the thematic-break shape `---`. The
-    /// remaining test order is also part of parsing. `- - -` reaches the list
-    /// branch before the thematic-break branch, although CommonMark gives the
-    /// thematic break precedence. That changes lazy-continuation ownership.
-    /// Table recognition must precede paragraph scanning because a single-cell
-    /// `---` delimiter can also look like a setext underline or thematic break.
+    /// Only the root walker enables frontmatter: remark-frontmatter recognises a
+    /// fence at the document's first line and nowhere else, and there it has to
+    /// win over the thematic-break shape `---`.
+    ///
+    /// Two other orderings are load-bearing. Thematic breaks are tested before
+    /// list items, because `- - -` and `* * *` match both and CommonMark gives
+    /// the break precedence — testing lists first turned `- - -` into three
+    /// items and swallowed the setext heading after it. And tables are
+    /// recognised before paragraphs, because a single-cell `---` delimiter row
+    /// also looks like a setext underline.
     mutating func run(allowsFrontmatter: Bool = false) -> BlockResult {
         var result = BlockResult()
         var lineIndex = 0
@@ -524,10 +526,9 @@ private struct BlockScanner {
         return InlineScanner(units: units, definitionLabels: definitionLabels).run()
     }
 
-    /// Checks blockquotes, list items, fences, HTML blocks, ATX headings,
-    /// thematic breaks, and footnote definitions before accepting lazy content.
-    /// `htmlBlockStart` also returns type 7, although CommonMark does not allow
-    /// that type to interrupt a paragraph.
+    /// Whether this line ends an open paragraph rather than continuing it
+    /// lazily. Also decides where a blockquote's or list item's lazy
+    /// continuation stops.
     private func startsInterruptingBlock(_ line: SourceLine) -> Bool {
         // Type 7 is deliberately absent: CommonMark 4.6 lets every HTML block
         // type except 7 interrupt a paragraph, which is what keeps

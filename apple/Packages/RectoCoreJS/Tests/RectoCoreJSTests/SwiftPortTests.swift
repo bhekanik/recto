@@ -41,7 +41,7 @@ struct SwiftPortTests {
 
     @Test("WordCount agrees with the JS core")
     func wordCountAgreesWithCore() async throws {
-        let core = try Fixtures.core()
+        let core = try Fixtures.shared()
         for testCase in corpus.cases + corpus.unicode {
             let authority = try await core.countWords(testCase.input)
             #expect(
@@ -73,7 +73,7 @@ struct SwiftPortTests {
 
     @Test("Outline agrees with the JS core")
     func outlineAgreesWithCore() async throws {
-        let core = try Fixtures.core()
+        let core = try Fixtures.shared()
         for testCase in corpus.cases + corpus.unicode {
             let authority = try await core.parseOutline(testCase.input)
             expectOutline(

@@ -1,5 +1,5 @@
 {
-	"about": "Vim behaviour the native client must reproduce. Expectations are written from vim semantics, not captured from the implementation. Both the Bun suite (test/suite.test.ts) and the Swift suite (apple/Spikes/VimSpike) run this same file, so a divergence between them is a bridge bug rather than a vim bug. cursor is [line, ch] with ch in UTF-16 code units.",
+	"about": "Vim behaviour the native client must reproduce. Expectations are written from vim semantics, not captured from the implementation. Both the Bun suite (test/suite.bun.test.ts) and the Swift suites (apple/Packages/RectoVim/Tests, headless and through a real NSTextView) run this same file, so a divergence between them is a bridge bug rather than a vim bug. cursor is [line, ch] with ch in UTF-16 code units.",
 	"cases": [
 		{
 			"name": "dw at start of line",

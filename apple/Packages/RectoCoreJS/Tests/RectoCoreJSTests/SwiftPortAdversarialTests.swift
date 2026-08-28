@@ -67,7 +67,7 @@ struct SwiftPortAdversarialTests {
 
     @Test("WordCount agrees with the JS core", arguments: documents)
     func wordCount(document: (name: String, markdown: String)) async throws {
-        let core = try Fixtures.core()
+        let core = try Fixtures.shared()
         let authority = try await core.countWords(document.markdown)
         #expect(
             WordCount.count(document.markdown) == authority,
@@ -77,7 +77,7 @@ struct SwiftPortAdversarialTests {
 
     @Test("Outline agrees with the JS core", arguments: documents)
     func outline(document: (name: String, markdown: String)) async throws {
-        let core = try Fixtures.core()
+        let core = try Fixtures.shared()
         let authority = try await core.parseOutline(document.markdown)
         let ours = Outline.parse(document.markdown)
         #expect(

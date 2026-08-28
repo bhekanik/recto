@@ -40,6 +40,24 @@ enum Fixtures {
         return try RectoCore(bundleURL: bundle)
     }
 
+    /// One core for the whole test run.
+    ///
+    /// `RectoCore` serialises on its own queue and is `Sendable`, so sharing one
+    /// instance across swift-testing's parallel cases is exactly the shape the
+    /// app uses — and exercising it here is better testing than the alternative.
+    /// A fresh core per parameterised case meant ~100 `JSVirtualMachine`s and
+    /// ~100 evaluations of a 1 MB bundle in flight at once, which once took the
+    /// test process down with SIGTRAP.
+    ///
+    /// `try?` because a global `let` cannot throw; the only realistic failure is
+    /// the bundle not being built, which `shared()` reports.
+    private static let cached: RectoCore? = try? core()
+
+    static func shared() throws -> RectoCore {
+        guard let cached else { throw SkipBundle() }
+        return cached
+    }
+
     struct SkipBundle: Error, CustomStringConvertible {
         var description: String {
             "packages/recto-core-js/dist/recto-core.js is missing — run `bun run core:build`"
