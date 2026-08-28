@@ -263,10 +263,24 @@ struct LiveConvexTests {
 
     // A pointer move in between advances the revision without changing the head
     // — the case that used to turn a lost answer into a spurious divergence.
+    // It goes through the deployed compare-and-set, with the revision the commit
+    // just handed back, and with a timestamp the WALL-CLOCK rule would refuse:
+    // that is what proves the deployment reads the revision and not the clock.
+    let afterCommit = try #require(
+      try await transport.getDocument(documentId: created.documentId))
     let move = try await transport.updateCurrentNodeId(
       documentId: created.documentId, currentNodeId: commit.nodeId, markdown: "landed",
-      wordCount: 1, updatedAt: Date().timeIntervalSince1970 * 1000)
-    #expect(move.applied)
+      wordCount: 1, updatedAt: afterCommit.updatedAt - 600_000,
+      expectedPointerRevision: afterCommit.pointerRevision)
+    #expect(move.applied, "the deployment compares revisions, not clocks")
+
+    // And a revision the server has moved past is refused, with the head that won.
+    let stale = try await transport.updateCurrentNodeId(
+      documentId: created.documentId, currentNodeId: created.rootNodeId, markdown: "",
+      wordCount: 0, updatedAt: Date().timeIntervalSince1970 * 1000,
+      expectedPointerRevision: afterCommit.pointerRevision)
+    #expect(stale.applied == false)
+    #expect(stale.currentNodeId == commit.nodeId)
 
     let replay = try await transport.commitEdit(commit)
     #expect(replay.committed, "a lost answer replays as the success it already was")

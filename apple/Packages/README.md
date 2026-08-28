@@ -32,15 +32,17 @@ let store = try RectoStore(url: RectoStore.defaultURL())
 let origin = try await SyncEngine.resolveOrigin(store: store)     // per-device id
 let auth = RectoAuth(store: store)                                 // @MainActor
 RectoAuth.configureClerk(publishableKey: key)                      // once, in App.init
-await auth.start()
 
 let transport = await ConvexTransport(
   deploymentURL: convexURL, authProvider: auth.convexAuthProvider)
 let sync = SyncEngine(store: store, transport: transport, origin: origin)
-await sync.start()
-
 let registry = DocumentSessionRegistry(
   store: store, sync: sync, origin: origin, countWords: RectoCoreJS.countWords)
+
+await auth.attach(sync: sync)
+await auth.attach(sessions: registry)
+await auth.start()
+await sync.start()
 ```
 
 ### Per window

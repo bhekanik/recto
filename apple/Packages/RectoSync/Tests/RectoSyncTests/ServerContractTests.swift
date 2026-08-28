@@ -185,7 +185,8 @@ struct FakeContractTests {
     await #expect(throws: InMemoryTransport.TransportFault.unknownPointerTarget) {
       _ = try await transport.updateCurrentNodeId(
         documentId: seeded.documentId, currentNodeId: "never-existed", markdown: "x",
-        wordCount: 1, updatedAt: Date().timeIntervalSince1970 * 1000)
+        wordCount: 1, updatedAt: Date().timeIntervalSince1970 * 1000,
+        expectedPointerRevision: nil)
     }
     #expect(
       try await transport.getDocument(documentId: seeded.documentId)?.currentNodeId
@@ -293,7 +294,7 @@ struct CommitParentContractTests {
     let laterThanAnything = Date().timeIntervalSince1970 * 1000 + 60_000
     _ = try await transport.updateCurrentNodeId(
       documentId: seeded.documentId, currentNodeId: commit.nodeId, markdown: "landed",
-      wordCount: 1, updatedAt: laterThanAnything)
+      wordCount: 1, updatedAt: laterThanAnything, expectedPointerRevision: nil)
 
     // Our lost answer is retried. The already-head path answers success AND
     // records this key.
@@ -303,7 +304,7 @@ struct CommitParentContractTests {
     // replay is still the success it always was — not a spurious divergence.
     _ = try await transport.updateCurrentNodeId(
       documentId: seeded.documentId, currentNodeId: theirs, markdown: "theirs",
-      wordCount: 1, updatedAt: laterThanAnything + 1)
+      wordCount: 1, updatedAt: laterThanAnything + 1, expectedPointerRevision: nil)
     let replay = try await transport.commitEdit(commit)
     #expect(replay.committed, "a recorded replay stays a success after the head moves on")
     #expect(replay.headNodeId == commit.nodeId)

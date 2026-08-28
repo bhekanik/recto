@@ -119,6 +119,21 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
     for session in sessions.values { await session.resume() }
   }
 
+  /// Empty and drop every session, after an identity change has purged the
+  /// mirror they were reading.
+  ///
+  /// Dropping them from the map is not enough on its own — a window holds its
+  /// own reference — so each session also clears its state and finishes its
+  /// stream. The registry stays frozen: the new identity is published first,
+  /// and `resumeAll()` is what lets windows open fresh sessions.
+  public func invalidateAll() async {
+    isFrozen = true
+    let invalidated = Array(sessions.values)
+    sessions.removeAll()
+    holders.removeAll()
+    for session in invalidated { await session.invalidate() }
+  }
+
   /// Whether new sessions are currently born frozen.
   public var isFrozenForTesting: Bool { isFrozen }
 

@@ -37,6 +37,10 @@ public actor InMemoryTransport: RectoTransport {
     /// Apply the mutation, then throw. The client never learns it succeeded and
     /// must replay the same `clientMutationId`.
     case dropAcknowledgement
+    /// A deterministic refusal, the way the deployment throws one: a
+    /// `ConvexError` carrying `{code, message}`. A terminal code must park the
+    /// job, not retry it forever.
+    case refused(ServerRefusal)
   }
 
   public private(set) var documents: [String: Document] = [:]
@@ -110,6 +114,9 @@ public actor InMemoryTransport: RectoTransport {
     case .tokenExpired:
       _ = takeFault()
       throw TransportFault.unauthenticated
+    case .refused(let refusal):
+      _ = takeFault()
+      throw refusal
     default:
       return
     }
@@ -315,7 +322,8 @@ public actor InMemoryTransport: RectoTransport {
   }
 
   public func updateCurrentNodeId(
-    documentId: String, currentNodeId: String, markdown: String, wordCount: Int, updatedAt: Double
+    documentId: String, currentNodeId: String, markdown: String, wordCount: Int,
+    updatedAt: Double, expectedPointerRevision: Double?
   ) async throws -> UpdateCurrentNodeResponse {
     try applyPreFault()
     guard var document = documents[documentId] else { throw TransportFault.documentNotFound }
@@ -325,7 +333,12 @@ public actor InMemoryTransport: RectoTransport {
     guard (nodes[documentId] ?? []).contains(where: { $0.nodeId == currentNodeId }) else {
       throw TransportFault.unknownPointerTarget
     }
-    if updatedAt < document.updatedAt {
+    // `convex/documents.ts`: a supplied revision is a compare-and-set and the
+    // wall-clock comparison is the fallback for callers that omit one.
+    let rejected =
+      expectedPointerRevision.map { $0 != document.pointerRevision }
+      ?? (updatedAt < document.updatedAt)
+    if rejected {
       // Lost the last-write-wins check: hand back the head that won so the
       // caller reconciles instead of guessing.
       return UpdateCurrentNodeResponse(

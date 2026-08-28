@@ -145,8 +145,28 @@ public final class ConvexTemplateAuthProvider: AuthProvider {
   /// token.
   public func logout() async throws {
     syncedSessionID = nil
+    // `dropConvexBridge()` needs the SDK's teardown WITHOUT ending the Clerk
+    // session — there is nothing to retry a login with otherwise. The SDK calls
+    // this with no arguments, so the intent has to travel on the instance.
+    guard !isDroppingBridgeOnly else { return }
     guard RectoAuth.isClerkConfigured, Clerk.shared.session != nil else { return }
     try await Clerk.shared.auth.signOut()
+  }
+
+  private var isDroppingBridgeOnly = false
+
+  /// Drop convex-swift's `authBridge` and FFI auth callback, keeping the Clerk
+  /// session.
+  ///
+  /// A failed `loginFromCache()` leaves the PREVIOUS account's bridge installed:
+  /// the SDK publishes `unauthenticated` but only `logout()` clears those two,
+  /// so a socket opened afterwards can still authenticate as the previous user.
+  /// After an account switch that means copying A's documents into a mirror
+  /// that already belongs to B.
+  public func dropConvexBridge() async {
+    isDroppingBridgeOnly = true
+    await logoutConvexClient()
+    isDroppingBridgeOnly = false
   }
 
   public nonisolated func extractIdToken(from authResult: String) -> String { authResult }

@@ -120,30 +120,29 @@ struct ReviewerRepros {
     await mac.sync.drainNow()
     let ourHead = try #require(try await mac.store.document(localId: localId)?.localHeadNodeId)
 
-    // An undo that was queued while offline: its EVENT time is long past.
+    // Our undo is queued, and another client moves the pointer to the root
+    // before it drains. That bumps `pointerRevision`, so our move loses the
+    // compare-and-set. (Round 7 replaced the wall-clock rule this repro used to
+    // trigger: a stale event time is no longer a rejection, which is finding 3.)
     #expect(try await session.undo())
-    let queued = try #require(
-      try await mac.store.pendingJobs(documentLocalId: localId)
-        .first { $0.kind == .pointerMove })
-    var payload = try OutboxPayload.decode(queued.payload)
-    payload.createdAt = Date().timeIntervalSince1970 * 1000 - 600_000  // ten minutes ago
-    var rewritten = queued
-    rewritten.payload = payload.encoded
-    try await mac.store.replaceJob(id: try #require(queued.id), with: rewritten)
+    _ = try await server.updateCurrentNodeId(
+      documentId: seeded.documentId, currentNodeId: seeded.rootNodeId, markdown: "",
+      wordCount: 0, updatedAt: Date().timeIntervalSince1970 * 1000,
+      expectedPointerRevision: nil)
 
     await mac.sync.drainNow()
 
-    // The server refused it: its own `updatedAt` is newer than the event time.
     let remote = try #require(try await server.getDocument(documentId: seeded.documentId))
-    #expect(remote.currentNodeId == ourHead, "the rejected move did not take")
+    #expect(remote.currentNodeId == seeded.rootNodeId, "the rejected move did not take")
+    #expect(ourHead != seeded.rootNodeId)
     let document = try #require(try await mac.store.document(localId: localId))
     // The rejection was read, not acknowledged: the client reconciled onto the
     // head that won instead of keeping its own and calling that `synced`.
-    #expect(document.remoteHeadNodeId == ourHead)
+    #expect(document.remoteHeadNodeId == seeded.rootNodeId)
     #expect(
       document.localHeadNodeId == remote.currentNodeId,
       "a synced document must agree with the server about the head")
-    #expect(document.markdown == "first second")
+    #expect(document.markdown == "")
   }
 
   // MARK: - 4. Offline create is replay-safe and re-keys the whole root

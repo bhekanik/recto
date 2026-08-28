@@ -724,6 +724,11 @@ public actor SyncEngine: SyncControlling {
     /// answered, it simply wrote nothing, and the next attempt carries the
     /// baseline this one just learned.
     case retryAfterBackoff(reason: String)
+    /// The server refused this commit's parent. The node landed anyway, so the
+    /// two heads are branches the user has to choose between: one transaction
+    /// records the synced node, the deletion, the remote head, the revision and
+    /// a DURABLE divergence barrier.
+    case divergedCommit(nodeId: String, remoteHeadNodeId: String, remotePointerRevision: Double?)
     /// Leave the job queued and stop.
     case stop
   }
@@ -784,6 +789,15 @@ public actor SyncEngine: SyncControlling {
         try await store.completeJobAndBlockQueue(
           id: jobId, documentLocalId: localId, reason: reason.rawValue)
         if reconcile { try await reconcileHead(localId: localId) }
+        return true
+      case .divergedCommit(let nodeId, let remoteHeadNodeId, let remotePointerRevision):
+        try await store.recordCommitDivergence(
+          documentLocalId: localId, jobId: jobId, syncedNodeId: nodeId,
+          remoteHeadNodeId: remoteHeadNodeId, remotePointerRevision: remotePointerRevision)
+        emit(
+          .diverged(
+            localId: localId, local: document.localHeadNodeId, remote: remoteHeadNodeId))
+        emit(.syncStateChanged(localId: localId, state: .diverged))
         return true
       case .retryAfterBackoff(let reason):
         let delay = outboxBackoff(attempts: job.attempts + 1)
@@ -910,21 +924,29 @@ public actor SyncEngine: SyncControlling {
         return .completed
 
       case .diverged(let remoteHeadNodeId, let remotePointerRevision):
-        // `commitEdit` inserts the node regardless of the head check, so the
-        // text is safe on the server; only the pointer is contended.
-        try await store.markNodesSynced(
-          documentLocalId: document.localId, nodeIds: [request.nodeId])
-        try await store.setSyncState(
-          documentLocalId: document.localId, document.syncState,
-          remotePointerRevision: remotePointerRevision)
-        // The nodes have to be pulled before anything can be decided, and that
-        // is safe to do with the job still queued.
+        // The ancestry has to be local before anything is decided, and pulling
+        // it is safe with the job still queued.
         try await pullRemoteNodes(document: document)
-        // PROVISIONAL. The server refused because the head is not where this
-        // commit expected it; whether that is a divergence, a remote undo we
-        // should adopt, or work we still have to upload is what the
-        // reconciliation below decides, and it writes the durable barrier.
-        return .completedAndBlock(reason: .commitRejected, reconcile: true)
+        guard !remoteHeadNodeId.isEmpty, remoteHeadNodeId != document.localHeadNodeId else {
+          // The server's head is where we already are — nothing is contended.
+          // `markNodesSynced` still has to happen: the node did land.
+          try await store.markNodesSynced(
+            documentLocalId: document.localId, nodeIds: [request.nodeId])
+          try await store.setSyncState(
+            documentLocalId: document.localId, document.syncState,
+            remotePointerRevision: remotePointerRevision)
+          return .completedAndBlock(reason: .commitRejected, reconcile: true)
+        }
+        // A DURABLE divergence, decided here rather than by the generic
+        // reconciliation. `commitEdit` inserts the node whatever the head check
+        // says and does not move the pointer, so what the server is telling us
+        // is "your branch and mine are both real". Handing that to the ancestry
+        // rules instead reads a remote head that happens to sit ABOVE ours as
+        // "the server has not seen our nodes yet", releases the barrier, and
+        // strands the committed node with a `pending` badge and no resolver.
+        return .divergedCommit(
+          nodeId: request.nodeId, remoteHeadNodeId: remoteHeadNodeId,
+          remotePointerRevision: remotePointerRevision)
       }
 
     case .appendNode:
@@ -945,7 +967,12 @@ public actor SyncEngine: SyncControlling {
         documentId: convexId, currentNodeId: nodeId,
         markdown: payload.markdown ?? "",
         wordCount: payload.wordCount ?? 0,
-        updatedAt: payload.createdAt ?? job.createdAt)
+        updatedAt: payload.createdAt ?? job.createdAt,
+        // Read at DRAIN time, not captured when the job was enqueued: earlier
+        // jobs in this document's FIFO queue legitimately bump the revision, and
+        // sending the enqueue-time value would make our own commit reject our
+        // own undo.
+        expectedPointerRevision: document.remotePointerRevision ?? 0)
       guard response.applied else {
         // Deliberately do NOT record the response's revision here. `reconcileHead`
         // compares the freshly fetched revision against the one still on the
@@ -1072,10 +1099,25 @@ public actor SyncEngine: SyncControlling {
   private func handleSendFailure(job: OutboxJob, jobId: Int64, error: any Error) async {
     let attempts = job.attempts + 1
     let description = String(describing: error)
+    let refusal = error as? ServerRefusal
+
+    // A refusal the server decides deterministically will be decided the same
+    // way forever. Retrying it blocks everything behind it in this document's
+    // queue; deleting it would destroy the text. It is parked, with the reason.
+    if let refusal, refusal.isTerminal {
+      await parkUnsendableJob(
+        job: job, jobId: jobId, reason: "\(refusal.code.rawValue): \(refusal.message)")
+      return
+    }
+
     // A Clerk token lives 60 seconds and can expire between two jobs of a long
     // drain. Force a re-auth before backing off, or the retry fails identically.
-    if description.localizedCaseInsensitiveContains("unauthenticated")
-      || description.localizedCaseInsensitiveContains("auth")
+    // The CODE is the authority; the substring match is the fallback for plain
+    // errors, which carry no structured data at all.
+    if refusal?.code == .unauthenticated
+      || (refusal == nil
+        && (description.localizedCaseInsensitiveContains("unauthenticated")
+          || description.localizedCaseInsensitiveContains("auth")))
     {
       // Sockets down first: this is the one path that replaces the bridge.
       await reauthenticateQuiesced()

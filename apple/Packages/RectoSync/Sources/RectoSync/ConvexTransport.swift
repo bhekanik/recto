@@ -12,8 +12,13 @@ import RectoStore
 public protocol RectoTransport: Actor {
   func createDocument(title: String) async throws -> CreateDocumentResponse
   func commitEdit(_ request: CommitEditRequest) async throws -> CommitEditResponse
+  /// Move the server's pointer. `expectedPointerRevision` is a compare-and-set
+  /// on `documents.pointerRevision`; omitting it selects the server's legacy
+  /// wall-clock rule, which loses to any write that lands after the caller
+  /// captured its timestamp.
   func updateCurrentNodeId(
-    documentId: String, currentNodeId: String, markdown: String, wordCount: Int, updatedAt: Double
+    documentId: String, currentNodeId: String, markdown: String, wordCount: Int,
+    updatedAt: Double, expectedPointerRevision: Double?
   ) async throws -> UpdateCurrentNodeResponse
   func updateMarkdown(
     documentId: String, markdown: String, wordCount: Int, expectedUpdatedAt: Double,
@@ -139,6 +144,20 @@ public actor ConvexTransport: RectoTransport {
   /// an unconfigured Clerk.
   var liveSubscriptionCountForTesting: Int { 0 }
 
+  /// A Convex `ConvexError` carrying one of our `{code, message}` refusals, as
+  /// a `ServerRefusal`; anything else unchanged.
+  ///
+  /// The translation belongs here rather than in `SyncEngine`: the engine's
+  /// retry policy should not have to know what shape this particular SDK gives
+  /// a server error. An unrecognised failure is rethrown untouched and keeps
+  /// its retry.
+  private nonisolated static func mapped(_ error: any Error) -> any Error {
+    guard case ClientError.ConvexError(let data)? = error as? ClientError,
+      let refusal = ServerRefusal(convexErrorData: data)
+    else { return error }
+    return refusal
+  }
+
   /// Re-authenticate from the keychain session. Safe to call repeatedly.
   ///
   /// Through the coordinator: foreground resume and auth-error recovery both
@@ -238,25 +257,41 @@ public actor ConvexTransport: RectoTransport {
   }
 
   public func createDocument(title: String) async throws -> CreateDocumentResponse {
-    try await client.mutation(ConvexFunction.documentsCreate, with: ["title": title])
+    do {
+      return try await client.mutation(ConvexFunction.documentsCreate, with: ["title": title])
+    } catch {
+      throw Self.mapped(error)
+    }
   }
 
   public func commitEdit(_ request: CommitEditRequest) async throws -> CommitEditResponse {
-    try await client.mutation(ConvexFunction.documentsCommitEdit, with: request.convexArgs)
+    do {
+      return try await client.mutation(
+        ConvexFunction.documentsCommitEdit, with: request.convexArgs)
+    } catch {
+      throw Self.mapped(error)
+    }
   }
 
   public func updateCurrentNodeId(
-    documentId: String, currentNodeId: String, markdown: String, wordCount: Int, updatedAt: Double
+    documentId: String, currentNodeId: String, markdown: String, wordCount: Int,
+    updatedAt: Double, expectedPointerRevision: Double?
   ) async throws -> UpdateCurrentNodeResponse {
-    try await client.mutation(
-      ConvexFunction.documentsUpdateCurrentNodeId,
-      with: [
-        "documentId": documentId,
-        "currentNodeId": currentNodeId,
-        "markdown": markdown,
-        "wordCount": Double(wordCount),
-        "updatedAt": updatedAt,
-      ])
+    var args: [String: ConvexEncodable?] = [
+      "documentId": documentId,
+      "currentNodeId": currentNodeId,
+      "markdown": markdown,
+      "wordCount": Double(wordCount),
+      "updatedAt": updatedAt,
+    ]
+    // `v.optional()` means absent, not null: sending null fails validation, and
+    // an absent revision is what puts the server back on the wall-clock rule.
+    if let expectedPointerRevision { args["expectedPointerRevision"] = expectedPointerRevision }
+    do {
+      return try await client.mutation(ConvexFunction.documentsUpdateCurrentNodeId, with: args)
+    } catch {
+      throw Self.mapped(error)
+    }
   }
 
   public func updateMarkdown(
@@ -274,25 +309,46 @@ public actor ConvexTransport: RectoTransport {
     // `currentNodeId`.
     if let expectedHeadNodeId { args["expectedHeadNodeId"] = expectedHeadNodeId }
     if let title { args["title"] = title }
-    return try await client.mutation(ConvexFunction.documentsUpdateMarkdown, with: args)
+    do {
+      return try await client.mutation(ConvexFunction.documentsUpdateMarkdown, with: args)
+    } catch {
+      throw Self.mapped(error)
+    }
   }
 
   public func appendNode(documentId: String, node: CommitEditRequest) async throws {
-    try await client.mutation(ConvexFunction.docNodesAppend, with: node.appendArgs)
+    do {
+      try await client.mutation(ConvexFunction.docNodesAppend, with: node.appendArgs)
+    } catch {
+      throw Self.mapped(error)
+    }
   }
 
   public func rename(documentId: String, title: String) async throws {
-    try await client.mutation(
-      ConvexFunction.documentsRename, with: ["documentId": documentId, "title": title])
+    do {
+      try await client.mutation(
+        ConvexFunction.documentsRename, with: ["documentId": documentId, "title": title])
+    } catch {
+      throw Self.mapped(error)
+    }
   }
 
   public func remove(documentId: String) async throws {
-    try await client.mutation(ConvexFunction.documentsRemove, with: ["documentId": documentId])
+    do {
+      try await client.mutation(
+        ConvexFunction.documentsRemove, with: ["documentId": documentId])
+    } catch {
+      throw Self.mapped(error)
+    }
   }
 
   public func recordWritingStat(date: String, words: Int) async throws {
-    try await client.mutation(
-      ConvexFunction.writingStatsRecord, with: ["date": date, "words": Double(words)])
+    do {
+      try await client.mutation(
+        ConvexFunction.writingStatsRecord, with: ["date": date, "words": Double(words)])
+    } catch {
+      throw Self.mapped(error)
+    }
   }
 }
 

@@ -1042,6 +1042,43 @@ public actor RectoStore {
     }
   }
 
+  /// Everything a server-rejected `commitEdit` implies, in ONE transaction.
+  ///
+  /// `documents.commitEdit` inserts the node whatever the head check says, so a
+  /// rejection means: the text is safe on the server, and the two heads are
+  /// branches the user has to choose between. Doing this in pieces — mark
+  /// synced, record the revision, delete the job, then reconcile — is what let
+  /// the generic reconciliation classify the remote head as "the server has not
+  /// seen our nodes yet" and release the barrier, stranding the committed node
+  /// off the server's branch with no resolver and a `pending` badge.
+  ///
+  /// The barrier written here is DURABLE: only a resolution clears it.
+  public func recordCommitDivergence(
+    documentLocalId: String,
+    jobId: Int64,
+    syncedNodeId: String,
+    remoteHeadNodeId: String,
+    remotePointerRevision: Double?
+  ) throws {
+    try writer.write { db in
+      guard var document = try DocumentRecord.fetchOne(db, key: documentLocalId) else {
+        throw StoreError.documentNotFound(documentLocalId)
+      }
+      _ = try DocNodeRecord
+        .filter(Column("documentLocalId") == documentLocalId)
+        .filter(Column("nodeId") == syncedNodeId)
+        .updateAll(db, Column("synced").set(to: true))
+      _ = try OutboxJob.deleteOne(db, key: jobId)
+
+      document.syncState = .diverged
+      document.remoteHeadNodeId = remoteHeadNodeId
+      document.divergedRemoteHeadNodeId = remoteHeadNodeId
+      if let remotePointerRevision { document.remotePointerRevision = remotePointerRevision }
+      document.queueBlockedReason = QueueBlockReason.diverged.rawValue
+      try document.update(db)
+    }
+  }
+
   /// Push a job's next attempt out WITHOUT recording a failure.
   ///
   /// A server answer of "nothing was written, your baseline is stale" is not an

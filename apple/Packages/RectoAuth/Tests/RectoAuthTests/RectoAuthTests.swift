@@ -203,6 +203,7 @@ struct Round3AuthTests {
       await onFreeze?()
     }
     func resumeAll() async { events.append("sessions.resume") }
+    func invalidateAll() async { events.append("sessions.invalidate") }
   }
 
   private func store(withDocument markdown: String = "") throws -> RectoStore {
@@ -377,6 +378,7 @@ struct Round5AuthTests {
     func start() async { events.append("sync.start") }
     func freezeAndFlushAll() async { events.append("sessions.freeze") }
     func resumeAll() async { events.append("sessions.resume") }
+    func invalidateAll() async { events.append("sessions.invalidate") }
   }
 
   private func storeOwnedByA(withWork: Bool) async throws -> RectoStore {
@@ -483,6 +485,7 @@ struct Round6AuthTests {
     func clear() { events.removeAll() }
     func freezeAndFlushAll() async { events.append("sessions.freeze") }
     func resumeAll() async { events.append("sessions.resume") }
+    func invalidateAll() async { events.append("sessions.invalidate") }
   }
 
   private func storeOwnedByA() async throws -> RectoStore {
@@ -530,8 +533,8 @@ struct Round6AuthTests {
     await transition.value
 
     #expect(await coordinator.events == [
-      "sessions.freeze", "sync.stop.begin", "sync.stop.end", "convex.login",
-      "sessions.resume", "sync.start",
+      "sessions.freeze", "sync.stop.begin", "sync.stop.end", "sessions.invalidate",
+      "convex.login", "sessions.resume", "sync.start",
     ])
     #expect(await auth.status == .signedIn(userId: "user_B"))
   }
@@ -628,12 +631,19 @@ struct Round6AuthTests {
     await auth.handleSessionSwitchForTesting(from: "user_A", toUserId: "user_B")
     #expect(await attempts.value == 1)
     #expect(await auth.convexAuthProvider.needsCachedLogin, "the session is still unauthenticated")
-    #expect(await auth.status == .signedIn(userId: "user_B"), "the app is usable, just read-only")
+    // NOT `.signedIn`. convex-swift keeps A's bridge when B's login fails, so a
+    // socket started now can authenticate as A into a mirror that is already
+    // B's. The transition is incomplete and the app has to say so.
+    #expect(await auth.status == .convexLoginRequired(userId: "user_B"))
+    #expect(await coordinator.events.contains("sync.start") == false, "sync stayed stopped")
+    #expect(await coordinator.events.contains("sessions.resume") == false)
 
     // Reconnect or foreground, with the sockets stopped for the bridge swap.
     #expect(await auth.recoverConvexLoginIfNeeded())
     #expect(await attempts.value == 2)
     #expect(await auth.convexAuthProvider.needsCachedLogin == false)
+    #expect(await auth.status == .signedIn(userId: "user_B"))
+    #expect(await coordinator.events.contains("sync.start"))
 
     // And it is a no-op once the session is synced — a login per foreground
     // would replace the auth bridge for no reason.
@@ -676,7 +686,7 @@ struct Round6AuthTests {
     #expect(await retry.value)
 
     #expect(await coordinator.events == [
-      "sync.stop.begin", "sync.stop.end", "convex.login", "sync.start",
+      "sync.stop.begin", "sync.stop.end", "convex.login", "sessions.resume", "sync.start",
     ])
   }
 
@@ -701,11 +711,14 @@ struct Round6AuthTests {
     #expect(try await store.pendingJobCount() == 0)
     #expect(await auth.convexAuthProvider.needsCachedLogin)
 
+    // The failed transition started nothing, so there is no socket to carry the
+    // library — and nothing else will ever retry.
+    #expect(await coordinator.events.contains("sync.start") == false)
+
     #expect(await auth.recoverConvexLoginIfNeeded())
     #expect(await auth.convexAuthProvider.needsCachedLogin == false)
-    // The sockets were rebuilt after the successful login, which is what makes
-    // `documents.list` arrive.
-    #expect(await coordinator.events.filter { $0 == "sync.start" }.count == 2)
+    // Started exactly once, by the recovery that succeeded.
+    #expect(await coordinator.events.filter { $0 == "sync.start" }.count == 1)
   }
 }
 

@@ -57,7 +57,8 @@ struct Round5Tests {
     // Another client undoes to the root. That is a pointer write only.
     _ = try await server.updateCurrentNodeId(
       documentId: seeded.documentId, currentNodeId: seeded.rootNodeId, markdown: "",
-      wordCount: 0, updatedAt: Date().timeIntervalSince1970 * 1000)
+      wordCount: 0, updatedAt: Date().timeIntervalSince1970 * 1000,
+      expectedPointerRevision: nil)
 
     // Our own stale redo, queued with an older event time, loses the LWW check.
     let timestamp = Date().timeIntervalSince1970 * 1000 - 600_000
@@ -112,7 +113,8 @@ struct Round5Tests {
 
     _ = try await server.updateCurrentNodeId(
       documentId: seeded.documentId, currentNodeId: seeded.rootNodeId, markdown: "",
-      wordCount: 0, updatedAt: Date().timeIntervalSince1970 * 1000)
+      wordCount: 0, updatedAt: Date().timeIntervalSince1970 * 1000,
+      expectedPointerRevision: nil)
 
     let stale = Date().timeIntervalSince1970 * 1000 - 600_000
     _ = try await mac.store.enqueue(

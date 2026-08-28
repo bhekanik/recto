@@ -18,6 +18,54 @@ public enum ConvexFunction {
   public static let writingStatsList = "writingStats:list"
 }
 
+/// A deterministic refusal from the server (`convex/documents.ts`, `refuse()`).
+///
+/// Convex throws these as a `ConvexError` whose data is `{code, message}`, which
+/// is what separates "retrying this exact call can never succeed" from a
+/// transient rejection such as an exhausted OCC retry — Convex surfaces those as
+/// plain errors and they ARE safe to retry. Matching on message substrings
+/// cannot tell the two apart, and guessing wrong either parks work that would
+/// have gone through or retries a refusal forever.
+public struct ServerRefusal: Error, Equatable, Sendable {
+  public enum Code: String, Sendable, CaseIterable {
+    case invalidArgument = "invalid_argument"
+    case unauthenticated
+    case notFound = "not_found"
+    case unknownNode = "unknown_node"
+    case tooLarge = "too_large"
+    case parentMismatch = "parent_mismatch"
+  }
+
+  public var code: Code
+  public var message: String
+
+  public init(code: Code, message: String) {
+    self.code = code
+    self.message = message
+  }
+
+  /// Retrying the identical call can never succeed, so the job is parked rather
+  /// than retried forever.
+  ///
+  /// `unauthenticated` is deliberately NOT terminal: a Clerk `convex` token
+  /// lives 60 seconds and can expire between two jobs of a long drain, so it
+  /// goes down the re-authenticate-and-retry path instead (`TERMINAL_REFUSAL_CODES`
+  /// on the server says the same).
+  public var isTerminal: Bool { code != .unauthenticated }
+
+  /// Parse the `data` a `ConvexError` carries. Returns nil for anything that is
+  /// not one of our refusals, so an unrecognised failure keeps its retry.
+  public init?(convexErrorData data: String) {
+    guard let parsed = try? JSONSerialization.jsonObject(with: Data(data.utf8)),
+      let object = parsed as? [String: Any],
+      let raw = object["code"] as? String,
+      let code = Code(rawValue: raw)
+    else { return nil }
+    self.code = code
+    self.message = (object["message"] as? String) ?? raw
+  }
+}
+
 /// A row from `documents.list` (metadata only — the body arrives with the nodes).
 public struct RemoteDocumentSummary: Decodable, Sendable, Equatable {
   public let id: String

@@ -122,7 +122,8 @@ struct Round4Tests {
 
     _ = try await server.updateCurrentNodeId(
       documentId: seeded.documentId, currentNodeId: seeded.rootNodeId, markdown: "",
-      wordCount: 0, updatedAt: Date().timeIntervalSince1970 * 1000)
+      wordCount: 0, updatedAt: Date().timeIntervalSince1970 * 1000,
+      expectedPointerRevision: nil)
 
     try await mac.sync.mirrorLibrary(await server.summaries())
 

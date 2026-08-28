@@ -91,7 +91,8 @@ struct Round6Tests {
     // Another client undoes to the root. Pointer only — no node is written.
     _ = try await server.updateCurrentNodeId(
       documentId: seeded.documentId, currentNodeId: seeded.rootNodeId, markdown: "",
-      wordCount: 0, updatedAt: Date().timeIntervalSince1970 * 1000)
+      wordCount: 0, updatedAt: Date().timeIntervalSince1970 * 1000,
+      expectedPointerRevision: nil)
 
     // Our own stale redo loses the last-write-wins check, and a rename sits
     // behind it.

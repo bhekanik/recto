@@ -33,6 +33,9 @@ public enum SessionError: Error, Equatable, Sendable {
   case notOpen
   /// The session is frozen while sign-out decides what to do with unsent work.
   case frozen
+  /// The mirror this session was reading has been purged by an identity change.
+  /// Ask the registry for a new session; this one will never work again.
+  case invalidated
   case documentMissing(String)
 }
 
@@ -87,6 +90,8 @@ public actor DocumentSession {
   /// Editing is refused. Set while sign-out decides, so no new text can arrive
   /// between "how much is unsynced?" and the purge that answers it.
   private var isFrozen = false
+  /// The mirror this session was reading no longer exists. Terminal.
+  private var isInvalidated = false
 
   /// Tail of the transition queue. Actor isolation does NOT prevent reentrancy:
   /// every `await` is a place another window's keystroke can run a whole edit.
@@ -145,6 +150,9 @@ public actor DocumentSession {
   }
 
   private func performOpen() async throws {
+    // A handle held across an account switch must not be able to reload: the
+    // document id belonged to the previous mirror.
+    guard !isInvalidated else { throw SessionError.invalidated }
     // Counted only once the open has actually succeeded. Incrementing first and
     // throwing leaves a holder nobody owns, and the next successful open then
     // needs two releases to reach a final close.
@@ -286,6 +294,34 @@ public actor DocumentSession {
     await withTransition { isFrozen = false }
   }
 
+  /// Forget everything this session holds about the mirror, permanently.
+  ///
+  /// An account switch purges SQLite, but a window that was open across it still
+  /// has the previous account's title, markdown, grouping controller and node
+  /// map in memory, and the next `publish()` hands them to whoever signed in.
+  /// The state stream is finished so the window learns its document is gone,
+  /// and the session refuses to open again — the registry mints a fresh one for
+  /// the new account.
+  public func invalidate() async {
+    await withTransition {
+      isInvalidated = true
+      isFrozen = true
+      idleTask?.cancel()
+      draftTask?.cancel()
+      eventTask?.cancel()
+      idleTask = nil
+      draftTask = nil
+      eventTask = nil
+      controller = nil
+      document = nil
+      nodesById = [:]
+      openCount = 0
+      for continuation in stateContinuations.values { continuation.finish() }
+      stateContinuations.removeAll()
+      if let sync { await sync.closeDocument(localId: documentLocalId) }
+    }
+  }
+
   /// The guard on every user-triggered mutating transition.
   ///
   /// `EditSessionCoordinating.freezeAndFlushAll()` promises that no session
@@ -297,6 +333,7 @@ public actor DocumentSession {
   /// `flush()` deliberately does NOT check it: the freeze path itself flushes,
   /// and that flush is how the pending draft reaches the count.
   private func requireWritable() throws {
+    guard !isInvalidated else { throw SessionError.invalidated }
     guard !isFrozen else { throw SessionError.frozen }
   }
 
