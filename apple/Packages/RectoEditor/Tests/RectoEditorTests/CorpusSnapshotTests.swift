@@ -82,6 +82,9 @@ struct CorpusSnapshotTests {
     /// what the reader sees when they are not editing that spot — the state the
     /// snapshots capture.
     private func render(_ markdown: String, presentation: Presentation) -> NSAttributedString {
+        // The engine resolves table colours against the app's appearance, and
+        // `NSApp` is nil in a test process until something touches it.
+        _ = NSApplication.shared
         let styler = MarkdownStyler(presentation: presentation, theme: .twilight)
         return MarkdownRendering.attributedString(
             for: markdown,

@@ -96,7 +96,6 @@ public struct MarkdownStyler: Sendable, Equatable {
         MarkdownEditorTheme(
             bodyText: theme.ink,
             mutedText: theme.ink3,
-            disabledText: theme.ink3.withAlphaComponent(0.55),
             headingMarker: theme.ink3,
             link: theme.accent2,
             incompleteLink: theme.ink3,

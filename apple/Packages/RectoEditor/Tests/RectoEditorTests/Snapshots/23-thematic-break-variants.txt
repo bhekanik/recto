@@ -1,0 +1,46 @@
+# 23-thematic-break-variants
+
+## rich
+Before⏎    19.0
+⏎    —
+···⏎    —
+⏎    —
+Between⏎    19.0
+⏎    —
+···⏎    —
+⏎    —
+After⏎    19.0
+⏎    —
+· - -⏎    19.0
+⏎    —
+End⏎    19.0
+
+## raw
+Before⏎    17.5 mono
+⏎    —
+***⏎    17.5 mono
+⏎    —
+Between⏎    17.5 mono
+⏎    —
+___⏎    17.5 mono
+⏎    —
+After⏎    17.5 mono
+⏎    —
+- - -⏎    17.5 mono
+⏎    —
+End⏎    17.5 mono
+
+## preview
+Before⏎    19.0
+⏎    —
+···⏎    —
+⏎    —
+Between⏎    19.0
+⏎    —
+···⏎    —
+⏎    —
+After⏎    19.0
+⏎    —
+- - -⏎    19.0
+⏎    —
+End⏎    19.0

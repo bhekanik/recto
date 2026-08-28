@@ -1,0 +1,22 @@
+# 02-setext-to-atx
+
+## rich
+Title⏎    19.0
+=====⏎    19.0
+⏎    —
+Subtitle⏎    19.0
+···⏎    —
+
+## raw
+Title⏎    17.5 mono
+=====⏎    17.5 mono
+⏎    —
+Subtitle⏎    17.5 mono
+---⏎    17.5 mono
+
+## preview
+Title⏎    19.0
+=====⏎    19.0
+⏎    —
+Subtitle⏎    19.0
+···⏎    —

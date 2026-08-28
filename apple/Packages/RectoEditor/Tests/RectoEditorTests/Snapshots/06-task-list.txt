@@ -1,0 +1,16 @@
+# 06-task-list
+
+## rich
+······todo⏎    19.0
+······done⏎    19.0 strike
+  ······nested⏎    19.0
+
+## raw
+- [ ] todo⏎    17.5 mono
+- [x] done⏎    17.5 mono
+  - [ ] nested⏎    17.5 mono
+
+## preview
+- [ ] todo⏎    19.0
+- [x] done⏎    19.0
+  - [ ] nested⏎    19.0

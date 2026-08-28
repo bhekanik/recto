@@ -1,0 +1,19 @@
+# 10-multiple-footnotes-out-of-order
+
+## rich
+Second[^b] and first[^a].⏎    19.0
+⏎    —
+[^b]: Note B⏎    19.0
+[^a]: Note A⏎    19.0
+
+## raw
+Second[^b] and first[^a].⏎    17.5 mono
+⏎    —
+[^b]: Note B⏎    17.5 mono
+[^a]: Note A⏎    17.5 mono
+
+## preview
+Second[^b] and first[^a].⏎    19.0
+⏎    —
+[^b]: Note B⏎    19.0
+[^a]: Note A⏎    19.0
