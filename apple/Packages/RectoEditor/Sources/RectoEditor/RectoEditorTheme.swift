@@ -94,13 +94,6 @@ public struct RectoEditorTheme: Sendable, Equatable {
         selection: NSColor.oklch(0.52, 0.15, 288).withAlphaComponent(0.18),
         caret: .oklch(0.52, 0.15, 288)
     )
-
-    /// The palette for the given appearance. `nil` reads the current one.
-    public static func matching(_ appearance: NSAppearance? = nil) -> RectoEditorTheme {
-        let name = (appearance ?? NSApplication.shared.effectiveAppearance)
-            .bestMatch(from: [.aqua, .darkAqua])
-        return name == .darkAqua ? .twilight : .paper
-    }
 }
 
 // MARK: - OKLCH

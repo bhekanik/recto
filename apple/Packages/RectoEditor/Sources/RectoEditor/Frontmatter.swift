@@ -23,7 +23,12 @@ public struct Frontmatter: Sendable, Equatable {
     /// Top-level `key: value` pairs, in document order. Keys whose value is a
     /// nested mapping or a sequence are present with an empty value — the
     /// header does not render them, but their presence is visible to callers.
-    public let fields: [(key: String, value: String)]
+    public let fields: [Field]
+
+    public struct Field: Sendable, Equatable {
+        public let key: String
+        public let value: String
+    }
 
     public var title: String? { self["title"] }
     public var subtitle: String? { self["subtitle"] }
@@ -34,12 +39,6 @@ public struct Frontmatter: Sendable, Equatable {
 
     public subscript(key: String) -> String? {
         fields.first { $0.key == key }.map(\.value).flatMap { $0.isEmpty ? nil : $0 }
-    }
-
-    public static func == (lhs: Frontmatter, rhs: Frontmatter) -> Bool {
-        lhs.range == rhs.range
-            && lhs.fields.count == rhs.fields.count
-            && zip(lhs.fields, rhs.fields).allSatisfy { $0.key == $1.key && $0.value == $1.value }
     }
 
     /// Parse the leading frontmatter block, or `nil` when the document does not
@@ -56,7 +55,7 @@ public struct Frontmatter: Sendable, Equatable {
         guard trimmed(ns, firstLine) == "---" else { return nil }
 
         var cursor = NSMaxRange(firstLine)
-        var fields: [(key: String, value: String)] = []
+        var fields: [Field] = []
         while cursor < ns.length {
             let line = ns.lineRange(for: NSRange(location: cursor, length: 0))
             let text = trimmed(ns, line)
@@ -73,7 +72,7 @@ public struct Frontmatter: Sendable, Equatable {
                 let key = String(text[text.startIndex..<colon]).trimmingCharacters(in: .whitespaces)
                 let value = String(text[text.index(after: colon)...])
                     .trimmingCharacters(in: .whitespaces)
-                if !key.isEmpty { fields.append((key, unquoted(value))) }
+                if !key.isEmpty { fields.append(Field(key: key, value: unquoted(value))) }
             }
             let next = NSMaxRange(line)
             guard next > cursor else { break }

@@ -91,9 +91,8 @@ public final class RectoTextStorage {
                 return false
             }
         }
-        // Assign last: `didSet` reconciles the editor, and it has just been
-        // patched, so there is nothing left for it to do.
-        markdown = updated
+        // The editor is already there; reconciling would only re-diff it.
+        withoutReconciling { markdown = updated }
         return true
     }
 
@@ -123,40 +122,7 @@ public final class RectoTextStorage {
 
     /// Bring the attached editor to `markdown` by patching the one changed run.
     private func reconcileEditor() {
-        guard !isReconciling, !isApplyingExternalEdit, controller.isAttached else { return }
-        let live = controller.text
-        guard live != markdown else { return }
-        let patch = TextSplice.between(live, and: markdown)
-        controller.applyPatch(range: patch.range, replacement: patch.replacement)
-    }
-}
-
-/// The one changed run between two strings, as a patch.
-///
-/// A common prefix/suffix scan, not a real diff: a document edit is one
-/// contiguous change often enough that the extra machinery would buy nothing,
-/// and a wrong answer here is still correct output (a larger replacement than
-/// necessary), only a bigger restyle.
-enum TextSplice {
-    static func between(_ old: String, and new: String) -> MarkdownTextPatch {
-        let oldNS = old as NSString
-        let newNS = new as NSString
-        var prefix = 0
-        let maxPrefix = min(oldNS.length, newNS.length)
-        while prefix < maxPrefix, oldNS.character(at: prefix) == newNS.character(at: prefix) {
-            prefix += 1
-        }
-        var suffix = 0
-        let maxSuffix = maxPrefix - prefix
-        while suffix < maxSuffix,
-              oldNS.character(at: oldNS.length - 1 - suffix)
-                == newNS.character(at: newNS.length - 1 - suffix) {
-            suffix += 1
-        }
-        return MarkdownTextPatch(
-            range: NSRange(location: prefix, length: oldNS.length - suffix - prefix),
-            replacement: newNS.substring(
-                with: NSRange(location: prefix, length: newNS.length - suffix - prefix))
-        )
+        guard !isReconciling, controller.isAttached else { return }
+        controller.applyText(markdown)
     }
 }

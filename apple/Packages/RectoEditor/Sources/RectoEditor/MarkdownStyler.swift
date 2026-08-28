@@ -109,14 +109,6 @@ public struct MarkdownStyler: Sendable, Equatable {
             highlightColor: theme.accent.withAlphaComponent(0.24)
         )
     }
-
-    public static func == (lhs: MarkdownStyler, rhs: MarkdownStyler) -> Bool {
-        lhs.presentation == rhs.presentation
-            && lhs.theme == rhs.theme
-            && lhs.typography == rhs.typography
-            && lhs.readingWidth == rhs.readingWidth
-            && lhs.undo == rhs.undo
-    }
 }
 
 /// Code-block face and fill. No syntax highlighting yet — language colouring
