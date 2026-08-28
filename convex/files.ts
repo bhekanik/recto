@@ -1,4 +1,6 @@
+import type { GenericMutationCtx } from "convex/server";
 import { v } from "convex/values";
+import type { DataModel, Id } from "./_generated/dataModel";
 import { internalMutation, mutation, query } from "./_generated/server";
 import { requireUserId } from "./documents";
 
@@ -15,6 +17,62 @@ export const generateUploadUrl = mutation({
 	handler: async (ctx) => {
 		await requireUserId(ctx); // single-user; only the owner may upload
 		return await ctx.storage.generateUploadUrl();
+	},
+});
+
+/**
+ * Record who owns a freshly uploaded blob, and hand back its servable URL.
+ *
+ * The signed-upload-URL pattern means the bytes never pass through a mutation,
+ * so this is the first moment the server learns the storage id exists. Without
+ * it a blob has no owner at all: account deletion would have to guess from
+ * "whose markdown mentions this URL", which deletes someone else's file as soon
+ * as a URL is shared and misses files referenced only from history (ADR-21).
+ *
+ * Replaces the `getImageUrl` round trip the upload path used to make — same one
+ * call, now with ownership recorded. Idempotent on `storageId`.
+ */
+export const registerUpload = mutation({
+	args: { storageId: v.id("_storage") },
+	handler: async (ctx, args) => {
+		const userId = await requireUserId(ctx);
+
+		const existing = await ctx.db
+			.query("blobs")
+			.withIndex("by_storage", (q) => q.eq("storageId", args.storageId))
+			.unique();
+		if (!existing) {
+			await ctx.db.insert("blobs", {
+				storageId: args.storageId,
+				ownerUserId: userId,
+				kind: "upload",
+				createdAt: Date.now(),
+			});
+		}
+
+		return await ctx.storage.getUrl(args.storageId);
+	},
+});
+
+/**
+ * Record ownership of a generated export blob. Called by the `export.docx`
+ * action, which cannot write to the database itself; `userId` comes from the
+ * JWT the action already verified, never from a caller argument.
+ */
+export const registerExport = internalMutation({
+	args: { storageId: v.id("_storage"), userId: v.string() },
+	handler: async (ctx, args) => {
+		const existing = await ctx.db
+			.query("blobs")
+			.withIndex("by_storage", (q) => q.eq("storageId", args.storageId))
+			.unique();
+		if (existing) return;
+		await ctx.db.insert("blobs", {
+			storageId: args.storageId,
+			ownerUserId: args.userId,
+			kind: "export",
+			createdAt: Date.now(),
+		});
 	},
 });
 
@@ -85,6 +143,7 @@ export const orphanSweep = internalMutation({
 				(text) => (!!segment && text.includes(segment)) || text.includes(id),
 			);
 			if (!referenced) {
+				await deleteBlobRow(ctx, file._id);
 				await ctx.storage.delete(file._id);
 				deleted += 1;
 			}
@@ -106,8 +165,25 @@ export const orphanSweep = internalMutation({
 export const deleteStoredFile = internalMutation({
 	args: { storageId: v.id("_storage") },
 	handler: async (ctx, args) => {
+		await deleteBlobRow(ctx, args.storageId);
 		const existing = await ctx.db.system.get(args.storageId);
 		if (existing === null) return;
 		await ctx.storage.delete(args.storageId);
 	},
 });
+
+/**
+ * Drop the ownership row for a blob that is going away. Every path that deletes
+ * a stored file goes through this, or `blobs` accumulates rows pointing at
+ * storage ids that no longer exist and the account purge keeps "finding" work.
+ */
+export async function deleteBlobRow(
+	ctx: GenericMutationCtx<DataModel>,
+	storageId: Id<"_storage">,
+): Promise<void> {
+	const row = await ctx.db
+		.query("blobs")
+		.withIndex("by_storage", (q) => q.eq("storageId", storageId))
+		.unique();
+	if (row) await ctx.db.delete(row._id);
+}

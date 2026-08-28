@@ -1,6 +1,6 @@
 "use client";
 
-import { useConvex, useMutation, useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Skeleton } from "@/components/ui/skeleton";
@@ -109,18 +109,19 @@ export function PaneEditor({
 	// URL resolve happens inside an event handler, so use the imperative client
 	// (not a reactive useQuery).
 	const generateUploadUrl = useMutation(api.files.generateUploadUrl);
-	const convex = useConvex();
+	// registerUpload, not getImageUrl: the same round trip, but it also records
+	// who owns the blob, which is the only way account deletion can find it
+	// later (ADR-21).
+	const registerUpload = useMutation(api.files.registerUpload);
 	const handleUploadImage = useCallback(
 		(file: File | Blob) =>
 			uploadImage({
 				file,
 				generateUploadUrl,
 				resolveUrl: (storageId) =>
-					convex.query(api.files.getImageUrl, {
-						storageId: storageId as Id<"_storage">,
-					}),
+					registerUpload({ storageId: storageId as Id<"_storage"> }),
 			}),
-		[generateUploadUrl, convex],
+		[generateUploadUrl, registerUpload],
 	);
 
 	// Milkdown reports frontmatter on every seed. While the writer is editing the

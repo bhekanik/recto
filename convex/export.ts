@@ -86,6 +86,22 @@ export const docx = action({
 		}
 
 		const storageId = await ctx.storage.store(new Blob([bytes]));
+
+		// Ownership BEFORE the URL is handed out. A generated `.docx` is served
+		// from a bearer URL and is referenced by no markdown anywhere, so if this
+		// row is missing the account purge has no way to find the file and it
+		// stays fetchable after the account is gone. If the registration fails the
+		// blob is deleted immediately rather than left unattributed.
+		try {
+			await ctx.runMutation(internal.files.registerExport, {
+				storageId,
+				userId: identity.subject,
+			});
+		} catch (error) {
+			await ctx.runMutation(internal.files.deleteStoredFile, { storageId });
+			throw error;
+		}
+
 		const url = await ctx.storage.getUrl(storageId);
 		if (url === null) {
 			// Storing succeeded but the file is unreadable; leaving it behind would
