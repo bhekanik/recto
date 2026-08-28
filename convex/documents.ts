@@ -15,8 +15,33 @@ type MutationCtx = GenericMutationCtx<
  * by documents.updateMarkdown and review.ts (suggester/AI branch writes).
  */
 export const MAX_MARKDOWN_LENGTH = 950_000;
+
+/**
+ * UTF-8 byte length. The Convex ceiling is on encoded bytes, not JS characters,
+ * so `"漢".repeat(400_000)` is 400k characters and 1.2 MB — under any
+ * `.length` check and over the real limit.
+ */
+export function utf8Length(value: string): number {
+	return new TextEncoder().encode(value).length;
+}
+
 export const MARKDOWN_TOO_LARGE_MESSAGE =
 	"Document exceeds the ~1 MiB size limit; split it into multiple documents.";
+
+/**
+ * Client-generated ids are ULIDs (26 chars) but legacy roots are UUIDs, so the
+ * shape is not pinned — only that an id is a plausible non-empty identifier.
+ * `v.string()` accepts "", which would otherwise let a malformed payload insert
+ * an empty node id or point a document at no node at all.
+ */
+const MAX_ID_LENGTH = 64;
+
+function requireId(value: string, field: string): string {
+	if (value.length === 0 || value.length > MAX_ID_LENGTH) {
+		throw new Error(`Invalid ${field}`);
+	}
+	return value;
+}
 
 /** Resolve the authenticated Clerk user id (JWT subject) or throw. */
 export async function requireUserId(
@@ -76,6 +101,12 @@ export const get = query({
 			markdown: doc.markdown,
 			wordCount: doc.wordCount,
 			currentNodeId: doc.currentNodeId,
+			// undefined means the stored markdown's provenance is unknown, which
+			// clients must treat as untrusted rather than as "belongs to the head".
+			markdownHeadNodeId: doc.markdownHeadNodeId,
+			// Rows predating pointerRevision read as 0; the first pointer write
+			// bumps them to 1, so clients never have to handle a missing value.
+			pointerRevision: doc.pointerRevision ?? 0,
 			createdAt: doc.createdAt,
 			updatedAt: doc.updatedAt,
 		};
@@ -184,17 +215,37 @@ export const updateCurrentNodeId = mutation({
 		updatedAt: v.number(),
 	},
 	handler: async (ctx, args) => {
+		requireId(args.currentNodeId, "currentNodeId");
 		const doc = await requireOwnedDocument(ctx, args.documentId);
+
+		// The pointer may only name a node that exists. This used to race the
+		// fire-and-forget append that created it; it no longer can. A navigation
+		// flushes any open draft first, and Convex delivers one client's
+		// mutations in order, so the commitEdit that creates a node is always
+		// applied before the pointer write that follows it.
+		const target = await ctx.db
+			.query("docNodes")
+			.withIndex("by_document_node", (q) =>
+				q.eq("documentId", args.documentId).eq("nodeId", args.currentNodeId),
+			)
+			.unique();
+		if (!target) throw new Error("Unknown currentNodeId");
+
 		// Same ~1 MiB guard as updateMarkdown — the materialized markdown is stored
-		// on the documents row here too. (Node-existence of currentNodeId is NOT
-		// checked: the client appends the node fire-and-forget and writes this
-		// pointer on a debounce, so a strict check would race a legitimate write.)
-		if (args.markdown.length > MAX_MARKDOWN_LENGTH) {
+		// on the documents row here too.
+		if (utf8Length(args.markdown) > MAX_MARKDOWN_LENGTH) {
 			throw new Error(MARKDOWN_TOO_LARGE_MESSAGE);
 		}
 
+		const pointerRevision = (doc.pointerRevision ?? 0) + 1;
 		if (args.updatedAt < doc.updatedAt) {
-			return { applied: false, currentNodeId: doc.currentNodeId };
+			// Rejected: hand back the head that won, so the caller can queue it
+			// instead of guessing.
+			return {
+				applied: false as const,
+				currentNodeId: doc.currentNodeId,
+				pointerRevision: doc.pointerRevision ?? 0,
+			};
 		}
 		const updatedAt = Date.now();
 		await ctx.db.patch(args.documentId, {
@@ -202,8 +253,197 @@ export const updateCurrentNodeId = mutation({
 			markdown: args.markdown,
 			wordCount: args.wordCount,
 			updatedAt,
+			pointerRevision,
+			// This writes the materialization of the node it is pointing at.
+			markdownHeadNodeId: args.currentNodeId,
 		});
-		return { applied: true, currentNodeId: args.currentNodeId, updatedAt };
+		return {
+			applied: true as const,
+			currentNodeId: args.currentNodeId,
+			updatedAt,
+			pointerRevision,
+		};
+	},
+});
+
+/**
+ * Commit one undo-tree node AND the document state it produces, atomically.
+ *
+ * Replaces the three independent writes an edit used to make — `docNodes.append`
+ * (fire-and-forget), `documents.updateCurrentNodeId` (debounced 1200ms) and
+ * `documents.updateMarkdown` (debounced 500ms). Splitting them meant the server
+ * could sit in a state no client ever intended: a node present with the pointer
+ * still on its parent, or `updatedAt` advanced by a markdown write while
+ * `currentNodeId` lagged. A client watching that intermediate state read its own
+ * un-published pointer move as a remote one and walked the pointer backwards
+ * (plan 022). One transaction removes the intermediate state entirely.
+ *
+ * Concurrency contract, for the offline outbox the native clients replay through
+ * (plan 023 §4.1):
+ *  - The node row is inserted regardless of the head check. The DAG is
+ *    append-only and conflict-free, so a node is never wrong — only the pointer
+ *    can be contended, and dropping the row would lose the writer's text.
+ *  - `expectedHeadNodeId` is the parent the caller committed onto. If the
+ *    document head has moved elsewhere, the pointer/markdown are left alone and
+ *    `{committed: false, diverged: true, remoteHeadNodeId}` is returned; the
+ *    caller resolves it (the web adopts the remote head — the local node stays
+ *    reachable in the history panel).
+ *  - Retries are safe: replaying the same `clientMutationId`, or a commit whose
+ *    node is already the head, returns the original success instead of a
+ *    spurious divergence.
+ *
+ * REPLAY WINDOW — clients must retry a commit until it is acknowledged before
+ * sending the next one. Only the MOST RECENT commit is replay-safe:
+ * `documents.lastCommit` remembers one `clientMutationId`, so an outbox that
+ * pipelines commits and later replays an older one — whose node landed but
+ * whose head has since advanced — gets `diverged` rather than its original
+ * answer. A strictly sequential outbox that only ever retries the head of its
+ * queue never sees this. Widening it means a per-document log of recent
+ * mutation ids, which nothing needs yet.
+ *
+ * Only SUCCESSFUL commits are recorded for replay. A divergence response that
+ * never reached the caller, retried later once the head has returned to
+ * `expectedHeadNodeId`, will commit — the caller asked to commit onto that head
+ * and that head is current, so committing is the correct answer, not a
+ * duplicate.
+ */
+export const commitEdit = mutation({
+	args: {
+		documentId: v.id("documents"),
+		node: v.object({
+			nodeId: v.string(),
+			parentNodeId: v.union(v.string(), v.null()),
+			patch: v.string(),
+			snapshot: v.optional(v.string()),
+			selection: v.union(
+				v.object({ anchor: v.number(), head: v.number() }),
+				v.null(),
+			),
+			origin: v.string(),
+			createdAt: v.number(),
+		}),
+		markdown: v.string(),
+		wordCount: v.number(),
+		/** The document head the caller believes it is committing onto. */
+		expectedHeadNodeId: v.string(),
+		/** Caller-generated idempotency key for this commit attempt. */
+		clientMutationId: v.string(),
+	},
+	handler: async (ctx, args) => {
+		requireId(args.node.nodeId, "node.nodeId");
+		requireId(args.expectedHeadNodeId, "expectedHeadNodeId");
+		requireId(args.clientMutationId, "clientMutationId");
+		if (args.node.parentNodeId !== null) {
+			requireId(args.node.parentNodeId, "node.parentNodeId");
+		}
+		// An empty patch cannot be applied, so it would poison every
+		// materialization that walks through this node.
+		if (args.node.patch.length === 0) throw new Error("Invalid node.patch");
+
+		const doc = await requireOwnedDocument(ctx, args.documentId);
+
+		// Replay of an attempt we already answered — return the same answer.
+		if (doc.lastCommit?.clientMutationId === args.clientMutationId) {
+			return {
+				committed: true as const,
+				headNodeId: doc.lastCommit.headNodeId,
+				updatedAt: doc.lastCommit.updatedAt,
+				pointerRevision:
+					doc.lastCommit.pointerRevision ?? doc.pointerRevision ?? 0,
+			};
+		}
+
+		// Same ~1 MiB ceiling as updateMarkdown (blueprint 03 §5), applied to both
+		// rows this mutation writes. The docNodes row is measured as patch +
+		// snapshot together because Convex counts the whole document against the
+		// limit — checked here so an oversized node fails with this message rather
+		// than blowing up opaquely inside the transaction.
+		const nodeRowBytes =
+			utf8Length(args.node.patch) +
+			(args.node.snapshot ? utf8Length(args.node.snapshot) : 0);
+		if (
+			utf8Length(args.markdown) > MAX_MARKDOWN_LENGTH ||
+			nodeRowBytes > MAX_MARKDOWN_LENGTH
+		) {
+			throw new Error(MARKDOWN_TOO_LARGE_MESSAGE);
+		}
+
+		// A node's parent IS the head it was committed onto; a caller that names
+		// one head and parents the node on another would leave the DAG
+		// mis-parented or detached, so refuse before anything is written.
+		if (args.node.parentNodeId !== args.expectedHeadNodeId) {
+			throw new Error(
+				"commitEdit: node.parentNodeId must equal expectedHeadNodeId",
+			);
+		}
+
+		const existing = await ctx.db
+			.query("docNodes")
+			.withIndex("by_document_node", (q) =>
+				q.eq("documentId", args.documentId).eq("nodeId", args.node.nodeId),
+			)
+			.unique();
+		if (!existing) {
+			await ctx.db.insert("docNodes", {
+				documentId: args.documentId,
+				...args.node,
+			});
+		}
+
+		// The commit already landed (an earlier attempt got through); don't read
+		// the advanced head as someone else's write. Record THIS attempt's id too:
+		// if this answer is lost and another client moves the head before the
+		// retry, the retry must replay the success, not see a divergence.
+		if (doc.currentNodeId === args.node.nodeId) {
+			const pointerRevision = doc.pointerRevision ?? 0;
+			await ctx.db.patch(args.documentId, {
+				lastCommit: {
+					clientMutationId: args.clientMutationId,
+					headNodeId: doc.currentNodeId,
+					updatedAt: doc.updatedAt,
+					pointerRevision,
+				},
+			});
+			return {
+				committed: true as const,
+				headNodeId: doc.currentNodeId,
+				updatedAt: doc.updatedAt,
+				pointerRevision,
+			};
+		}
+
+		if (doc.currentNodeId !== args.expectedHeadNodeId) {
+			return {
+				committed: false as const,
+				diverged: true as const,
+				remoteHeadNodeId: doc.currentNodeId,
+				remotePointerRevision: doc.pointerRevision ?? 0,
+			};
+		}
+
+		const updatedAt = Date.now();
+		const pointerRevision = (doc.pointerRevision ?? 0) + 1;
+		await ctx.db.patch(args.documentId, {
+			currentNodeId: args.node.nodeId,
+			markdown: args.markdown,
+			wordCount: args.wordCount,
+			updatedAt,
+			pointerRevision,
+			markdownHeadNodeId: args.node.nodeId,
+			lastCommit: {
+				clientMutationId: args.clientMutationId,
+				headNodeId: args.node.nodeId,
+				updatedAt,
+				pointerRevision,
+			},
+		});
+
+		return {
+			committed: true as const,
+			headNodeId: args.node.nodeId,
+			updatedAt,
+			pointerRevision,
+		};
 	},
 });
 
@@ -230,6 +470,13 @@ export const updateMarkdown = mutation({
 		wordCount: v.number(),
 		expectedUpdatedAt: v.number(),
 		title: v.optional(v.string()),
+		/**
+		 * The undo-tree head the caller's text belongs to. Optional so the
+		 * previously-deployed client keeps working; when given, a head that has
+		 * moved elsewhere means this draft is written against someone else's
+		 * branch and must not overwrite theirs.
+		 */
+		expectedHeadNodeId: v.optional(v.string()),
 	},
 	handler: async (ctx, args) => {
 		const doc = await requireOwnedDocument(ctx, args.documentId);
@@ -237,12 +484,30 @@ export const updateMarkdown = mutation({
 		// Guard the Convex ~1 MiB per-value ceiling (blueprint 03 §5). Book-length
 		// manuscripts are an explicit non-goal; fail loudly rather than let Convex
 		// reject the whole mutation opaquely. The editor keeps the text locally.
-		if (args.markdown.length > MAX_MARKDOWN_LENGTH) {
+		if (utf8Length(args.markdown) > MAX_MARKDOWN_LENGTH) {
 			throw new Error(MARKDOWN_TOO_LARGE_MESSAGE);
 		}
 
+		// A diverged head is NOT retryable: the stale-updatedAt retry loop below
+		// would otherwise keep re-writing this device's draft on top of whichever
+		// branch won, leaving documents.markdown detached from currentNodeId.
+		if (
+			args.expectedHeadNodeId !== undefined &&
+			doc.currentNodeId !== args.expectedHeadNodeId
+		) {
+			return {
+				updatedAt: doc.updatedAt,
+				stale: true as const,
+				headMoved: true as const,
+			};
+		}
+
 		if (doc.updatedAt !== args.expectedUpdatedAt) {
-			return { updatedAt: doc.updatedAt, stale: true };
+			return {
+				updatedAt: doc.updatedAt,
+				stale: true as const,
+				headMoved: false as const,
+			};
 		}
 
 		const updatedAt = Date.now();
@@ -251,10 +516,16 @@ export const updateMarkdown = mutation({
 			wordCount: number;
 			updatedAt: number;
 			title?: string;
+			markdownHeadNodeId?: string;
 		} = {
 			markdown: args.markdown,
 			wordCount: args.wordCount,
 			updatedAt,
+			// A caller that passed the compare-and-set has proven which head this
+			// text belongs to. A legacy caller has not, so its write CLEARS any
+			// stamp — leaving a stale one would let another device promote text
+			// into a branch it never belonged to (ADR-19, deployment window).
+			markdownHeadNodeId: args.expectedHeadNodeId,
 		};
 		if (args.title !== undefined) {
 			patch.title = args.title.trim() || "Untitled";
@@ -262,6 +533,6 @@ export const updateMarkdown = mutation({
 
 		await ctx.db.patch(args.documentId, patch);
 
-		return { updatedAt, stale: false };
+		return { updatedAt, stale: false as const, headMoved: false as const };
 	},
 });
