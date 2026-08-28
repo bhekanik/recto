@@ -91,4 +91,33 @@ struct PatchTests {
     #expect(throws: PatchDecodingError.self) { try TextPatch.decode(#"{"from":0,"to":0}"#) }
     #expect(throws: PatchDecodingError.self) { try TextPatch.decode(#"{"from":0,"to":0,"insert":"a"#) }
   }
+
+  @Test(
+    "an out-of-range patch index is an error, not a trap",
+    arguments: [
+      // A valid JSON numeral whose `Double` is infinite. `Int(infinity)` traps,
+      // so one corrupt server node used to kill every native open.
+      #"{"from":0,"to":1e999,"insert":"a"}"#,
+      #"{"from":1e999,"to":1e999,"insert":"a"}"#,
+      // Finite but larger than `Int`.
+      #"{"from":0,"to":1e30,"insert":"a"}"#,
+      // Fractional and negative offsets are not patch coordinates.
+      #"{"from":0.5,"to":1,"insert":"a"}"#,
+      #"{"from":0,"to":1.5,"insert":"a"}"#,
+      #"{"from":-1,"to":1,"insert":"a"}"#,
+      #"{"from":0,"to":-1,"insert":"a"}"#,
+      // A range that runs backwards.
+      #"{"from":5,"to":2,"insert":"a"}"#,
+    ])
+  func invalidIndices(raw: String) {
+    #expect(throws: PatchDecodingError.self) { try TextPatch.decode(raw) }
+  }
+
+  @Test("a zero-width patch at the very end is still valid")
+  func boundaryIndicesAreAccepted() throws {
+    let patch = try TextPatch.decode(#"{"from":2,"to":2,"insert":"!"}"#)
+    #expect(patch.from == 2)
+    #expect(patch.to == 2)
+    #expect(try applyPatch("ab", patchRaw: patch.encoded) == "ab!")
+  }
 }

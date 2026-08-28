@@ -5,6 +5,9 @@ public enum PatchDecodingError: Error, Equatable, Sendable {
   case malformedJSON(String)
   case missingField(String)
   case illFormedResult
+  /// A `from`/`to` that is not a usable UTF-16 offset: infinite, NaN,
+  /// fractional, outside `Int`, negative, or a range that runs backwards.
+  case invalidIndex(String)
 }
 
 /// A JSON reader for the `{from, to, insert}` patch envelope.
@@ -29,7 +32,31 @@ enum PatchJSON {
     guard case .string(let insert)? = fields["insert"] else {
       throw PatchDecodingError.missingField("insert")
     }
-    return TextPatch(from: Int(from), to: Int(to), insert: insert)
+    let fromIndex = try offset(from, field: "from")
+    let toIndex = try offset(to, field: "to")
+    guard fromIndex <= toIndex else {
+      throw PatchDecodingError.invalidIndex("from \(fromIndex) is after to \(toIndex)")
+    }
+    return TextPatch(from: fromIndex, to: toIndex, insert: insert)
+  }
+
+  /// A patch coordinate, or an error.
+  ///
+  /// `docNodes.patch` is an opaque server string, so a corrupt or hand-written
+  /// node reaches this reader. `Int(_: Double)` traps on infinity and on
+  /// anything outside `Int` — a valid JSON numeral like `1e999` produces both —
+  /// which would kill the process on open instead of following the
+  /// malformed-payload path this type exists to provide.
+  private static func offset(_ value: Double, field: String) throws -> Int {
+    // `Int(exactly:)` rejects infinity, NaN, a fraction and an out-of-range
+    // magnitude in one step, and never traps.
+    guard let index = Int(exactly: value) else {
+      throw PatchDecodingError.invalidIndex("\(field) is not an integer offset: \(value)")
+    }
+    guard index >= 0 else {
+      throw PatchDecodingError.invalidIndex("\(field) is negative: \(index)")
+    }
+    return index
   }
 
   enum Value {
