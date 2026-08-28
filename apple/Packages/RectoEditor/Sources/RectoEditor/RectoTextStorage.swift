@@ -7,16 +7,28 @@ import AppKit
 import MarkdownEngine
 import Observation
 
-/// One open document's text, shared by every editor view showing it.
+/// One editor's text.
 ///
 /// The Markdown string is the document — there is no parallel model to keep in
 /// step. This type owns that string, hands edits to the attached editor as
 /// patches (never by reassigning the text, which would reset the caret), and
 /// re-reads the frontmatter when the header could have changed.
 ///
-/// One instance per document, not per view: two Mac windows on the same
-/// document share this and therefore share the caret-preserving edit path.
-/// Plan 023 allows that once `DocumentSession`'s tests pass.
+/// ### Two windows on one document
+///
+/// One storage drives one editor view. Marker hiding is a font size and a kern,
+/// so presentation-dependent styling is written into the text storage itself
+/// and two views over one storage overwrite each other's attributes — TextKit 2
+/// rendering attributes cannot collapse a marker's advance, so there is no
+/// overlay that would fix it.
+///
+/// A second window is therefore a second `RectoTextStorage`, and the app keeps
+/// the two in step with the halves this type already exposes: ``onEdit``
+/// publishes what the reader did, and ``apply(_:)`` takes what someone else
+/// did. The Mac app's `DocumentSession` integration will fan that patch stream
+/// out to every window's storage. Each window then has its own caret, scroll
+/// position, undo stack and presentation — one can be in raw while the other
+/// stays rich, which sharing a storage could never allow.
 @Observable
 @MainActor
 public final class RectoTextStorage {
@@ -44,13 +56,10 @@ public final class RectoTextStorage {
     @ObservationIgnored
     public let controller = MarkdownEditorController()
 
-    /// The engine's content storage for this document, once the editor is on
-    /// screen — one `NSTextContentStorage` per document, which is what makes
-    /// showing the same document in two windows cheap.
+    /// The engine's content storage, once the editor is on screen.
     ///
-    /// Read-only: layout and drawing belong to the engine. Exposed so a second
-    /// view can be attached to the same storage and so tests can assert the
-    /// string in the storage matches ``markdown`` byte for byte.
+    /// Read-only: layout and drawing belong to the engine. Exposed so tests can
+    /// assert the string in the storage matches ``markdown`` byte for byte.
     @ObservationIgnored
     public var contentStorage: NSTextContentStorage? {
         controller.textView?.textContentStorage

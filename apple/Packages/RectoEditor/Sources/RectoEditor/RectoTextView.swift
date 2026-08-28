@@ -15,25 +15,20 @@ import MarkdownEngine
 /// Everything stage 2 needs a text view for goes through here, so there is one
 /// place to look when the engine's ownership changes.
 ///
-/// **Bind it to one view.** A document can be open in several windows, and
-/// find, a vim key layer, typewriter scrolling and focus dimming all act on the
-/// window the reader is in — not on whichever view happened to attach last.
-/// `RectoEditorView` hands each of its instances its own handle through
-/// `onAttach`; `storage.textView` (no argument) resolves to the most recently
-/// attached view and is only right when the document has exactly one.
+/// A storage drives exactly one editor view, so there is nothing to
+/// disambiguate: find, a vim key layer, typewriter scrolling and focus dimming
+/// all act on this one. A second window on the same document is a second
+/// ``RectoTextStorage`` with a seam of its own — see that type for how the two
+/// are kept in step.
 ///
 /// Every member is inert while nothing is attached — an editor that has been
 /// scrolled out of existence answers `nil`/`false` rather than trapping.
 @MainActor
 public struct RectoTextView {
     private let controller: MarkdownEditorController
-    /// The view this handle speaks for. `nil` means "whichever is current",
-    /// which is what `storage.textView` gives you.
-    private weak var boundView: NSTextView?
 
-    init(controller: MarkdownEditorController, view: NSTextView? = nil) {
+    init(controller: MarkdownEditorController) {
         self.controller = controller
-        self.boundView = view
     }
 
     /// The live text view, or `nil` when no editor is on screen.
@@ -43,10 +38,7 @@ public struct RectoTextView {
     /// `textLayoutManager`, and the system text affordances — Writing Tools,
     /// dictation, Speak, Look Up, Services — which need nothing more than for
     /// this to be a real `NSTextView`.
-    public var nsTextView: NSTextView? { boundView ?? controller.textView }
-
-    /// Every view showing this document. `nsTextView` is one of them.
-    public var allTextViews: [NSTextView] { controller.textViews }
+    public var nsTextView: NSTextView? { controller.textView }
 
     /// The scroll view the editor lives in — the `NSTextFinderBarContainer`,
     /// and what typewriter scrolling drives.
@@ -59,12 +51,11 @@ public struct RectoTextView {
         nsTextView?.textLayoutManager
     }
 
-    /// One `NSTextContentStorage` per document.
-    /// One per document, shared by every view of it.
+    /// The document's `NSTextContentStorage`, owned by the controller rather
+    /// than auto-created by the view.
     public var textContentStorage: NSTextContentStorage { controller.textContentStorage }
 
     /// Selection in UTF-16 display coordinates.
-    /// This view's selection. Each window has its own.
     public var selectedRange: NSRange {
         get { nsTextView?.selectedRange() ?? NSRange(location: 0, length: 0) }
         nonmutating set { nsTextView?.setSelectedRange(newValue) }

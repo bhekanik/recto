@@ -26,11 +26,9 @@ public struct RectoEditorView: View {
 
     private let onAttach: ((RectoTextView?) -> Void)?
 
-    /// - Parameter onAttach: Called with a handle bound to THIS view when it
-    ///   appears, and `nil` when it goes. Find, a vim key layer, typewriter
-    ///   scrolling and focus dimming all act on the window the reader is in, so
-    ///   they need this rather than `storage.textView`, which resolves to
-    ///   whichever view attached last.
+    /// - Parameter onAttach: Called with the AppKit seam when the editor
+    ///   appears, and `nil` when it goes — the moment to install find, a vim key
+    ///   layer or typewriter scrolling, rather than polling `storage.textView`.
     public init(storage: RectoTextStorage, styler: MarkdownStyler,
                 placeholder: String? = nil,
                 onAttach: ((RectoTextView?) -> Void)? = nil) {
@@ -79,17 +77,25 @@ public struct RectoEditorView: View {
             onTextMutation: { storage.editorDidMutate($0) },
             placeholder: placeholderText
         )
-        .onAppear { announceAttachment() }
-        .onDisappear { onAttach?(nil) }
+        .onAppear { observeAttachment() }
     }
 
-    /// The engine attaches its text view during `makeNSView`, which SwiftUI
-    /// runs before `onAppear`, so by here there is a view to bind to.
-    private func announceAttachment() {
-        guard let onAttach else { return }
-        onAttach(storage.controller.textView.map {
-            RectoTextView(controller: storage.controller, view: $0)
-        })
+    /// `onAppear` runs after the first attachment. Keeping the callback on the
+    /// controller also covers remount handover, where SwiftUI builds the
+    /// replacement before dismantling the old view and does not call
+    /// `onAppear` again after the replacement takes ownership.
+    private func observeAttachment() {
+        let controller = storage.controller
+        controller.onAttach = onAttach.map { callback in
+            { [weak controller] textView in
+                guard let controller, textView != nil else {
+                    callback(nil)
+                    return
+                }
+                callback(RectoTextView(controller: controller))
+            }
+        }
+        onAttach?(controller.isAttached ? storage.textView : nil)
     }
 
     private var placeholderText: NSAttributedString? {
@@ -102,16 +108,6 @@ public struct RectoEditorView: View {
 }
 
 public extension RectoTextStorage {
-    /// The AppKit seam for the document's CURRENT view.
-    ///
-    /// Right when the document is open in one window. When it is open in
-    /// several, anything acting on "the window the reader is in" — find, a vim
-    /// key layer, typewriter scrolling, focus dimming — must take the
-    /// view-bound handle `RectoEditorView` hands it through `onAttach` instead.
+    /// The AppKit seam for this storage's editor.
     var textView: RectoTextView { RectoTextView(controller: controller) }
-
-    /// A seam bound to one specific view of this document.
-    func textView(for view: NSTextView) -> RectoTextView {
-        RectoTextView(controller: controller, view: view)
-    }
 }

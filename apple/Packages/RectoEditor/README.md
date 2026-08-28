@@ -39,6 +39,23 @@ storage.apply(MarkdownTextPatch(range: range, replacement: text))
 storage.markdown = canonicalised
 ```
 
+### Two windows on one document
+
+One storage drives one editor view. A second window is a second
+`RectoTextStorage`. `onEdit` publishes what the reader did and `apply` takes a
+patch from elsewhere. The Mac app's `DocumentSession` integration will use
+those two halves to keep every window on the document in step.
+
+Why not share one storage between the windows? Because marker hiding is a font
+size and a kern, so presentation-dependent styling is written into the text
+storage itself and two views over it overwrite each other's attributes — and
+TextKit 2 rendering attributes cannot collapse a marker's advance, so there is no
+overlay that would fix it.
+
+What that buys, rather than costs: each window gets its own caret, scroll
+position, undo stack **and presentation**. One window can be in raw while the
+other stays rich — which sharing a storage could never allow.
+
 Reaching the AppKit layer (find, a key layer, typewriter scroll, a
 caret-anchored popover):
 
@@ -58,7 +75,7 @@ seam.caretRect()
 | `MarkdownStyler` | Recto's opinion in one value; `engineConfiguration()` turns it into the engine's `MarkdownEditorConfiguration`. Nothing else should build one by hand. |
 | `RectoTypography` | The design plan's two scales: prose (Source Serif 4, 19 pt) and source (JetBrains Mono, 17.5 pt), both at 1.6 line height, headings 1.7/1.42/1.22/1.08/1/1 em at 700, tracking −0.015 em. `scale` is the reader's text-size control, clamped 0.8–2.0. |
 | `RectoEditorTheme` | Semantic colour slots — `canvas`, `sheet`, `raised`, `ink`/`ink2`/`ink3`, `line`, `accent`, `accent2`, `selection`, `caret` — with Twilight (dark) and Paper (light) defaults converted from `packages/design-tokens/tokens.json`. The Mac app maps that package's `Colors.xcassets` in instead, so the system resolves light/dark; these defaults serve tests and previews, and a test holds the OKLCH conversion to the same sRGB bytes the token pipeline generates. |
-| `RectoTextStorage` | One open document: the string, the frontmatter, the edit path, and (through the engine) one `NSTextContentStorage`. One instance per document, not per view — two windows on the same document share it. |
+| `RectoTextStorage` | One editor: the string, the frontmatter, the edit path, and (through the engine) one `NSTextContentStorage`. One instance per editor view — a second window on the same document is a second instance, kept in step by patches. See [Two windows on one document](#two-windows-on-one-document). |
 | `RectoTextView` | The AppKit seam. A facade over the engine's `MarkdownEditorController`, not an `NSTextView` subclass: the engine builds and owns the text view because it needs its own TextKit 2 stack and layout-fragment subclass. |
 | `RectoEditorView` | The SwiftUI view. Composes the engine's `NativeTextViewWrapper` (which is the `NSViewRepresentable`) rather than re-implementing it. |
 | `Frontmatter` | The leading `---` block as data for the document header: `title`, `subtitle`, `subject`, `preview`, plus every top-level `key: value` in document order. Reached from `storage.frontmatter`. Top-level scalars only — full YAML is the canonical parser's job. |
@@ -219,28 +236,35 @@ renders them is stage 2; the data it will read is here now, and
   newline starts a new line fragment whatever font it is set in, so shrinking
   the characters of a frontmatter block or a setext underline would leave the
   empty lines behind. The engine collapses those lines' paragraph style too.
-- **One `NSTextContentStorage` per document, not per view.** `RectoTextStorage`
-  holds a `MarkdownEditorController`, and the controller owns the storage; every
-  `RectoEditorView` on it gets its own layout manager, container and selection.
-  Two windows on one document therefore share the characters and the attributes,
-  and an edit through either is immediately the other's.
-- **One controller means one presentation**, enforced at attach. Marker hiding is
-  a font size and a kern — it changes *layout*, not just colour — so it cannot be
+- **One `NSTextContentStorage` per controller.**
+  `RectoTextStorage` holds a `MarkdownEditorController`, and the controller owns
+  the storage rather than letting `NSTextView` auto-create one. That is what lets
+  a window be pointed at a different document by moving its layout manager,
+  instead of rebuilding the window around it.
+- **One attached view per controller**, enforced at attach. Marker hiding is a
+  font size and a kern — it changes *layout*, not just colour — so it cannot be
   moved into a per-layout-manager rendering-attributes overlay, because rendering
   attributes do not affect layout. Presentation-dependent styling therefore has
-  to be written into the shared storage, and a rich view and a raw view of one
-  document would overwrite each other. Show a document in two presentations by
-  giving each its own `RectoTextStorage`. Two views in the *same* presentation
-  are fine and share reveal state: marker reveal follows whichever view moved its
-  selection last. Splitting the styler into document-shared base attributes and a
-  per-view overlay needs a hiding technique that does not affect layout — a
-  stage-2 design question, not a patch.
-- **A view the document refuses is isolated, not broken.** Admission is decided
-  before the view touches the shared storage; a refused one gets a text storage
-  of its own, shows the text it was given, and reaches nobody. The request is
-  remembered and applied when the lock lifts — removing the blocking peer and
-  switching the survivor's presentation can arrive in one SwiftUI transaction,
-  and then no further update pass comes to notice the peer has gone.
+  to be written into the storage itself, and two views over one storage overwrite
+  each other's attributes. Two presentations over one storage was never
+  reachable, so the engine no longer pretends: a second `attach` returns `false`,
+  and the refused view keeps a TextKit stack of its own, publishes nothing to the
+  binding or the edit feed, and reaches nothing.
+- **A remount hands the controller over rather than orphaning the replacement.**
+  SwiftUI builds a remount's replacement *before* dismantling the original —
+  measured order `make(new) → update(new) → dismantle(old)` — and sends the
+  replacement no further update pass. So a view refused at build time can never
+  re-ask; releasing the controller pushes it to the view that was waiting.
+  Without that, a remount left a live editor that reached nothing: no
+  `applyPatch`, no seam, no find, no typewriter scrolling.
+- **A presentation switch runs as one transition.** `applyPresentationChange`
+  does the whole thing: AppKit's five input rewrites off (or restored from the
+  snapshot taken on the way in), `rawSourceMode` synced onto both the
+  coordinator's configuration and the view's, undo coalescing closed and the
+  document's undo stack cleared, a full rebuild, and — leaving raw — the
+  caret-dependent autocorrect settings recomputed. Splitting it is how a raw
+  editor ended up still substituting quotes and replacing text inside Markdown
+  source.
 - **Switching which document a window shows resets the selection twice.** A
   selection from the outgoing document can be out of range for the incoming one,
   and AppKit fixes attributes over the selected range on the next attribute
@@ -248,23 +272,14 @@ renders them is stage 2; the data it will read is here now, and
   manager moves and once after, because detaching leaves the view with no
   content manager and the selection it reads back is neither zero nor in range.
   The outgoing selection is remembered per document and restored, clamped.
-- **The presentation lock is asked before anything moves.** `canPresent(rawSourceMode:isEditable:from:)`
-  is consulted at the top of the update pass, and a refusal stops the
-  transition and the rebuild. A document whose only view is the one asking may
-  change presentation freely — switching the lens in one window is the ordinary
-  case.
-- **Closing one window must not detach the others.** `controller.detach(textView:)`
-  removes one attachment (and its layout manager from the storage); `textViews`
-  lists them all.
-- **Bind the seam to a view.** `RectoEditorView`'s `onAttach` hands each instance
-  a `RectoTextView` bound to that view. `storage.textView` resolves to whichever
-  attached last and is only right for a single-window document — find, a vim key
-  layer, typewriter scrolling and focus dimming all act on the window the reader
-  is in.
-- **An edit through one view invalidates every other view's parse.** The parse
-  caches key on a per-coordinator counter and on the document's length, and a
-  same-length edit (`*a*` → `**a`) moves neither, so a second window styled
-  syntax that was no longer there.
+- **Ownership is settled before anything moves.** Whether a view gets the
+  controller is decided in `makeNSView`, before its layout manager joins the
+  document's storage and before `textView.string` is written — deciding after
+  would mean a refused view had already overwritten the document.
+- **The seam has one view to answer for.** `storage.textView` is the editor;
+  `RectoEditorView`'s `onAttach` hands the same handle over at the moment it
+  appears, which is when find, a vim key layer or typewriter scrolling should be
+  installed.
 - **Focus dimming cannot use `setRenderingAttributes`.** Task boxes, ordered
   numbers and table bitmaps are drawn by the fragment; a colour attribute cannot
   recolour them. Stage 2 wraps the fragment draw in a CGContext transparency
@@ -285,9 +300,6 @@ drives `applyPatch` for undo and redo.
 
 Three review findings are deliberately stage 2:
 
-Two review findings are deliberately stage 2, because both need a
-source-to-visible range map that does not exist yet:
-
 - **VoiceOver reads the raw Markdown.** Marker hiding is font, kern and colour;
   the accessibility value is still the source, delimiters and hidden URLs
   included, and frontmatter is read out as YAML. Rich and preview need a
@@ -297,8 +309,13 @@ source-to-visible range map that does not exist yet:
   find search the raw string, so searching preview for `**` or a hidden URL
   reports matches and highlights a zero-width range. Rich and preview need to
   search a visible-text projection and map results back to source coordinates.
-- **`onAttach` can hand back another window's view** when two wrappers mount in
-  one update pass, because it resolves through the controller rather than the
-  wrapper that built the view. Attachment should be delivered by that wrapper,
-  with a token identifying it. Related: selection delegate callbacks can fire
-  against the outgoing document's closure during a controller transfer.
+- **A controller transfer fires the outgoing document's selection callback.**
+  The two `setSelectedRange` calls that keep the swap in range run delegate
+  selection callbacks synchronously, and the coordinator still holds the old
+  document's `onCodeBlockSelectionChange` at that point, so an embedder can
+  persist the incoming document's code-block geometry into the outgoing
+  window's state. Recto does not wire that callback in stage 1. The fix is to
+  suppress selection work for the whole detach-adopt-rebuild sequence and
+  replay one update after the new document is built.
+
+The first two need a source-to-visible range map that does not exist yet.

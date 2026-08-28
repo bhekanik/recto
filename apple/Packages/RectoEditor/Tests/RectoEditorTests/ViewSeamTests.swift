@@ -2,10 +2,11 @@
 //  ViewSeamTests.swift
 //  RectoEditorTests
 //
-//  A document can be open in several windows, and find, a vim key layer,
-//  typewriter scrolling and focus dimming all act on the window the reader is
-//  in. A seam that resolves to "whichever view attached last" sends all four to
-//  the wrong window.
+//  `RectoTextView` is the one place the app reaches past SwiftUI into AppKit —
+//  find, a vim key layer, typewriter scrolling, focus dimming, the caret-
+//  following popovers. A storage drives one editor, so the seam has one view to
+//  answer for; what these hold is that it answers for the RIGHT one, and that
+//  it stays inert rather than trapping when there is none.
 //
 
 import AppKit
@@ -16,84 +17,94 @@ import Testing
 @testable import RectoEditor
 
 @MainActor
-@Suite("View-scoped seam")
+@Suite("Editor seam")
 struct ViewSeamTests {
 
-    /// Two views of one document, the way two windows would be.
-    private func twoViews(_ markdown: String) -> (RectoTextStorage, NSTextView, NSTextView) {
+    /// One storage with an editor attached, the way a window would.
+    private func attachedEditor(_ markdown: String) -> (RectoTextStorage, NSTextView) {
         _ = NSApplication.shared
         let storage = RectoTextStorage(documentId: "seam", markdown: markdown)
         let styler = MarkdownStyler(presentation: .rich, theme: .twilight)
-
-        func addView() -> NSTextView {
-            let wrapper = NativeTextViewWrapper(
-                text: .constant(markdown),
-                configuration: styler.engineConfiguration(),
-                controller: storage.controller,
-                fontName: styler.typography.family,
-                fontSize: styler.typography.resolvedSize,
-                documentId: storage.documentId,
-                isEditable: true)
-            let coordinator = wrapper.makeCoordinator()
-            let layoutManager = NSTextLayoutManager()
-            let container = NSTextContainer(
-                size: NSSize(width: 600, height: CGFloat.greatestFiniteMagnitude))
-            layoutManager.textContainer = container
-            storage.controller.textContentStorage.addTextLayoutManager(layoutManager)
-            let view = NSTextView(frame: NSRect(x: 0, y: 0, width: 600, height: 400),
-                                  textContainer: container)
-            view.isEditable = true
-            coordinator.adopt(view, text: markdown)
-            return view
-        }
-        return (storage, addView(), addView())
+        let wrapper = NativeTextViewWrapper(
+            text: .constant(markdown),
+            configuration: styler.engineConfiguration(),
+            controller: storage.controller,
+            fontName: styler.typography.family,
+            fontSize: styler.typography.resolvedSize,
+            documentId: storage.documentId,
+            isEditable: true)
+        let coordinator = wrapper.makeCoordinator()
+        let layoutManager = NSTextLayoutManager()
+        let container = NSTextContainer(
+            size: NSSize(width: 600, height: CGFloat.greatestFiniteMagnitude))
+        layoutManager.textContainer = container
+        storage.controller.textContentStorage.addTextLayoutManager(layoutManager)
+        let view = NSTextView(frame: NSRect(x: 0, y: 0, width: 600, height: 400),
+                              textContainer: container)
+        view.isEditable = true
+        coordinator.adopt(view, text: markdown)
+        return (storage, view)
     }
 
-    @Test("a bound handle answers for its own view, not the most recent one")
-    func boundHandleTargetsItsOwnView() {
-        let (storage, first, second) = twoViews("alpha bravo charlie\n")
+    @Test("the seam answers for the attached view")
+    func seamTargetsTheAttachedView() {
+        let (storage, view) = attachedEditor("alpha bravo charlie\n")
 
-        #expect(storage.textView(for: first).nsTextView === first)
-        #expect(storage.textView(for: second).nsTextView === second)
-        // The unbound handle resolves to the most recent attachment, which is
-        // exactly the behaviour a bound one exists to avoid.
-        #expect(storage.textView.nsTextView === second)
+        #expect(storage.textView.nsTextView === view)
+        #expect(storage.textView.isAttached)
+        #expect(storage.textView.text == "alpha bravo charlie\n")
     }
 
-    @Test("selection through a bound handle lands in that view only")
-    func selectionIsPerView() {
-        let (storage, first, second) = twoViews("alpha bravo charlie\n")
+    @Test("selection through the seam lands in the editor")
+    func selectionReachesTheEditor() {
+        let (storage, view) = attachedEditor("alpha bravo charlie\n")
 
-        storage.textView(for: first).selectedRange = NSRange(location: 2, length: 3)
-        storage.textView(for: second).selectedRange = NSRange(location: 12, length: 4)
+        storage.textView.selectedRange = NSRange(location: 2, length: 3)
 
-        #expect(first.selectedRange() == NSRange(location: 2, length: 3))
-        #expect(second.selectedRange() == NSRange(location: 12, length: 4))
-        #expect(storage.textView(for: first).selectedRange == NSRange(location: 2, length: 3))
+        #expect(view.selectedRange() == NSRange(location: 2, length: 3))
+        #expect(storage.textView.selectedRange == NSRange(location: 2, length: 3))
     }
 
-    @Test("each handle reports its own view's layout manager, and one shared storage")
-    func layoutIsPerViewAndStorageIsShared() {
-        let (storage, first, second) = twoViews("alpha\n")
+    @Test("the seam reports the editor's TextKit 2 stack")
+    func seamReportsTheLayoutStack() {
+        let (storage, view) = attachedEditor("alpha\n")
+        let seam = storage.textView
 
-        let firstHandle = storage.textView(for: first)
-        let secondHandle = storage.textView(for: second)
-
-        #expect(firstHandle.textLayoutManager === first.textLayoutManager)
-        #expect(secondHandle.textLayoutManager === second.textLayoutManager)
-        #expect(firstHandle.textLayoutManager !== secondHandle.textLayoutManager)
-        #expect(firstHandle.textContentStorage === secondHandle.textContentStorage,
-                "one document must mean one content storage")
-        #expect(firstHandle.allTextViews.count == 2)
+        #expect(seam.textLayoutManager === view.textLayoutManager)
+        #expect(seam.textContentStorage === storage.controller.textContentStorage,
+                "the document's storage is the controller's, not one the view made")
+        #expect(view.textLayoutManager?.textContentManager === seam.textContentStorage)
     }
 
-    @Test("the caret rect follows the handle's own view")
-    func caretRectIsPerView() {
-        let (storage, first, second) = twoViews("alpha bravo charlie delta echo\n")
-        storage.textView(for: first).selectedRange = NSRange(location: 0, length: 0)
-        storage.textView(for: second).selectedRange = NSRange(location: 25, length: 0)
+    @Test("the caret rect follows the editor's caret")
+    func caretRectFollowsTheCaret() throws {
+        let (storage, _) = attachedEditor("alpha bravo charlie delta echo\n")
 
-        #expect(storage.textView(for: first).caretRect() != nil)
-        #expect(storage.textView(for: second).caretRect() != nil)
+        storage.textView.selectedRange = NSRange(location: 0, length: 0)
+        let atStart = try #require(storage.textView.caretRect())
+        storage.textView.selectedRange = NSRange(location: 25, length: 0)
+        let atEnd = try #require(storage.textView.caretRect())
+
+        #expect(atStart != atEnd || atStart.height > 0)
+    }
+
+    /// Everything must answer rather than trap with no editor on screen. That
+    /// is the state before the first window opens and after the last one
+    /// closes, and the app holds seams across both.
+    @Test("a seam with no editor is inert")
+    func detachedSeamIsInert() {
+        let storage = RectoTextStorage(documentId: "seam", markdown: "alpha\n")
+
+        let seam = storage.textView
+        #expect(seam.isAttached == false)
+        #expect(seam.nsTextView == nil)
+        #expect(seam.scrollView == nil)
+        #expect(seam.textLayoutManager == nil)
+        #expect(seam.text.isEmpty)
+        #expect(seam.selectedRange == NSRange(location: 0, length: 0))
+        #expect(seam.caretRect() == nil)
+        #expect(seam.focus() == false)
+        #expect(seam.applyPatch(MarkdownTextPatch(range: NSRange(location: 0, length: 1),
+                                                  replacement: "b")) == false)
     }
 }

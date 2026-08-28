@@ -146,8 +146,8 @@ struct MountedSwapTests {
                 === b.controller.textContentStorage,
                 "the view still lays out through the document it left")
         #expect(a.controller.textContentStorage.textLayoutManagers.isEmpty)
-        #expect(b.controller.textViews.contains { $0 === textView })
-        #expect(a.controller.textViews.isEmpty)
+        #expect(b.controller.textView === textView)
+        #expect(a.controller.isAttached == false)
 
         // And an edit lands in B only.
         #expect(b.apply(MarkdownTextPatch(range: NSRange(location: 10, length: 0),
