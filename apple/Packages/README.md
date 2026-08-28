@@ -135,20 +135,20 @@ so a heading offset scrolls to without conversion.
 
 ## Latency, and the entitlement that decides it
 
-Median of 10 samples over 2 fresh processes, sizes reshuffled each round;
-M-series, macOS 26 / Xcode 26.6, release build, `apple/Spikes/JSCPerf`,
+Median of 10 samples **pooled** over 2 fresh processes, sizes reshuffled each
+round; M-series, macOS 26 / Xcode 26.6, release build, `apple/Spikes/JSCPerf`,
 2026-08-28:
 
 | document | no `allow-jit` | with `allow-jit` | ratio |
 |---|---|---|---|
-| 8 kB `normalize` | 92.7 ms | 6.0 ms | 15.5× |
-| 50 kB | 570.5 ms | 40.8 ms | 14.0× |
-| 64 kB | 724.6 ms | 54.1 ms | 13.4× |
-| 250 kB | 3450.1 ms | 760.5 ms | 4.5× |
+| 8 kB `normalize` | 89.4 ms | 7.2 ms | 12.4× |
+| 50 kB | 538.7 ms | 43.9 ms | 12.3× |
+| 64 kB | 702.3 ms | 54.2 ms | 13.0× |
+| 250 kB | 3253.0 ms | 773.2 ms | 4.2× |
 
 **A hardened-runtime macOS process without `com.apple.security.cs.allow-jit`
 gets no JIT from JavaScriptCore.** Nothing reports this; it just runs 13–15×
-slower up to 64 kB (4.5× at 250 kB, where the entitled run turns
+slower up to 64 kB (4.2× at 250 kB, where the entitled run turns
 allocation-bound), and the unentitled numbers match `jsc --useJIT=false` at every
 size. **The Mac app must ship that entitlement** — plan 023 §2's list
 (`app-sandbox`, `network.client`, `files.user-selected.read-write`) is missing
@@ -161,8 +161,12 @@ read from WebKit's source (`isJITEnabled()` in `ExecutableAllocator.cpp` and
 `process-entitlements.sh`), **not measured on a device**, and the device
 measurement is still the N3 go/no-go. The iOS *simulator* does have the JIT (it
 is a Mac process), so simulator numbers are an upper bound and never the answer.
-Evidence, citations and the device invocation are in
-`apple/Spikes/JSCPerf/README.md`.
+
+The harness is ready for the device — the bundle is a test-target resource, the
+samples are machine-readable, and the 50 kB budget is an assertion that fires
+only where the JIT is off — but **the device run itself has not happened**: it
+needs BK's iPhone. `apple/Spikes/JSCPerf/README.md` has the one command,
+the citations, and what to read in the output.
 
 Either way, `WordCount` and `Outline` are what the keystroke path calls: both are
 well under a millisecond on a 64 kB document.
@@ -216,9 +220,17 @@ as marked text rewritten before it commits. So the engine runs with
 `BlockCaretTextView` routes `insertText(_:replacementRange:)` back through
 `VimTextViewAdapter.insertText`, which is one transaction — the mirror, the
 edit, and the change the core needs for `.` to replay it. **A custom text view
-must forward `insertText(_:replacementRange:)` the same way.** IME composition is
-the exception: AppKit owns the storage while marked text is up, and the adapter
-resyncs when it ends.
+must forward `insertText(_:replacementRange:)` and `keyDown` the same way**;
+`start()` installs both hooks on a `BlockCaretTextView` for you.
+
+**Composition wins over vim.** While `hasMarkedText()` (or UIKit's
+`markedTextRange`) is set, keys go straight to the input manager: Space selects a
+candidate, Return commits, Escape cancels, Backspace deletes a jamo. Handing them
+to vim first stops the composition from ever committing and leaves the storage
+holding text the mirror never saw. AppKit owns the storage for the duration, and
+the adapter takes it back through `textDidChangeExternally` — hooked on *any*
+change the text view made itself rather than on composition-end, because
+Backspace can end a composition and leave no `unmarkText` to hang the resync on.
 
 **Replay is transactional.** The engine has already committed every edit to its
 mirror by the time the journal arrives, so a partial replay leaves the two
@@ -228,15 +240,29 @@ the engine *from the storage*, and reports `VimReplayFailure` through
 `onReplayFailure`. Surface it; do not swallow it.
 
 **Grapheme clamping lives in JS, and Swift must not repeat it.** The vim core
-clips to code points, which severs ZWJ families, flags, skin tones and combining
-marks; `packages/recto-vim-js/src/grapheme.js` clamps with the same UAX #29 code
-CodeMirror 6 uses. Every offset in a `VimResult` is already on a cluster
-boundary, and the adapter applies edit ranges **verbatim** — re-clamping against
-ICU could disagree by a code unit and desynchronise the two buffers.
-`GraphemeClamp` exists for the other direction only: positions of *native*
-origin (a mouse click, an initial caret, a host `setText`) on their way into the
-engine. A debug assertion and `RectoVimTests` check that the clamp is the
-identity on everything JS produces.
+clips to code points, which severs anything built from more than one. Every
+offset in a `VimResult` is already on a cluster boundary and the adapter applies
+edit ranges **verbatim**; `GraphemeClamp` runs in the other direction only, on
+positions of *native* origin (a click, an initial caret, a host `setText`) on
+their way into the engine. A debug assertion and `RectoVimTests` check the clamp
+is the identity on everything JS produces.
+
+**Both sides are gated by Unicode's own `GraphemeBreakTest.txt`**, vendored under
+`packages/editor-fixtures/unicode/` with its licence. JS uses `Intl.Segmenter`
+and Swift walks `Character` boundaries — both ICU, both run against all ~1,100
+rows and every offset within each row. That is not ceremony: the pair this
+replaced used `@marijn/find-cluster-break` and
+`NSString.rangeOfComposedCharacterSequence`, neither of which is complete
+UAX #29, and they passed a hand-written suite while splitting Hangul syllables
+(`가`), SpacingMarks (`का`) and CRLF. `x` on `a가b` produced `aᅡb`. One row is
+recorded as diverging in both suites (`2701 ZWJ 2701`, where this ICU works from
+an older `Extended_Pictographic` set) and asserted to *still* diverge, so an OS
+update that fixes it fails the suite rather than leaving a stale allowance.
+
+`Segments.containing()` disagrees with its own iteration at a high surrogate —
+on `a🎩b` it reports the cluster at offset 1 as `{index: 0, length: 3}` — so
+`grapheme.js` asks about the low surrogate instead. Worth knowing before writing
+anything else against that API.
 
 **Threading: main, and forced rather than chosen.** `JSContext` is not
 thread-safe, and `keyDown` must know synchronously whether vim consumed the key
@@ -267,12 +293,15 @@ it is a protocol. Three things this cost the spike, in case they bite again:
   AppKit's coalescing path, which raises when event grouping is disabled. The
   adapter turns it off around the batch and restores it afterwards.
 
-**The caret after `u` is vim's, not the undo manager's.** Vim puts it at the
+**The caret after `u` is vim's, and it comes from the patch.** Vim puts it at the
 start of the change it restored; `NSUndoManager` restores whatever selection it
-recorded, which in the spike's proof was two lines away. `performHistory`
-derives it as the first offset at which the two versions differ, which needs no
-cooperation from whoever owns undo — the same derivation `RectoHistory` will use
-from its own patch.
+recorded, which in the spike's proof was two lines away. Diffing the two versions
+looks like a fix and is not: on `"aa"`, `ia<Esc>u` gives a first-difference of 1
+where the patch began at 0, because the surrounding text repeats. `VimUndoPatchLog`
+records the range each keystroke wrote and both adapters return its start through
+`VimHistoryResult` — the contract `RectoHistory` implements with its own patch.
+Vim's own clamping still applies on top: a patch starting past the last character
+of a line lands *on* that character in normal mode.
 
 **Coexisting with the rich lens.** The vim lens uses the raw/source presentation,
 which is what makes the mirror sound: nothing is hidden, so JS and the text view
@@ -325,14 +354,19 @@ thing to re-check on an upstream bump.
 ## Tests
 
 `RectoVimTests` runs `packages/recto-vim-js/fixtures/keystroke-suite.json` —
-143 cases, 21 of them grapheme cases and 6 CRLF — twice: once headless through
-`JSContext`, and once replayed through a real `NSTextView`, asserting the storage
-stays byte for byte equal to the engine's mirror. The text-view pass drives keys
-the way `keyDown` does, so everything vim declines goes through the real
-`insertText` path rather than a synthetic one. `AdapterContractTests` covers what
-is not a keystroke: CRLF replay, NFD, emoji and ZWJ input, an IME composition,
-dot-repeat through the input system, a vetoing delegate, an out-of-bounds range,
-the undo caret, and the `gj`/`gk` goal column across a soft wrap. The same
+155 cases, 21 grapheme, 6 CRLF, 5 replace-mode and 6 for the clusters the old
+splitter broke — twice: once headless through `JSContext`, and once replayed
+through a real `NSTextView`, asserting the storage stays byte for byte equal to
+the engine's mirror. The text-view pass drives keys the way `keyDown` does, so
+everything vim declines goes through the real `insertText` path rather than a
+synthetic one.
+
+Around that: `GraphemeConformanceTests` runs Unicode's own break test;
+`KeyRoutingTests` drives real `NSEvent`s, including Space, Return, Escape and
+Backspace during an IME composition; `AdapterContractTests` covers what is not a
+keystroke — CRLF replay, NFD, emoji and ZWJ input, dot-repeat through the input
+system, a vetoing delegate, an out-of-bounds range, the undo caret with repeated
+text around the patch, and the `gj`/`gk` goal column across a soft wrap. The same
 fixture file runs in Bun (`bun run vim:test`), so a case that passes there and
 fails here is a bridge bug, which is a much smaller place to look.
 

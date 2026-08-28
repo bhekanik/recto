@@ -81,7 +81,7 @@ enum MarkdownDifferentialGenerator {
             let baseLimit = max(0, maximumDocumentCharacters - separator.count - fragment.count)
             let base = String(document.markdown.prefix(baseLimit))
             return DifferentialDocument(
-                name: "mutated (kind.name), (lineEnding.name), from (document.name)",
+                name: "mutated \(kind.name), \(lineEnding.name), from \(document.name)",
                 markdown: base + separator + fragment,
                 isMutated: true)
         }
