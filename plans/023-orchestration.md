@@ -203,7 +203,7 @@ in-flight workers are producing (§4).
 | W8 js-cores | N3 | 023/js-cores | round 2 (Codex: 3 blocking: CRLF mirror divergence, native input translation (NFD/emoji/IME/dead keys), non-transactional replay; 11 should-fix) | #10 | Claude r1 / Codex r1 | n/a (CI) |
 | W9a editor-engine stage 1 (fork plumbing + dialect + RectoEditor skeleton) | N5 | 023/editor-engine | round 3 (Codex r2: 5 blocking: controller swap leaves the view on the old doc; Writing Tools republishes concurrent edits; same-length edits leave other views' parse caches stale; shared attributes corrupt rich/raw across windows; incremental setext splice; 5 should-fix) | #9 + fork PR #1 (`2cec4d8`) | Claude r1 / Codex r1+r2 | n/a (CI) |
 | W9b editor-engine stage 2 (blocks, features, undo-tree, typewriter) | N5 | 023/editor-engine-2 | blocked on W9a | | | |
-| W10 native-core | N4 | 023/native-core | round 3 fixed (14/14; 153 tests; live ×5); orchestrator verifying; Codex r3 running | #7 | Claude r1 / Codex r1+r2 | n/a (CI) |
+| W10 native-core | N4 | 023/native-core | round 3 fixed (verified by orchestrator: 154 tests, live ×3, no SIGBUS); Codex r3 running | #7 | Claude r1 / Codex r1+r2 | n/a (CI) |
 | W11 ai-on-convex | N2 | 023/ai-convex | blocked on W7 | | | |
 | W12 mac-alpha | N6 | 023/mac-alpha | blocked on W9, W10, W8, W2 | | | |
 | W13 mac-beta | N7 | 023/mac-beta | blocked on W12, W11 | | | |
