@@ -203,7 +203,7 @@ in-flight workers are producing (§4).
 | W15 iphone | N9 | 023/iphone | blocked on W14 | | | |
 | W16 release | N10 | 023/release | blocked on W13, W15 | | | |
 | F2 streak-dst (fix `lib/stats/streak.ts` to step calendar days; parity with the Swift port; W10 finding) | N1 follow-up | 023/streak-dst | not started | | | |
-| F1 accent-token-rename (`--color-accent` collides with shadcn `@theme inline`; Twilight accent renders muted on prod) | N1c follow-up | 023/accent-token | launched 2026-08-28 (W2 agent) | | | |
+| F1 accent-token-rename | N1c follow-up | 023/accent-token | **merged + deployed** 2026-08-28; prod CSS no longer redefines `--color-accent` | #8 | Claude / Codex (no blocking) | prod |
 
 ## 7. Review protocol (orchestrator)
 
