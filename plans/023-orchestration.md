@@ -190,7 +190,7 @@ in-flight workers are producing (§4).
 | W5 native-spike | N0a | spike/native-core | **done: GO** (clerk-ios 1.5.0 + convex-swift 0.8.1; own templated auth provider) | #4 (draft, not merged) | n/a | n/a |
 | W6 vim-spike | N0c | spike/vim-jsc | **done: GO** (verbatim core split, ~20× latency headroom) | #5 (draft, not merged) | n/a | n/a |
 | W7 settings-workspaces-deletion | N1b | 023/settings | blocked on W1 | | | |
-| W8 js-cores | N3 | 023/js-cores | unblocked (W3 merged); launch after W6 notes are folded in | | | |
+| W8 js-cores | N3 | 023/js-cores | launched 2026-08-28 | | | |
 | W9a editor-engine stage 1 (fork plumbing + dialect + RectoEditor skeleton) | N5 | 023/editor-engine | launched 2026-08-28 | | | |
 | W9b editor-engine stage 2 (blocks, features, undo-tree, typewriter) | N5 | 023/editor-engine-2 | blocked on W9a | | | |
 | W10 native-core | N4 | 023/native-core | launched 2026-08-28 (sync transport tests wait for W1 deploy) | | | |
