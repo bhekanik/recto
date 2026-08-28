@@ -176,7 +176,7 @@ in-flight workers are producing (§4).
 
 | Worker | Phase | Branch | Status | PR | Reviews (Claude / Codex) | Deployed |
 |---|---|---|---|---|---|---|
-| W1 history-commit | N1a + N0e | 023/history-commit | in review (round 1 sent; e2e proof blocked on CLERK_SECRET_KEY) | #1 | Claude r1 / Codex running | |
+| W1 history-commit | N1a + N0e | 023/history-commit | in review, round 2 (Codex: 5 blocking → 8 fixes requested, 2 deferred); e2e proof blocked on CLERK_SECRET_KEY | #1 | Claude r1+r2 / Codex r1 done | |
 | W2 light-theme | N1c | 023/light-theme | in review (round 1 green; Codex running) | #3 | Claude r1 / Codex running | |
 | W3 core-js | N1d + N0d | 023/core-js | in progress (launched 02:30) | | | |
 | W4 editor-spike | N0b | spike/editor-engine | **done: GO** (fork @ 08ff3c07) | #2 (draft, not merged) | n/a | n/a |
