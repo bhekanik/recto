@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import { requireOwnedDocument } from "./documents";
+import { refuse, requireOwnedDocument } from "./documents";
 
 const kindValidator = v.union(v.literal("auto"), v.literal("manual"));
 
@@ -25,7 +25,7 @@ export const create = mutation({
 				q.eq("documentId", args.documentId).eq("nodeId", args.nodeId),
 			)
 			.unique();
-		if (!node) throw new Error("Node not found");
+		if (!node) refuse("unknown_node", "Node not found");
 
 		const versionId = await ctx.db.insert("versions", {
 			documentId: args.documentId,
