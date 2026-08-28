@@ -9,7 +9,11 @@ import type { EditorHandle } from "@/lib/editor/handle";
 import { countWords } from "@/lib/markdown";
 import { toast } from "@/lib/ui/toast";
 
-import { type GroupCommit, GroupingController } from "./grouping";
+import {
+	type GroupCommit,
+	GroupingController,
+	type NodeSelection,
+} from "./grouping";
 import {
 	childrenByParent,
 	type DocNode,
@@ -17,6 +21,7 @@ import {
 	materialize,
 	unionMerge,
 } from "./materialize";
+import { ulid } from "./ulid";
 
 export type HistoryNode = DocNode & {
 	createdAt: number;
@@ -51,8 +56,45 @@ export type HistoryController = {
 	materializeAt: (nodeId: string) => string | null;
 };
 
-const POINTER_DEBOUNCE_MS = 1200;
 const AUTO_VERSION_MS = 120_000; // tag an auto version ~2min after activity settles
+
+/**
+ * This client's own most recent pointer move, tracked until the server echoes it
+ * back. `appliedAt` is the server `updatedAt` the move was written at, or null
+ * while the write is still in flight.
+ */
+export type LocalPointerMove = { nodeId: string; appliedAt: number | null };
+
+/** What to do with a `documents.currentNodeId` value the client just observed. */
+export type PointerDecision = "adopt" | "ignore" | "settled";
+
+/**
+ * Tell a genuine cross-device pointer move apart from an echo of state this
+ * client has already moved past (plan 022).
+ *
+ * The bug this exists to prevent: the client advances its pointer locally on
+ * every commit, but the server only learns about it when the commit write
+ * lands. In that window the reactive `documents` query keeps delivering the
+ * PREVIOUS pointer — and, because a separate markdown write can bump
+ * `updatedAt` meanwhile, it delivers it looking freshly changed. Adopting it
+ * walks the pointer backwards onto an ancestor, and the next undo then lands a
+ * whole level too far up (often the empty root).
+ */
+export function decideServerPointer(args: {
+	serverCurrentNodeId: string;
+	serverUpdatedAt: number;
+	localMove: LocalPointerMove | null;
+}): PointerDecision {
+	const { serverCurrentNodeId, serverUpdatedAt, localMove } = args;
+	if (!localMove) return "adopt";
+	// The server caught up with us; there is nothing left to reconcile.
+	if (serverCurrentNodeId === localMove.nodeId) return "settled";
+	// Our move has not reached the server, so everything we see predates it.
+	if (localMove.appliedAt === null) return "ignore";
+	// The write landed but this query result was produced before it.
+	if (serverUpdatedAt <= localMove.appliedAt) return "ignore";
+	return "adopt";
+}
 
 /**
  * The model-level branching undo tree for one open document (blueprint 07). It
@@ -84,7 +126,7 @@ export function useDocumentHistory(args: {
 		api.docNodes.listSince,
 		enabled && documentId ? { documentId } : "skip",
 	);
-	const appendNode = useMutation(api.docNodes.append);
+	const commitEdit = useMutation(api.documents.commitEdit);
 	const ensureRoot = useMutation(api.docNodes.ensureRoot);
 	const updatePointer = useMutation(api.documents.updateCurrentNodeId);
 	const createVersion = useMutation(api.versions.create);
@@ -99,6 +141,14 @@ export function useDocumentHistory(args: {
 	const currentNodeIdRef = useRef<string | null>(null);
 	currentNodeIdRef.current = currentNodeId;
 	const ensureRootSentRef = useRef(false);
+	const localMoveRef = useRef<LocalPointerMove | null>(null);
+	// The latest editor change seen before the controller hydrated. Without this
+	// the first keystrokes of a session are dropped: recordChange has nowhere to
+	// put them until the DAG query resolves.
+	const pendingRecordRef = useRef<{
+		markdown: string;
+		selection: NodeSelection;
+	} | null>(null);
 
 	// Reset per document.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: reset on document rebind
@@ -108,6 +158,8 @@ export function useDocumentHistory(args: {
 		hydratedRef.current = false;
 		ensureRootSentRef.current = false;
 		lastAutoNodeIdRef.current = null;
+		localMoveRef.current = null;
+		pendingRecordRef.current = null;
 		setLocalNodes([]);
 		setCurrentNodeId(null);
 	}, [documentId]);
@@ -119,19 +171,6 @@ export function useDocumentHistory(args: {
 	}, [dagRows, localNodes]);
 
 	const nodesById = useMemo(() => indexNodes(nodes), [nodes]);
-
-	const debouncedPointer = useDebouncedCallback((nodeId: string) => {
-		if (!documentId) return;
-		const handle = getHandleRef.current();
-		const md = handle?.getCanonicalMarkdown() ?? serverMarkdown ?? "";
-		void updatePointer({
-			documentId,
-			currentNodeId: nodeId,
-			markdown: md,
-			wordCount: countWords(md),
-			updatedAt: Date.now(),
-		}).catch(() => {});
-	}, POINTER_DEBOUNCE_MS);
 
 	// Auto-versioning on the idle path (blueprint 08 §4, phase-4 C2): a periodic
 	// "auto" tag of the current node, deduped — never a duplicate when nothing
@@ -174,20 +213,46 @@ export function useDocumentHistory(args: {
 			};
 			setLocalNodes((prev) => [...prev, node]);
 			setCurrentNodeId(commit.nodeId);
-			void appendNode({
+			localMoveRef.current = { nodeId: commit.nodeId, appliedAt: null };
+
+			// One transaction: the node, the pointer, the markdown. See the
+			// documents.commitEdit doc comment for why these can't be separate.
+			void commitEdit({
 				documentId,
-				nodeId: commit.nodeId,
-				parentNodeId: commit.parentNodeId,
-				patch: commit.patch,
-				snapshot: commit.snapshot,
-				selection: commit.selection,
-				origin: commitOrigin,
-				createdAt: node.createdAt,
-			}).catch(() => {});
-			debouncedPointer(commit.nodeId);
+				node: {
+					nodeId: commit.nodeId,
+					parentNodeId: commit.parentNodeId,
+					patch: commit.patch,
+					snapshot: commit.snapshot,
+					selection: commit.selection,
+					origin: commitOrigin,
+					createdAt: node.createdAt,
+				},
+				markdown: commit.markdown,
+				wordCount: countWords(commit.markdown),
+				expectedHeadNodeId: commit.parentNodeId,
+				clientMutationId: ulid(),
+			})
+				.then((result) => {
+					if (localMoveRef.current?.nodeId !== commit.nodeId) return;
+					if (result.committed) {
+						localMoveRef.current.appliedAt = result.updatedAt;
+						return;
+					}
+					// Another writer owns the head. The node is stored either way, so
+					// nothing is lost — drop the guard and let the remote pointer win.
+					localMoveRef.current = null;
+				})
+				.catch(() => {
+					// The write may never have landed; a stuck guard would deafen this
+					// client to every later remote pointer move.
+					if (localMoveRef.current?.nodeId === commit.nodeId) {
+						localMoveRef.current = null;
+					}
+				});
 			debouncedAutoVersion();
 		},
-		[appendNode, debouncedPointer, debouncedAutoVersion, documentId, origin],
+		[commitEdit, debouncedAutoVersion, documentId, origin],
 	);
 
 	// Hydrate the grouping controller once the DAG + pointer are known.
@@ -210,13 +275,23 @@ export function useDocumentHistory(args: {
 			? materialize(serverCurrentNodeId, map)
 			: (serverMarkdown ?? "");
 
-		controllerRef.current = new GroupingController({
+		const controller = new GroupingController({
 			rootNodeId: serverCurrentNodeId,
 			rootMarkdown,
 			onCommit,
 		});
+		controllerRef.current = controller;
 		setCurrentNodeId(serverCurrentNodeId);
 		hydratedRef.current = true;
+
+		// Replay anything typed before the DAG query resolved, as one node.
+		const pending = pendingRecordRef.current;
+		pendingRecordRef.current = null;
+		if (pending && pending.markdown !== rootMarkdown) {
+			controller.record(pending.markdown, pending.selection, {
+				structural: true,
+			});
+		}
 	}, [
 		enabled,
 		documentId,
@@ -232,18 +307,19 @@ export function useDocumentHistory(args: {
 	const navigatingRef = useRef(false);
 
 	const recordChange = useCallback((opts?: { structural?: boolean }) => {
-		const controller = controllerRef.current;
-		if (!controller || navigatingRef.current) return;
+		if (navigatingRef.current) return;
 		try {
 			const handle = getHandleRef.current();
 			if (!handle) return;
 			const markdown = handle.getCanonicalMarkdown();
 			const caret = handle.exportCaret();
-			controller.record(
-				markdown,
-				{ anchor: caret.anchor, head: caret.head },
-				opts,
-			);
+			const selection = { anchor: caret.anchor, head: caret.head };
+			const controller = controllerRef.current;
+			if (!controller) {
+				pendingRecordRef.current = { markdown, selection };
+				return;
+			}
+			controller.record(markdown, selection, opts);
 		} catch {
 			// History is additive — never disturb the edit path.
 		}
@@ -251,8 +327,7 @@ export function useDocumentHistory(args: {
 
 	const flush = useCallback(() => {
 		controllerRef.current?.flush();
-		debouncedPointer.flush();
-	}, [debouncedPointer]);
+	}, []);
 
 	const navigateTo = useCallback(
 		(nodeId: string) => {
@@ -287,15 +362,28 @@ export function useDocumentHistory(args: {
 			window.setTimeout(() => {
 				navigatingRef.current = false;
 			}, 200);
+			localMoveRef.current = { nodeId, appliedAt: null };
 			void updatePointer({
 				documentId,
 				currentNodeId: nodeId,
 				markdown,
 				wordCount: countWords(markdown),
 				updatedAt: Date.now(),
-			}).catch(() => {
-				toast("Couldn't sync undo position", "error");
-			});
+			})
+				.then((result) => {
+					if (localMoveRef.current?.nodeId !== nodeId) return;
+					if (result.applied) {
+						localMoveRef.current.appliedAt = result.updatedAt;
+						return;
+					}
+					localMoveRef.current = null;
+				})
+				.catch(() => {
+					if (localMoveRef.current?.nodeId === nodeId) {
+						localMoveRef.current = null;
+					}
+					toast("Couldn't sync undo position", "error");
+				});
 		},
 		[documentId, nodesById, updatePointer],
 	);
@@ -406,6 +494,14 @@ export function useDocumentHistory(args: {
 		if (!hydratedRef.current) return;
 		if (serverCurrentNodeId === undefined) return;
 		if (serverUpdatedAt === undefined) return;
+		const decision = decideServerPointer({
+			serverCurrentNodeId,
+			serverUpdatedAt,
+			localMove: localMoveRef.current,
+		});
+		if (decision === "ignore") return;
+		localMoveRef.current = null;
+		if (decision === "settled") return;
 		if (serverCurrentNodeId === currentNodeIdRef.current) return;
 		const handle = getHandleRef.current();
 		if (handle?.isFocused()) return; // don't disturb an active writer
