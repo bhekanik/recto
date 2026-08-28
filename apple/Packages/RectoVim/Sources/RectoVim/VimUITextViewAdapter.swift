@@ -61,6 +61,9 @@ public final class VimUITextViewAdapter: NSObject, VimGeometryProvider, VimHisto
         _ text: String,
         replacementRange: NSRange = NSRange(location: NSNotFound, length: 0)
     ) -> Bool {
+        // A commit that ends a composition is UIKit's to apply; the caller
+        // resyncs afterwards, as `VimTextViewAdapter` does on AppKit.
+        if textView.markedTextRange != nil { return false }
         do {
             let result: VimResult
             if replacementRange.location == NSNotFound {
@@ -81,12 +84,16 @@ public final class VimUITextViewAdapter: NSObject, VimGeometryProvider, VimHisto
     /// Call from `pressesBegan`. Returns true when vim consumed the key, in
     /// which case the caller must not pass it to `super`.
     public func handle(_ press: UIPress) -> Bool {
+        // Composition wins, same as AppKit: while marked text is up, Space,
+        // Return, Escape and Backspace belong to the input system.
+        if textView.markedTextRange != nil { return false }
         guard let (key, modifiers) = VimKeyEvent.translate(press) else { return false }
         return handle(key: key, modifiers: modifiers)
     }
 
     @discardableResult
     public func handle(key: String, modifiers: VimModifiers = []) -> Bool {
+        if textView.markedTextRange != nil { return false }
         // Command chords belong to the key-command table, never to vim.
         if modifiers.contains(.command) { return false }
         do {

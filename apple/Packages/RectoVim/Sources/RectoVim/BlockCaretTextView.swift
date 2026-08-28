@@ -30,34 +30,49 @@ public final class BlockCaretTextView: NSTextView {
     /// directly changes the storage without telling the JS mirror.
     public var inputHook: ((String, NSRange) -> Bool)?
 
-    /// An IME composition finished. AppKit owns the storage while marked text is
-    /// up, so the adapter resyncs rather than trying to model it.
-    public var compositionDidEnd: (() -> Void)?
+    /// The text view changed its own storage.
+    ///
+    /// AppKit owns the storage during a composition and modelling that as vim
+    /// edits would fight the input system, so the adapter stands aside and takes
+    /// the storage back afterwards. Hooking *any* change rather than
+    /// composition-end specifically is what makes that reliable: Backspace on a
+    /// marked run can end the composition itself, so there is no later
+    /// `unmarkText` to hang the resync on.
+    ///
+    /// The adapter ignores this while it is applying its own edits.
+    public var textDidChangeExternally: (() -> Void)?
 
     public override func keyDown(with event: NSEvent) {
-        // Vim first; anything it declines falls through to the text view, which
-        // is what keeps system editing behaviour (and IME) working when the vim
-        // layer is idle or in insert mode.
+        // **Composition wins.** While marked text is up, Space, Return, Escape
+        // and Backspace belong to the input manager — they select a candidate,
+        // commit, cancel, or delete a jamo. Handing them to vim first stops the
+        // composition from ever committing and leaves the storage holding text
+        // the mirror never saw: a marked `ni` followed by Space produced storage
+        // `" niab"` against mirror `" ab"`.
+        if hasMarkedText() {
+            super.keyDown(with: event)
+            return
+        }
+        // Otherwise vim first; anything it declines falls through to the text
+        // view, which is what keeps system editing behaviour working when the
+        // vim layer is idle or in insert mode.
         if keyHook?(event) == true { return }
         super.keyDown(with: event)
     }
 
     public override func insertText(_ string: Any, replacementRange: NSRange) {
         let text = (string as? NSAttributedString)?.string ?? (string as? String)
-        // A commit that ends a composition is AppKit's to apply; the adapter
-        // resyncs from the storage once it has.
-        let wasComposing = hasMarkedText()
-        if let text, !wasComposing, inputHook?(text, replacementRange) == true {
+        // A commit that ends a composition is AppKit's to apply; the resync in
+        // `didChangeText` picks it up.
+        if let text, !hasMarkedText(), inputHook?(text, replacementRange) == true {
             return
         }
         super.insertText(string, replacementRange: replacementRange)
-        if wasComposing, !hasMarkedText() { compositionDidEnd?() }
     }
 
-    public override func unmarkText() {
-        let wasComposing = hasMarkedText()
-        super.unmarkText()
-        if wasComposing { compositionDidEnd?() }
+    public override func didChangeText() {
+        super.didChangeText()
+        textDidChangeExternally?()
     }
 
     public override func drawInsertionPoint(

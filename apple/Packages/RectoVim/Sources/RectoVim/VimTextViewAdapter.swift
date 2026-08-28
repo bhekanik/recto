@@ -52,10 +52,16 @@ public final class VimTextViewAdapter: NSObject, VimGeometryProvider, VimHistory
         // `insertText(_:replacementRange:)` the same way.
         engine.setExternalInput(true)
         if let hooked = textView as? BlockCaretTextView {
+            // Without this the text view sends every physical key straight to
+            // AppKit and the vim layer never sees a keystroke at all.
+            hooked.keyHook = { [weak self] event in self?.handle(event) ?? false }
             hooked.inputHook = { [weak self] text, range in
                 self?.insertText(text, replacementRange: range) ?? false
             }
-            hooked.compositionDidEnd = { [weak self] in
+            // Anything that changed the storage without going through us —
+            // a composition, a menu command, a drag — is taken back here.
+            // `syncFromTextView` is a no-op while we are applying our own edits.
+            hooked.textDidChangeExternally = { [weak self] in
                 try? self?.syncFromTextView()
             }
         }
@@ -68,7 +74,10 @@ public final class VimTextViewAdapter: NSObject, VimGeometryProvider, VimHistory
     /// A `replacementRange` of `NSNotFound` means "the current selection", which
     /// is what the engine does by default.
     @discardableResult
-    public func insertText(_ text: String, replacementRange: NSRange = NSRange(location: NSNotFound, length: 0)) -> Bool {
+    public func insertText(
+        _ text: String,
+        replacementRange: NSRange = NSRange(location: NSNotFound, length: 0)
+    ) -> Bool {
         do {
             let result: VimResult
             if replacementRange.location == NSNotFound {
@@ -89,6 +98,10 @@ public final class VimTextViewAdapter: NSObject, VimGeometryProvider, VimHistory
     /// Returns true when vim consumed the key, in which case the text view must
     /// not also handle it.
     public func handle(_ event: NSEvent) -> Bool {
+        // Belt and braces for a host that installs its own key hook:
+        // `BlockCaretTextView` already bypasses vim during composition, and a
+        // key that reaches vim mid-composition desynchronises the mirror.
+        if textView.hasMarkedText() { return false }
         guard let (key, modifiers) = VimKeyEvent.translate(event) else { return false }
         return handle(key: key, modifiers: modifiers)
     }
@@ -97,6 +110,7 @@ public final class VimTextViewAdapter: NSObject, VimGeometryProvider, VimHistory
     /// suite, a menu item, a synthesised key from a macro.
     @discardableResult
     public func handle(key: String, modifiers: VimModifiers = []) -> Bool {
+        if textView.hasMarkedText() { return false }
         // Command chords belong to the menu bar, never to vim.
         if modifiers.contains(.command) { return false }
         do {

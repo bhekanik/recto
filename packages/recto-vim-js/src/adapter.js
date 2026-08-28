@@ -20,7 +20,7 @@
  * which is what lets the keystroke suite run headless.
  */
 
-import { RectoDoc } from "./document.js";
+import { isLineEnding, RectoDoc } from "./document.js";
 import { StringStream } from "./generated/string-stream.js";
 import { hardWrap, scanForBracket } from "./generated/vim-helpers.js";
 import {
@@ -464,9 +464,14 @@ export class RectoCM {
 			if (r.anchor !== r.head) return r;
 			// One grapheme cluster, not one code unit: `R` over an emoji replaces
 			// the whole emoji rather than half of a surrogate pair.
+			//
+			// Line endings are never consumed — replace mode overwrites within a
+			// line and pushes past the end of it. Checking only for `"\n"` joined
+			// lines in a document with CRLF or lone-CR endings: `RXY<Esc>` on
+			// `a\rb\r` produced `XYb\r`.
 			const end = nextCluster(this.doc.text, r.head);
 			const next = this.doc.slice(r.head, end);
-			return next && next !== "\n" ? { anchor: r.anchor, head: end } : r;
+			return next && !isLineEnding(next) ? { anchor: r.anchor, head: end } : r;
 		});
 		this.replaceSelection(text);
 	}

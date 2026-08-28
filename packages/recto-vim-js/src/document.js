@@ -68,6 +68,16 @@ export function splitLines(text) {
 	return { lines, endings };
 }
 
+/**
+ * Whether a string is exactly one line ending. `Intl.Segmenter` reports `\r\n`
+ * as one cluster, so a caller stepping by cluster gets the whole thing.
+ *
+ * @param {string} text
+ */
+export function isLineEnding(text) {
+	return text === "\n" || text === "\r\n" || text === "\r";
+}
+
 export class RectoDoc {
 	/** @param {string} text */
 	constructor(text) {

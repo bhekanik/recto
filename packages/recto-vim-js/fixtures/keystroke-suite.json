@@ -1019,6 +1019,91 @@
 			"cursor": [0, 0],
 			"keys": "v$jr-",
 			"expectText": "--\n--\n"
+		},
+		{
+			"name": "R stops at a LF line ending",
+			"text": "ab\ncd\n",
+			"cursor": [0, 0],
+			"keys": "RXYZ<Esc>",
+			"expectText": "XYZ\ncd\n"
+		},
+		{
+			"name": "R stops at a CRLF line ending",
+			"text": "ab\r\ncd\r\n",
+			"cursor": [0, 0],
+			"keys": "RXYZ<Esc>",
+			"expectText": "XYZ\r\ncd\r\n"
+		},
+		{
+			"name": "R stops at a lone CR line ending",
+			"text": "a\rb\r",
+			"cursor": [0, 0],
+			"keys": "RXY<Esc>",
+			"expectText": "XY\rb\r"
+		},
+		{
+			"name": "R overwrites within the line before extending",
+			"text": "abcd\n",
+			"cursor": [0, 0],
+			"keys": "RXY<Esc>",
+			"expectText": "XYcd\n"
+		},
+		{
+			"name": "R overwrites an emoji as one character",
+			"text": "a👨‍👩‍👧‍👦b\n",
+			"cursor": [0, 0],
+			"keys": "RXY<Esc>",
+			"expectText": "XYb\n"
+		},
+		{
+			"name": "x deletes a Hangul syllable whole",
+			"text": "a가b",
+			"cursor": [0, 1],
+			"keys": "x",
+			"expectText": "ab"
+		},
+		{
+			"name": "x deletes a Hangul LVT syllable whole",
+			"text": "a각b",
+			"cursor": [0, 1],
+			"keys": "x",
+			"expectText": "ab"
+		},
+		{
+			"name": "x deletes a SpacingMark cluster whole",
+			"text": "aकाb",
+			"cursor": [0, 1],
+			"keys": "x",
+			"expectText": "ab"
+		},
+		{
+			"name": "x deletes a Prepend cluster whole",
+			"text": "a؀कb",
+			"cursor": [0, 1],
+			"keys": "x",
+			"expectText": "ab"
+		},
+		{
+			"name": "l steps over a Hangul syllable as one character",
+			"text": "a가b",
+			"cursor": [0, 0],
+			"keys": "llx",
+			"expectText": "a가"
+		},
+		{
+			"name": "r replaces a Hangul syllable with one character",
+			"text": "a가b",
+			"cursor": [0, 1],
+			"keys": "r-",
+			"expectText": "a-b"
+		},
+		{
+			"name": "x leaves a CRLF intact",
+			"text": "a\r\nb\r\n",
+			"cursor": [0, 0],
+			"keys": "x",
+			"expectText": "\r\nb\r\n",
+			"note": "The CRLF is one grapheme cluster, so a clamp that widened the deletion outwards would take it with the `a`. Vim never joins lines with `x`."
 		}
 	]
 }
