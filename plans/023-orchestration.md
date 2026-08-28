@@ -206,7 +206,7 @@ in-flight workers are producing (§4).
 | W6 vim-spike | N0c | spike/vim-jsc | **done: GO** (verbatim core split, ~20× latency headroom) | #5 (draft, not merged) | n/a | n/a |
 | W7 settings-workspaces-deletion | N1b | 023/settings | blocked on W1 | | | |
 | W8 js-cores | N3 | 023/js-cores | round 3 (Codex r2: 9 of 14 fixed, 5 partial; 4 blocking: grapheme splitter is not UAX #29 (Hangul/Indic/CRLF), keyHook never wired + marked-text bypass, replace mode joins CR lines, device perf target does not compile) | #10 | Claude r1 / Codex r1 | n/a (CI) |
-| W9a editor-engine stage 1 (fork plumbing + dialect + RectoEditor skeleton) | N5 | 023/editor-engine | round 3 fixed (fork 422 tests, 0 warnings; RectoEditor 61; one presentation per controller enforced as the interim rule); orchestrator verifying; Codex r3 running | #9 + fork PR #1 (`5e6a00e`) | Claude r1 / Codex r1+r2 | n/a (CI) |
+| W9a editor-engine stage 1 (fork plumbing + dialect + RectoEditor skeleton) | N5 | 023/editor-engine | round 3 fixed (verified by orchestrator: RectoEditor 61 ×2, fork 422 with 0 build warnings); Codex r3 running | #9 + fork PR #1 (`5e6a00e`) | Claude r1 / Codex r1+r2 | n/a (CI) |
 | W9b editor-engine stage 2 (blocks, features, undo-tree, typewriter) | N5 | 023/editor-engine-2 | blocked on W9a | | | |
 | W10 native-core | N4 | 023/native-core | round 4 fixed (verified by orchestrator: 169 tests, full RectoCore with live env ×2, no SIGBUS); Codex r4 running | #7 | Claude r1 / Codex r1+r2 | n/a (CI) |
 | W11 ai-on-convex | N2 | 023/ai-convex | blocked on W7 | | | |
