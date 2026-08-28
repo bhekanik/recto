@@ -127,6 +127,14 @@ export default defineSchema({
 		// ever suggested on. Absent on owner-authored nodes, and on reviewer
 		// nodes written before this field (see migrations.backfillNodeAuthors).
 		authorUserId: v.optional(v.string()),
+		// Which review branch this suggestion node belongs to. Account deletion
+		// decides per BRANCH — an accepted branch's nodes stay, an open or
+		// rejected one's go — and without this the only available grouping was
+		// (document, reviewer), so one accepted branch rescued every other branch
+		// that reviewer had on the same document. Absent on owner-authored nodes
+		// and on reviewer nodes whose branch could not be derived
+		// (migrations.backfillNodeBranches).
+		branchId: v.optional(v.id("reviewBranches")),
 	})
 		.index("by_document", ["documentId"])
 		.index("by_document_node", ["documentId", "nodeId"])
@@ -285,7 +293,61 @@ export default defineSchema({
 		),
 		/** When the tombstone may be swept. Set once the deletion finishes. */
 		expiresAt: v.optional(v.number()),
+		/**
+		 * Progress of the foreign-reference survey that runs before any blob is
+		 * deleted. A blob this user owns may still be referenced by SOMEONE
+		 * ELSE's document or history — a URL pasted across a shared review — and
+		 * deleting it would break their document. Answering that needs a scan of
+		 * everyone else's text, which is far too much for one transaction, so it
+		 * is paged: `blobSurveyCursor` is the `_creationTime` the last pass
+		 * stopped at and `retainedTokens` accumulates the storage tokens foreign
+		 * text mentions.
+		 */
+		blobSurveyCursor: v.optional(v.number()),
+		blobSurveyNodeCursor: v.optional(v.number()),
+		blobSurveyStorageCursor: v.optional(v.number()),
+		blobSurveyDone: v.optional(v.boolean()),
+		/** Tokens SOMEONE ELSE's text mentions. Those files are never deleted. */
+		retainedTokens: v.optional(v.array(v.string())),
+		/**
+		 * Tokens only this user's text mentions. Used to reclaim files uploaded
+		 * by a browser tab running the pre-`/upload-image` protocol, which could
+		 * complete an upload without ever recording ownership.
+		 */
+		ownTokens: v.optional(v.array(v.string())),
+		/**
+		 * The token set hit its cap, so it cannot be trusted as complete. Every
+		 * owned blob is then kept (its ownership row still goes); the daily
+		 * orphan sweep collects whatever nothing references.
+		 */
+		blobSurveyOverflow: v.optional(v.boolean()),
 	})
 		.index("by_user", ["userId"])
 		.index("by_expires", ["expiresAt"]),
+
+	/**
+	 * Migration-only scaffolding: which user's text mentions which storage token
+	 * (`blobRefs`), and how far each backfill has read (`migrationProgress`).
+	 *
+	 * `migrations.backfillBlobOwners` used to read every document AND every
+	 * history node on each 64-file batch, which is exactly the shape that blows
+	 * the per-transaction read limits on any real corpus. Building the reference
+	 * rows first, in bounded passes with persisted progress, makes the claim
+	 * step a bounded index lookup per file. Both tables are dropped by
+	 * `migrations.cleanupBlobRefs` once the backfill is done.
+	 */
+	blobRefs: defineTable({
+		/** The `/api/storage/<token>` segment, or a raw `_storage` id. */
+		token: v.string(),
+		ownerUserId: v.string(),
+	})
+		.index("by_token", ["token"])
+		.index("by_token_owner", ["token", "ownerUserId"]),
+
+	migrationProgress: defineTable({
+		name: v.string(),
+		cursor: v.number(),
+		done: v.boolean(),
+		updatedAt: v.number(),
+	}).index("by_name", ["name"]),
 });
