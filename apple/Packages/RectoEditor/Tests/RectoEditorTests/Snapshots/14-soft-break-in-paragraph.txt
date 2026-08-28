@@ -1,0 +1,13 @@
+# 14-soft-break-in-paragraph
+
+## rich
+Line one⏎    19.0
+Line two still same paragraph⏎    19.0
+
+## raw
+Line one⏎    17.5 mono
+Line two still same paragraph⏎    17.5 mono
+
+## preview
+Line one⏎    19.0
+Line two still same paragraph⏎    19.0

@@ -1,0 +1,25 @@
+# 01-headings-h1-h6-atx
+
+## rich
+··One⏎    32.3 bold
+···Two⏎    27.0 bold
+····Three⏎    23.2 bold
+·····Four⏎    20.5 bold
+······Five⏎    19.0 bold
+·······Six⏎    19.0 bold
+
+## raw
+# One⏎    17.5 mono
+## Two⏎    17.5 mono
+### Three⏎    17.5 mono
+#### Four⏎    17.5 mono
+##### Five⏎    17.5 mono
+###### Six⏎    17.5 mono
+
+## preview
+··One⏎    32.3 bold
+···Two⏎    27.0 bold
+····Three⏎    23.2 bold
+·····Four⏎    20.5 bold
+······Five⏎    19.0 bold
+·······Six⏎    19.0 bold

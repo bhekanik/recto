@@ -1,0 +1,16 @@
+# 24-inline-raw-html
+
+## rich
+<span>safe</span>⏎    19.0
+⏎    —
+<script>alert(1)</script>⏎    19.0
+
+## raw
+<span>safe</span>⏎    17.5 mono
+⏎    —
+<script>alert(1)</script>⏎    17.5 mono
+
+## preview
+<span>safe</span>⏎    19.0
+⏎    —
+<script>alert(1)</script>⏎    19.0

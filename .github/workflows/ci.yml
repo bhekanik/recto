@@ -108,6 +108,44 @@ jobs:
       - run: bunx playwright install --with-deps chromium
       - run: bun run tokens:cascade
 
+  # RectoEditor (plan 023 N5). `macos-26` is arm64 with Xcode 26.6 (17F113)
+  # as the default toolchain — the macOS 26 SDK and Swift 6.3 the package needs
+  # (`swift-tools-version: 6.2`, `.defaultIsolation(MainActor.self)`,
+  # `platforms: [.macOS(.v26)]`). `macos-latest` is the same image today, but
+  # pinning keeps a future -latest bump from silently changing the SDK.
+  #
+  # Blocking: it builds and runs unit tests only. The perf suite is opt-in
+  # (RECTO_RUN_PERF) because wall-clock thresholds on a shared runner are
+  # flaky enough to teach people to ignore red.
+  editor:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo xcode-select -s /Applications/Xcode_26.6.app
+      - run: swift --version
+      # Warnings are failures. The engine's soundness argument is that its
+      # mutable static caches are main-actor isolated, and every actor-isolation
+      # warning is that argument leaking. `unsafeFlags` cannot carry
+      # -warnings-as-errors (SwiftPM refuses them in a package consumed as a
+      # dependency), so the gate lives here. The dependency is compiled from
+      # source, so this covers the fork too.
+      - name: Build (warnings are failures)
+        working-directory: apple/Packages/RectoEditor
+        run: |
+          set -o pipefail
+          swift build 2>&1 | tee build.log
+          if grep -q 'warning:' build.log; then
+            echo "::error::Swift emitted warnings; see below."
+            grep 'warning:' build.log | sort -u | head -40
+            exit 1
+          fi
+      # Three times: the suite mounts real AppKit windows, and window-backed
+      # tests are where flakiness hides. A run that only passes sometimes must
+      # fail here rather than in someone's afternoon.
+      - name: Test
+        working-directory: apple/Packages/RectoEditor
+        run: for i in 1 2 3; do swift test || exit 1; done
+
   # Browser smoke suite (plan 021). Non-blocking (continue-on-error) for the
   # first iteration — flip it to blocking once it has been stable ~2 weeks.
   #

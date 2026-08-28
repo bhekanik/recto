@@ -1,0 +1,16 @@
+# 18-reference-style-link
+
+## rich
+·ref link·····⏎    19.0 link
+⏎    —
+······································    —
+
+## raw
+[ref link][id]⏎    17.5 mono
+⏎    —
+[id]: https://example.com "Ref title"⏎    17.5 mono
+
+## preview
+·ref link·····⏎    19.0 link
+⏎    —
+······································    —

@@ -1,0 +1,16 @@
+# 21-inline-mix
+
+## rich
+··bold·· ·italic· ·code· ··strike·· ·link················ and footnote··n·.⏎    19.0 bold | 19.0 italic | 16.0 mono fill | 19.0 strike | 19.0 link | 19.0 | 15.2 | 19.0
+⏎    —
+··n···Note⏎    15.2 | 19.0
+
+## raw
+**bold** _italic_ `code` ~~strike~~ [link](https://x.com) and footnote[^n].⏎    17.5 mono
+⏎    —
+[^n]: Note⏎    17.5 mono
+
+## preview
+··bold·· ·italic· ·code· ··strike·· ·link················ and footnote··n·.⏎    19.0 bold | 19.0 italic | 16.0 mono fill | 19.0 strike | 19.0 link | 19.0 | 15.2 | 19.0
+⏎    —
+··n···Note⏎    15.2 | 19.0

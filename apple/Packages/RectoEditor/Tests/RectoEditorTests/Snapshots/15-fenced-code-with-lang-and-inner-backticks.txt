@@ -1,0 +1,16 @@
+# 15-fenced-code-with-lang-and-inner-backticks
+
+## rich
+······    —
+const x = `hello`;⏎    16.0 mono indent 12 fill
+···⏎    —
+
+## raw
+```ts⏎    17.5 mono
+const x = `hello`;⏎    17.5 mono
+```⏎    17.5 mono
+
+## preview
+······    —
+const x = `hello`;⏎    16.0 mono indent 12 fill
+···⏎    —
