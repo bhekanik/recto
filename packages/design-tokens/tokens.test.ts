@@ -215,3 +215,51 @@ describe("sRGB gamut", () => {
 		expect(outOfGamut(twilight)).toEqual(["caret"]);
 	});
 });
+
+/**
+ * `app/globals.css` carries two `@theme` blocks: the generated palette and
+ * shadcn's `@theme inline` mapping. Tailwind emits both at `:root`, so a key in
+ * BOTH resolves to whichever is written last — and the loser disappears with no
+ * error anywhere. That is how `--color-accent` spent its life resolving to
+ * `accent-muted` in Twilight (F1).
+ *
+ * This is the cheap, browser-free half of that guard: it catches the collision
+ * at the source. `bun run tokens:cascade` is the other half — it proves what a
+ * real CSS engine actually resolves, for every palette.
+ */
+describe("Tailwind theme keys", () => {
+	/** The custom-property names declared directly inside one at-rule block. */
+	function themeKeys(css: string, atRule: string): Set<string> {
+		const head = css.indexOf(atRule);
+		if (head < 0) throw new Error(`${atRule} not found`);
+		const open = css.indexOf("{", head);
+		let depth = 0;
+		let close = open;
+		for (let i = open; i < css.length; i++) {
+			if (css[i] === "{") depth++;
+			else if (css[i] === "}" && --depth === 0) {
+				close = i;
+				break;
+			}
+		}
+		return new Set(
+			[...css.slice(open, close).matchAll(/^\s*(--[\w-]+)\s*:/gm)].map(
+				(m) => m[1] as string,
+			),
+		);
+	}
+
+	it("shadcn's @theme inline never claims a generated palette key", async () => {
+		const [globals, generated] = await Promise.all([
+			readFile(join(HERE, "..", "..", "app", "globals.css"), "utf8"),
+			readFile(join(COMMITTED, "tokens.css"), "utf8"),
+		]);
+		const palette = themeKeys(generated, "@theme");
+		const shadcn = themeKeys(globals, "@theme inline");
+		const collisions = [...shadcn].filter((k) => palette.has(k)).sort();
+		expect(
+			collisions,
+			"these keys are declared by both blocks, so the palette value is silently discarded",
+		).toEqual([]);
+	});
+});

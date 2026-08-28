@@ -18,7 +18,8 @@
 		"core:build": "bun run packages/recto-core-js/build.ts",
 		"core:parity": "bun run packages/recto-core-js/parity.ts",
 		"fixtures:build": "bun run packages/editor-fixtures/build.ts",
-		"tokens:build": "bun run packages/design-tokens/build.ts"
+		"tokens:build": "bun run packages/design-tokens/build.ts",
+		"tokens:cascade": "bun run packages/design-tokens/accent-cascade.ts"
 	},
 	"devDependencies": {
 		"@clerk/testing": "^2.1.7",
@@ -30,6 +31,7 @@
 		"@types/react": "^19.2.17",
 		"@types/react-dom": "^19.2.3",
 		"culori": "4.0.2",
+		"postcss": "8.5.15",
 		"style-dictionary": "5.5.2"
 	},
 	"peerDependencies": {

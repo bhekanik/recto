@@ -830,8 +830,16 @@
 	--color-input: var(--input);
 	--color-border: var(--border);
 	--color-destructive: var(--destructive);
-	--color-accent-foreground: var(--accent-foreground);
-	--color-accent: var(--accent);
+	/* shadcn's `accent` is its subtle hover/active fill. It is NOT Recto's accent,
+	   and it must not claim Tailwind's `accent` colour key: `@theme inline` is
+	   emitted after the generated palette, so `--color-accent: var(--accent)` at
+	   the same specificity silently replaced Recto's live accent with
+	   `accent-muted` in Twilight — the one palette with no `[data-theme]` rule to
+	   win the cascade back. Namespaced to `ui-accent`, so `bg-ui-accent` /
+	   `text-ui-accent-foreground` are the shadcn fills and `--color-accent` stays
+	   Recto's (ADR-20, follow-up F1). */
+	--color-ui-accent-foreground: var(--accent-foreground);
+	--color-ui-accent: var(--accent);
 	--color-muted-foreground: var(--muted-foreground);
 	--color-muted: var(--muted);
 	--color-secondary-foreground: var(--secondary-foreground);
