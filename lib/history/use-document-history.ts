@@ -61,9 +61,15 @@ const AUTO_VERSION_MS = 120_000; // tag an auto version ~2min after activity set
 /**
  * This client's own most recent pointer move, tracked until the server echoes it
  * back. `appliedAt` is the server `updatedAt` the move was written at, or null
- * while the write is still in flight.
+ * while the write is still in flight. `token` identifies the individual move:
+ * node ids repeat (undo to A, redo to B, undo to A again), so a response must
+ * name the attempt it belongs to or the first A can settle the second.
  */
-export type LocalPointerMove = { nodeId: string; appliedAt: number | null };
+export type LocalPointerMove = {
+	token: number;
+	nodeId: string;
+	appliedAt: number | null;
+};
 
 /** What to do with a `documents.currentNodeId` value the client just observed. */
 export type PointerDecision = "adopt" | "ignore" | "settled";
@@ -91,8 +97,11 @@ export function decideServerPointer(args: {
 	if (serverCurrentNodeId === localMove.nodeId) return "settled";
 	// Our move has not reached the server, so everything we see predates it.
 	if (localMove.appliedAt === null) return "ignore";
-	// The write landed but this query result was produced before it.
-	if (serverUpdatedAt <= localMove.appliedAt) return "ignore";
+	// The write landed but this query result was produced before it. Strictly
+	// earlier: an equal timestamp on a DIFFERENT node means a remote write
+	// executed after ours inside the same millisecond, and our own echo has
+	// already been taken by the `settled` branch above.
+	if (serverUpdatedAt < localMove.appliedAt) return "ignore";
 	return "adopt";
 }
 
@@ -142,6 +151,15 @@ export function useDocumentHistory(args: {
 	currentNodeIdRef.current = currentNodeId;
 	const ensureRootSentRef = useRef(false);
 	const localMoveRef = useRef<LocalPointerMove | null>(null);
+	const moveTokenRef = useRef(0);
+	// A remote pointer we have decided to adopt but cannot project yet — the
+	// writer is mid-sentence, or the node has not reached this client's DAG.
+	// Held until the next safe moment instead of being dropped.
+	const pendingRemotePointerRef = useRef<string | null>(null);
+	// Bumped whenever something happens that could unblock a queued adoption
+	// (a local move settles, the editor blurs). The reconciliation lives in an
+	// effect, so it needs a state dependency to re-run on.
+	const [reconcileTick, setReconcileTick] = useState(0);
 	// The latest editor change seen before the controller hydrated. Without this
 	// the first keystrokes of a session are dropped: recordChange has nowhere to
 	// put them until the DAG query resolves.
@@ -159,22 +177,39 @@ export function useDocumentHistory(args: {
 		ensureRootSentRef.current = false;
 		lastAutoNodeIdRef.current = null;
 		localMoveRef.current = null;
+		pendingRemotePointerRef.current = null;
 		pendingRecordRef.current = null;
 		setLocalNodes([]);
 		setCurrentNodeId(null);
 	}, [documentId]);
 
+	/** Claim the pointer for a move this client is about to write. */
+	const startLocalMove = useCallback((nodeId: string): number => {
+		moveTokenRef.current += 1;
+		localMoveRef.current = {
+			token: moveTokenRef.current,
+			nodeId,
+			appliedAt: null,
+		};
+		return moveTokenRef.current;
+	}, []);
+
 	/**
 	 * Record what became of a pointer move this client started. `appliedAt` is
 	 * the server `updatedAt` it was written at, or null when the move never took
 	 * — a failed write, or a head another writer owns. Either way the guard has
-	 * to go: keeping it would deafen this client to every later remote move. A
-	 * newer move supersedes this one, so only settle the move still outstanding.
+	 * to go: keeping it would deafen this client to every later remote move.
+	 *
+	 * The tick is bumped either way. A move that settles to null unblocks a
+	 * remote pointer this client was ignoring while the move was in flight, and
+	 * nothing else would re-run the reconciliation for it.
 	 */
 	const settleLocalMove = useCallback(
-		(nodeId: string, appliedAt: number | null) => {
-			if (localMoveRef.current?.nodeId !== nodeId) return;
-			localMoveRef.current = appliedAt === null ? null : { nodeId, appliedAt };
+		(token: number, appliedAt: number | null) => {
+			if (localMoveRef.current?.token !== token) return;
+			if (appliedAt === null) localMoveRef.current = null;
+			else localMoveRef.current.appliedAt = appliedAt;
+			setReconcileTick((tick) => tick + 1);
 		},
 		[],
 	);
@@ -228,7 +263,7 @@ export function useDocumentHistory(args: {
 			};
 			setLocalNodes((prev) => [...prev, node]);
 			setCurrentNodeId(commit.nodeId);
-			localMoveRef.current = { nodeId: commit.nodeId, appliedAt: null };
+			const moveToken = startLocalMove(commit.nodeId);
 
 			// One transaction: the node, the pointer, the markdown. See the
 			// documents.commitEdit doc comment for why these can't be separate.
@@ -248,16 +283,29 @@ export function useDocumentHistory(args: {
 				expectedHeadNodeId: commit.parentNodeId,
 				clientMutationId: ulid(),
 			})
-				.then((result) =>
+				.then((result) => {
+					if (!result.committed) {
+						// Another writer owns the head. Queue theirs so the next safe
+						// moment adopts it; the writer is probably still typing, and
+						// re-projecting under their caret is not an option.
+						pendingRemotePointerRef.current = result.remoteHeadNodeId;
+					}
 					settleLocalMove(
-						commit.nodeId,
+						moveToken,
 						result.committed ? result.updatedAt : null,
-					),
-				)
-				.catch(() => settleLocalMove(commit.nodeId, null));
+					);
+				})
+				.catch(() => settleLocalMove(moveToken, null));
 			debouncedAutoVersion();
 		},
-		[commitEdit, debouncedAutoVersion, documentId, origin, settleLocalMove],
+		[
+			commitEdit,
+			debouncedAutoVersion,
+			documentId,
+			origin,
+			settleLocalMove,
+			startLocalMove,
+		],
 	);
 
 	// Hydrate the grouping controller once the DAG + pointer are known.
@@ -370,11 +418,12 @@ export function useDocumentHistory(args: {
 			}
 			controller?.setCurrent(nodeId, markdown);
 			setCurrentNodeId(nodeId);
+			pendingRemotePointerRef.current = null;
 			// Release the guard after the async re-seed cascade (idle-rehydrate, etc.).
 			window.setTimeout(() => {
 				navigatingRef.current = false;
 			}, 200);
-			localMoveRef.current = { nodeId, appliedAt: null };
+			const moveToken = startLocalMove(nodeId);
 			void updatePointer({
 				documentId,
 				currentNodeId: nodeId,
@@ -383,14 +432,14 @@ export function useDocumentHistory(args: {
 				updatedAt: Date.now(),
 			})
 				.then((result) =>
-					settleLocalMove(nodeId, result.applied ? result.updatedAt : null),
+					settleLocalMove(moveToken, result.applied ? result.updatedAt : null),
 				)
 				.catch(() => {
-					settleLocalMove(nodeId, null);
+					settleLocalMove(moveToken, null);
 					toast("Couldn't sync undo position", "error");
 				});
 		},
-		[documentId, nodesById, settleLocalMove, updatePointer],
+		[documentId, nodesById, settleLocalMove, startLocalMove, updatePointer],
 	);
 
 	const undo = useCallback(() => {
@@ -494,29 +543,68 @@ export function useDocumentHistory(args: {
 		return Boolean(children && children.length > 0);
 	}, [currentNodeId, nodes]);
 
-	// Adopt a remote pointer move (cross-device LWW) when idle.
+	// Adopt a remote pointer move (cross-device LWW) at the next safe moment.
+	//
+	// Deciding to adopt and being able to adopt are separate: a writer mid-
+	// sentence must not have state re-projected under their caret, and the node
+	// may not have reached this client's DAG yet. Whatever cannot be applied now
+	// is QUEUED rather than dropped — this effect only re-runs on its own
+	// dependencies, so a pointer skipped once used to be skipped forever, and
+	// with commitEdit's head check that would leave a focused writer diverging
+	// on every commit with no way back.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: reconcileTick is a re-run signal, not a value the body reads — settling a move or blurring the editor bumps it so a queued pointer is reconsidered
 	useEffect(() => {
 		if (!hydratedRef.current) return;
 		if (serverCurrentNodeId === undefined) return;
 		if (serverUpdatedAt === undefined) return;
+
 		const decision = decideServerPointer({
 			serverCurrentNodeId,
 			serverUpdatedAt,
 			localMove: localMoveRef.current,
 		});
+		// Our own move is still resolving; it decides the pointer, not the server.
 		if (decision === "ignore") return;
 		localMoveRef.current = null;
-		if (decision === "settled") return;
-		if (serverCurrentNodeId === currentNodeIdRef.current) return;
+		if (decision === "settled") {
+			// The server is on our node, so anything queued has been overtaken.
+			pendingRemotePointerRef.current = null;
+			return;
+		}
+		if (serverCurrentNodeId !== currentNodeIdRef.current) {
+			pendingRemotePointerRef.current = serverCurrentNodeId;
+		}
+
+		const target = pendingRemotePointerRef.current;
+		if (target === null) return;
+		if (target === currentNodeIdRef.current) {
+			pendingRemotePointerRef.current = null;
+			return;
+		}
+		// Never re-project over text the writer is still producing. `isFocused`
+		// alone is not enough: a click on a panel blurs the editor while the last
+		// keystrokes are still uncommitted.
 		const handle = getHandleRef.current();
-		if (handle?.isFocused()) return; // don't disturb an active writer
-		if (!nodesById.has(serverCurrentNodeId)) return;
-		controllerRef.current?.setCurrent(
-			serverCurrentNodeId,
-			materialize(serverCurrentNodeId, nodesById),
-		);
-		setCurrentNodeId(serverCurrentNodeId);
-	}, [serverCurrentNodeId, serverUpdatedAt, nodesById]);
+		if (handle?.isFocused()) return;
+		if (controllerRef.current?.hasPendingDraft) return;
+		if (!nodesById.has(target)) return; // wait for the node to sync
+
+		pendingRemotePointerRef.current = null;
+		controllerRef.current?.setCurrent(target, materialize(target, nodesById));
+		setCurrentNodeId(target);
+	}, [serverCurrentNodeId, serverUpdatedAt, nodesById, reconcileTick]);
+
+	// The writer leaving the editor is the moment a queued adoption becomes safe.
+	// `focusout` bubbles where `blur` does not, so one window listener covers
+	// every lens; the ref check keeps unrelated focus changes free.
+	useEffect(() => {
+		const onFocusOut = () => {
+			if (pendingRemotePointerRef.current === null) return;
+			setReconcileTick((tick) => tick + 1);
+		};
+		window.addEventListener("focusout", onFocusOut);
+		return () => window.removeEventListener("focusout", onFocusOut);
+	}, []);
 
 	return {
 		nodes,

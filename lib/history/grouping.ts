@@ -70,6 +70,14 @@ export class GroupingController {
 		return this.parentNodeId;
 	}
 
+	/**
+	 * Whether local input exists that no node has captured yet. Callers use this
+	 * to avoid re-projecting remote state over text the writer just produced.
+	 */
+	get hasPendingDraft(): boolean {
+		return this.draftMarkdown !== this.parentMarkdown;
+	}
+
 	/** Reposition the controller after a navigation/restore (no commit). */
 	setCurrent(nodeId: string, markdown: string, depthSinceSnapshot = 0): void {
 		this.cancelIdle();

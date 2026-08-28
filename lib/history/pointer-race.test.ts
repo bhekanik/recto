@@ -18,7 +18,12 @@ import type { HistoryController, HistoryNode } from "./use-document-history";
 // moved locally but the write has not been acknowledged, so every server value
 // the client sees still describes the state before the move.
 // ---------------------------------------------------------------------------
-const mutationCalls: Array<{ name: string; args: unknown }> = [];
+const mutationCalls: Array<{
+	name: string;
+	args: unknown;
+	/** Settle this call's promise; unresolved until a test says otherwise. */
+	resolve: (result: unknown) => void;
+}> = [];
 let dagRows: HistoryNode[] | undefined;
 
 vi.mock("convex/react", () => ({
@@ -27,8 +32,9 @@ vi.mock("convex/react", () => ({
 	useMutation: (ref: never) => {
 		const name = getFunctionName(ref);
 		return (args: unknown) => {
-			mutationCalls.push({ name, args });
-			return new Promise(() => {});
+			const { promise, resolve } = Promise.withResolvers<unknown>();
+			mutationCalls.push({ name, args, resolve });
+			return promise;
 		};
 	},
 }));
@@ -40,6 +46,13 @@ type CommitCall = {
 	expectedHeadNodeId: string;
 	clientMutationId: string;
 };
+
+/** The most recent `documents.commitEdit` call, for tests that settle it. */
+function lastCommitCall() {
+	return mutationCalls.findLast(
+		(c) => c.name === getFunctionName(api.documents.commitEdit),
+	);
+}
 
 /** Args of every `documents.commitEdit` call, in order. */
 function commitCalls(): CommitCall[] {
@@ -67,6 +80,22 @@ function rootNode(): HistoryNode {
 		selection: null,
 		origin: "server",
 		createdAt: 1,
+	};
+}
+
+const REMOTE = "01REMOTEBRANCHNODE0000000";
+const REMOTE_TEXT = "A sentence written on the other device.";
+
+/** A node another device committed on the same root. */
+function remoteNode(): HistoryNode {
+	return {
+		nodeId: REMOTE,
+		parentNodeId: ROOT,
+		patch: JSON.stringify({ from: 0, to: 0, insert: REMOTE_TEXT }),
+		snapshot: REMOTE_TEXT,
+		selection: null,
+		origin: "other-device",
+		createdAt: 2,
 	};
 }
 
@@ -158,7 +187,7 @@ describe("decideServerPointer", () => {
 		expect(
 			decideServerPointer({
 				...base,
-				localMove: { nodeId: "local", appliedAt: null },
+				localMove: { token: 1, nodeId: "local", appliedAt: null },
 			}),
 		).toBe("ignore");
 	});
@@ -167,10 +196,23 @@ describe("decideServerPointer", () => {
 		expect(
 			decideServerPointer({
 				...base,
-				serverUpdatedAt: 2_000,
-				localMove: { nodeId: "local", appliedAt: 2_000 },
+				serverUpdatedAt: 1_999,
+				localMove: { token: 1, nodeId: "local", appliedAt: 2_000 },
 			}),
 		).toBe("ignore");
+	});
+
+	it("adopts a remote move that landed in the same millisecond as ours", () => {
+		// Equal timestamps on a different node: the server pointer is not ours, so
+		// a write executed after ours inside that millisecond. Our own echo is the
+		// `settled` case, not this one.
+		expect(
+			decideServerPointer({
+				...base,
+				serverUpdatedAt: 2_000,
+				localMove: { token: 1, nodeId: "local", appliedAt: 2_000 },
+			}),
+		).toBe("adopt");
 	});
 
 	it("adopts a remote move that is genuinely newer than ours", () => {
@@ -178,7 +220,7 @@ describe("decideServerPointer", () => {
 			decideServerPointer({
 				...base,
 				serverUpdatedAt: 2_001,
-				localMove: { nodeId: "local", appliedAt: 2_000 },
+				localMove: { token: 1, nodeId: "local", appliedAt: 2_000 },
 			}),
 		).toBe("adopt");
 	});
@@ -188,7 +230,7 @@ describe("decideServerPointer", () => {
 			decideServerPointer({
 				...base,
 				serverCurrentNodeId: "local",
-				localMove: { nodeId: "local", appliedAt: null },
+				localMove: { token: 1, nodeId: "local", appliedAt: null },
 			}),
 		).toBe("settled");
 	});
@@ -330,6 +372,97 @@ describe("plan 022 — undo pointer race after an AI accept", () => {
 		expect(h.controller.currentNodeId).toBe(ROOT);
 		expect(h.controller.nodes).toHaveLength(1);
 		expect(commitCalls()).toEqual([]);
+
+		h.unmount();
+	});
+
+	it("adopts a remote pointer it ignored once the local move turns out to have failed", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode()];
+		const h = mountHistory(handle);
+		h.render({ serverCurrentNodeId: ROOT, serverUpdatedAt: 1_000 });
+
+		// This device commits; the write is in flight.
+		act(() => {
+			handle.text = TYPED;
+			h.controller.recordChange({ structural: true });
+		});
+		const localNodeId = h.controller.currentNodeId;
+		expect(localNodeId).not.toBe(ROOT);
+
+		// Meanwhile the other device took the head.
+		dagRows = [rootNode(), remoteNode()];
+		h.render({ serverCurrentNodeId: REMOTE, serverUpdatedAt: 2_000 });
+
+		// Ignored for now — our own move is still resolving and decides the pointer.
+		expect(h.controller.currentNodeId).toBe(localNodeId);
+
+		// The commit comes back diverged. Nothing else will re-run the adoption,
+		// so settling has to be what reconsiders the pointer we set aside.
+		await act(async () => {
+			lastCommitCall()?.resolve({
+				committed: false,
+				diverged: true,
+				remoteHeadNodeId: REMOTE,
+			});
+		});
+
+		expect(h.controller.currentNodeId).toBe(REMOTE);
+
+		h.unmount();
+	});
+
+	it("holds a remote pointer that arrives mid-sentence and adopts it on blur", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode()];
+		const h = mountHistory(handle);
+		h.render({ serverCurrentNodeId: ROOT, serverUpdatedAt: 1_000 });
+
+		// The writer is in the editor.
+		handle.focused = true;
+
+		dagRows = [rootNode(), remoteNode()];
+		h.render({ serverCurrentNodeId: REMOTE, serverUpdatedAt: 2_000 });
+
+		// Not adopted under the caret.
+		expect(h.controller.currentNodeId).toBe(ROOT);
+
+		// They click away. The queued pointer must be reconsidered — before this
+		// it was dropped for good, because the effect never re-ran.
+		handle.focused = false;
+		await act(async () => {
+			window.dispatchEvent(new Event("focusout"));
+		});
+
+		expect(h.controller.currentNodeId).toBe(REMOTE);
+
+		h.unmount();
+	});
+
+	it("still refuses to re-project over uncommitted local text after a blur", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode()];
+		const h = mountHistory(handle);
+		h.render({ serverCurrentNodeId: ROOT, serverUpdatedAt: 1_000 });
+
+		// Typed but not yet grouped into a node: a click on a panel blurs the
+		// editor while those keystrokes are still uncommitted.
+		handle.focused = true;
+		act(() => {
+			handle.text = TYPED;
+			h.controller.recordChange();
+		});
+
+		dagRows = [rootNode(), remoteNode()];
+		h.render({ serverCurrentNodeId: REMOTE, serverUpdatedAt: 2_000 });
+
+		handle.focused = false;
+		await act(async () => {
+			window.dispatchEvent(new Event("focusout"));
+		});
+
+		expect(h.controller.currentNodeId).toBe(ROOT);
+		expect(handle.text).toBe(TYPED);
 
 		h.unmount();
 	});
