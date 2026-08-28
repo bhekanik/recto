@@ -1,0 +1,162 @@
+//
+//  RectoTextStorage.swift
+//  RectoEditor
+//
+
+import AppKit
+import MarkdownEngine
+import Observation
+
+/// One open document's text, shared by every editor view showing it.
+///
+/// The Markdown string is the document — there is no parallel model to keep in
+/// step. This type owns that string, hands edits to the attached editor as
+/// patches (never by reassigning the text, which would reset the caret), and
+/// re-reads the frontmatter when the header could have changed.
+///
+/// One instance per document, not per view: two Mac windows on the same
+/// document share this and therefore share the caret-preserving edit path.
+/// Plan 023 allows that once `DocumentSession`'s tests pass.
+@Observable
+@MainActor
+public final class RectoTextStorage {
+    /// Stable identity. The engine keys per-document state on it.
+    public let documentId: String
+
+    /// The document, in canonical Markdown.
+    ///
+    /// Assigning reconciles the attached editor by patch, so a whole-document
+    /// replacement from sync or a history jump keeps the reader where they
+    /// were. Reads are cheap; the string is the storage.
+    public var markdown: String {
+        didSet {
+            guard markdown != oldValue else { return }
+            frontmatter = Frontmatter.parse(markdown)
+            reconcileEditor()
+        }
+    }
+
+    /// The leading `---` block as data, or `nil`. Re-read on every change.
+    public private(set) var frontmatter: Frontmatter?
+
+    /// Handle on the attached editor. `nil` until a `RectoEditorView` for this
+    /// document is on screen.
+    @ObservationIgnored
+    public let controller = MarkdownEditorController()
+
+    /// The engine's content storage for this document, once the editor is on
+    /// screen — one `NSTextContentStorage` per document, which is what makes
+    /// showing the same document in two windows cheap.
+    ///
+    /// Read-only: layout and drawing belong to the engine. Exposed so a second
+    /// view can be attached to the same storage and so tests can assert the
+    /// string in the storage matches ``markdown`` byte for byte.
+    @ObservationIgnored
+    public var contentStorage: NSTextContentStorage? {
+        controller.textView?.textContentStorage
+    }
+
+    /// Fires for every edit the reader makes, in UTF-16 coordinates, so the
+    /// undo tree and the sync outbox see the same descriptors.
+    @ObservationIgnored
+    public var onEdit: ((MarkdownTextMutation) -> Void)?
+
+    /// `true` while the storage is applying an external change, so a listener
+    /// can tell the reader's typing from a patch it caused itself.
+    @ObservationIgnored
+    public private(set) var isApplyingExternalEdit = false
+
+    public init(documentId: String, markdown: String = "") {
+        self.documentId = documentId
+        self.markdown = markdown
+        self.frontmatter = Frontmatter.parse(markdown)
+    }
+
+    // MARK: - Editing
+
+    /// Apply an edit from outside the editor — a remote change, an undo-tree
+    /// navigation, a canonicalisation pass.
+    ///
+    /// - Returns: `false` when the range does not fit the current text.
+    @discardableResult
+    public func apply(_ patch: MarkdownTextPatch) -> Bool {
+        let ns = markdown as NSString
+        guard patch.range.location != NSNotFound, patch.range.length >= 0,
+              NSMaxRange(patch.range) <= ns.length else { return false }
+        let updated = ns.replacingCharacters(in: patch.range, with: patch.replacement)
+        isApplyingExternalEdit = true
+        defer { isApplyingExternalEdit = false }
+        if controller.isAttached {
+            guard controller.applyPatch(range: patch.range, replacement: patch.replacement) else {
+                return false
+            }
+        }
+        // Assign last: `didSet` reconciles the editor, and it has just been
+        // patched, so there is nothing left for it to do.
+        markdown = updated
+        return true
+    }
+
+    /// The editor writing its text back after an edit. The editor is already
+    /// in this state, so `didSet`'s reconciliation is suppressed — patching it
+    /// back would be a no-op at best.
+    func editorDidWriteBack(_ text: String) {
+        guard markdown != text else { return }
+        withoutReconciling { markdown = text }
+    }
+
+    /// One accepted edit, in UTF-16 display coordinates. Suppressed while the
+    /// storage is applying a patch of its own, so a listener never sees its
+    /// own change come back.
+    func editorDidMutate(_ mutation: MarkdownTextMutation) {
+        guard !isApplyingExternalEdit else { return }
+        onEdit?(mutation)
+    }
+
+    private var isReconciling = false
+
+    private func withoutReconciling(_ body: () -> Void) {
+        isReconciling = true
+        body()
+        isReconciling = false
+    }
+
+    /// Bring the attached editor to `markdown` by patching the one changed run.
+    private func reconcileEditor() {
+        guard !isReconciling, !isApplyingExternalEdit, controller.isAttached else { return }
+        let live = controller.text
+        guard live != markdown else { return }
+        let patch = TextSplice.between(live, and: markdown)
+        controller.applyPatch(range: patch.range, replacement: patch.replacement)
+    }
+}
+
+/// The one changed run between two strings, as a patch.
+///
+/// A common prefix/suffix scan, not a real diff: a document edit is one
+/// contiguous change often enough that the extra machinery would buy nothing,
+/// and a wrong answer here is still correct output (a larger replacement than
+/// necessary), only a bigger restyle.
+enum TextSplice {
+    static func between(_ old: String, and new: String) -> MarkdownTextPatch {
+        let oldNS = old as NSString
+        let newNS = new as NSString
+        var prefix = 0
+        let maxPrefix = min(oldNS.length, newNS.length)
+        while prefix < maxPrefix, oldNS.character(at: prefix) == newNS.character(at: prefix) {
+            prefix += 1
+        }
+        var suffix = 0
+        let maxSuffix = maxPrefix - prefix
+        while suffix < maxSuffix,
+              oldNS.character(at: oldNS.length - 1 - suffix)
+                == newNS.character(at: newNS.length - 1 - suffix) {
+            suffix += 1
+        }
+        return MarkdownTextPatch(
+            range: NSRange(location: prefix, length: oldNS.length - suffix - prefix),
+            replacement: newNS.substring(
+                with: NSRange(location: prefix, length: newNS.length - suffix - prefix))
+        )
+    }
+}

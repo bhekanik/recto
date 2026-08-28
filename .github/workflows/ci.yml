@@ -24,6 +24,28 @@ jobs:
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY_CI }}
           NEXT_PUBLIC_CLERK_SIGN_IN_URL: /login
 
+  # RectoEditor (plan 023 N5). `macos-26` is arm64 with Xcode 26.6 (17F113)
+  # as the default toolchain — the macOS 26 SDK and Swift 6.3 the package needs
+  # (`swift-tools-version: 6.2`, `.defaultIsolation(MainActor.self)`,
+  # `platforms: [.macOS(.v26)]`). `macos-latest` is the same image today, but
+  # pinning keeps a future -latest bump from silently changing the SDK.
+  #
+  # Blocking: it builds and runs unit tests only. The perf suite is opt-in
+  # (RECTO_RUN_PERF) because wall-clock thresholds on a shared runner are
+  # flaky enough to teach people to ignore red.
+  editor:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo xcode-select -s /Applications/Xcode_26.6.app
+      - run: swift --version
+      - name: Build
+        working-directory: apple/Packages/RectoEditor
+        run: swift build
+      - name: Test
+        working-directory: apple/Packages/RectoEditor
+        run: swift test
+
   # Browser smoke suite (plan 021). Non-blocking (continue-on-error) for the
   # first iteration — flip it to blocking once it has been stable ~2 weeks.
   #
