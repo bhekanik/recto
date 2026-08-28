@@ -296,3 +296,18 @@ test("adopting text that did not change is only a selection move", () => {
 	expect(adopted.selections[adopted.mainIndex]).toEqual({ anchor: 1, head: 1 });
 	api.setExternalInput(false);
 });
+
+test("a dangling <C-g> does not survive into the next insert session", () => {
+	const host = start("tail\n");
+	api.setExternalInput(true);
+	press("i", host);
+	press("<C-g>", host);
+	press("<Esc>", host);
+	// `U` in normal mode is an undo command, not the tail of `<C-g>U`; the next
+	// insert session must start with no prefix pending either.
+	press("i", host);
+	const join = press("U", host);
+	expect(join.handled).toBe(false);
+	expect(JSON.parse(api.moveCursorFromHost(0, 0)).undoBreak).toBe(true);
+	api.setExternalInput(false);
+});

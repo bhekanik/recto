@@ -60,6 +60,11 @@ class VimSession {
 			this.mode = e.mode;
 			this.subMode = e.subMode || "";
 			this.modeChanged = true;
+			// `<C-g>U` is insert-mode state; leaving insert must not carry a
+			// half-typed prefix into the next session, where the `U` of an
+			// unrelated command would complete it.
+			this.pendingUndoJoin = false;
+			this.suppressUndoBreak = false;
 			// Upstream's own view plugin clears the pending keys here and on
 			// `vim-command-done`; without both, `pending` accumulates every key of
 			// the session instead of showing a half-typed command.
