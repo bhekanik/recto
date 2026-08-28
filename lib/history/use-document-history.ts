@@ -290,12 +290,19 @@ export function useDocumentHistory(args: {
 		hydratedRef.current = true;
 
 		// Replay anything typed before the DAG query resolved, as one node.
+		// The buffer only says the writer typed *something*; the value comes from
+		// the live editor, because the sync hook may have seeded server markdown
+		// over those keystrokes in the meantime (D11). Committing the buffered
+		// text there would put a node in the DAG that the editor never showed,
+		// and the next recordChange would commit a reverting node on top of it.
 		const pending = pendingRecordRef.current;
 		pendingRecordRef.current = null;
-		if (pending && pending.markdown !== rootMarkdown) {
-			controller.record(pending.markdown, pending.selection, {
-				structural: true,
-			});
+		if (pending) {
+			const typed =
+				getHandleRef.current()?.getCanonicalMarkdown() ?? pending.markdown;
+			if (typed !== rootMarkdown) {
+				controller.record(typed, pending.selection, { structural: true });
+			}
 		}
 	}, [
 		enabled,

@@ -281,4 +281,56 @@ describe("plan 022 — undo pointer race after an AI accept", () => {
 
 		h.unmount();
 	});
+
+	it("replays keystrokes typed before the DAG query resolved", () => {
+		const handle = fakeHandle();
+		// The docNodes query has not resolved, so the controller cannot hydrate.
+		dagRows = undefined;
+		const h = mountHistory(handle);
+		h.render({ serverCurrentNodeId: ROOT, serverUpdatedAt: 1_000 });
+		expect(h.controller.currentNodeId).toBeNull();
+
+		// The writer types into an editor that is already mounted.
+		act(() => {
+			handle.text = TYPED;
+			h.controller.recordChange();
+		});
+
+		// The DAG arrives and the controller hydrates.
+		dagRows = [rootNode()];
+		h.render({ serverCurrentNodeId: ROOT, serverUpdatedAt: 1_000 });
+
+		expect(h.controller.currentNodeId).not.toBe(ROOT);
+		expect(commitCalls().map((c) => c.markdown)).toEqual([TYPED]);
+
+		h.unmount();
+	});
+
+	it("drops pre-hydration keystrokes the sync seed clobbered, rather than committing a node the editor never showed", () => {
+		const handle = fakeHandle();
+		const FROM_SERVER = "Text this document already had on the server.";
+		dagRows = undefined;
+		const h = mountHistory(handle);
+		h.render({ serverCurrentNodeId: ROOT, serverUpdatedAt: 1_000 });
+
+		act(() => {
+			handle.text = "typed before anything had loaded";
+			h.controller.recordChange();
+		});
+
+		// use-document-sync seeds the server markdown (D11), overwriting what the
+		// writer typed — the pre-existing early-input papercut.
+		handle.seed(FROM_SERVER, { programmatic: true });
+
+		const seededRoot = { ...rootNode(), snapshot: FROM_SERVER };
+		dagRows = [seededRoot];
+		h.render({ serverCurrentNodeId: ROOT, serverUpdatedAt: 1_000 });
+
+		// The clobbered text must not become a node: the editor does not show it.
+		expect(h.controller.currentNodeId).toBe(ROOT);
+		expect(h.controller.nodes).toHaveLength(1);
+		expect(commitCalls()).toEqual([]);
+
+		h.unmount();
+	});
 });
