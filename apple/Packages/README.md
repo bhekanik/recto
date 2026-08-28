@@ -62,6 +62,7 @@ await registry.release(documentLocalId)                          // flushes when
 | `navigate(to:)` | Jump anywhere in the DAG. Flushes the pending draft first so you branch from a real node. |
 | `selection(at:)` | The caret stored on a node, to restore after a navigation. |
 | `flush()` | Commit the pending draft and push the queue. Call on background, window close, scene disconnect and mode switch. |
+| `resolveDivergenceKeepingLocal()` / `…KeepingRemote()` | The two non-manual outcomes of the compare sheet. Neither deletes anything. |
 
 Every one of these is **serialized**: actor isolation does not prevent
 reentrancy, so a navigation that suspends while materializing would otherwise be
@@ -81,7 +82,13 @@ typed is what a relaunched window shows — not the head it was typed on top of.
 and sync-event repositioning all queue behind each other. Scheduled work also
 carries a `draftRevision` token that the store refuses if the document has moved
 on, so a 250 ms debounce cannot write its old text back over a newer change.
-| `resolveDivergenceKeepingLocal()` / `…KeepingRemote()` | The two non-manual outcomes of the compare sheet. Neither deletes anything. |
+
+**A frozen session refuses every one of them.** `applyLocalChange`, `tickIdle`,
+`undo`, `redo`, `navigate`, the debounced draft write and both resolvers all
+throw `SessionError.frozen` after `freeze()`; `flush()` deliberately does not,
+because the freeze path itself flushes and that flush is how the pending draft
+reaches sign-out's final unsynced count. Anything accepted between that count
+and the purge would be deleted without anyone consenting.
 
 `DocumentState` carries `markdown`, `head`, `wordCount`, `syncState`,
 `divergence`, `canUndo`, `canRedo`. Render from it; do not read the store
@@ -132,6 +139,25 @@ advanced — would be told `diverged` instead of getting its original answer.
   same transaction as the divergence and enforced in the SQL that selects
   drainable documents, so backgrounding the app cannot drop it and let the
   pointer move queued behind a conflict drain on the next launch.
+- **A barrier is either durable or provisional** (`QueueBlockReason`). `diverged`
+  and `removed` wait for a person. `commit-rejected`, `pointer-move-rejected`
+  and `draft-head-moved` are **provisional**: they exist only so the tail cannot
+  drain while the reconciliation that follows classifies the situation, and that
+  reconciliation must promote them to a divergence or release them. A
+  provisional barrier left behind is a deadlock with no exit — the tail cannot
+  drain, so the document can never become idle, so the adoption that was
+  deferred *because* work was pending never happens, and every later pass reads
+  the remote ancestor as server lag. `SyncEngine.start()` sweeps any a crash
+  abandoned (`reconcileAbandonedBarriers()`).
+- **A deferred adoption does not spend the ordering signal.** `pointerRevision`
+  is recorded only by the adoption that actually happens; recording it while
+  deferring turns "newer" into "equal" and the remote undo reads as lag.
+- **The wake schedule only counts jobs that can be sent.**
+  `earliestNextAttempt()` is the minimum over each UNBLOCKED document's
+  queue-head row, excluding parked rows. `MIN` over every row answers with a
+  later job's default zero timestamp, and the woken drain then arms another
+  zero-delay wake — a spin that consumes a core until the head becomes eligible,
+  or forever behind a barrier.
 - **A divergence holds the document's queue.** A diverged commit returns
   `completedAndBlock`; nothing else for that document is sent until a resolution
   or a fresh reconciliation releases it. Otherwise the pointer move queued behind
@@ -147,7 +173,13 @@ advanced — would be told `diverged` instead of getting its original answer.
   loses a divergence, so the text is preserved without contesting the pointer.
   `pointerMove` sends its **event** timestamp, not the retry time, and reconciles
   when the server answers `applied: false`. `draftSave` sends
-  `expectedHeadNodeId`; a `headMoved` answer is reconciled, never retried.
+  `expectedHeadNodeId`; a `headMoved` answer is reconciled, never retried, and a
+  `stale: true, headMoved: false` answer means the server **wrote nothing** — the
+  refreshed `updatedAt` is stored as the next CAS's baseline and the same job is
+  retried with a capped backoff (`RectoStore.deferJob`, which records no
+  `lastError`, because a lost CAS is not a stuck queue). Completing it there
+  treated a rejection as an acknowledgement and deleted the only retry, so the
+  queue could settle to `synced` with the final draft in SQLite alone.
 
 Nothing reaches the network until `SyncEngine.start()`. `requestDrain()` and
 `openDocument(_:)` on a stopped engine record the intent and return — `start()`
@@ -252,6 +284,19 @@ A→B switch, a revocation and an explicit discard all go through it. It fails
 transition is refused rather than authorised, and the purge plus the ownership
 change happen in one transaction so the rows never outlive the marker.
 
+An **unowned** mirror — one migrated from a build that predates ownership
+markers — is purged too, not merely relabelled. Its rows are still somebody's
+documents, so a clean one used to be handed to the next person to sign in, and
+the explicit-discard path kept the very work the user had just agreed to
+destroy. Only `mirror-owner` and `device-origin` survive a purge: the first so a
+cold start can still tell whose database this is, the second because it
+identifies the machine rather than the account.
+
+The `VACUUM` that follows a purge is **best-effort maintenance**. It runs after
+the transaction has committed, so reporting its failure as the failure of the
+identity transition told the caller to retry a decision whose destructive half
+had already happened.
+
 An owner mismatch on a mirror that still holds unsynced work does **not** purge:
 `status` becomes `.blockedByRetainedWork(owner:count:)` and the UI must offer
 either recovery as that owner or an explicit
@@ -305,6 +350,23 @@ one (convex-swift #26), and the existing bridge refreshes an expired token by
 itself. The one path that must replace it — auth-error recovery — stops every
 subscription first and awaits them.
 
+**`RectoAuth` is the only thing that changes the Convex identity**, and it does
+so in exactly one order: freeze editing → stop and **await** every socket →
+`claimMirror` → Convex login/logout → publish the status → restart the sockets.
+`ConvexTemplateAuthProvider` no longer follows `Clerk.shared.auth.events`; Clerk
+broadcasts to every listener with no ordering between them, so a second listener
+could log Convex in as B while A's subscriptions were still delivering into A's
+mirror. `bind(client:)` does one login while the transport is still being
+constructed and no socket exists yet.
+
+**A failed cached login is recorded as failed.** The session id is written only
+after `loginFromCache()` succeeds and cleared when it does not, and
+`RectoAuth.recoverConvexLoginIfNeeded()` is the quiesced retry to call on
+reconnect and on foreground. Recording the id first and ignoring the result left
+one transient failure suppressing every later attempt for that session — and a
+user with an empty outbox never reaches the drain's auth-error recovery, so
+their library simply never arrived.
+
 **One coordinator owns every Convex auth call.** `ConvexAuthCoordinator` is the
 single path for `login`/`logout` on the client — foreground resume, auth-error
 recovery, bind-time session login and explicit sign-out all queue behind it —
@@ -325,11 +387,11 @@ also carries a lifecycle generation it re-checks after every external await.
 ## Tests
 
 ```
-swift test --package-path apple/Packages/RectoHistory   # 37 — web parity
-swift test --package-path apple/Packages/RectoStore     # 27 — incl. v1→v4 and v3→v4 upgrades
-swift test --package-path apple/Packages/RectoAuth      # 23
-swift test --package-path apple/Packages/RectoSync      # 42 — server contract + live flows
-swift test --package-path apple/Packages/RectoCore      # 52 — acceptance, provenance, repros
+swift test --package-path apple/Packages/RectoHistory   # 39 — web parity
+swift test --package-path apple/Packages/RectoStore     # 34 — incl. v1→v4 and v3→v4 upgrades
+swift test --package-path apple/Packages/RectoAuth      # 30
+swift test --package-path apple/Packages/RectoSync      # 45 — server contract + live flows
+swift test --package-path apple/Packages/RectoCore      # 56 — acceptance, provenance, repros
 ```
 
 SwiftPM has served a **stale cross-package module** here more than once: editing
