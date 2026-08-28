@@ -1,27 +1,33 @@
 #!/bin/bash
 #
-# Installs the built JS bundles into the Swift packages that ship them, and
-# refuses to install one that does not match its manifest.
+# Builds the JS bundles, installs them into the Swift packages that ship them,
+# and refuses to install one that must not go out.
 #
 # This is the Xcode "Run Script" build phase target (plan 023 §2). It also runs
 # standalone, which is how `swift test` and CI get their resources:
 #
 #     bun install --frozen-lockfile
-#     bun run core:build && bun run vim:build
 #     apple/scripts/copy-js-bundles.sh
+#
+# **It builds; it does not merely check.** Comparing a bundle against the
+# manifest written beside it only proves the bundle has not been corrupted since
+# it was built — edit `lib/`, keep the matching pair, and the check passes, which
+# is exactly the case that matters. The alternative to building would be hashing
+# every build input here and again in `build.ts`, two implementations of one hash
+# that have to agree byte for byte forever. Running the build is cheaper to
+# maintain and cannot be wrong: `build.ts` is deterministic, so an unchanged tree
+# reproduces the same bytes, and `cmp` below keeps an unchanged bundle from
+# touching the file and invalidating the rest of the build.
+#
+# Without `bun` on PATH it falls back to verifying whatever is already in
+# `dist/`, and says out loud that it could not check staleness. That is a real
+# degradation, not a pass — the message is the point.
 #
 # Why a copy and not a symlink: SwiftPM does not follow symlinks when it stages
 # resources, and Xcode's resource copier does not either.
 #
-# Why the hash check: the bundles are gitignored build output, so a stale one in
-# `Resources/` is invisible in a diff. Comparing against the manifest that
-# `build.ts` wrote makes "you edited lib/ and forgot to rebuild" a build error
-# instead of a native app running last week's markdown semantics.
-#
-# In an Xcode run-script phase, declare the inputs and outputs so Xcode does not
-# skip it:
-#   Input Files:  $(SRCROOT)/../packages/recto-core-js/manifest.json
-#                 $(SRCROOT)/../packages/recto-vim-js/manifest.json
+# In an Xcode run-script phase, leave "Based on dependency analysis" unchecked so
+# it runs every build, and declare:
 #   Output Files: $(SRCROOT)/Packages/RectoCoreJS/Sources/RectoCoreJS/JS/recto-core.js
 #                 $(SRCROOT)/Packages/RectoVim/Sources/RectoVim/JS/recto-vim.js
 set -euo pipefail
@@ -31,59 +37,98 @@ repo="$(cd "$here/../.." && pwd)"
 
 fail() {
 	echo "error: $*" >&2
-	echo "note: run \`bun install --frozen-lockfile && bun run core:build && bun run vim:build\` from $repo" >&2
 	exit 1
 }
 
 # A bundle that ships inside the app must not carry any of these (plan 023 §2:
-# "no localhost, no source maps, no secrets").
+# "no localhost, no source maps, no secrets"). Matched case-insensitively, so
+# `LOCALHOST` and `SK-OR-V1-` are caught too.
 #
-# Each pattern is deliberately narrower than the word it guards, because the
-# bare words do occur innocently in a megabyte of bundled dependencies and a
-# gate that cries wolf gets switched off. `//localhost` or `localhost:` is an
-# endpoint, where the word alone is `node:url`'s "File URL host must be
-# \"localhost\" or empty" message. `sourceMappingURL=` is the pragma, not the
-# name. `sk_test_`/`sk_live_`/`pk_live_` are the Clerk and Stripe key shapes;
-# a bare `sk_` matches minified identifiers.
-FORBIDDEN=(
-	"(//|[[:space:]\"'])localhost([:/]|$)"
-	"sourceMappingURL="
-	"(sk|pk)_(test|live)_[A-Za-z0-9]"
-	"OPENROUTER"
+# Each pattern is narrower than the word it guards, because the bare words do
+# occur innocently in a megabyte of bundled dependencies and a gate that cries
+# wolf gets switched off. `//localhost` or `localhost:` is an endpoint; the word
+# alone is `node:url`'s "File URL host must be \"localhost\"" message.
+#
+# The key shapes are the ones this repo handles or could plausibly be pasted into
+# a source file: Clerk and Stripe, OpenRouter, OpenAI, GitHub, Convex deploy
+# keys, AWS, Google, Slack, and PEM private-key headers. `scan-samples.sh` runs
+# every pattern against a positive and a negative sample, so one that stops
+# matching fails CI instead of going quiet.
+#
+# Deliberately not gitleaks: it would put a network download inside a build phase
+# that has to work offline and inside Xcode Cloud's sandbox. Narrower coverage,
+# no new dependency, and tested — that is the trade.
+RECTO_FORBIDDEN=(
+	'(//|[[:space:]"'"'"'])localhost([:/]|$)'
+	'(//|[[:space:]"'"'"'])127\.0\.0\.1([:/]|$)'
+	'(//|[[:space:]"'"'"'])0\.0\.0\.0([:/]|$)'
+	'\[::1\]'
+	'sourceMappingURL='
+	'(sk|pk)_(test|live)_[A-Za-z0-9]{8}'
+	'sk-(or-v1|proj|svcacct)-[A-Za-z0-9_-]{8}'
+	'(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{16}'
+	'github_pat_[A-Za-z0-9_]{16}'
+	'AKIA[0-9A-Z]{12}'
+	'AIza[0-9A-Za-z_-]{16}'
+	'xox[baprs]-[0-9A-Za-z-]{10}'
+	'BEGIN [A-Z ]*PRIVATE KEY'
+	'OPENROUTER'
+	'CONVEX_DEPLOY_KEY'
 )
 
+recto_scan_file() {
+	local label="$1" path="$2" hits
+	for pattern in "${RECTO_FORBIDDEN[@]}"; do
+		hits="$(grep -c -E -i -- "$pattern" "$path" || true)"
+		if [ "$hits" != "0" ]; then
+			echo "error: $label has $hits line(s) matching /$pattern/, which must not ship" >&2
+			return 1
+		fi
+	done
+	return 0
+}
+
+# `scan-samples.sh` sources this file for the patterns and the scanner.
+if [ "${RECTO_SCAN_PATTERNS_ONLY:-}" = "1" ]; then
+	return 0 2>/dev/null || exit 0
+fi
+
+read_manifest_sha() {
+	# The manifest has a fixed shape written by `build.ts`; depending on jq would
+	# make the Xcode phase fail on a machine that does not have it.
+	sed -n 's/.*"sha256"[[:space:]]*:[[:space:]]*"\([0-9a-f]*\)".*/\1/p' "$1"
+}
+
 install_bundle() {
-	local package="$1" file="$2" target_dir="$3"
+	local package="$1" file="$2" script="$3" target_dir="$4"
 	local source="$repo/packages/$package/dist/$file"
 	local manifest="$repo/packages/$package/manifest.json"
 
-	[ -f "$source" ] || fail "$package: $source is missing"
-	[ -f "$manifest" ] || fail "$package: $manifest is missing"
-
-	# Read the recorded hash without a JSON parser: the manifest is written by
-	# `build.ts` with a fixed shape, and depending on jq would make the Xcode
-	# phase fail on a machine that does not have it.
-	local expected
-	expected="$(sed -n 's/.*"sha256"[[:space:]]*:[[:space:]]*"\([0-9a-f]*\)".*/\1/p' "$manifest")"
-	[ -n "$expected" ] || fail "$package: manifest.json has no sha256"
-
-	local actual
-	actual="$(shasum -a 256 "$source" | cut -d' ' -f1)"
-	if [ "$actual" != "$expected" ]; then
-		fail "$package: $file does not match manifest.json (built $expected, found $actual) — rebuild"
+	if command -v bun >/dev/null 2>&1; then
+		# Quiet on success, and the build's own output on failure — `bun run`
+		# echoes the command it runs to stderr, which is noise in a build log
+		# until something goes wrong.
+		local log
+		log="$(cd "$repo" && bun run "$script" 2>&1)" ||
+			fail "\`bun run $script\` failed:
+$log"
+	else
+		[ -f "$source" ] ||
+			fail "$package: bun is not on PATH and there is no bundle to fall back on — run \`bun install && bun run $script\` from $repo"
+		echo "warning: bun is not on PATH; using the existing $file WITHOUT checking it against its sources" >&2
 	fi
 
-	local hit
-	for pattern in "${FORBIDDEN[@]}"; do
-		hit="$(grep -c -E -- "$pattern" "$source" || true)"
-		if [ "$hit" != "0" ]; then
-			fail "$package: $file has $hit line(s) matching /$pattern/, which must not ship"
-		fi
-	done
+	[ -f "$manifest" ] || fail "$package: $manifest is missing"
+	local expected actual
+	expected="$(read_manifest_sha "$manifest")"
+	[ -n "$expected" ] || fail "$package: manifest.json has no sha256"
+	actual="$(shasum -a 256 "$source" | cut -d' ' -f1)"
+	[ "$actual" = "$expected" ] ||
+		fail "$package: $file does not match manifest.json (built $expected, found $actual)"
+
+	recto_scan_file "$package/$file" "$source" || exit 1
 
 	mkdir -p "$target_dir"
-	# `cp` only when the bytes differ, so an unchanged bundle does not touch the
-	# file and invalidate everything downstream of it in an incremental build.
 	if ! cmp -s "$source" "$target_dir/$file"; then
 		cp "$source" "$target_dir/$file"
 		echo "installed $file ($(wc -c <"$source" | tr -d ' ') bytes, sha256 ${actual:0:16}…) -> ${target_dir#"$repo"/}"
@@ -92,7 +137,7 @@ install_bundle() {
 	fi
 }
 
-install_bundle recto-core-js recto-core.js \
+install_bundle recto-core-js recto-core.js core:build \
 	"$repo/apple/Packages/RectoCoreJS/Sources/RectoCoreJS/JS"
-install_bundle recto-vim-js recto-vim.js \
+install_bundle recto-vim-js recto-vim.js vim:build \
 	"$repo/apple/Packages/RectoVim/Sources/RectoVim/JS"
