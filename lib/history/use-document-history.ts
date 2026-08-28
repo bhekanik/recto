@@ -97,6 +97,41 @@ export type LocalPointerMove = {
 /** A remote pointer we have decided to adopt but could not project yet. */
 export type QueuedRemotePointer = { nodeId: string; revision: number };
 
+/**
+ * The server's stored markdown, but only when it can be trusted as a draft
+ * belonging to `headNodeId` — otherwise null, meaning "show the DAG instead".
+ *
+ * `documents.markdown` can be ahead of the head (a writer who never paused long
+ * enough to close a grouping boundary) which is worth rescuing, or it can be
+ * text a pre-deploy client saved with no idea which branch it belonged to,
+ * which must never be promoted into this one. `markdownHeadNodeId` is the only
+ * thing that tells those apart, so an absent or mismatched stamp is distrusted.
+ *
+ * Shared by first-open hydration and remote reconciliation so both answer the
+ * question the same way.
+ */
+export function trustedServerDraft(args: {
+	headNodeId: string;
+	materialized: string;
+	serverMarkdown: string | undefined;
+	serverMarkdownHeadNodeId: string | undefined;
+	/** False when the observation is not newer than what the editor shows. */
+	isNewerThanBaseline: boolean;
+}): string | null {
+	const {
+		headNodeId,
+		materialized,
+		serverMarkdown,
+		serverMarkdownHeadNodeId,
+		isNewerThanBaseline,
+	} = args;
+	if (serverMarkdown === undefined) return null;
+	if (serverMarkdownHeadNodeId !== headNodeId) return null;
+	if (serverMarkdown === materialized) return null;
+	if (!isNewerThanBaseline) return null;
+	return serverMarkdown;
+}
+
 /** What to do with a `documents.currentNodeId` value the client just observed. */
 export type PointerDecision = "adopt" | "ignore" | "settled";
 
@@ -439,20 +474,49 @@ export function useDocumentHistory(args: {
 		headNodeIdRef.current = serverCurrentNodeId;
 		hydratedRef.current = true;
 
-		// Replay anything typed before the DAG query resolved, as one node.
-		// The buffer only says the writer typed *something*; the value comes from
-		// the live editor, because the sync hook may have seeded server markdown
-		// over those keystrokes in the meantime (D11). Committing the buffered
-		// text there would put a node in the DAG that the editor never showed,
-		// and the next recordChange would commit a reverting node on top of it.
+		// First open goes through the SAME provenance rule as a remote update.
+		// The sync hook cannot apply it — it has no DAG — so it leaves the editor
+		// alone for us, and everything the writer ends up looking at is decided
+		// here, once, with the tree in hand.
+		const handle = getHandleRef.current();
+		const editorText = handle?.getCanonicalMarkdown() ?? "";
+
+		// Local input outranks anything from the server: keystrokes that landed
+		// before the DAG resolved, or a draft recovered from localStorage (which
+		// the sync hook does seed, because it is this writer's own unsaved work).
 		const pending = pendingRecordRef.current;
 		pendingRecordRef.current = null;
-		if (pending) {
-			const typed =
-				getHandleRef.current()?.getCanonicalMarkdown() ?? pending.markdown;
-			if (typed !== rootMarkdown) {
-				controller.record(typed, pending.selection, { structural: true });
-			}
+		const localInput =
+			pending?.markdown ??
+			(editorText !== "" &&
+			editorText !== rootMarkdown &&
+			editorText !== serverMarkdown
+				? editorText
+				: null);
+
+		// Opening is the first thing this device has seen, so there is no earlier
+		// baseline for the server to be newer than.
+		const serverDraft = trustedServerDraft({
+			headNodeId: serverCurrentNodeId,
+			materialized: rootMarkdown,
+			serverMarkdown,
+			serverMarkdownHeadNodeId,
+			isNewerThanBaseline: true,
+		});
+
+		const shown = localInput ?? serverDraft ?? rootMarkdown;
+		if (editorText !== shown) handle?.seed(shown, { programmatic: true });
+		if (shown !== rootMarkdown) {
+			// An OPEN draft on the node, not silent editor text: undo, a version
+			// tag or an AI replacement all flush first, so this text becomes a real
+			// child node instead of being dropped by the navigation.
+			controller.record(shown, pending?.selection ?? null);
+		}
+		if (localInput === null) {
+			// Server-derived text — tell the sync hook this is the baseline, or it
+			// will push it back up as though the writer had typed it. Local input
+			// stays dirty and is deliberately NOT reported as saved.
+			onRemoteProjectionRef.current?.(shown, serverUpdatedAt ?? 0);
 		}
 	}, [
 		enabled,
@@ -460,6 +524,8 @@ export function useDocumentHistory(args: {
 		dagRows,
 		serverCurrentNodeId,
 		serverMarkdown,
+		serverMarkdownHeadNodeId,
+		serverUpdatedAt,
 		ensureRoot,
 		onCommit,
 		setPointer,
@@ -730,12 +796,16 @@ export function useDocumentHistory(args: {
 		// that text may belong to another branch entirely and must never be
 		// promoted into this one. Then the node's own materialization is the only
 		// thing we know to be true.
-		const trustedDraft =
-			serverMarkdown !== undefined &&
-			serverMarkdownHeadNodeId === target.nodeId &&
-			serverMarkdown !== materialized &&
-			(serverUpdatedAt ?? 0) > (getBaselineUpdatedAt?.() ?? 0);
-		const editorText = trustedDraft ? serverMarkdown : materialized;
+		const draft = trustedServerDraft({
+			headNodeId: target.nodeId,
+			materialized,
+			serverMarkdown,
+			serverMarkdownHeadNodeId,
+			isNewerThanBaseline:
+				(serverUpdatedAt ?? 0) > (getBaselineUpdatedAt?.() ?? 0),
+		});
+		const trustedDraft = draft !== null;
+		const editorText = draft ?? materialized;
 
 		const alreadyThere = target.nodeId === currentNodeIdRef.current;
 		// The pointer has not moved and there is no newer trusted draft to show:

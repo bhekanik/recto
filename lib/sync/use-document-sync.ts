@@ -91,6 +91,12 @@ export function useDocumentSync({
 	const [pendingConflict, setPendingConflict] = useState(false);
 
 	const expectedUpdatedAtRef = useRef<number>(0);
+	// The server revision the EDITOR is actually showing. Distinct from
+	// expectedUpdatedAtRef, which is a compare-and-set token: that one advances
+	// when a remote update is DEFERRED, so that a later save can still pass the
+	// CAS. Using it to answer "is this newer than what the writer sees" made a
+	// deferred projection look already-seen and project stale text over a draft.
+	const projectedBaselineUpdatedAtRef = useRef<number>(0);
 	const lastWrittenUpdatedAtRef = useRef<number>(0);
 	const lastHandledServerUpdatedAtRef = useRef<number>(0);
 	const hasSeededRef = useRef(false);
@@ -109,6 +115,7 @@ export function useDocumentSync({
 		lastWrittenUpdatedAtRef.current = 0;
 		lastHandledServerUpdatedAtRef.current = 0;
 		lastFlushedMarkdownRef.current = "";
+		projectedBaselineUpdatedAtRef.current = 0;
 	}, [documentId]);
 
 	const performFlush = useCallback(
@@ -181,6 +188,7 @@ export function useDocumentSync({
 				lastWrittenUpdatedAtRef.current = result.updatedAt;
 				lastHandledServerUpdatedAtRef.current = result.updatedAt;
 				lastFlushedMarkdownRef.current = markdown;
+				projectedBaselineUpdatedAtRef.current = result.updatedAt;
 				pendingMarkdownRef.current = null;
 				clearDraft(documentId);
 				setSyncStatus("saved");
@@ -250,7 +258,7 @@ export function useDocumentSync({
 	}, [debouncedFlush, flush]);
 
 	const getBaselineUpdatedAt = useCallback(
-		() => expectedUpdatedAtRef.current,
+		() => projectedBaselineUpdatedAtRef.current,
 		[],
 	);
 
@@ -295,12 +303,22 @@ export function useDocumentSync({
 				documentId,
 			);
 
-			editorRef.seed(markdown, { programmatic: true });
-			setWordCount(countWords(markdown));
+			// A recovered localStorage draft is this writer's own unsaved work and
+			// always wins, so seed it here. Plain server markdown does NOT get
+			// seeded when the history hook owns projection: only it can tell a
+			// trustworthy draft from text a pre-deploy client left under an
+			// unknown head, and showing the untrustworthy kind — even briefly —
+			// is how it ends up committed as a child of the wrong node.
+			const recoveredDraft = markdown !== serverMarkdown;
+			if (recoveredDraft || !reconcileRemote) {
+				editorRef.seed(markdown, { programmatic: true });
+				setWordCount(countWords(markdown));
+				lastFlushedMarkdownRef.current = markdown;
+				projectedBaselineUpdatedAtRef.current = serverUpdatedAt ?? 0;
+			}
 			expectedUpdatedAtRef.current = serverUpdatedAt ?? 0;
 			lastWrittenUpdatedAtRef.current = serverUpdatedAt ?? 0;
 			lastHandledServerUpdatedAtRef.current = serverUpdatedAt ?? 0;
-			lastFlushedMarkdownRef.current = markdown;
 			hasSeededRef.current = true;
 
 			if (hadConflict && !isOwnDraftOrigin(draftOrigin)) {
@@ -316,7 +334,7 @@ export function useDocumentSync({
 		}, 50);
 
 		return () => window.clearInterval(interval);
-	}, [enabled, documentId, serverMarkdown, serverUpdatedAt]);
+	}, [enabled, documentId, reconcileRemote, serverMarkdown, serverUpdatedAt]);
 
 	// Idle re-hydrate when remote write arrives (G7.4 origin/updatedAt guard)
 	useEffect(() => {
@@ -397,6 +415,7 @@ export function useDocumentSync({
 			lastWrittenUpdatedAtRef.current = serverRevisionUpdatedAt;
 			lastHandledServerUpdatedAtRef.current = serverRevisionUpdatedAt;
 			lastFlushedMarkdownRef.current = markdown;
+			projectedBaselineUpdatedAtRef.current = serverRevisionUpdatedAt;
 			pendingMarkdownRef.current = null;
 			if (documentId) clearDraft(documentId);
 			setSyncStatus("saved");
