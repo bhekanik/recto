@@ -54,11 +54,12 @@ type StatusBarProps = {
 	readingMinutes: number;
 	syncStatus: SyncStatus;
 	/**
-	 * Present only when the server has REFUSED a write. Re-sending it cannot
-	 * help, so the indicator becomes the writer's way out: discard the refused
-	 * write and keep the text, which their next edit saves as a new change.
+	 * Present only while a write is stuck. The indicator becomes a control that
+	 * opens the confirmation — which is where the server's message, what would
+	 * be discarded, and Retry live. It deliberately does NOT discard on click:
+	 * discarding is lossy and a one-click control could not say so.
 	 */
-	onResolveBlocked?: () => void;
+	onShowBlocked?: () => void;
 	mode: Mode;
 	onModeChange: (mode: Mode) => void;
 	theme: Theme;
@@ -145,10 +146,10 @@ const SYNC_META: Record<
 // label flipping between Saving/Saved/Unsynced never reflows its neighbours.
 function SyncIndicator({
 	status,
-	onResolveBlocked,
+	onShowBlocked,
 }: {
 	status: SyncStatus;
-	onResolveBlocked?: () => void;
+	onShowBlocked?: () => void;
 }) {
 	const meta = SYNC_META[status];
 	const body = (
@@ -171,13 +172,13 @@ function SyncIndicator({
 	);
 	// "Not synced" is the one status a writer can do something about, so when
 	// there is something to do it is a control rather than a label.
-	if (onResolveBlocked) {
+	if (onShowBlocked) {
 		return (
 			<button
 				type="button"
 				className={cn(className, "underline decoration-dotted")}
-				onClick={onResolveBlocked}
-				title="This change was refused by the server. Discard it and keep your text — your next edit saves it as a new change."
+				onClick={onShowBlocked}
+				title="A change couldn't be saved. Open the details to try again or discard it."
 			>
 				{body}
 			</button>
@@ -289,7 +290,7 @@ export function StatusBar({
 	wordCount,
 	readingMinutes,
 	syncStatus,
-	onResolveBlocked,
+	onShowBlocked,
 	mode,
 	onModeChange,
 	theme,
@@ -618,10 +619,7 @@ export function StatusBar({
 				>
 					·
 				</span>
-				<SyncIndicator
-					status={syncStatus}
-					onResolveBlocked={onResolveBlocked}
-				/>
+				<SyncIndicator status={syncStatus} onShowBlocked={onShowBlocked} />
 			</div>
 		</footer>
 	);

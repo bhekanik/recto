@@ -49,9 +49,11 @@ export type DocumentSyncState = {
 	projectionGeneration: string;
 	/** Work the server has not confirmed yet — queued or in flight. */
 	hasPendingWrites: boolean;
-	/** A write the server refused; terminal until the writer resolves it. */
+	/** The write the queue is stuck on, refused or unclassified. */
 	blockedWrite: BlockedWrite | null;
-	/** Discard the refused write and everything behind it, keeping the text. */
+	/** Send the stuck write again, unchanged. Non-destructive. */
+	retryBlockedWrite: () => void;
+	/** Discard the stuck write and everything behind it, keeping the text. */
 	resolveBlockedWrite: () => void;
 	handleEditorChange: () => void;
 	flushMarkdown: (markdown: string) => Promise<void>;
@@ -317,6 +319,7 @@ function OwnerSyncHost({
 		projectionGeneration,
 		hasPendingWrites: history.hasPendingWrites,
 		blockedWrite: history.blockedWrite,
+		retryBlockedWrite: history.retryBlockedWrite,
 		resolveBlockedWrite: history.resolveBlockedWrite,
 		handleEditorChange,
 		flushMarkdown: sync.flushMarkdown,
@@ -462,6 +465,7 @@ function ReviewerSyncHost({
 		projectionGeneration: "reviewer",
 		hasPendingWrites: false,
 		blockedWrite: null,
+		retryBlockedWrite: noopResolveBlocked,
 		resolveBlockedWrite: noopResolveBlocked,
 		handleEditorChange,
 		// No owner write path for a grantee — flushing markdown is a no-op.

@@ -20,6 +20,7 @@ import { CommentsPanel } from "@/components/review/comments-panel";
 import { ReviewSurface } from "@/components/review/review-surface";
 import { ShareDialog } from "@/components/share-dialog";
 import { StatusBar } from "@/components/status-bar";
+import { BlockedWriteDialog } from "@/components/sync/blocked-write-dialog";
 import { Toaster } from "@/components/toaster";
 import { TopFormatToolbar } from "@/components/top-format-toolbar";
 import { Button } from "@/components/ui/button";
@@ -56,7 +57,7 @@ import {
 } from "@/lib/studio/use-studio-settings";
 import { useWritingStats } from "@/lib/studio/use-writing-stats";
 import { useZenMode } from "@/lib/studio/use-zen-mode";
-import { displaySyncStatus } from "@/lib/sync/sync-indicator";
+import { syncIndicatorProps } from "@/lib/sync/sync-indicator";
 import { cn } from "@/lib/utils";
 import { findLeaf } from "@/lib/workspace/queries";
 import {
@@ -167,6 +168,7 @@ function StudioWorkspace() {
 			: activeShareState.role === "owner";
 	const effectiveAiEnabled = settings.aiEnabled && !activeDocShared;
 	const [shareDialogOpen, setShareDialogOpen] = useState(false);
+	const [blockedDialogOpen, setBlockedDialogOpen] = useState(false);
 
 	// Comments (plan 010 Phase B). Available whenever the caller can see the active
 	// doc with at least commenter access: the owner always can; a grantee can (any
@@ -676,14 +678,10 @@ function StudioWorkspace() {
 						<StatusBar
 							wordCount={activeSync.wordCount}
 							readingMinutes={readingTimeMinutes(activeSync.wordCount)}
-							syncStatus={displaySyncStatus({
-								status: activeSync.syncStatus,
-								hasPendingWrites: activeSync.hasPendingWrites,
-								blocked: activeSync.blockedWrite !== null,
-							})}
-							onResolveBlocked={
-								activeSync.blockedWrite
-									? activeSync.resolveBlockedWrite
+							syncStatus={syncIndicatorProps(activeSync).syncStatus}
+							onShowBlocked={
+								syncIndicatorProps(activeSync).blocked
+									? () => setBlockedDialogOpen(true)
 									: undefined
 							}
 							mode={activeMode}
@@ -829,6 +827,19 @@ function StudioWorkspace() {
 							settings.setOutlineOpen(false);
 							dispatchFocusEditor();
 						}}
+					/>
+				)}
+
+				{activeSync && (
+					<BlockedWriteDialog
+						blocked={activeSync.blockedWrite}
+						open={blockedDialogOpen && activeSync.blockedWrite !== null}
+						onOpenChange={(open) => {
+							setBlockedDialogOpen(open);
+							if (!open) dispatchFocusEditor();
+						}}
+						onRetry={activeSync.retryBlockedWrite}
+						onDiscard={activeSync.resolveBlockedWrite}
 					/>
 				)}
 

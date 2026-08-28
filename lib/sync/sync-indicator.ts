@@ -1,3 +1,4 @@
+import type { DiscardSummary } from "@/lib/history/use-document-history";
 import type { SyncStatus } from "@/lib/sync/use-document-sync";
 
 /**
@@ -34,4 +35,67 @@ export function displaySyncStatus(args: {
 		return "unsynced";
 	}
 	return args.status;
+}
+
+/**
+ * What discarding a stuck write would throw away, in words. The counts matter
+ * to the writer: "your last two edits, one of them from the AI, a saved version
+ * and a history move" is a decision they can make; "discard queued work" is not.
+ */
+export function describeDiscards(discards: DiscardSummary): string[] {
+	const parts: string[] = [];
+	if (discards.commits > 0) {
+		const edits = `${discards.commits} unsaved ${discards.commits === 1 ? "edit" : "edits"}`;
+		parts.push(
+			discards.aiCommits > 0
+				? `${edits} (${discards.aiCommits} from AI)`
+				: edits,
+		);
+	}
+	if (discards.versions > 0) {
+		parts.push(
+			`${discards.versions} saved ${discards.versions === 1 ? "version" : "versions"}`,
+		);
+	}
+	if (discards.pointers > 0) {
+		parts.push(
+			`${discards.pointers} history ${discards.pointers === 1 ? "move" : "moves"}`,
+		);
+	}
+	return parts;
+}
+
+/** The subset of the sync state the status indicator reads. */
+export type SyncIndicatorSource = {
+	syncStatus: SyncStatus;
+	hasPendingWrites: boolean;
+	blockedWrite: { message: string } | null;
+};
+
+/**
+ * The status bar's props, derived in one place.
+ *
+ * Extracted because the mapping is the part that was wrong: calling
+ * `displaySyncStatus` from a test proved the rule but not that the shell passed
+ * it the right three values, so removing the wiring left every status test
+ * green.
+ */
+export type SyncIndicatorProps = {
+	syncStatus: SyncStatus;
+	/** Whether there is a stuck write for the writer to decide about. */
+	blocked: boolean;
+};
+
+export function syncIndicatorProps(
+	source: SyncIndicatorSource,
+): SyncIndicatorProps {
+	const blocked = source.blockedWrite !== null;
+	return {
+		syncStatus: displaySyncStatus({
+			status: source.syncStatus,
+			hasPendingWrites: source.hasPendingWrites,
+			blocked,
+		}),
+		blocked,
+	};
 }

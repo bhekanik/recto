@@ -299,6 +299,7 @@ export function useReviewerHistory(args: {
 		// outbox — there is nothing here to be queued or refused.
 		hasPendingWrites: false,
 		blockedWrite: null,
+		retryBlockedWrite: noopResolveBlocked,
 		resolveBlockedWrite: noopResolveBlocked,
 		hasPendingDraft: noPendingDraft,
 		reconcileRemote: noRemoteToReconcile,
