@@ -146,6 +146,7 @@ in-flight workers are producing (§4).
 
 ## 5. Learnings log (append; newest first)
 
+- 2026-08-28 (W10, round 3): `documents.list` carries no body, so a newer `updatedAt` on a known document must trigger a `get` to see another device's stamped draft. A deterministic `SIGBUS (EXC_ARM_DA_ALIGN)` inside a Swift concurrency job pointed at convex-swift's FFI auth bridge (issues #21/#26) during the live tests; it stopped after serializing `loginFromCache`/`logout` but ALSO stops with that fix reverted (likely SwiftPM stale-build), so it is unverified: watch TestFlight crash reports from W12 on. A fake transport's delay gate must NOT be cancellation-aware (real Convex calls do not abort when their Task is cancelled), or `stop()` looks correct when it is not.
 - 2026-08-28 (W1, round 8): an asserted revert-pattern match proves the edit landed, not that it changed behaviour (a `useRef` initialiser flip was inert because a reset effect reassigns the ref on mount); when a revert still passes, instrument before concluding. Follow-up: an e2e/component test for the real `PaneEditor` preview→raw remount path (the hook harness cannot model the `paneMarkdown` override).
 - 2026-08-28 (Codex on W9a): the fenced-code typing cliff is `BlockParser.incrementalParse` returning nil when the incremental window ends in `.fencedCode` (full reparse per keystroke). The engine creates one `NSTextContentStorage` PER VIEW (`NativeTextView(frame:)` per wrapper; controller keeps only the last attached view), so "one storage, several presentations" (D-N1) needs the document to own the storage and each view its own layout manager. Raw mode must switch off quote/dash substitution, text replacement, autocorrect and smart insert/delete; the engine's paste path (`sanitizePastedText`) rewrites Markdown (trims indented code, hard-break spaces); Writing Tools acceptance writes back the whole binding without firing the mutation feed; whole-text diffs split surrogate pairs (ill-formed `String`, `JSONSerialization` error 3852).
 - 2026-08-28 (orchestrator): Codex sometimes overwrites its `-o` report with a one-line link as its final message; the full report survives in the `--json` events log as an apply_patch diff (`+`-prefixed lines): extract by line range.
@@ -192,7 +193,7 @@ in-flight workers are producing (§4).
 
 | Worker | Phase | Branch | Status | PR | Reviews (Claude / Codex) | Deployed |
 |---|---|---|---|---|---|---|
-| W1 history-commit | N1a + N0e | 023/history-commit | round 8 fixed (490 tests); Codex r8 running; e2e ×5 proof still blocked on CLERK_SECRET_KEY | #1 | Claude r1+r2 / Codex r1 done | |
+| W1 history-commit | N1a + N0e | 023/history-commit | round 9 (Codex r8: 3 blocking, all new single-device: programmatic seeds (AI accept/restore) published as saved before commitEdit acks; snapshot reactivation on undo (needs a projection generation); ensureRoot retry loop unbounded); e2e ×5 proof still blocked on CLERK_SECRET_KEY | #1 | Claude r1+r2 / Codex r1 done | |
 | W2 light-theme | N1c | 023/light-theme | **merged + deployed** 2026-08-28 (`b9fe11b`, `vercel deploy --prod`) | #3 | Claude r1+r2 / Codex r1 | prod `recto-dusky.vercel.app` |
 | W3 core-js | N1d + N0d | 023/core-js | **merged** 2026-08-28 (`42acd0c`); main CI green (ci, core-js) | #6 | Claude r1+r2 / Codex r1 | n/a (CI) |
 | W4 editor-spike | N0b | spike/editor-engine | **done: GO** (fork @ 08ff3c07) | #2 (draft, not merged) | n/a | n/a |
@@ -202,7 +203,7 @@ in-flight workers are producing (§4).
 | W8 js-cores | N3 | 023/js-cores | round 2 (Codex: 3 blocking: CRLF mirror divergence, native input translation (NFD/emoji/IME/dead keys), non-transactional replay; 11 should-fix) | #10 | Claude r1 / Codex r1 | n/a (CI) |
 | W9a editor-engine stage 1 (fork plumbing + dialect + RectoEditor skeleton) | N5 | 023/editor-engine | round 3 (Codex r2: 5 blocking: controller swap leaves the view on the old doc; Writing Tools republishes concurrent edits; same-length edits leave other views' parse caches stale; shared attributes corrupt rich/raw across windows; incremental setext splice; 5 should-fix) | #9 + fork PR #1 (`2cec4d8`) | Claude r1 / Codex r1+r2 | n/a (CI) |
 | W9b editor-engine stage 2 (blocks, features, undo-tree, typewriter) | N5 | 023/editor-engine-2 | blocked on W9a | | | |
-| W10 native-core | N4 | 023/native-core | round 3 (Codex r2: 7 of 17 partially fixed + 11 new blocking: server-draft provenance, timer-generation races, root re-key of pointer payloads, remote-deletion vs draft, sign-out race/event bypass, cold-start mirror owner, stop() not awaiting tasks, completedAndStop, keep-local queue order, resolution CAS, undecodable payloads) | #7 | Claude r1 / Codex r1+r2 | n/a (CI) |
+| W10 native-core | N4 | 023/native-core | round 3 fixed (14/14; 153 tests; live ×5); orchestrator verifying; Codex r3 running | #7 | Claude r1 / Codex r1+r2 | n/a (CI) |
 | W11 ai-on-convex | N2 | 023/ai-convex | blocked on W7 | | | |
 | W12 mac-alpha | N6 | 023/mac-alpha | blocked on W9, W10, W8, W2 | | | |
 | W13 mac-beta | N7 | 023/mac-beta | blocked on W12, W11 | | | |
