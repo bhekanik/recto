@@ -370,10 +370,14 @@ function mountStudio(handle: ReturnType<typeof fakeHandle>) {
 				} else if (projection.source === "recovered-draft") {
 					syncHook.adoptRecoveredDraft(projection.markdown);
 				} else {
-					syncHook.markLocalProjectionPending(projection.markdown);
+					syncHook.markLocalProjectionPending(
+						projection.markdown,
+						projection.projectionId ?? crypto.randomUUID(),
+					);
 				}
 			},
 			onProjectionSettled: syncHook.settleLocalProjection,
+			getPendingProjectionId: syncHook.getPendingProjectionId,
 		});
 		historyApiRef.current = h;
 		history = h;
@@ -470,6 +474,7 @@ describe("decideServerPointer", () => {
 					nodeId: "local",
 					appliedRevision: null,
 					markdown: "x",
+					projectionId: "p1",
 				},
 			}),
 		).toBe("ignore");
@@ -485,6 +490,7 @@ describe("decideServerPointer", () => {
 					nodeId: "local",
 					appliedRevision: 7,
 					markdown: "x",
+					projectionId: "p1",
 				},
 			}),
 		).toBe("ignore");
@@ -500,6 +506,7 @@ describe("decideServerPointer", () => {
 					nodeId: "local",
 					appliedRevision: 7,
 					markdown: "x",
+					projectionId: "p1",
 				},
 			}),
 		).toBe("adopt");
@@ -518,6 +525,7 @@ describe("decideServerPointer", () => {
 					nodeId: "local",
 					appliedRevision: 7,
 					markdown: "x",
+					projectionId: "p1",
 				},
 			}),
 		).toBe("adopt");
@@ -533,6 +541,7 @@ describe("decideServerPointer", () => {
 					nodeId: "local",
 					appliedRevision: null,
 					markdown: "x",
+					projectionId: "p1",
 				},
 			}),
 		).toBe("settled");
@@ -1630,6 +1639,114 @@ describe("studio sync + history contract", () => {
 		// Pending until the server takes it, saved once it has — not stuck dirty.
 		expect(s.syncStatus).toBe("saved");
 		expect(loadDraft(DOC_ID)).toBeNull();
+		s.unmount();
+	});
+
+	it("S4: an ensureRoot failure after unmount schedules nothing", async () => {
+		const handle = fakeHandle();
+		dagRows = []; // a legacy document with no root node
+		const s = mountStudio(handle);
+
+		const toasts: string[] = [];
+		const onToast = (event: Event) => {
+			toasts.push((event as CustomEvent<{ message: string }>).detail.message);
+		};
+		window.addEventListener("recto:toast", onToast);
+
+		s.render(AT_ROOT);
+		const sent = callsTo(NAMES.ensureRoot).length;
+		expect(sent).toBe(1);
+
+		// The pane goes away with the call still outstanding.
+		s.unmount();
+		const timersAfterUnmount = vi.getTimerCount();
+		await rejectNext(NAMES.ensureRoot);
+
+		// A rejection arriving after unmount has no timer to cancel — the cleanup
+		// already ran — so without a binding token it SCHEDULES one, against a
+		// hook that no longer exists.
+		expect(vi.getTimerCount()).toBe(timersAfterUnmount);
+
+		await settle(30_000);
+		window.removeEventListener("recto:toast", onToast);
+		expect(callsTo(NAMES.ensureRoot).length).toBe(sent);
+		expect(toasts).toEqual([]);
+	});
+
+	it("S2: a stale host's acknowledgement never clears newer work", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode()];
+		const first = mountStudio(handle);
+		first.render(AT_ROOT);
+
+		// Commit A goes out and is never answered.
+		first.type(TYPED);
+		await settle(600);
+		const inFlight = mutationCalls.filter((c) => !c.settled);
+		expect(inFlight.length).toBeGreaterThan(0);
+
+		// The document is closed and reopened: a new host, a new draft.
+		first.unmount();
+		const reopened = fakeHandle();
+		const second = mountStudio(reopened);
+		second.render(AT_ROOT);
+		second.type("B, typed after reopening");
+		await settle(600);
+		const draftB = loadDraft(DOC_ID)?.markdown;
+		expect(draftB).toBe("B, typed after reopening");
+
+		// Now the old host's write finally comes back. Matched on text or on
+		// "something is pending", it would clear B — work it has never seen.
+		for (const call of inFlight) {
+			call.settled = true;
+			await act(async () => {
+				call.resolve(
+					call.name === NAMES.commitEdit
+						? {
+								committed: true,
+								headNodeId: "a",
+								updatedAt: 9_000,
+								pointerRevision: 9,
+							}
+						: { updatedAt: 9_000, stale: false, headMoved: false },
+				);
+			});
+		}
+
+		expect(loadDraft(DOC_ID)?.markdown).toBe("B, typed after reopening");
+		second.unmount();
+	});
+
+	it("S3: a draft typed past a failed pointer move is not projected away", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode(), remoteNode()];
+		const s = mountStudio(handle);
+		s.render(AT_ROOT);
+
+		// Navigate to REMOTE; the pointer write is still in flight.
+		s.run(() => s.history.navigateTo(REMOTE));
+
+		// The writer types B on top of it and the grouping boundary closes, so
+		// hasPendingDraft goes quiet — but B is still unacknowledged.
+		s.type(`${REMOTE_TEXT} and then B`);
+		await settle(600);
+
+		// The pointer write fails. The server is still on the root.
+		const pointerCall = mutationCalls.find(
+			(c) => !c.settled && c.name === NAMES.updatePointer,
+		);
+		expect(pointerCall).toBeDefined();
+		if (pointerCall) {
+			pointerCall.settled = true;
+			await act(async () => {
+				pointerCall.reject(new Error("network"));
+			});
+		}
+		await settle();
+
+		// Reconciliation must not seed the root over B: B exists nowhere else.
+		expect(handle.text).toBe(`${REMOTE_TEXT} and then B`);
+		expect(loadDraft(DOC_ID)?.markdown).toBe(`${REMOTE_TEXT} and then B`);
 		s.unmount();
 	});
 
