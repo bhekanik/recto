@@ -28,12 +28,9 @@ import wordCountFixture from "@/packages/editor-fixtures/word-count.json";
 import { BUNDLE_PATH, loadCore } from "./bare-realm";
 
 const packageDir = dirname(fileURLToPath(import.meta.url));
-const corpusPath = join(
-	packageDir,
-	"..",
-	"editor-fixtures",
-	"markdown-corpus.json",
-);
+const fixturesDir = join(packageDir, "..", "editor-fixtures");
+const corpusPath = join(fixturesDir, "markdown-corpus.json");
+const streakPath = join(fixturesDir, "streak.json");
 
 /** Whole-document timings are opt-in — see the module comment. */
 const bench = process.argv.includes("--bench");
@@ -74,6 +71,24 @@ for (const testCase of corpus.cases) {
 		`${where}: parseOutline`,
 	);
 }
+for (const testCase of corpus.unicode) {
+	const where = `unicode case ${testCase.id} (${testCase.name})`;
+	expect(
+		core.normalize(testCase.input),
+		testCase.normalized,
+		`${where}: normalize`,
+	);
+	expect(
+		core.countWords(testCase.input),
+		testCase.words,
+		`${where}: countWords`,
+	);
+	expect(
+		core.parseOutline(testCase.input),
+		testCase.outline,
+		`${where}: parseOutline`,
+	);
+}
 for (const testCase of wordCountFixture.cases) {
 	expect(
 		core.countWords(testCase.markdown),
@@ -89,20 +104,13 @@ for (const testCase of outlineFixture.cases) {
 	);
 }
 
-// No fixture file covers these three, so compare the bundle against `lib/`
-// directly — same contract, and it also proves they run without a DOM.
+// No committed fixture covers these three — a Swift port will never reimplement
+// preview rendering, smart paste or prose lint, so they are not editor fixtures.
+// Their expected values come straight from `lib/`, which is the authority, and
+// are written to `dist/jsc-expected.json` so the JSC gate asserts the same exact
+// payloads rather than "something came back".
 const richHtml = "<h1>Title</h1><p>Some <b>bold</b> text<br>and a break.</p>";
 const markdownSample = corpus.cases.map((c) => c.normalized).join("\n");
-expect(
-	core.htmlFromMarkdown(markdownSample),
-	renderPreviewHtml(markdownSample),
-	"htmlFromMarkdown matches lib/preview/render",
-);
-expect(
-	core.markdownFromHtml(richHtml),
-	markdownFromHtml(richHtml),
-	"markdownFromHtml matches lib/markdown/from-html",
-);
 const lintSample =
 	"The report was written by the committee. It was very clearly quite good.";
 const everyCategory: LintOptions = {
@@ -111,10 +119,43 @@ const everyCategory: LintOptions = {
 	adverb: true,
 	weasel: true,
 };
+
+const expected = {
+	$source:
+		"lib/preview/render.ts, lib/markdown/from-html.ts, lib/lint/analyze.ts",
+	version: core.version,
+	htmlFromMarkdown: {
+		markdown: markdownSample,
+		html: renderPreviewHtml(markdownSample),
+	},
+	markdownFromHtml: { html: richHtml, markdown: markdownFromHtml(richHtml) },
+	lint: {
+		markdown: lintSample,
+		issues: await analyze(lintSample, everyCategory),
+	},
+};
+
+expect(
+	core.htmlFromMarkdown(markdownSample),
+	expected.htmlFromMarkdown.html,
+	"htmlFromMarkdown matches lib/preview/render",
+);
+expect(
+	core.markdownFromHtml(richHtml),
+	expected.markdownFromHtml.markdown,
+	"markdownFromHtml matches lib/markdown/from-html",
+);
 expect(
 	await core.lint(lintSample),
-	await analyze(lintSample, everyCategory),
+	expected.lint.issues,
 	"lint matches lib/lint/analyze",
+);
+// The probe has to actually produce issues, or the JSC gate would be asserting
+// that two empty arrays match.
+expect(
+	expected.lint.issues.length > 0,
+	true,
+	"the lint probe produces at least one issue",
 );
 for (const testCase of streakFixture.cases) {
 	expect(
@@ -125,11 +166,12 @@ for (const testCase of streakFixture.cases) {
 }
 
 /**
- * Two ~950 kB documents, because they behave very differently: ordinary prose is
- * what a writer actually has open, while the corpus concatenation is adversarial
- * (thousands of duplicate footnote and link-reference definitions, which remark
- * resolves super-linearly). Both are written next to the bundle so the Swift
- * spike times the exact same bytes.
+ * Prose at four sizes plus one adversarial document. Prose is what a writer
+ * actually has open and is what the ms/kB figure comes from; the corpus
+ * concatenation is the pathological shape (thousands of duplicate footnote and
+ * link-reference definitions, which remark resolves super-linearly). All of them
+ * are written next to the bundle so the Swift spike times the exact same bytes,
+ * and every number quoted in the README comes from this function.
  */
 function benchDocuments(): { name: string; markdown: string }[] {
 	const vocabulary =
@@ -156,14 +198,18 @@ function benchDocuments(): { name: string; markdown: string }[] {
 		prose += `${words.join(" ")}.\n\n`;
 	}
 	// A quarter the size on purpose: this document is about shape, not scale, and
-	// at 950 kB it costs ~25 s per call in JSC — too slow to run on every push.
+	// at 950 kB it costs ~25 s per call in JSC.
 	let adversarial = "";
 	while (adversarial.length < 250_000) {
 		for (const testCase of corpus.cases) adversarial += `${testCase.input}\n`;
 	}
+	// Prefixes of the same prose, so the size sweep varies one thing only.
 	return [
-		{ name: "bench-prose.md", markdown: prose },
-		{ name: "bench-corpus.md", markdown: adversarial },
+		{ name: "bench-prose-64k.md", markdown: prose.slice(0, 64_000) },
+		{ name: "bench-prose-256k.md", markdown: prose.slice(0, 256_000) },
+		{ name: "bench-prose-512k.md", markdown: prose.slice(0, 512_000) },
+		{ name: "bench-prose-950k.md", markdown: prose },
+		{ name: "bench-corpus-250k.md", markdown: adversarial },
 	];
 }
 
@@ -196,7 +242,7 @@ if (bench) {
 					.padStart(8)} ms · ` +
 				`parseOutline ${callMs(() => core.parseOutline(markdown))
 					.toFixed(3)
-					.padStart(8)} ms (bun)`,
+					.padStart(8)} ms (node:vm realm under bun)`,
 		);
 	}
 }
@@ -208,13 +254,18 @@ if (failures.length > 0) {
 }
 console.log(
 	`parity   ${corpus.cases.length}/${corpus.cases.length} corpus cases + idempotence sweep, ` +
-		`${wordCountFixture.cases.length} word-count, ${outlineFixture.cases.length} outline, ` +
-		`${streakFixture.cases.length} streak, and all 7 globals green in a DOM-free realm`,
+		`${corpus.unicode.length} unicode, ${wordCountFixture.cases.length} word-count, ` +
+		`${outlineFixture.cases.length} outline, ${streakFixture.cases.length} streak, ` +
+		"and all 7 globals green in a DOM-free realm",
 );
 
 if (process.platform !== "darwin") {
 	console.log("jsc      skipped — JavaScriptCore parity needs macOS");
 	process.exit(0);
 }
+
+const expectedPath = join(packageDir, "dist", "jsc-expected.json");
+await writeFile(expectedPath, `${JSON.stringify(expected, null, "\t")}\n`);
+
 console.log("");
-await $`swift run --package-path ${join(packageDir, "jsc")} -c release recto-core-parity ${BUNDLE_PATH} ${corpusPath} ${documentPaths}`;
+await $`swift run --package-path ${join(packageDir, "jsc")} -c release recto-core-parity ${BUNDLE_PATH} ${corpusPath} ${streakPath} ${expectedPath} ${documentPaths}`;
