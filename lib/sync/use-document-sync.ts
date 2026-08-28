@@ -113,7 +113,10 @@ export function useDocumentSync({
 	const pendingMarkdownRef = useRef<string | null>(null);
 	const flushInFlightRef = useRef(false);
 	const pendingFlushAfterInFlightRef = useRef(false);
-	const lastFlushedMarkdownRef = useRef<string>("");
+	// null means "nothing has been flushed yet", which "" cannot express: an
+	// intentionally empty recovered draft equalled the initial value and was
+	// skipped by the no-op fast path, so it was never written.
+	const lastFlushedMarkdownRef = useRef<string | null>(null);
 	const getEditorHandleRef = useRef(getEditorHandle);
 	getEditorHandleRef.current = getEditorHandle;
 
@@ -124,7 +127,7 @@ export function useDocumentSync({
 		expectedUpdatedAtRef.current = 0;
 		lastWrittenUpdatedAtRef.current = 0;
 		lastHandledServerUpdatedAtRef.current = 0;
-		lastFlushedMarkdownRef.current = "";
+		lastFlushedMarkdownRef.current = null;
 		projectedBaselineUpdatedAtRef.current = 0;
 		recoveredRef.current = null;
 	}, [documentId]);

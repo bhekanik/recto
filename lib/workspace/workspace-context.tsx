@@ -189,16 +189,18 @@ function OwnerSyncHost({
 		(projection: {
 			markdown: string;
 			serverUpdatedAt: number;
-			serverDerived: boolean;
+			source: "server" | "recovered-draft" | "local";
 		}) => {
 			// Publish first: this is how the text reaches a preview-only pane, and
 			// nothing may be treated as accepted before it has.
 			setProjectedMarkdown(projection.markdown);
-			if (projection.serverDerived) {
+			if (projection.source === "server") {
 				acceptRemoteProjection(projection.markdown, projection.serverUpdatedAt);
-			} else {
+			} else if (projection.source === "recovered-draft") {
 				adoptRecoveredDraft(projection.markdown);
 			}
+			// "local": the sync hook already tracks this text's dirty state through
+			// handleEditorChange; publishing is only for the panes.
 		},
 		[acceptRemoteProjection, adoptRecoveredDraft],
 	);
@@ -271,7 +273,11 @@ function OwnerSyncHost({
 		sync.wordCount,
 		sync.syncStatus,
 		sync.pendingConflict,
-		document?.markdown,
+		// The PROJECTION, not documents.markdown: a change that only moves what
+		// the panes should render — an undo, a branch switch, a remote projection
+		// at the same word count — never touched the raw field, so it never
+		// reached the store and a preview pane stayed on the previous node.
+		projectedMarkdown,
 		onSyncUpdate,
 	]);
 

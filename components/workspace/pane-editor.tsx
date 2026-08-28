@@ -42,6 +42,10 @@ import {
 import { useStudioSettingsContext } from "@/lib/studio/settings-context";
 import { useIsMobile } from "@/lib/studio/use-is-mobile";
 import { cn } from "@/lib/utils";
+import {
+	activePaneSnapshot,
+	type PaneSnapshot,
+} from "@/lib/workspace/pane-snapshot";
 import type { PaneLeaf } from "@/lib/workspace/types";
 import {
 	useBridgeSession,
@@ -93,7 +97,11 @@ export function PaneEditor({
 	const cmRef = useRef<CodeMirrorEditorHandle>(null);
 	const [vimSubMode, setVimSubMode] = useState<VimSubMode>("normal");
 	const [editorReady, setEditorReady] = useState(false);
-	const [paneMarkdown, setPaneMarkdown] = useState<string | null>(null);
+	// A mode switch snapshots the outgoing lens's text so the incoming one has
+	// something to seed from. It is only valid while the published projection is
+	// unchanged: pinning the pane to it indefinitely hid every remote projection
+	// and let a switch back flush the stale snapshot under the adopted node.
+	const [paneSnapshot, setPaneSnapshot] = useState<PaneSnapshot>(null);
 	const [pendingCaret, setPendingCaret] = useState<CaretPosition | null>(null);
 	// Title/subtitle frontmatter surfaced as the rich-mode header. Milkdown reports
 	// it via onMeta (on seed); the header writes back via richRef.setMeta.
@@ -137,6 +145,7 @@ export function PaneEditor({
 	const meta = documents?.find((d) => d._id === documentId);
 	const title = meta?.title ?? "Untitled";
 
+	const paneMarkdown = activePaneSnapshot(paneSnapshot, sync?.markdown ?? null);
 	const markdown = paneMarkdown ?? sync?.markdown ?? "";
 	const bridgeSession = useBridgeSession(documentId, markdown);
 
@@ -454,7 +463,10 @@ export function PaneEditor({
 			const outgoing = getEditorHandle();
 			const liveMarkdown = outgoing?.getCanonicalMarkdown() ?? markdown;
 			const caret = outgoing?.exportCaret() ?? null;
-			setPaneMarkdown(liveMarkdown);
+			setPaneSnapshot({
+				markdown: liveMarkdown,
+				basis: sync?.markdown ?? null,
+			});
 			setPendingCaret(caret);
 			actions.setPaneMode(leaf.paneId, to);
 			// Mode switch is a structural boundary — commit the pending undo node.
@@ -552,7 +564,10 @@ export function PaneEditor({
 		);
 	}
 
-	const loading = !editorReady || !sync;
+	// `markdown === null` means the history hook has not decided what this
+	// document shows yet (ADR-19 V2). Rendering an interactive editor then gives
+	// the writer an empty pane they can type into before the DAG has resolved.
+	const loading = !editorReady || !sync || sync.markdown === null;
 	const surfaceClass =
 		"recto-editor-body h-full min-h-0 overflow-auto bg-[var(--color-bg-surface)]";
 

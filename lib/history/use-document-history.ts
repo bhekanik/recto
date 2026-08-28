@@ -200,11 +200,18 @@ export function useDocumentHistory(args: {
 	 * hook can accept the text as the new baseline instead of flushing it back
 	 * as a local edit. Projection is the ONLY thing that clears a dirty draft.
 	 */
+	/**
+	 * Publish the document's canonical text. EVERY transition goes through this —
+	 * local commits, AI commits, undo, redo, branch switches and remote
+	 * projections — because it is what the panes render. A transition that
+	 * updated only the editor handle left a preview pane of the same document
+	 * showing the previous node.
+	 */
 	onProjection?: (projection: {
 		markdown: string;
 		serverUpdatedAt: number;
-		/** False for a recovered local draft, which is unsaved. */
-		serverDerived: boolean;
+		/** Where the text came from, which decides whether it counts as saved. */
+		source: "server" | "recovered-draft" | "local";
 	}) => void;
 	/** A draft restored from storage on open, resolved without an editor. */
 	getRecoveredDraft?: () => { present: boolean; markdown: string } | null;
@@ -291,6 +298,21 @@ export function useDocumentHistory(args: {
 		currentNodeIdRef.current = null;
 		setCurrentNodeId(null);
 	}, [documentId]);
+
+	/**
+	 * The single place canonical text leaves this hook. Local transitions publish
+	 * for the panes only; the sync hook already knows their dirty state.
+	 */
+	const publishProjection = useCallback(
+		(
+			markdown: string,
+			source: "server" | "recovered-draft" | "local",
+			serverUpdatedAt = 0,
+		) => {
+			onProjectionRef.current?.({ markdown, serverUpdatedAt, source });
+		},
+		[],
+	);
 
 	/** Move the pointer, keeping the ref and the rendered state in step. */
 	const setPointer = useCallback((nodeId: string | null) => {
@@ -403,6 +425,7 @@ export function useDocumentHistory(args: {
 				node,
 			);
 			setPointer(commit.nodeId);
+			publishProjection(commit.markdown, "local");
 			const moveToken = startLocalMove(commit.nodeId);
 
 			// One transaction: the node, the pointer, the markdown. See the
@@ -445,6 +468,7 @@ export function useDocumentHistory(args: {
 			debouncedAutoVersion,
 			documentId,
 			origin,
+			publishProjection,
 			queueRemotePointer,
 			setPointer,
 			settleLocalMove,
@@ -453,6 +477,7 @@ export function useDocumentHistory(args: {
 	);
 
 	// Hydrate the grouping controller once the DAG + pointer are known.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: reconcileTick is a retry signal, not a value the body reads — a failed ensureRoot bumps it to re-attempt hydration
 	useEffect(() => {
 		if (!enabled || !documentId) return;
 		if (hydratedRef.current) return;
@@ -462,7 +487,14 @@ export function useDocumentHistory(args: {
 		if (dagRows.length === 0) {
 			if (!ensureRootSentRef.current) {
 				ensureRootSentRef.current = true;
-				void ensureRoot({ documentId }).catch(() => {});
+				void ensureRoot({ documentId }).catch(() => {
+					// Release the latch, or one failed call strands this document with
+					// no root: hydration never runs, so the pane never leaves loading
+					// and nothing the writer types can be committed.
+					ensureRootSentRef.current = false;
+					toast("Couldn't open this document's history — retrying", "error");
+					setReconcileTick((tick) => tick + 1);
+				});
 			}
 			return; // wait for the query to refetch with the root
 		}
@@ -520,15 +552,16 @@ export function useDocumentHistory(args: {
 		// Publish it either way — the pane renders from this, which is the only
 		// way the text reaches a preview-only surface. `serverDerived` decides
 		// whether it counts as saved: local input stays dirty until it is written.
-		onProjectionRef.current?.({
-			markdown: shown,
-			serverUpdatedAt: serverUpdatedAt ?? 0,
-			serverDerived: localInput === null,
-		});
+		publishProjection(
+			shown,
+			localInput === null ? "server" : "recovered-draft",
+			serverUpdatedAt ?? 0,
+		);
 	}, [
 		enabled,
 		documentId,
 		dagRows,
+		reconcileTick,
 		serverCurrentNodeId,
 		serverMarkdown,
 		serverMarkdownHeadNodeId,
@@ -536,6 +569,7 @@ export function useDocumentHistory(args: {
 		ensureRoot,
 		getRecoveredDraft,
 		onCommit,
+		publishProjection,
 		setPointer,
 	]);
 
@@ -600,6 +634,7 @@ export function useDocumentHistory(args: {
 			}
 			controller?.setCurrent(nodeId, markdown);
 			setPointer(nodeId);
+			publishProjection(markdown, "local");
 			// Release the guard after the async re-seed cascade (idle-rehydrate, etc.).
 			window.setTimeout(() => {
 				navigatingRef.current = false;
@@ -636,6 +671,7 @@ export function useDocumentHistory(args: {
 		[
 			documentId,
 			nodesById,
+			publishProjection,
 			queueRemotePointer,
 			setPointer,
 			settleLocalMove,
@@ -878,15 +914,12 @@ export function useDocumentHistory(args: {
 		// will flush the projected text back as though the writer had typed it —
 		// and if that text were the materialization, the flush would clobber the
 		// draft this projection just rescued.
-		onProjectionRef.current?.({
-			markdown: editorText,
-			serverUpdatedAt: serverUpdatedAt ?? 0,
-			serverDerived: true,
-		});
+		publishProjection(editorText, "server", serverUpdatedAt ?? 0);
 		toast("Updated from another device", "info");
 		return true;
 	}, [
 		getBaselineUpdatedAt,
+		publishProjection,
 		serverMarkdown,
 		serverMarkdownHeadNodeId,
 		serverPointerRevision,
