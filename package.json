@@ -14,7 +14,9 @@
 		"test:e2e": "playwright test",
 		"convex:dev": "convex dev",
 		"convex:configure": "convex dev --configure new --team bhekani-khumalo --project recto --dev-deployment cloud --once",
-		"convex:codegen": "convex codegen"
+		"convex:codegen": "convex codegen",
+		"vim:build": "bun run --cwd packages/recto-vim-js build",
+		"vim:test": "bun test --cwd packages/recto-vim-js"
 	},
 	"devDependencies": {
 		"@clerk/testing": "^2.1.7",
