@@ -84,6 +84,10 @@ hidden and the caret is not drawn. Selection and copy still work.
 
 ## Testing
 
+The perf suite is serialized and needs a quiet machine: three of its cases
+measuring wall clock concurrently read 13 ms where one alone reads 5 ms, and a
+loaded Mac reads worse still. That is the other reason it is opt-in.
+
 ```sh
 swift test                                    # everything except perf
 RECTO_UPDATE_SNAPSHOTS=1 swift test --filter Corpus   # re-record the snapshots
@@ -231,6 +235,18 @@ renders them is stage 2; the data it will read is here now, and
   selection last. Splitting the styler into document-shared base attributes and a
   per-view overlay needs a hiding technique that does not affect layout — a
   stage-2 design question, not a patch.
+- **Switching which document a window shows resets the selection twice.** A
+  selection from the outgoing document can be out of range for the incoming one,
+  and AppKit fixes attributes over the selected range on the next attribute
+  write — which traps rather than merely looking wrong. Once before the layout
+  manager moves and once after, because detaching leaves the view with no
+  content manager and the selection it reads back is neither zero nor in range.
+  The outgoing selection is remembered per document and restored, clamped.
+- **The presentation lock is asked before anything moves.** `canPresent(rawSourceMode:isEditable:from:)`
+  is consulted at the top of the update pass, and a refusal stops the
+  transition and the rebuild. A document whose only view is the one asking may
+  change presentation freely — switching the lens in one window is the ordinary
+  case.
 - **Closing one window must not detach the others.** `controller.detach(textView:)`
   removes one attachment (and its layout manager from the storage); `textViews`
   lists them all.

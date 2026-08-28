@@ -24,8 +24,12 @@ import Testing
 @testable import RectoEditor
 
 @MainActor
-@Suite("Perf", .disabled(if: ProcessInfo.processInfo.environment["RECTO_RUN_PERF"] == nil,
-                         "set RECTO_RUN_PERF=1, and build -c release, to measure"))
+// Serialized: these measure wall clock, and three of them running concurrently
+// contend for the same cores. Measured — the 10k-word case read 5 ms alone and
+// 13 ms alongside the other two, which would have been a false failure.
+@Suite("Perf", .serialized,
+       .disabled(if: ProcessInfo.processInfo.environment["RECTO_RUN_PERF"] == nil,
+                 "set RECTO_RUN_PERF=1, and build -c release, to measure"))
 struct PerfTests {
 
     private static let typingBudgetMilliseconds = 8.0
@@ -100,12 +104,39 @@ struct PerfTests {
         }
     }
 
+    /// A chain of blocks each of which is classified by what FOLLOWS it.
+    ///
+    /// The incremental parser extends its reparse window until the trailing
+    /// block cannot be reinterpreted by the suffix. A list item and a
+    /// blockquote line both absorb following lines, so an alternating chain of
+    /// them never reaches a stable trailing block: the window walks to the end
+    /// of the document, reparsing from the window START on every extension,
+    /// which is quadratic.
+    ///
+    /// This is a document a reader can type. Same 8 ms budget.
+    @Test("an alternating list/blockquote chain meets the typing budget")
+    func contextSensitiveChainMeetsTheBudget() {
+        // ~20 KB, the plan's mid-size document.
+        var document = "# Notes\n\n"
+        for index in 0..<840 {
+            document += "- item \(index)\n"
+            document += "> quoted \(index)\n"
+        }
+        #expect((document as NSString).length > 18_000)
+
+        let samples = typingSamples(in: document, anchor: "item 200")
+        report("typing, alternating list/blockquote chain", samples)
+        #expect(percentile(samples, 0.5) < Self.typingBudgetMilliseconds,
+                "the context-sensitive reparse window walked the whole document")
+    }
+
     // MARK: - Helpers
 
-    private func typingSamples(in document: String) -> [Double] {
+    private func typingSamples(in document: String,
+                               anchor anchorText: String = "Section 200") -> [Double] {
         let harness = EditorHarness(markdown: document)
-        let anchor = (harness.textView.string as NSString).range(of: "Section 200")
-        harness.textView.setSelectedRange(NSRange(location: NSMaxRange(anchor) + 40, length: 0))
+        let anchor = (harness.textView.string as NSString).range(of: anchorText)
+        harness.textView.setSelectedRange(NSRange(location: NSMaxRange(anchor), length: 0))
         var samples: [Double] = []
         for _ in 0..<140 {
             autoreleasepool {
