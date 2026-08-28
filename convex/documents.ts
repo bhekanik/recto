@@ -368,6 +368,15 @@ export const commitEdit = mutation({
 			throw new Error(MARKDOWN_TOO_LARGE_MESSAGE);
 		}
 
+		// A node's parent IS the head it was committed onto; a caller that names
+		// one head and parents the node on another would leave the DAG
+		// mis-parented or detached, so refuse before anything is written.
+		if (args.node.parentNodeId !== args.expectedHeadNodeId) {
+			throw new Error(
+				"commitEdit: node.parentNodeId must equal expectedHeadNodeId",
+			);
+		}
+
 		const existing = await ctx.db
 			.query("docNodes")
 			.withIndex("by_document_node", (q) =>
@@ -382,13 +391,24 @@ export const commitEdit = mutation({
 		}
 
 		// The commit already landed (an earlier attempt got through); don't read
-		// the advanced head as someone else's write.
+		// the advanced head as someone else's write. Record THIS attempt's id too:
+		// if this answer is lost and another client moves the head before the
+		// retry, the retry must replay the success, not see a divergence.
 		if (doc.currentNodeId === args.node.nodeId) {
+			const pointerRevision = doc.pointerRevision ?? 0;
+			await ctx.db.patch(args.documentId, {
+				lastCommit: {
+					clientMutationId: args.clientMutationId,
+					headNodeId: doc.currentNodeId,
+					updatedAt: doc.updatedAt,
+					pointerRevision,
+				},
+			});
 			return {
 				committed: true as const,
 				headNodeId: doc.currentNodeId,
 				updatedAt: doc.updatedAt,
-				pointerRevision: doc.pointerRevision ?? 0,
+				pointerRevision,
 			};
 		}
 

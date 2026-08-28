@@ -416,6 +416,71 @@ describe("documents.commitEdit", () => {
 		expect(nodes.map((n) => n.nodeId)).toEqual([rootNodeId]);
 	});
 
+	it("refuses a node whose parent is not the head the caller named", async () => {
+		const t = convexTest(schema, modules);
+		const { owner, documentId, rootNodeId } = await newDocument(t);
+
+		await expect(
+			owner.mutation(api.documents.commitEdit, {
+				documentId,
+				node: nodeFor("node-1", "somewhere-else", "", "hello"),
+				markdown: "hello",
+				wordCount: 1,
+				expectedHeadNodeId: rootNodeId,
+				clientMutationId: "commit-1",
+			}),
+		).rejects.toThrow(/parentNodeId must equal expectedHeadNodeId/);
+
+		const nodes = await owner.query(api.docNodes.listSince, { documentId });
+		expect(nodes.map((n) => n.nodeId)).toEqual([rootNodeId]);
+	});
+
+	it("replays an already-head commit whose answer was lost, even after the head moved on", async () => {
+		const t = convexTest(schema, modules);
+		const { owner, documentId, rootNodeId } = await newDocument(t);
+
+		const commit = {
+			documentId,
+			node: nodeFor("node-1", rootNodeId, "", "one"),
+			markdown: "one",
+			wordCount: 1,
+			expectedHeadNodeId: rootNodeId,
+		};
+		await owner.mutation(api.documents.commitEdit, {
+			...commit,
+			clientMutationId: "commit-1",
+		});
+		// A second attempt with a FRESH id lands while node-1 is already the head
+		// (the first answer was lost); its answer is lost too.
+		const retried = await owner.mutation(api.documents.commitEdit, {
+			...commit,
+			clientMutationId: "commit-1-retry",
+		});
+		expect(retried).toMatchObject({ committed: true, headNodeId: "node-1" });
+
+		// Another client moves the pointer (an undo) before the retry is
+		// replayed. A pointer move does not touch lastCommit, so the retry must
+		// replay the recorded success instead of reading the moved head as a
+		// divergence.
+		await owner.mutation(api.documents.updateCurrentNodeId, {
+			documentId,
+			currentNodeId: rootNodeId,
+			markdown: "",
+			wordCount: 0,
+			updatedAt: Date.now() + 1,
+		});
+
+		const replayed = await owner.mutation(api.documents.commitEdit, {
+			...commit,
+			clientMutationId: "commit-1-retry",
+		});
+		expect(replayed).toMatchObject({ committed: true, headNodeId: "node-1" });
+		// The replay answers; it does not re-move the pointer.
+		expect(
+			(await owner.query(api.documents.get, { documentId }))?.currentNodeId,
+		).toBe(rootNodeId);
+	});
+
 	it("refuses to point the head at a node that does not exist", async () => {
 		const t = convexTest(schema, modules);
 		const { owner, documentId, rootNodeId } = await newDocument(t);
