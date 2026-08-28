@@ -200,7 +200,7 @@ in-flight workers are producing (§4).
 
 | Worker | Phase | Branch | Status | PR | Reviews (Claude / Codex) | Deployed |
 |---|---|---|---|---|---|---|
-| W1 history-commit (client half) | N1a | 023/history-commit | rebased on main (`bcd23a8`, client-only diff of 13 files, 662 tests); Codex r11 (fresh whole-diff read) running; e2e ×5 proof still blocked on CLERK_SECRET_KEY | #1 | Claude r1+r2 / Codex r1 done | |
+| W1 history-commit (client half) | N1a | 023/history-commit | rebased on main (`bcd23a8`, client-only diff of 13 files; verified: convex identical to main, 662 tests); Codex r11 (fresh whole-diff read) running; e2e ×5 proof still blocked on CLERK_SECRET_KEY | #1 | Claude r1+r2 / Codex r1 done | |
 | W1b history-backend (backend half, cut by the orchestrator from W1's head `9cf1e94`) | N1a + N0e | 023/history-backend | **merged + deployed** 2026-08-28; smoke: `commitEdit` validates, LangSmith smoke skips (no key) | #11 | orchestrator / Codex (no blocking) | prod |
 | W2 light-theme | N1c | 023/light-theme | **merged + deployed** 2026-08-28 (`b9fe11b`, `vercel deploy --prod`) | #3 | Claude r1+r2 / Codex r1 | prod `recto-dusky.vercel.app` |
 | W3 core-js | N1d + N0d | 023/core-js | **merged** 2026-08-28 (`42acd0c`); main CI green (ci, core-js) | #6 | Claude r1+r2 / Codex r1 | n/a (CI) |
