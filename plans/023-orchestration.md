@@ -185,12 +185,12 @@ in-flight workers are producing (§4).
 |---|---|---|---|---|---|---|
 | W1 history-commit | N1a + N0e | 023/history-commit | round 3 (Codex r2: 4 blocking on the cross-hook contract: pre-hydration CAS gap, headMoved clears the draft, adoption never seeds the editor, focus-never-leaves stall; pointer revision added); e2e ×5 proof still blocked on CLERK_SECRET_KEY | #1 | Claude r1+r2 / Codex r1 done | |
 | W2 light-theme | N1c | 023/light-theme | **review green** (r2 fixed; Codex r1 done); waiting to rebase after #6 merges | #3 | Claude r1+r2 / Codex r1 | |
-| W3 core-js | N1d + N0d | 023/core-js | in review, round 2 (Codex: 1 blocking: Swift String equality is canonical-equivalence; 4 should-fix) | #6 | Claude r1 / Codex r1 done | n/a (CI) |
+| W3 core-js | N1d + N0d | 023/core-js | **merged** 2026-08-28 (squash); CI on main pending | #6 | Claude r1+r2 / Codex r1 | n/a (CI) |
 | W4 editor-spike | N0b | spike/editor-engine | **done: GO** (fork @ 08ff3c07) | #2 (draft, not merged) | n/a | n/a |
 | W5 native-spike | N0a | spike/native-core | **done: GO** (clerk-ios 1.5.0 + convex-swift 0.8.1; own templated auth provider) | #4 (draft, not merged) | n/a | n/a |
 | W6 vim-spike | N0c | spike/vim-jsc | **done: GO** (verbatim core split, ~20× latency headroom) | #5 (draft, not merged) | n/a | n/a |
 | W7 settings-workspaces-deletion | N1b | 023/settings | blocked on W1 | | | |
-| W8 js-cores | N3 | 023/js-cores | blocked on W3 | | | |
+| W8 js-cores | N3 | 023/js-cores | unblocked (W3 merged); launch after W6 notes are folded in | | | |
 | W9a editor-engine stage 1 (fork plumbing + dialect + RectoEditor skeleton) | N5 | 023/editor-engine | launched 2026-08-28 | | | |
 | W9b editor-engine stage 2 (blocks, features, undo-tree, typewriter) | N5 | 023/editor-engine-2 | blocked on W9a | | | |
 | W10 native-core | N4 | 023/native-core | launched 2026-08-28 (sync transport tests wait for W1 deploy) | | | |
