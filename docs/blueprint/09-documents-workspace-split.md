@@ -6,7 +6,9 @@ This document specifies three tightly related capabilities:
 
 1. **Documents** — the unit of writing. Listing, creating, renaming, deleting, switching, and the document switcher UI.
 2. **Split panes** — the recursive binary `paneTree` that tiles the writing surface into nested vertical/horizontal splits, each leaf a **pane** that binds one document to one mode.
-3. **Workspace** — the single persisted record per user (the `workspaces` table) that captures *which documents are open*, *how the surface is split*, and *what each pane was doing* — so a second machine opens to the same arrangement. This is the literal mechanism behind Product Principle 1, "Open and write… the last document and layout are restored."
+3. **Workspace** — the persisted record, **one per (user, device)** (the `workspaces` table), that captures *which documents are open*, *how the surface is split*, and *what each pane was doing* — so reopening Recto on that machine returns to the same arrangement. This is the literal mechanism behind Product Principle 1, "Open and write… the last document and layout are restored."
+
+> **Per device since ADR-21.** This chapter was written when there was one workspace row per user, and §4.4 below still describes the reasoning behind that. It is superseded: a Mac's four-way split is not a layout an iPhone can render, so a shared row meant every device overwrote the others on each focus change. Layout is now keyed by `(userId, deviceId)`, and moving to another device's layout is an explicit action — `workspaces.listForUser` to offer it, `workspaces.getForDevice` to fetch it. The pre-migration device-less row and its `workspaces.get`/`save` functions still exist **only** so a browser tab loaded before the migration keeps working and each client can seed its device row once; nothing writes them any more. See [`03-data-model.md`](./03-data-model.md) §3.4 and [`14-tech-decisions.md`](./14-tech-decisions.md) ADR-21.
 
 This is the feature set of **Phase 3** in the plan. See [`../plan/phase-3-multi-doc-split-workspace.md`](../plan/phase-3-multi-doc-split-workspace.md) for build order, exit criteria, and risks.
 
@@ -28,7 +30,10 @@ Canonical names used throughout (use these exact spellings everywhere):
 | Name | Meaning |
 |------|---------|
 | `documents` | Convex table; one row per piece of writing. |
-| `workspaces` | Convex table; **one row per user**; the persisted "resume where I left off" record. |
+| `workspaces` | Convex table; **one row per (user, device)** since ADR-21; the persisted "resume where I left off" record. |
+| `deviceId` | Field on `workspaces`; a random per-browser/app id (`recto:device-id` in web storage). |
+| `deviceClass` | Field on `workspaces`; `mac` · `ipad` · `iphone` · `web`. Labels the "resume from…" list. |
+| `json` | Field on `workspaces`; the device row's whole layout, opaque to the server. Replaces the four columns below, which survive only on the pre-migration row. |
 | `paneTree` | Field on `workspaces`; JSON string of the recursive split layout. |
 | `openDocumentIds` | Field on `workspaces`; the set of `Id<"documents">` currently open. |
 | `activePaneId` | Field on `workspaces`; the `paneId` of the focused pane. |
@@ -149,12 +154,12 @@ A **workspace** is the persisted answer to "where was I?" It is exactly three th
 2. **How the surface is split** — `paneTree`.
 3. **What each pane was doing** — `perPaneViewState` (the per-pane mode + cursor + scroll), plus `activePaneId` for focus.
 
-There is **one workspace per user** (the `workspaces` table has a `by_user` index and we keep a single row). It is **restored on load** so that opening Recto on a second machine reconstructs the same documents, the same window layout, and the same cursor positions — the literal promise in [`README.md`](./README.md) §1.
+There is **one workspace per device** (`workspaces` is indexed `by_user_device`). It is **restored on load** so that reopening Recto on that machine reconstructs the same documents, the same window layout, and the same cursor positions — the promise in [`README.md`](./README.md) §1. Carrying a layout ACROSS devices is still supported, but as something the writer asks for rather than something that happens to them: `workspaces.listForUser` lists the devices that have stored one, `workspaces.getForDevice` fetches the chosen one. On a device's first run, if it has no row of its own, it seeds from the pre-migration device-less row so nobody's panes reset on deploy day.
 
 The workspace is *layout state*, deliberately separate from *document content*:
 
 - **Document content** (`markdown`, history) lives in `documents` / `docNodes` / `versions` and is owned by [`10-sync-persistence.md`](./10-sync-persistence.md), [`07-undo-tree.md`](./07-undo-tree.md), [`08-version-control.md`](./08-version-control.md).
-- **Layout** (which docs, how split, where the cursor sat) lives in the single `workspaces` row.
+- **Layout** (which docs, how split, where the cursor sat) lives in this device's `workspaces` row.
 
 This separation is why a workspace row stays tiny (§4.3) regardless of how large the documents are.
 
@@ -162,14 +167,14 @@ This separation is why a workspace row stays tiny (§4.3) regardless of how larg
 
 On app load:
 
-1. Read the user's `workspaces` row (one reactive read; *not* bound to any editor).
+1. Read this device's `workspaces` row (`getForDevice`, one reactive read; *not* bound to any editor), falling back once to the pre-migration row when the device has none.
 2. Parse `paneTree` (JSON) and `perPaneViewState` (JSON).
 3. For each `documentId` referenced by a leaf, hydrate its canonical model from `documents.markdown` (mechanics in [`02-architecture.md`](./02-architecture.md) and [`10-sync-persistence.md`](./10-sync-persistence.md)). **Reference-counted, deduplicated** — a document referenced by two panes is loaded once (see §2.2 / §3.5).
 4. Mount the `react-resizable-panels` tree from `paneTree`; restore each leaf's `mode`, cursor and scroll from `perPaneViewState`.
 5. Focus the pane named by `activePaneId`.
 6. Reconcile dangling references (a `documentId` deleted on another device): drop it from `openDocumentIds`, rebind/empty its panes (§1.5), and re-persist.
 
-If there is no `workspaces` row yet (brand-new user), synthesize a default workspace: one pane, no document (the empty-pane state, §5.2) or a freshly created `"Untitled"` document — see §5.1.
+If there is no `workspaces` row for this device and no pre-migration row to seed from (brand-new user), synthesize a default workspace: one pane, no document (the empty-pane state, §5.2) or a freshly created `"Untitled"` document — see §5.1. Hydration waits for BOTH reads: deciding "nothing saved" while the fallback read is still in flight would reset the writer's panes.
 
 ---
 
@@ -448,6 +453,8 @@ Vim interaction: when the active pane is in **vim** mode, pane-navigation chords
 
 ### 4.1 The `workspaces` table (canon)
 
+> Superseded by ADR-21: the columns below are the **pre-migration** row's shape. A device row carries `deviceId`, `deviceClass` and a single opaque `json` string holding the same information. [`03-data-model.md`](./03-data-model.md) §3.4 has the current validators and function signatures.
+
 Verbatim from [`README.md`](./README.md) §7 (full validators in [`03-data-model.md`](./03-data-model.md)):
 
 ```ts
@@ -530,7 +537,9 @@ On **restore**, the `paneTree` is authoritative for structure; `perPaneViewState
 
 ### 4.5 Cross-device resume semantics (last-write-wins)
 
-There is one `workspaces` row per user (`by_user`). Two machines editing layout concurrently is resolved by **last-write-wins on the workspace row** — consistent with D10 ("debounced last-write-wins snapshot sync"). The whole row is the unit; `updatedAt` is the clock. The most recent `workspaces.save` mutation defines the layout every device then converges to via the reactive read.
+**Superseded by ADR-21.** There is now one `workspaces` row per **device** (`by_user_device`), so two machines editing layout concurrently is no longer a conflict at all — each writes its own row. Last-write-wins still governs the row itself (two windows of the *same* device), the whole row is the unit, and `updatedAt` is the clock; there is no compare-and-set because the only writers of a device row are that device's own windows, and the resolution of a conflict between them would be "take the newest layout" either way.
+
+What was written here before — one row per user, every device converging on the most recent `workspaces.save` — is exactly the behaviour ADR-21 removed: a Mac's four-way split is not a layout an iPhone can render, and convergence meant each device overwrote the others on every focus change.
 
 This is acceptable and intentional because:
 

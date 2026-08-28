@@ -231,18 +231,20 @@ or about the **screen in front of them**.
    this account seeds the server from its own localStorage; after that, signing
    in on a new machine adopts the writer's settings rather than pushing that
    machine's defaults over them.
-3. **Pushes are debounced 800 ms and are plain last-write-wins.**
-   `settings.save` offers a compare-and-set and the web deliberately does not
-   use it: on a lost CAS the only resolution available here would be to discard
-   the change the writer made a second ago in favour of another device's older
-   one. Two devices changing the same setting inside a second is not a real
-   scenario for one person's writing app; silently undoing their click is a real
-   annoyance. The CAS stays in the API for the native outbox, which replays
-   writes minutes late and does need to be told it lost.
-4. **A key the server does not carry keeps its local value.** That is what makes
-   adding a setting safe: an older client round-tripping the object does not
-   erase a key it has never heard of, and a newer client's unknown key survives
-   because the server stores the object whole.
+3. **Pushes are debounced 800 ms and always compare-and-set.** The hook tracks
+   which settings *this device* changed and has not had accepted. On a lost CAS
+   it takes the winner's values for every setting this device did not touch,
+   keeps the one it did, and writes again on top of the winner's stamp — so the
+   writer's most recent click survives *and* a stale tab cannot revert another
+   device. A failed save (offline, rejected) leaves those keys dirty and a
+   backoff timer re-sends them; nothing is dropped.
+4. **A key the server does not carry keeps its local value, and a key this
+   BUILD does not know is carried through untouched.** `SYNCED_KEYS` is compiled
+   from the running build's defaults, so an older web client's idea of "the whole
+   object" is missing every setting a newer native client added. Those
+   properties ride along in a sidecar (`pickUnknown`) and are written back with
+   every save, so opening the web app cannot silently reset an iPad's
+   preferences.
 5. **The device-local keys are filtered on the way out and on the way in.** The
    server never sees them, and a blob that somehow contains them cannot change
    this device's appearance or zoom.

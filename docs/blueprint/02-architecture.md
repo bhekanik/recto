@@ -126,7 +126,7 @@ The canonical MDAST sits at the center. The four lenses are projections of it on
  │   documents   markdown (canonical string at rest) · title · wordCount · currentNodeId · timestamps  │
  │   docNodes    append-only branching undo-tree DAG; immutable nodes; delta patch + periodic snapshot │
  │   versions    tagged references into docNodes (auto + manual)                                       │
- │   workspaces  one per user: paneTree · openDocumentIds · activePaneId · perPaneViewState            │
+ │   workspaces  one per (user, device): deviceId · deviceClass · json layout (ADR-21)                 │
  │                                                                                                     │
  │   Better Auth (D12) scopes every row to one user · last-write-wins snapshot sync (D10)              │
  └─────────────────────────────────────────────────────────────────────────────────────────────────┘
@@ -159,7 +159,8 @@ The split is deliberate and locked by **D10 / D11**: **the client owns everythin
 | Cross-device sync & reactivity | **Convex** | Reactive queries hydrate idle devices (D10; [`./10-sync-persistence.md`](./10-sync-persistence.md)). |
 | Conflict policy | **Convex (policy) / Client (apply)** | Debounced **last-write-wins snapshot**; DAG nodes union-merge with no conflict (D8, D10). |
 | Auth / identity scoping | **Convex + Better Auth** | Single user; every row scoped to one `userId` (D12). |
-| Workspace persistence | **Convex** | `workspaces` row: pane tree, open docs, per-pane view state ([`./03-data-model.md`](./03-data-model.md), `09`). |
+| Workspace persistence | **Convex** | `workspaces` row **per device**: pane tree, open docs, per-pane view state ([`./03-data-model.md`](./03-data-model.md) §3.4, `09`; ADR-21). |
+| Synced settings | **Convex** | `settings` row: one opaque JSON object per user. Device-local preferences (appearance, zoom, panel visibility) stay in web storage ([`./10-sync-persistence.md`](./10-sync-persistence.md) §8; ADR-21). |
 
 The performance contract behind this split: **typing never waits on the network** (Product principle 4). All input lands in the local model synchronously; the network is touched only by debounced, off-hot-path mutations. Convex's role is durability and resume, not live editing.
 
@@ -247,11 +248,14 @@ recto/
 │  └─ (studio)/              # the writing studio route(s): panes, workspace
 │
 ├─ convex/                   # THE server. Schema + functions = only write path.
-│  ├─ schema.ts              # documents · docNodes · versions · workspaces (D10; ./03)
+│  ├─ schema.ts              # documents · docNodes · versions · workspaces · settings · blobs (D10; ./03)
 │  ├─ documents.ts           # queries/mutations for the canonical string (D1)
 │  ├─ docNodes.ts            # append-only DAG nodes; union-merge (D8; ./07)
 │  ├─ versions.ts            # tagged versions; additive restore (D9; ./08)
-│  ├─ workspaces.ts          # workspace persistence; resume (./09)
+│  ├─ workspaces.ts          # per-device workspace persistence; resume (./09, ADR-21)
+│  ├─ settings.ts            # synced writer preferences (./10 §8, ADR-21)
+│  ├─ account.ts             # in-app account deletion, guideline 5.1.1(v) (ADR-21)
+│  ├─ export.ts              # server-side .docx render ("use node"; ./11, ADR-21)
 │  └─ auth.ts                # Better Auth integration (D12)
 │
 ├─ lib/
@@ -291,7 +295,7 @@ Three stores, with strict, non-overlapping responsibilities. The discipline here
 | State | Where it lives | Rule |
 |-------|----------------|------|
 | Live editor instances + canonical model | **React `ref`s** (imperative handles) | Never React-controlled by a server query. The Milkdown/CodeMirror instances hold the live model; React renders the *container*, not the value (D11). |
-| Workspace / pane / UI state | **Client store (e.g. Zustand)** | Pane tree, active pane, per-pane lens choice, transient UI (palette open, etc.). Persisted to Convex `workspaces` via `lib/sync` ([`./03-data-model.md`](./03-data-model.md), `09`). |
+| Workspace / pane / UI state | **Client store (e.g. Zustand)** | Pane tree, active pane, per-pane lens choice, transient UI (palette open, etc.). Persisted to this device's Convex `workspaces` row ([`./03-data-model.md`](./03-data-model.md) §3.4, `09`; ADR-21). |
 | All durable persistence | **Convex** | Document content, history DAG, versions, workspace snapshot. The source of truth at rest (D10). |
 
 Why editors live in refs and not in React state: binding an editor's value to a `useQuery` result makes the editor a controlled component of the network. Every reactive update would re-set the editor value and **clobber the cursor and the live undo state** (Risk register, [`../plan/README.md`](../plan/README.md); Risk "Cursor clobbered by reactive sync"). So the editor owns its live state imperatively; `useQuery` is consulted only to **hydrate on open/idle**, never to drive keystroke-level rendering. The flow of reactive data is one-directional and gated: query → (open/idle only) → hydrate; it never becomes query → render → editor-value.

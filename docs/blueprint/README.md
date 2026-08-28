@@ -143,7 +143,7 @@ versions: {                 // tagged snapshots — references into docNodes
   createdAt: number,
 }                            // index: by_document (documentId)
 
-workspaces: {               // one per user; "resume where I left off"
+workspaces: {               // one per (user, device) since ADR-21; "resume where I left off"
   userId: Id<"users">,
   paneTree: string,         // JSON: recursive split layout (see 09)
   openDocumentIds: Id<"documents">[],

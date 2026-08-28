@@ -60,12 +60,15 @@ owning plan is the contract:
 | `reviewBranches` | Index over reviewer suggestion branches in the undo DAG (status drives accept/reject). | [`plans/010-review-collaboration.md`](../../plans/010-review-collaboration.md) |
 | `comments` | Anchored review comments (human and AI reviewers). | [`plans/010-review-collaboration.md`](../../plans/010-review-collaboration.md) |
 | `settings` | The writer's synced preferences, one opaque JSON object per user. | [`plans/023-native-apple-apps.md`](../../plans/023-native-apple-apps.md) §4.1, ADR-21 |
+| `blobs` | Ownership for stored files: `storageId → {ownerUserId, kind}`. `_storage` carries no owner. | ADR-21 |
+| `accountDeletions` | An in-flight (or just-finished) account deletion. Its existence blocks every user-facing mutation for that user. | ADR-21 |
 
 ### 1.2 Changes made for the native apps (ADR-21)
 
 - **`workspaces` is now keyed by `(userId, deviceId)`**, not one row per user (§3.4). A device row carries `deviceId`, `deviceClass` (`mac` | `ipad` | `iphone` | `web`) and an opaque `json` layout; the pre-migration row has none of those and is still served by `workspaces.get/save`. A user has at most one legacy row and one row per device, capped at 32 devices (least-recently-used evicted).
 - **`documents.documentUuid`** (optional) is a client-minted idempotency key for creation, indexed `by_user_uuid`. **`documents.rootNodeId`** (optional) stores the root so a replayed `create` can hand back the same one without walking the history.
-- **Indexes added for account deletion**: `reviewBranches.by_reviewer`, `comments.by_author`, `docChunks.by_user`. A user's traces on *other people's* documents are only reachable by author/reviewer, and a vector index cannot be queried as a range.
+- **`docNodes.authorUserId`** (optional, indexed `by_author_document`) attributes a suggestion node to the reviewer who wrote it. The node lives in the document OWNER's rows, so nothing keyed to the reviewer reaches it, and the pre-existing `review:<userId>` origin string is not an index.
+- **Indexes added for account deletion**: `reviewBranches.by_reviewer`, `comments.by_author`, `docChunks.by_user`, `blobs.by_owner`, `blobs.by_storage`, `accountDeletions.by_user`, `accountDeletions.by_expires`. A user's traces on *other people's* documents are only reachable by author/reviewer, and a vector index cannot be queried as a range.
 
 ---
 
@@ -383,6 +386,13 @@ Not every setting lives here — see
 
 ### 3.6 `account.deleteEverything` / `export.docx`
 
+**Every user-facing mutation refuses while an `accountDeletions` row exists for
+the caller** (`convex/accountGuard.ts`, applied inside `documents.requireUserId`
+and `review.requireDocumentAccess`). Queries are unaffected. This is what makes
+a deletion atomic across the many transactions it takes: a JWT outlives the
+Clerk user, so without it a stale tab or an offline outbox writes rows behind
+the purge. See ADR-21.
+
 ```ts
 // action (authenticated) — App Store guideline 5.1.1(v)
 account.deleteEverything(): {
@@ -406,12 +416,21 @@ export.docx(args: { documentId: Id<"documents">; origin?: string }): {
 };
 ```
 
-`deleteEverything` purges storage blobs first (the markdown naming them is the
-only evidence of ownership), then every user-keyed row in bounded batches, then
-the Clerk user LAST — every step before it is idempotent, so a failure leaves an
-account that can still sign in and retry. `export.docx` renders the SERVER's
-canonical markdown through `lib/export/docx-render.ts`, the same module the
-browser runs; clients with unsynced edits must flush first.
+`deleteEverything` probes Clerk first (a wrong-instance secret 404s everything,
+and nothing may be deleted on that), writes the tombstone, purges owned blobs
+then rows in bounded batches, deletes the Clerk user LAST, and sweeps once more.
+Every step before the Clerk call is idempotent, so a failure leaves an account
+that can still sign in and retry; a server-owned `resumeDeletion` job finishes
+it if the caller disconnects.
+
+`export.docx` renders the SERVER's canonical markdown through
+`lib/export/docx-render.ts`, the same module the browser runs, and registers the
+generated file's ownership before handing out its URL; clients with unsynced
+edits must flush first.
+
+Two one-shot backfills exist for rows that predate ADR-21 —
+`migrations.backfillNodeAuthors` and `migrations.backfillBlobOwners`. Both are
+idempotent and bounded; run each until it reports `done`.
 
 ---
 

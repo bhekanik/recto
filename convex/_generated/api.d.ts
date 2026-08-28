@@ -9,6 +9,7 @@
  */
 
 import type * as account from "../account.js";
+import type * as accountGuard from "../accountGuard.js";
 import type * as accountPurge from "../accountPurge.js";
 import type * as ai_langsmithSmoke from "../ai/langsmithSmoke.js";
 import type * as crons from "../crons.js";
@@ -18,6 +19,7 @@ import type * as embeddings from "../embeddings.js";
 import type * as export_ from "../export.js";
 import type * as files from "../files.js";
 import type * as history from "../history.js";
+import type * as migrations from "../migrations.js";
 import type * as retention from "../retention.js";
 import type * as review from "../review.js";
 import type * as settings from "../settings.js";
@@ -33,6 +35,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   account: typeof account;
+  accountGuard: typeof accountGuard;
   accountPurge: typeof accountPurge;
   "ai/langsmithSmoke": typeof ai_langsmithSmoke;
   crons: typeof crons;
@@ -42,6 +45,7 @@ declare const fullApi: ApiFromModules<{
   export: typeof export_;
   files: typeof files;
   history: typeof history;
+  migrations: typeof migrations;
   retention: typeof retention;
   review: typeof review;
   settings: typeof settings;
