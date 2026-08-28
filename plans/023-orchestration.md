@@ -197,14 +197,14 @@ in-flight workers are producing (§4).
 | W8 js-cores | N3 | 023/js-cores | launched 2026-08-28 | | | |
 | W9a editor-engine stage 1 (fork plumbing + dialect + RectoEditor skeleton) | N5 | 023/editor-engine | launched 2026-08-28 | | | |
 | W9b editor-engine stage 2 (blocks, features, undo-tree, typewriter) | N5 | 023/editor-engine-2 | blocked on W9a | | | |
-| W10 native-core | N4 | 023/native-core | in review (round 1: orchestrator verifying suites; Codex running) | #7 | Codex running | n/a (CI) |
+| W10 native-core | N4 | 023/native-core | round 2 (Codex: 12 blocking: draft restore, write-ahead durability, actor reentrancy, offline-create idempotency, draft head CAS, adoption races, keep-remote queue rewrite, pointer retries, double drain, sign-out purge, account-switch ordering, CI Xcode path; F2 streak folded in) | #7 | Claude r1 / Codex r1 | n/a (CI) |
 | W11 ai-on-convex | N2 | 023/ai-convex | blocked on W7 | | | |
 | W12 mac-alpha | N6 | 023/mac-alpha | blocked on W9, W10, W8, W2 | | | |
 | W13 mac-beta | N7 | 023/mac-beta | blocked on W12, W11 | | | |
 | W14 ios-engine-ipad | N8 | 023/ios-ipad | blocked on W9, W12 | | | |
 | W15 iphone | N9 | 023/iphone | blocked on W14 | | | |
 | W16 release | N10 | 023/release | blocked on W13, W15 | | | |
-| F2 streak-dst (fix `lib/stats/streak.ts` to step calendar days; parity with the Swift port; W10 finding) | N1 follow-up | 023/streak-dst | not started | | | |
+| F2 streak-dst | N1 follow-up | (folded into PR #7) | assigned to W10 round 2 | | | |
 | F1 accent-token-rename | N1c follow-up | 023/accent-token | **merged + deployed** 2026-08-28; prod CSS no longer redefines `--color-accent` | #8 | Claude / Codex (no blocking) | prod |
 
 ## 7. Review protocol (orchestrator)
