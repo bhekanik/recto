@@ -111,8 +111,15 @@ public final class VimUITextViewAdapter: NSObject, VimGeometryProvider, VimHisto
     @discardableResult
     public func handle(key: String, modifiers: VimModifiers = []) -> Bool {
         if textView.markedTextRange != nil { return false }
-        // Command chords belong to the key-command table, never to vim.
-        if modifiers.contains(.command) { return false }
+        // Command chords belong to the key-command table, never to vim. History
+        // is the exception: the adapter must close its explicit group before
+        // UIKit's undo manager runs, or Command-Z aborts the process.
+        if modifiers.contains(.command) {
+            if key.lowercased() == "z" {
+                return performPlatformHistory(redo: modifiers.contains(.shift))
+            }
+            return false
+        }
         do {
             let result = try engine.handleKey(key, modifiers: modifiers)
             try apply(result)
@@ -305,6 +312,25 @@ public final class VimUITextViewAdapter: NSObject, VimGeometryProvider, VimHisto
         undoManager.registerUndo(withTarget: self) { adapter in
             adapter.restoredPatchStart = start
             adapter.registerCaret(start, on: undoManager)
+        }
+    }
+
+    private func performPlatformHistory(redo: Bool) -> Bool {
+        guard let undoManager = textView.undoManager else { return false }
+        closeInsertGroup()
+        guard redo ? undoManager.canRedo : undoManager.canUndo else { return false }
+
+        applyingEdits = true
+        if redo { undoManager.redo() } else { undoManager.undo() }
+        applyingEdits = false
+
+        do {
+            try syncFromTextView()
+            return true
+        } catch {
+            Self.log.error(
+                "platform history sync failed: \(String(describing: error), privacy: .public)")
+            return true
         }
     }
 

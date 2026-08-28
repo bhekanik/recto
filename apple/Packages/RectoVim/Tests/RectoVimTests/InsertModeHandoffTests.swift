@@ -315,5 +315,22 @@ struct InsertModeHandoffTests {
         harness.press("u")
         #expect(harness.textView.string == "tail\n")
     }
+
+    @Test("Command-Z closes an open insert group before AppKit handles undo")
+    func platformUndoDuringInsert() throws {
+        let harness = try TextViewHarness("tail\n")
+        harness.textView.keyDown(with: KeyRoutingTests.key("i"))
+        harness.textView.keyDown(with: KeyRoutingTests.key("X"))
+        #expect(harness.textView.string == "Xtail\n")
+
+        harness.textView.keyDown(with: KeyRoutingTests.key("z", .command))
+
+        #expect(harness.textView.string == "tail\n")
+        #expect(sameCodeUnits(harness.engine.text(), harness.textView.string))
+
+        harness.textView.keyDown(with: KeyRoutingTests.key("Z", [.command, .shift]))
+        #expect(harness.textView.string == "Xtail\n")
+        #expect(sameCodeUnits(harness.engine.text(), harness.textView.string))
+    }
 }
 #endif
