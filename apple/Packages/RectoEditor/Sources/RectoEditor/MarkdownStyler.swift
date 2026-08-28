@@ -68,9 +68,13 @@ public struct MarkdownStyler: Sendable, Equatable {
             codeBlock: CodeBlockStyle(fontSizeScale: 0.85, horizontalIndent: 12),
             inlineCode: InlineCodeStyle(fontSizeScale: 0.85),
             lists: ListStyle(
-                // Raw is source: what the reader types is what the file gets,
-                // so no auto-continuation and no auto-closing pairs.
-                helpersEnabled: presentation == .rich,
+                // `helpersEnabled` is misleadingly named: as well as the
+                // editing helpers it gates the DRAWN bullets, numbers and task
+                // boxes. Off for preview would leave preview showing raw `-`
+                // markers, so it tracks "not raw", not "editable".
+                helpersEnabled: presentation != .raw,
+                // Auto-closing pairs are pure input, and raw is source: what
+                // the reader types is what the file gets.
                 autoClosePairsEnabled: presentation == .rich
             ),
             headings: HeadingStyle(

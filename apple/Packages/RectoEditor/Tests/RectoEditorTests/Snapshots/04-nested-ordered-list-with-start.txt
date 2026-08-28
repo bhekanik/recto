@@ -1,9 +1,9 @@
 # 04-nested-ordered-list-with-start
 
 ## rich
-3. first⏎    19.0
-4. second⏎    19.0
-   1. nested⏎    19.0
+3. first⏎    19.0 indent 47
+4. second⏎    19.0 indent 47
+   1. nested⏎    19.0 indent 75
 
 ## raw
 3. first⏎    17.5 mono
@@ -11,6 +11,6 @@
    1. nested⏎    17.5 mono
 
 ## preview
-3. first⏎    19.0
-4. second⏎    19.0
-   1. nested⏎    19.0
+3. first⏎    19.0 indent 47
+4. second⏎    19.0 indent 47
+   1. nested⏎    19.0 indent 75

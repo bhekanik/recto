@@ -86,6 +86,12 @@ enum ReaderView {
                 if traits.contains(.italic) { descriptors.append("italic") }
                 if traits.contains(.monoSpace) { descriptors.append("mono") }
             }
+            if let paragraph = attributes[.paragraphStyle] as? NSParagraphStyle,
+               paragraph.headIndent > 0 {
+                // List nesting is otherwise invisible here, and getting the
+                // level right is one of the dialect fixes.
+                descriptors.append("indent \(Int(paragraph.headIndent.rounded()))")
+            }
             if attributes[.link] != nil { descriptors.append("link") }
             if attributes[.strikethroughStyle] != nil { descriptors.append("strike") }
             if attributes[.backgroundColor] != nil { descriptors.append("fill") }

@@ -18,7 +18,7 @@ let package = Package(
     dependencies: [
         .package(
             url: "https://github.com/bhekanik/swift-markdown-engine",
-            revision: "af0ca458f8d2984d82c114ae99c99bd9d1732716"
+            revision: "1acd61b3653202e9ab486145360fa257426b56c3"
         ),
     ],
     targets: [

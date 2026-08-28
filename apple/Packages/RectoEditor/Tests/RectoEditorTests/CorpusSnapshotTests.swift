@@ -53,6 +53,18 @@ struct CorpusSnapshotTests {
         }
     }
 
+    @Test("preview renders exactly like rich with no caret anywhere",
+          arguments: Self.cases)
+    func previewMatchesRich(testCase: (name: String, markdown: String)) {
+        // The design says preview IS rich with editing off and every marker
+        // hidden. It is easy to make them diverge by accident — one engine flag
+        // that reads as an editing switch also gates the drawn list markers —
+        // so hold them together.
+        #expect(ReaderView.dump(render(testCase.markdown, presentation: .preview))
+            == ReaderView.dump(render(testCase.markdown, presentation: .rich)),
+                "\(testCase.name): preview diverged from rich")
+    }
+
     @Test("what the reader sees matches the checked-in expectation",
           arguments: Self.cases)
     func readerViewMatchesSnapshot(testCase: (name: String, markdown: String)) throws {

@@ -1,9 +1,9 @@
 # 16-nested-blockquote
 
 ## rich
-··outer⏎    19.0
+··outer⏎    19.0 indent 27
 ·⏎    —
-····inner⏎    19.0
+····inner⏎    19.0 indent 45
 
 ## raw
 > outer⏎    17.5 mono
@@ -11,6 +11,6 @@
 > > inner⏎    17.5 mono
 
 ## preview
-··outer⏎    19.0
+··outer⏎    19.0 indent 27
 ·⏎    —
-····inner⏎    19.0
+····inner⏎    19.0 indent 45

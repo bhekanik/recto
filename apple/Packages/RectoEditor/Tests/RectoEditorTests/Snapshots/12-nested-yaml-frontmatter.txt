@@ -1,15 +1,15 @@
 # 12-nested-yaml-frontmatter
 
 ## rich
-···⏎    —
-title: Hello⏎    19.0
-tags:⏎    19.0
-  · one⏎    19.0
-  · two⏎    19.0
-meta:⏎    19.0
-  nested: true⏎    19.0
-date: 2026-01-15⏎    19.0
-···⏎    —
+····    —
+·············    —
+······    —
+········    —
+········    —
+······    —
+···············    —
+·················    —
+····    —
 ⏎    —
 Body after frontmatter.⏎    19.0
 
@@ -27,14 +27,14 @@ date: 2026-01-15⏎    17.5 mono
 Body after frontmatter.⏎    17.5 mono
 
 ## preview
-···⏎    —
-title: Hello⏎    19.0
-tags:⏎    19.0
-  - one⏎    19.0
-  - two⏎    19.0
-meta:⏎    19.0
-  nested: true⏎    19.0
-date: 2026-01-15⏎    19.0
-···⏎    —
+····    —
+·············    —
+······    —
+········    —
+········    —
+······    —
+···············    —
+·················    —
+····    —
 ⏎    —
 Body after frontmatter.⏎    19.0

@@ -2,7 +2,7 @@
 
 ## rich
 ······    —
-const x = `hello`;⏎    16.0 mono fill
+const x = `hello`;⏎    16.0 mono indent 12 fill
 ···⏎    —
 
 ## raw
@@ -12,5 +12,5 @@ const x = `hello`;⏎    17.5 mono
 
 ## preview
 ······    —
-const x = `hello`;⏎    16.0 mono fill
+const x = `hello`;⏎    16.0 mono indent 12 fill
 ···⏎    —

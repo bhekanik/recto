@@ -1,11 +1,11 @@
 # 05-mixed-ordered-and-unordered-nesting
 
 ## rich
-1. ordered⏎    19.0
-   · bullet⏎    19.0
-     1. inner ordered⏎    19.0
-· top bullet⏎    19.0
-  1. inner⏎    19.0
+1. ordered⏎    19.0 indent 47
+   · bullet⏎    19.0 indent 65
+     1. inner ordered⏎    19.0 indent 102
+· top bullet⏎    19.0 indent 38
+  1. inner⏎    19.0 indent 75
 
 ## raw
 1. ordered⏎    17.5 mono
@@ -15,8 +15,8 @@
   1. inner⏎    17.5 mono
 
 ## preview
-1. ordered⏎    19.0
-   - bullet⏎    19.0
-     1. inner ordered⏎    19.0
-- top bullet⏎    19.0
-  1. inner⏎    19.0
+1. ordered⏎    19.0 indent 47
+   · bullet⏎    19.0 indent 65
+     1. inner ordered⏎    19.0 indent 102
+· top bullet⏎    19.0 indent 38
+  1. inner⏎    19.0 indent 75
