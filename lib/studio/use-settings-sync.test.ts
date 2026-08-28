@@ -8,6 +8,7 @@ import {
 	type StudioSettings,
 	serializeSynced,
 } from "./settings-schema";
+import { SETTINGS_RETRY_BASE_MS } from "./use-settings-sync";
 
 /**
  * The Convex side is mocked rather than mounted: the behaviour under test is
@@ -22,11 +23,20 @@ const state = {
 	remote: undefined as RemoteSettings,
 };
 
+type SaveResult =
+	| { saved: true; conflict: false; updatedAt: number; json?: undefined }
+	| {
+			saved: false;
+			conflict: true;
+			json: string | null;
+			updatedAt: number | null;
+	  };
+
 const saveMock = vi.fn(
-	async (_args: { json: string; expectedUpdatedAt?: number }) => ({
-		saved: true,
-		updatedAt: 1,
-	}),
+	async (_args: {
+		json: string;
+		expectedUpdatedAt?: number;
+	}): Promise<SaveResult> => ({ saved: true, conflict: false, updatedAt: 1 }),
 );
 
 /** The `json` the mocked mutation was called with, parsed. */
@@ -273,6 +283,116 @@ describe("useSettingsSync", () => {
 
 		expect(latest.theme).toBe("aurora");
 		expect(saveMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("compare-and-sets against the stamp it last saw", async () => {
+		state.remote = { json: serializeSynced(DEFAULTS), updatedAt: 42 };
+		render(DEFAULTS);
+		flushDebounce();
+		saveMock.mockClear();
+
+		act(() => setSettingsExternally?.({ ...latest, theme: "aurora" }));
+		flushDebounce();
+
+		// An unconditional write is how a tab left open overnight reverts another
+		// device's settings the moment someone toggles one thing in it.
+		expect(saveMock.mock.calls[0]?.[0]?.expectedUpdatedAt).toBe(42);
+	});
+
+	it("carries settings this build does not know about straight back", async () => {
+		// What a newer native client wrote and this older web build cannot name.
+		const stored = JSON.stringify({
+			...JSON.parse(serializeSynced(DEFAULTS)),
+			futureSetting: { nested: true },
+		});
+		state.remote = { json: stored, updatedAt: 7 };
+		render(DEFAULTS);
+		flushDebounce();
+		saveMock.mockClear();
+
+		act(() => setSettingsExternally?.({ ...latest, theme: "aurora" }));
+		flushDebounce();
+
+		const sent = sentJson(0);
+		expect(sent.theme).toBe("aurora");
+		// Dropping this key would silently reset that setting on every device.
+		expect(sent.futureSetting).toEqual({ nested: true });
+	});
+
+	it("retries a failed save instead of dropping the change", async () => {
+		state.remote = { json: serializeSynced(DEFAULTS), updatedAt: 1 };
+		render(DEFAULTS);
+		flushDebounce();
+		saveMock.mockClear();
+		saveMock.mockRejectedValueOnce(new Error("offline"));
+
+		act(() => setSettingsExternally?.({ ...latest, theme: "moonlit" }));
+		flushDebounce();
+		await act(async () => {});
+		expect(saveMock).toHaveBeenCalledTimes(1);
+
+		// The backoff timer fires and the same change goes again.
+		await act(async () => {
+			vi.advanceTimersByTime(SETTINGS_RETRY_BASE_MS + 100);
+		});
+		await act(async () => {});
+
+		expect(saveMock).toHaveBeenCalledTimes(2);
+		expect(sentJson(1).theme).toBe("moonlit");
+	});
+
+	it("on a lost compare-and-set, keeps this device's change and adopts the rest", async () => {
+		state.remote = { json: serializeSynced(DEFAULTS), updatedAt: 1 };
+		render(DEFAULTS);
+		flushDebounce();
+		saveMock.mockClear();
+
+		// Another device changed the reading font while this one changed the
+		// theme, and got there first.
+		const winner = serializeSynced({
+			...DEFAULTS,
+			readingFont: "serif",
+			theme: "dawn",
+		});
+		saveMock.mockResolvedValueOnce({
+			saved: false,
+			conflict: true,
+			json: winner,
+			updatedAt: 99,
+		});
+
+		act(() => setSettingsExternally?.({ ...latest, theme: "moonlit" }));
+		flushDebounce();
+		await act(async () => {});
+
+		// The setting the writer just changed survives; the one they did not
+		// touch takes the other device's value.
+		expect(latest.theme).toBe("moonlit");
+		expect(latest.readingFont).toBe("serif");
+	});
+
+	it("re-sends on top of the winner's stamp after losing", async () => {
+		state.remote = { json: serializeSynced(DEFAULTS), updatedAt: 1 };
+		render(DEFAULTS);
+		flushDebounce();
+		saveMock.mockClear();
+		saveMock.mockResolvedValueOnce({
+			saved: false,
+			conflict: true,
+			json: serializeSynced({ ...DEFAULTS, readingFont: "serif" }),
+			updatedAt: 99,
+		});
+
+		act(() => setSettingsExternally?.({ ...latest, theme: "moonlit" }));
+		flushDebounce();
+		await act(async () => {});
+		flushDebounce();
+		await act(async () => {});
+
+		expect(saveMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+		const retry = saveMock.mock.calls.at(-1)?.[0];
+		expect(retry?.expectedUpdatedAt).toBe(99);
+		expect(JSON.parse(retry?.json as string).theme).toBe("moonlit");
 	});
 
 	it("keeps the local change when the save fails, so nothing is silently lost", async () => {

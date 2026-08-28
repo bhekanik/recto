@@ -361,9 +361,62 @@ export function pickSynced(settings: StudioSettings): Record<string, unknown> {
 	return picked;
 }
 
-/** Serialize the synced subset. Stable key order, so equal state compares equal. */
-export function serializeSynced(settings: StudioSettings): string {
-	return JSON.stringify(pickSynced(settings));
+/**
+ * Properties in a stored settings object that this client does not know about.
+ *
+ * `SYNCED_KEYS` is compiled from this build's `DEFAULTS`, so an older web
+ * client's idea of "the whole object" is missing every setting a newer native
+ * client added. Writing that object back would delete those settings for every
+ * device — a silent downgrade that the writer would experience as their iPad's
+ * preferences resetting whenever they opened the web app.
+ *
+ * The fix is a sidecar: unknown properties are carried alongside, untouched,
+ * and written back with every save. Chosen over making `settings.save` a
+ * key-level patch on the server because the offline path already has to merge
+ * per key on the client (only the keys this device actually changed win a
+ * conflict), so the client is doing key-level reasoning either way — and
+ * `save` keeps the whole-object contract W10-W12 were given.
+ */
+export function pickUnknown(json: string): Record<string, unknown> {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(json);
+	} catch {
+		return {};
+	}
+	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+	const known = new Set<string>(SYNCED_KEYS);
+	const extras: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(parsed)) {
+		// Device-local keys are dropped rather than preserved: they must never
+		// travel, and a buggy client putting one in the blob should not make it
+		// permanent.
+		if (known.has(key) || DEVICE_LOCAL_SET.has(key)) continue;
+		extras[key] = value;
+	}
+	return extras;
+}
+
+/**
+ * Serialize the synced subset, carrying `unknown` properties through untouched.
+ * Stable key order, so equal state compares equal.
+ */
+export function serializeSynced(
+	settings: StudioSettings,
+	unknown: Record<string, unknown> = {},
+): string {
+	// Known keys last: this client's values win for the settings it understands.
+	const merged: Record<string, unknown> = {
+		...unknown,
+		...pickSynced(settings),
+	};
+	// Sorted, so two clients holding the same settings produce byte-identical
+	// JSON. The sync hook compares these strings to decide whether a change is
+	// worth a mutation, and insertion order differs between a client that knows
+	// a key and one that carried it through as unknown.
+	const canonical: Record<string, unknown> = {};
+	for (const key of Object.keys(merged).sort()) canonical[key] = merged[key];
+	return JSON.stringify(canonical);
 }
 
 /**
@@ -379,6 +432,13 @@ export function serializeSynced(settings: StudioSettings): string {
 export function mergeSyncedJson(
 	current: StudioSettings,
 	json: string,
+	/**
+	 * Keys this device has changed and not yet had accepted. They keep their
+	 * local value instead of taking the server's, which is what makes a lost
+	 * compare-and-set recoverable: the writer's own change survives, and only
+	 * the settings they did not touch adopt the other device's values.
+	 */
+	keepLocal: ReadonlySet<string> = new Set(),
 ): StudioSettings {
 	let parsed: unknown;
 	try {
@@ -392,7 +452,18 @@ export function mergeSyncedJson(
 	const incoming = parsed as Record<string, unknown>;
 	const synced: Record<string, unknown> = {};
 	for (const key of SYNCED_KEYS) {
+		if (keepLocal.has(key)) continue;
 		if (key in incoming) synced[key] = incoming[key];
 	}
 	return coerceSettings({ ...current, ...synced }, current);
+}
+
+/** Which synced settings differ between two states. */
+export function changedSyncedKeys(
+	before: StudioSettings,
+	after: StudioSettings,
+): SyncedKey[] {
+	return SYNCED_KEYS.filter(
+		(key) => JSON.stringify(before[key]) !== JSON.stringify(after[key]),
+	);
 }

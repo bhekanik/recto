@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+	changedSyncedKeys,
 	coerceSettings,
 	DEFAULTS,
 	DEVICE_LOCAL_KEYS,
 	mergeSyncedJson,
 	pickSynced,
+	pickUnknown,
 	READING_SCALE_MAX,
 	READING_SCALE_MIN,
 	type StudioSettings,
@@ -184,5 +186,105 @@ describe("mergeSyncedJson", () => {
 		};
 		const merged = mergeSyncedJson(local, serializeSynced(other));
 		expect(pickSynced(merged)).toEqual(pickSynced(other));
+	});
+});
+
+describe("unknown properties (forward compatibility)", () => {
+	const stored = JSON.stringify({
+		theme: "dawn",
+		futureSetting: 42,
+		nested: { a: 1 },
+		// A device-local key has no business in the stored object, and must not
+		// be made permanent by being carried through as "unknown".
+		appearance: "light",
+	});
+
+	it("picks out only the properties this build cannot name", () => {
+		expect(pickUnknown(stored)).toEqual({
+			futureSetting: 42,
+			nested: { a: 1 },
+		});
+	});
+
+	it("returns nothing for a payload that is not a JSON object", () => {
+		for (const json of ["", "nope", "[]", "7", "null"]) {
+			expect(pickUnknown(json)).toEqual({});
+		}
+	});
+
+	it("writes unknown properties back, with this build's values winning", () => {
+		const json = serializeSynced(
+			{ ...DEFAULTS, theme: "aurora" },
+			pickUnknown(stored),
+		);
+		const parsed = JSON.parse(json);
+		// The whole point: an older client must not delete a newer one's settings
+		// by writing back "the whole object".
+		expect(parsed.futureSetting).toBe(42);
+		expect(parsed.theme).toBe("aurora");
+		expect(parsed).not.toHaveProperty("appearance");
+	});
+
+	it("serializes canonically, so two clients holding the same state agree", () => {
+		const unknown = { zzz: 1, aaa: 2 };
+		const reordered = { aaa: 2, zzz: 1 };
+		expect(serializeSynced(DEFAULTS, unknown)).toBe(
+			serializeSynced(DEFAULTS, reordered),
+		);
+	});
+});
+
+describe("changedSyncedKeys", () => {
+	it("reports nothing for identical states", () => {
+		expect(changedSyncedKeys(DEFAULTS, { ...DEFAULTS })).toEqual([]);
+	});
+
+	it("ignores device-local changes — those must not cost a mutation", () => {
+		expect(
+			changedSyncedKeys(DEFAULTS, {
+				...DEFAULTS,
+				appearance: "dark",
+				readingScale: 1.4,
+				topToolbar: false,
+				outlineOpen: true,
+			}),
+		).toEqual([]);
+	});
+
+	it("reports a changed nested value", () => {
+		expect(
+			changedSyncedKeys(DEFAULTS, {
+				...DEFAULTS,
+				lintCategories: { ...DEFAULTS.lintCategories, passive: false },
+			}),
+		).toEqual(["lintCategories"]);
+	});
+});
+
+describe("mergeSyncedJson with locally-held keys", () => {
+	it("keeps the keys this device is still holding, and adopts the rest", () => {
+		const local: StudioSettings = {
+			...DEFAULTS,
+			theme: "moonlit",
+			readingFont: "sans",
+		};
+		const winner = serializeSynced({
+			...DEFAULTS,
+			theme: "dawn",
+			readingFont: "serif",
+		});
+
+		const merged = mergeSyncedJson(local, winner, new Set(["theme"]));
+		// The writer's own unsent change survives losing the compare-and-set.
+		expect(merged.theme).toBe("moonlit");
+		expect(merged.readingFont).toBe("serif");
+	});
+
+	it("adopts everything when nothing is held", () => {
+		const merged = mergeSyncedJson(
+			{ ...DEFAULTS, theme: "moonlit" },
+			serializeSynced({ ...DEFAULTS, theme: "dawn" }),
+		);
+		expect(merged.theme).toBe("dawn");
 	});
 });
