@@ -274,6 +274,8 @@ function mountStudio(handle: ReturnType<typeof fakeHandle>) {
 	let syncStatus = "";
 	/** What workspace-context would hand the panes to render. */
 	let projectedMarkdown: string | null = null;
+	/** Every value published, so a test can assert a transition was announced. */
+	const projectionLog: string[] = [];
 	let onEditorChange: () => void = () => {};
 	const pointerLog: Array<string | null> = [];
 
@@ -321,12 +323,13 @@ function mountStudio(handle: ReturnType<typeof fakeHandle>) {
 				// Mirrors workspace-context: publish for the panes, then decide
 				// whether it counts as saved.
 				projectedMarkdown = projection.markdown;
-				if (projection.serverDerived) {
+				projectionLog.push(projection.markdown);
+				if (projection.source === "server") {
 					syncHook.acceptRemoteProjection(
 						projection.markdown,
 						projection.serverUpdatedAt,
 					);
-				} else {
+				} else if (projection.source === "recovered-draft") {
 					syncHook.adoptRecoveredDraft(projection.markdown);
 				}
 			},
@@ -384,6 +387,7 @@ function mountStudio(handle: ReturnType<typeof fakeHandle>) {
 		get projectedMarkdown() {
 			return projectedMarkdown;
 		},
+		projectionLog,
 		/** Type, exactly as the studio reports it: one handler, both hooks. */
 		type(text: string) {
 			act(() => {
@@ -1327,6 +1331,78 @@ describe("studio sync + history contract", () => {
 		// The draft's own node is expected; the AI must not add a second one.
 		expect(callsTo(NAMES.commitEdit).length).toBe(before + 1);
 		expect(lastCallTo(NAMES.commitEdit)?.args.markdown).toBe(TYPED);
+		s.unmount();
+	});
+
+	it("U1: publishes every local transition, so a preview pane keeps up", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode()];
+		const s = mountStudio(handle);
+		s.render(AT_ROOT);
+
+		// A grouped edit.
+		s.type(TYPED);
+		await settle(600);
+		expect(s.projectedMarkdown).toBe(TYPED);
+
+		// An AI commit.
+		s.run(() => {
+			s.history.commitProgrammatic(AI, { origin: "ai:grammar" });
+		});
+		expect(s.projectedMarkdown).toBe(AI);
+
+		// Undo, then redo.
+		s.run(() => s.history.undo());
+		expect(s.projectedMarkdown).toBe(TYPED);
+		s.run(() => s.history.redo());
+		expect(s.projectedMarkdown).toBe(AI);
+
+		// Every one of those was announced. Before this, they moved the editor
+		// handle and the pointer while the published value — what a preview pane
+		// of the same document renders — stayed on the previous node.
+		expect(s.projectionLog).toEqual(["", TYPED, AI, TYPED, AI]);
+		s.unmount();
+	});
+
+	it("U1: publishes a branch switch", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode(), remoteNode()];
+		const s = mountStudio(handle);
+		s.render(AT_ROOT);
+
+		s.run(() => s.history.navigateTo(REMOTE));
+
+		expect(s.projectedMarkdown).toBe(REMOTE_TEXT);
+		expect(handle.text).toBe(REMOTE_TEXT);
+		s.unmount();
+	});
+
+	it("U4: writes an intentionally empty recovered draft", async () => {
+		const handle = fakeHandle();
+		window.localStorage.setItem(
+			`recto:draft:${DOC_ID}`,
+			JSON.stringify({ markdown: "", updatedAt: 9_999, origin: "other" }),
+		);
+
+		dagRows = [rootNode(), localNode()];
+		const s = mountStudio(handle);
+		s.render({
+			currentNodeId: LOCAL_NODE,
+			markdown: LOCAL_TEXT,
+			updatedAt: 1_000,
+			pointerRevision: 2,
+			markdownHeadNodeId: LOCAL_NODE,
+		});
+		const clearsBefore = removedKeys.length;
+		await settle();
+
+		// Nothing is answered, so nothing has been written yet. "" used to equal
+		// the initial lastFlushed value, so the no-op fast path declared the draft
+		// already saved and DELETED the recovery copy — with no write behind it,
+		// the writer's deletion was silently undone on the next open.
+
+		expect(removedKeys.slice(clearsBefore)).toEqual([]);
+		expect(s.syncStatus).not.toBe("saved");
 		s.unmount();
 	});
 
