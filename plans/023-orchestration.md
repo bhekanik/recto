@@ -146,6 +146,7 @@ in-flight workers are producing (§4).
 
 ## 5. Learnings log (append; newest first)
 
+- 2026-08-28 (W1, round 9): a revert that breaks the build makes vitest report "no tests", which looks like a pass; check the executed test COUNT in revert verification, not only the absence of failures.
 - 2026-08-28 (W8, round 2): `NSUndoManager.groupsByEvent = false` breaks IME (`setMarkedText` reaches `_prepareEventGrouping`, which raises): scope it to the adapter's own writes only. ICU treats `\r\n` as one grapheme cluster; keep line endings verbatim per line. Bounds checks must precede grapheme-boundary assertions. JIT claim corrected: 13–15× between 8 and 64 kB, 4.5× at 250 kB (fresh-process median/p95); the iOS no-JIT conclusion is source-based (WebKit `ExecutableAllocator.cpp`), not device-measured.
 - 2026-08-28 (W10, round 3): `documents.list` carries no body, so a newer `updatedAt` on a known document must trigger a `get` to see another device's stamped draft. A deterministic `SIGBUS (EXC_ARM_DA_ALIGN)` inside a Swift concurrency job pointed at convex-swift's FFI auth bridge (issues #21/#26) during the live tests; it stopped after serializing `loginFromCache`/`logout` but ALSO stops with that fix reverted (likely SwiftPM stale-build), so it is unverified: watch TestFlight crash reports from W12 on. A fake transport's delay gate must NOT be cancellation-aware (real Convex calls do not abort when their Task is cancelled), or `stop()` looks correct when it is not.
 - 2026-08-28 (W1, round 8): an asserted revert-pattern match proves the edit landed, not that it changed behaviour (a `useRef` initialiser flip was inert because a reset effect reassigns the ref on mount); when a revert still passes, instrument before concluding. Follow-up: an e2e/component test for the real `PaneEditor` preview→raw remount path (the hook harness cannot model the `paneMarkdown` override).
@@ -194,7 +195,7 @@ in-flight workers are producing (§4).
 
 | Worker | Phase | Branch | Status | PR | Reviews (Claude / Codex) | Deployed |
 |---|---|---|---|---|---|---|
-| W1 history-commit | N1a + N0e | 023/history-commit | round 9 (Codex r8: 3 blocking, all new single-device: programmatic seeds (AI accept/restore) published as saved before commitEdit acks; snapshot reactivation on undo (needs a projection generation); ensureRoot retry loop unbounded); e2e ×5 proof still blocked on CLERK_SECRET_KEY | #1 | Claude r1+r2 / Codex r1 done | |
+| W1 history-commit | N1a + N0e | 023/history-commit | round 9 fixed (495 tests; pending→acknowledged local projections, projection generation, bounded ensureRoot retry); Codex r9 running; e2e ×5 proof still blocked on CLERK_SECRET_KEY | #1 | Claude r1+r2 / Codex r1 done | |
 | W2 light-theme | N1c | 023/light-theme | **merged + deployed** 2026-08-28 (`b9fe11b`, `vercel deploy --prod`) | #3 | Claude r1+r2 / Codex r1 | prod `recto-dusky.vercel.app` |
 | W3 core-js | N1d + N0d | 023/core-js | **merged** 2026-08-28 (`42acd0c`); main CI green (ci, core-js) | #6 | Claude r1+r2 / Codex r1 | n/a (CI) |
 | W4 editor-spike | N0b | spike/editor-engine | **done: GO** (fork @ 08ff3c07) | #2 (draft, not merged) | n/a | n/a |
