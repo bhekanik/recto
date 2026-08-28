@@ -3,7 +3,16 @@
 import { useAction } from "convex/react";
 import { useCallback, useEffect, useState } from "react";
 
-import { Button } from "@/components/ui/button";
+import {
+	AlertDialog,
+	AlertDialogAction,
+	AlertDialogCancel,
+	AlertDialogContent,
+	AlertDialogDescription,
+	AlertDialogFooter,
+	AlertDialogHeader,
+	AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { api } from "@/convex/_generated/api";
 
@@ -40,9 +49,6 @@ type DeleteAccountDialogProps = {
  * rather than a button, an explicit list of what goes, and no "are you sure?"
  * second step — one accurate warning the writer has to read in order to type
  * the phrase beats two dismissible ones.
- *
- * Modeled on the share dialog (plan 010) so the chrome, escape handling and
- * focus behaviour match.
  */
 export function DeleteAccountDialog({
 	open,
@@ -55,7 +61,15 @@ export function DeleteAccountDialog({
 	const [pending, setPending] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
-	const close = useCallback(() => onOpenChange(false), [onOpenChange]);
+	const handleOpenChange = useCallback(
+		(nextOpen: boolean) => {
+			// The account may be partly deleted. Keep the progress state visible until
+			// the action finishes or returns an error the writer can act on.
+			if (!nextOpen && pending) return;
+			onOpenChange(nextOpen);
+		},
+		[pending, onOpenChange],
+	);
 
 	useEffect(() => {
 		if (open) {
@@ -63,20 +77,6 @@ export function DeleteAccountDialog({
 			setError(null);
 		}
 	}, [open]);
-
-	useEffect(() => {
-		if (!open) return;
-		const onKeyDown = (event: KeyboardEvent) => {
-			if (event.key === "Escape") {
-				event.preventDefault();
-				// Escape must not cancel a delete already in flight; the account is
-				// half gone and closing the dialog would just hide that.
-				if (!pending) close();
-			}
-		};
-		window.addEventListener("keydown", onKeyDown, true);
-		return () => window.removeEventListener("keydown", onKeyDown, true);
-	}, [open, close, pending]);
 
 	const confirmed = phrase.trim().toLowerCase() === CONFIRMATION_PHRASE;
 
@@ -95,36 +95,19 @@ export function DeleteAccountDialog({
 		}
 	}, [confirmed, pending, deleteEverything, onDeleted]);
 
-	if (!open) return null;
-
 	return (
-		<div
-			className="recto-scrim fixed inset-0 z-[110] flex items-center justify-center p-[var(--space-4)]"
-			role="dialog"
-			aria-modal="true"
-			aria-labelledby="recto-delete-account-title"
-		>
-			<button
-				type="button"
-				className="absolute inset-0"
-				aria-label="Close delete account dialog"
-				disabled={pending}
-				onClick={close}
-			/>
-			<div className="recto-panel relative z-10 w-full max-w-md p-[var(--space-5)]">
-				<h2
-					id="recto-delete-account-title"
-					className="text-[length:var(--text-ui)] font-[var(--font-reading)] text-[var(--color-ink-primary)]"
-				>
-					Delete account
-				</h2>
+		<AlertDialog open={open} onOpenChange={handleOpenChange}>
+			<AlertDialogContent>
+				<AlertDialogHeader>
+					<AlertDialogTitle>Delete account</AlertDialogTitle>
 
-				<p className="mt-[var(--space-2)] text-[length:var(--text-ui-sm)] text-[var(--color-ink-secondary)]">
-					This deletes every document and its full edit history, your versions,
-					comments and suggestions, uploaded images, writing stats, settings and
-					saved layouts — then deletes your sign-in itself. It cannot be undone
-					and there is no export step afterwards.
-				</p>
+					<AlertDialogDescription>
+						This deletes every document and its full edit history, your
+						versions, comments and suggestions, uploaded images, writing stats,
+						settings and saved layouts — then deletes your sign-in itself. It
+						cannot be undone and there is no export step afterwards.
+					</AlertDialogDescription>
+				</AlertDialogHeader>
 
 				<label
 					htmlFor="delete-account-phrase"
@@ -152,19 +135,19 @@ export function DeleteAccountDialog({
 					</p>
 				)}
 
-				<div className="mt-[var(--space-5)] flex justify-end gap-[var(--space-2)]">
-					<Button variant="ghost" disabled={pending} onClick={close}>
+				<AlertDialogFooter>
+					<AlertDialogCancel variant="ghost" disabled={pending}>
 						Cancel
-					</Button>
-					<Button
+					</AlertDialogCancel>
+					<AlertDialogAction
 						variant="destructive"
 						disabled={!confirmed || pending}
 						onClick={() => void handleDelete()}
 					>
 						{pending ? "Deleting…" : "Delete everything"}
-					</Button>
-				</div>
-			</div>
-		</div>
+					</AlertDialogAction>
+				</AlertDialogFooter>
+			</AlertDialogContent>
+		</AlertDialog>
 	);
 }
