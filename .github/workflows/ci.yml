@@ -58,7 +58,11 @@ jobs:
       - run: swift test --package-path apple/Packages/RectoVim
       # The UIKit adapter is `#if canImport(UIKit)` and never compiles on the
       # macOS test run, so build it for the simulator to keep it honest.
-      - run: |
+      - name: build RectoVim for iOS (compile-checks the UIKit adapter)
+        # `set -o pipefail` or the pipe would hand the step `tail`'s exit status
+        # and a failing build would pass.
+        run: |
+          set -o pipefail
           xcodebuild build \
             -scheme RectoVim \
             -destination 'generic/platform=iOS Simulator' \
