@@ -20,10 +20,10 @@
  * which is what lets the keystroke suite run headless.
  */
 
-import { Pos } from "./pos.js";
-import { hardWrap, scanForBracket } from "./generated/vim-helpers.js";
-import { StringStream } from "./generated/string-stream.js";
 import { RectoDoc } from "./document.js";
+import { StringStream } from "./generated/string-stream.js";
+import { hardWrap, scanForBracket } from "./generated/vim-helpers.js";
+import { Pos } from "./pos.js";
 import { Prompt } from "./prompt.js";
 
 /** Assumed metrics when no text view is attached (headless runs). */
@@ -34,7 +34,8 @@ const FALLBACK_VIEWPORT_HEIGHT = 600;
 /* ------------------------------------------------------------------ events */
 
 function on(emitter, type, f) {
-	const map = emitter._handlers || (emitter._handlers = {});
+	emitter._handlers ??= {};
+	const map = emitter._handlers;
 	map[type] = (map[type] || []).concat(f);
 }
 
@@ -59,7 +60,7 @@ function signalTo(handlers, ...args) {
 
 let wordChar;
 try {
-	wordChar = new RegExp("[\\w\\p{Alphabetic}\\p{Number}_]", "u");
+	wordChar = /[\w\p{Alphabetic}\p{Number}_]/u;
 } catch {
 	wordChar = /[\w]/;
 }
@@ -72,7 +73,14 @@ try {
  * `trackDel` reports a position swallowed by the edit as gone, which is how
  * marks and `:g` line handles learn that their line was deleted.
  */
-function mapOffset(offset, from, to, insertLength, assoc = -1, trackDel = false) {
+function mapOffset(
+	offset,
+	from,
+	to,
+	insertLength,
+	assoc = -1,
+	trackDel = false,
+) {
 	if (offset <= from) return offset;
 	if (offset >= to) return offset + insertLength - (to - from);
 	if (trackDel) return null;
@@ -100,7 +108,14 @@ class Marker {
 
 	update(from, to, insertLength) {
 		if (this.offset == null) return;
-		this.offset = mapOffset(this.offset, from, to, insertLength, this.assoc, true);
+		this.offset = mapOffset(
+			this.offset,
+			from,
+			to,
+			insertLength,
+			this.assoc,
+			true,
+		);
 	}
 }
 
@@ -244,7 +259,8 @@ export class RectoCM {
 
 	/** Build the CM5 change object the core reads for dot-repeat and macros. */
 	_recordChange(fromB, insert, origin) {
-		const curOp = (this.curOp = this.curOp || {});
+		this.curOp ??= {};
+		const curOp = this.curOp;
 		if (curOp.$changeStart == null || curOp.$changeStart > fromB) {
 			curOp.$changeStart = fromB;
 		}
@@ -483,7 +499,11 @@ export class RectoCM {
 			},
 			find(back) {
 				if (back) {
-					const endAt = last ? (afterEmptyMatch ? last.to - 1 : last.from) : firstOffset;
+					const endAt = last
+						? afterEmptyMatch
+							? last.to - 1
+							: last.from
+						: firstOffset;
 					last = lastMatchBefore(Math.max(0, endAt));
 				} else {
 					const startFrom = last
@@ -499,7 +519,7 @@ export class RectoCM {
 					match: last.match,
 				};
 				afterEmptyMatch = last ? last.from === last.to : false;
-				return last && last.match;
+				return last?.match;
 			},
 			from() {
 				return lastResult?.from;
@@ -514,7 +534,7 @@ export class RectoCM {
 				if (lastResult) lastResult.to = cm.posFromIndex(last.to);
 			},
 			get match() {
-				return lastResult && lastResult.match;
+				return lastResult?.match;
 			},
 		};
 	}
@@ -634,7 +654,9 @@ export class RectoCM {
 	}
 
 	defaultTextHeight() {
-		return this._geometry({ kind: "lineHeight" })?.lineHeight ?? FALLBACK_LINE_HEIGHT;
+		return (
+			this._geometry({ kind: "lineHeight" })?.lineHeight ?? FALLBACK_LINE_HEIGHT
+		);
 	}
 
 	charCoords(pos, mode) {
@@ -708,7 +730,12 @@ export class RectoCM {
 		}
 		const perStep =
 			unit === "page"
-				? Math.max(1, Math.floor(this.getScrollInfo().clientHeight / this.defaultTextHeight()))
+				? Math.max(
+						1,
+						Math.floor(
+							this.getScrollInfo().clientHeight / this.defaultTextHeight(),
+						),
+					)
 				: 1;
 		let line = start.line + amount * perStep;
 		let hitSide = false;
@@ -720,7 +747,10 @@ export class RectoCM {
 			line = this.lastLine();
 			hitSide = true;
 		}
-		const goal = goalColumn == null ? start.ch : Math.round(goalColumn / FALLBACK_CHAR_WIDTH);
+		const goal =
+			goalColumn == null
+				? start.ch
+				: Math.round(goalColumn / FALLBACK_CHAR_WIDTH);
 		const pos = new Pos(line, Math.min(goal, this.getLine(line).length));
 		if (hitSide) pos.hitSide = true;
 		return pos;
@@ -729,7 +759,11 @@ export class RectoCM {
 	/* -- marks ------------------------------------------------------------- */
 
 	setBookmark(cursor, options) {
-		return new Marker(this, this.indexFromPos(cursor), options?.insertLeft ? 1 : -1);
+		return new Marker(
+			this,
+			this.indexFromPos(cursor),
+			options?.insertLeft ? 1 : -1,
+		);
 	}
 
 	/* -- prompts and messages --------------------------------------------- */
@@ -782,7 +816,8 @@ export class RectoCM {
 	}
 
 	_onSelectionChange() {
-		const curOp = (this.curOp = this.curOp || {});
+		this.curOp ??= {};
+		const curOp = this.curOp;
 		if (!curOp.cursorActivityHandlers) {
 			curOp.cursorActivityHandlers = this._handlers.cursorActivity?.slice();
 		}
@@ -862,7 +897,9 @@ RectoCM.keys = {
 		if (offset < cm.doc.length) cm._applyEdit(offset, offset + 1, "");
 	},
 };
-RectoCM.lookupKey = (key, map, handle) => {
+// `map` is part of upstream's signature; the core passes its keymap and we
+// only ever resolve against `RectoCM.keys`.
+RectoCM.lookupKey = (key, _map, handle) => {
 	let result = RectoCM.keys[key];
 	if (!result && /^Arrow/.test(key)) result = RectoCM.keys[key.slice(5)];
 	if (result) handle(result);

@@ -1,69 +1,461 @@
 {
 	"about": "Vim behaviour the native client must reproduce. Expectations are written from vim semantics, not captured from the implementation. Both the Bun suite (test/suite.test.ts) and the Swift suite (apple/Spikes/VimSpike) run this same file, so a divergence between them is a bridge bug rather than a vim bug. cursor is [line, ch] with ch in UTF-16 code units.",
 	"cases": [
-		{ "name": "dw at start of line", "text": "the quick brown fox", "cursor": [0, 0], "keys": "dw", "expectText": "quick brown fox", "expectCursor": [0, 0] },
-		{ "name": "dw mid-line", "text": "the quick brown fox", "cursor": [0, 4], "keys": "dw", "expectText": "the brown fox" },
-		{ "name": "de leaves the trailing space", "text": "the quick brown fox", "cursor": [0, 4], "keys": "de", "expectText": "the  brown fox" },
-		{ "name": "daw takes the trailing space", "text": "the quick brown fox", "cursor": [0, 4], "keys": "daw", "expectText": "the brown fox" },
-		{ "name": "diw keeps surrounding spaces", "text": "the quick brown fox", "cursor": [0, 4], "keys": "diw", "expectText": "the  brown fox" },
-		{ "name": "ciw replaces the word", "text": "the quick brown fox", "cursor": [0, 4], "keys": "ciwslow<Esc>", "expectText": "the slow brown fox", "expectMode": "normal" },
-		{ "name": "ciw leaves insert mode open before Esc", "text": "the quick brown fox", "cursor": [0, 4], "keys": "ciw", "expectText": "the  brown fox", "expectMode": "insert" },
-		{ "name": "caw replaces word and space", "text": "the quick brown fox", "cursor": [0, 4], "keys": "cawfast <Esc>", "expectText": "the fast brown fox" },
-		{ "name": "cw behaves like ce", "text": "the quick brown fox", "cursor": [0, 4], "keys": "cwslow<Esc>", "expectText": "the slow brown fox" },
-		{ "name": "x deletes one character", "text": "the quick brown fox", "cursor": [0, 0], "keys": "x", "expectText": "he quick brown fox" },
-		{ "name": "3x deletes three characters", "text": "the quick brown fox", "cursor": [0, 0], "keys": "3x", "expectText": " quick brown fox" },
-		{ "name": "D deletes to end of line", "text": "the quick brown fox", "cursor": [0, 4], "keys": "D", "expectText": "the " },
-		{ "name": "C changes to end of line", "text": "the quick brown fox", "cursor": [0, 4], "keys": "Cnew<Esc>", "expectText": "the new" },
-		{ "name": "dd removes the current line", "text": "alpha\nbeta\ngamma", "cursor": [1, 0], "keys": "dd", "expectText": "alpha\ngamma" },
-		{ "name": "3dd removes three lines", "text": "one\ntwo\nthree\nfour\nfive", "cursor": [1, 0], "keys": "3dd", "expectText": "one\nfive" },
-		{ "name": "yy then p duplicates the line below", "text": "one\ntwo", "cursor": [0, 0], "keys": "yyp", "expectText": "one\none\ntwo" },
-		{ "name": "yw then P pastes before the caret", "text": "abcdef", "cursor": [0, 0], "keys": "vllyP", "expectText": "abcabcdef" },
-		{ "name": "J joins two lines with a space", "text": "line one\nline two", "cursor": [0, 0], "keys": "J", "expectText": "line one line two" },
-		{ "name": "o opens a line below", "text": "abc", "cursor": [0, 0], "keys": "onew<Esc>", "expectText": "abc\nnew" },
-		{ "name": "O opens a line above", "text": "abc", "cursor": [0, 0], "keys": "Onew<Esc>", "expectText": "new\nabc" },
-		{ "name": "A appends at end of line", "text": "abc", "cursor": [0, 0], "keys": "A!<Esc>", "expectText": "abc!" },
-		{ "name": "I inserts at start of line", "text": "abc", "cursor": [0, 2], "keys": "Ix<Esc>", "expectText": "xabc" },
-		{ "name": "r replaces one character", "text": "abc", "cursor": [0, 0], "keys": "rz", "expectText": "zbc", "expectMode": "normal" },
-		{ "name": "R overwrites in replace mode", "text": "abcdef", "cursor": [0, 0], "keys": "RXY<Esc>", "expectText": "XYcdef" },
-		{ "name": "~ toggles case and advances", "text": "abc", "cursor": [0, 0], "keys": "~", "expectText": "Abc", "expectCursor": [0, 1] },
-		{ "name": "gg jumps to the first line", "text": "aaa\nbbb\nccc", "cursor": [2, 0], "keys": "ggx", "expectText": "aa\nbbb\nccc" },
-		{ "name": "G jumps to the last line", "text": "aaa\nbbb\nccc", "cursor": [0, 0], "keys": "Gx", "expectText": "aaa\nbbb\ncc" },
-		{ "name": "dG deletes to end of buffer", "text": "aaa\nbbb\nccc", "cursor": [1, 0], "keys": "dG", "expectText": "aaa\n", "note": "Real vim leaves a 1-line buffer; codemirror-vim asks to delete {line:1,ch:0}..{line:3,ch:0} and the out-of-range line clamps to end-of-document, so the newline after line 0 survives. The web lens does the same today — this fixture tracks the web, not vim." },
-		{ "name": "dgg deletes to start of buffer", "text": "aaa\nbbb\nccc", "cursor": [1, 0], "keys": "dgg", "expectText": "ccc" },
-		{ "name": "$ moves to end of line", "text": "abcd", "cursor": [0, 0], "keys": "$x", "expectText": "abc" },
-		{ "name": "0 moves to column zero", "text": "abcd", "cursor": [0, 3], "keys": "0x", "expectText": "bcd" },
-		{ "name": "^ moves to first non-blank", "text": "  abcd", "cursor": [0, 5], "keys": "^x", "expectText": "  bcd" },
-		{ "name": "f jumps onto the character", "text": "abcabc", "cursor": [0, 0], "keys": "fcx", "expectText": "ababc" },
-		{ "name": "t stops before the character", "text": "abcabc", "cursor": [0, 0], "keys": "tcx", "expectText": "acabc" },
-		{ "name": "; repeats the last f", "text": "abcabc", "cursor": [0, 0], "keys": "fc;x", "expectText": "abcab" },
-		{ "name": "v with motions then d", "text": "abcdef", "cursor": [0, 0], "keys": "vlld", "expectText": "def", "expectMode": "normal" },
-		{ "name": "v enters visual mode", "text": "abcdef", "cursor": [0, 0], "keys": "v", "expectText": "abcdef", "expectMode": "visual" },
-		{ "name": "V deletes the whole line", "text": "aaa\nbbb\nccc", "cursor": [1, 0], "keys": "Vd", "expectText": "aaa\nccc" },
-		{ "name": "viw selects the inner word", "text": "the quick brown", "cursor": [0, 4], "keys": "viwd", "expectText": "the  brown" },
-		{ "name": "search moves to the first match", "text": "alpha beta gamma\ndelta beta zeta", "cursor": [0, 0], "keys": "/beta<CR>x", "expectText": "alpha eta gamma\ndelta beta zeta" },
-		{ "name": "n advances to the next match", "text": "alpha beta gamma\ndelta beta zeta", "cursor": [0, 0], "keys": "/beta<CR>nx", "expectText": "alpha beta gamma\ndelta eta zeta" },
-		{ "name": "N goes back to the previous match", "text": "alpha beta gamma\ndelta beta zeta", "cursor": [0, 0], "keys": "/beta<CR>nNx", "expectText": "alpha eta gamma\ndelta beta zeta" },
-		{ "name": "count with a word motion", "text": "one two three four", "cursor": [0, 0], "keys": "2wx", "expectText": "one two hree four" },
-		{ "name": "dot repeats the last change", "text": "one two three four", "cursor": [0, 0], "keys": "dw.", "expectText": "three four" },
-		{ "name": "dot repeats an insert", "text": "ab", "cursor": [0, 0], "keys": "ix<Esc>.", "expectText": "xxab" },
-		{ "name": "u undoes through the host", "text": "one two three", "cursor": [0, 0], "keys": "dwu", "expectText": "one two three" },
-		{ "name": "ctrl-r redoes through the host", "text": "one two three", "cursor": [0, 0], "keys": "dwu<C-r>", "expectText": "two three" },
-		{ "name": "ex substitute on the current line", "text": "the quick brown fox", "cursor": [0, 0], "keys": ":s/quick/slow/<CR>", "expectText": "the slow brown fox" },
-		{ "name": "ex nohlsearch leaves the buffer alone", "text": "alpha beta", "cursor": [0, 0], "keys": "/beta<CR>:noh<CR>", "expectText": "alpha beta" },
-		{ "name": "ex delete removes the line", "text": "aaa\nbbb\nccc", "cursor": [1, 0], "keys": ":d<CR>", "expectText": "aaa\nccc" },
-		{ "name": "ex global delete", "text": "keep\ndrop me\nkeep2\ndrop me2", "cursor": [0, 0], "keys": ":g/drop/d<CR>", "expectText": "keep\nkeep2" },
-		{ "name": "ci( changes inside parens", "text": "foo(bar)baz", "cursor": [0, 5], "keys": "ci(new<Esc>", "expectText": "foo(new)baz" },
-		{ "name": "di\" deletes inside quotes", "text": "say \"hello\" now", "cursor": [0, 6], "keys": "di\"", "expectText": "say \"\" now" },
-		{ "name": "mark and jump back", "text": "line1\nline2\nline3", "cursor": [0, 0], "keys": "majj`ax", "expectText": "ine1\nline2\nline3" },
-		{ "name": "record and replay a macro", "text": "aaa\nbbb\nccc", "cursor": [0, 0], "keys": "qqxjq@q", "expectText": "aa\nbb\nccc" },
-		{ "name": "ctrl-a increments a number", "text": "value 41", "cursor": [0, 0], "keys": "<C-a>", "expectText": "value 42" },
-		{ "name": "P pastes a yanked line above", "text": "one\ntwo", "cursor": [1, 0], "keys": "yyP", "expectText": "one\ntwo\ntwo" },
-		{ "name": "cc changes the whole line", "text": "aaa\nbbb", "cursor": [0, 0], "keys": "ccnew<Esc>", "expectText": "new\nbbb" },
-		{ "name": "S is a synonym for cc", "text": "aaa\nbbb", "cursor": [0, 0], "keys": "Snew<Esc>", "expectText": "new\nbbb" },
-		{ "name": "s substitutes one character", "text": "abc", "cursor": [0, 0], "keys": "sX<Esc>", "expectText": "Xbc" },
-		{ "name": "w moves to the next word", "text": "one two", "cursor": [0, 0], "keys": "wx", "expectText": "one wo" },
-		{ "name": "b moves back a word", "text": "one two", "cursor": [0, 4], "keys": "bx", "expectText": "ne two" },
-		{ "name": "e moves to word end", "text": "one two", "cursor": [0, 0], "keys": "ex", "expectText": "on two" },
-		{ "name": "yiw then viwp replaces a word", "text": "alpha beta", "cursor": [0, 0], "keys": "yiwwviwp", "expectText": "alpha alpha" }
+		{
+			"name": "dw at start of line",
+			"text": "the quick brown fox",
+			"cursor": [0, 0],
+			"keys": "dw",
+			"expectText": "quick brown fox",
+			"expectCursor": [0, 0]
+		},
+		{
+			"name": "dw mid-line",
+			"text": "the quick brown fox",
+			"cursor": [0, 4],
+			"keys": "dw",
+			"expectText": "the brown fox"
+		},
+		{
+			"name": "de leaves the trailing space",
+			"text": "the quick brown fox",
+			"cursor": [0, 4],
+			"keys": "de",
+			"expectText": "the  brown fox"
+		},
+		{
+			"name": "daw takes the trailing space",
+			"text": "the quick brown fox",
+			"cursor": [0, 4],
+			"keys": "daw",
+			"expectText": "the brown fox"
+		},
+		{
+			"name": "diw keeps surrounding spaces",
+			"text": "the quick brown fox",
+			"cursor": [0, 4],
+			"keys": "diw",
+			"expectText": "the  brown fox"
+		},
+		{
+			"name": "ciw replaces the word",
+			"text": "the quick brown fox",
+			"cursor": [0, 4],
+			"keys": "ciwslow<Esc>",
+			"expectText": "the slow brown fox",
+			"expectMode": "normal"
+		},
+		{
+			"name": "ciw leaves insert mode open before Esc",
+			"text": "the quick brown fox",
+			"cursor": [0, 4],
+			"keys": "ciw",
+			"expectText": "the  brown fox",
+			"expectMode": "insert"
+		},
+		{
+			"name": "caw replaces word and space",
+			"text": "the quick brown fox",
+			"cursor": [0, 4],
+			"keys": "cawfast <Esc>",
+			"expectText": "the fast brown fox"
+		},
+		{
+			"name": "cw behaves like ce",
+			"text": "the quick brown fox",
+			"cursor": [0, 4],
+			"keys": "cwslow<Esc>",
+			"expectText": "the slow brown fox"
+		},
+		{
+			"name": "x deletes one character",
+			"text": "the quick brown fox",
+			"cursor": [0, 0],
+			"keys": "x",
+			"expectText": "he quick brown fox"
+		},
+		{
+			"name": "3x deletes three characters",
+			"text": "the quick brown fox",
+			"cursor": [0, 0],
+			"keys": "3x",
+			"expectText": " quick brown fox"
+		},
+		{
+			"name": "D deletes to end of line",
+			"text": "the quick brown fox",
+			"cursor": [0, 4],
+			"keys": "D",
+			"expectText": "the "
+		},
+		{
+			"name": "C changes to end of line",
+			"text": "the quick brown fox",
+			"cursor": [0, 4],
+			"keys": "Cnew<Esc>",
+			"expectText": "the new"
+		},
+		{
+			"name": "dd removes the current line",
+			"text": "alpha\nbeta\ngamma",
+			"cursor": [1, 0],
+			"keys": "dd",
+			"expectText": "alpha\ngamma"
+		},
+		{
+			"name": "3dd removes three lines",
+			"text": "one\ntwo\nthree\nfour\nfive",
+			"cursor": [1, 0],
+			"keys": "3dd",
+			"expectText": "one\nfive"
+		},
+		{
+			"name": "yy then p duplicates the line below",
+			"text": "one\ntwo",
+			"cursor": [0, 0],
+			"keys": "yyp",
+			"expectText": "one\none\ntwo"
+		},
+		{
+			"name": "yw then P pastes before the caret",
+			"text": "abcdef",
+			"cursor": [0, 0],
+			"keys": "vllyP",
+			"expectText": "abcabcdef"
+		},
+		{
+			"name": "J joins two lines with a space",
+			"text": "line one\nline two",
+			"cursor": [0, 0],
+			"keys": "J",
+			"expectText": "line one line two"
+		},
+		{
+			"name": "o opens a line below",
+			"text": "abc",
+			"cursor": [0, 0],
+			"keys": "onew<Esc>",
+			"expectText": "abc\nnew"
+		},
+		{
+			"name": "O opens a line above",
+			"text": "abc",
+			"cursor": [0, 0],
+			"keys": "Onew<Esc>",
+			"expectText": "new\nabc"
+		},
+		{
+			"name": "A appends at end of line",
+			"text": "abc",
+			"cursor": [0, 0],
+			"keys": "A!<Esc>",
+			"expectText": "abc!"
+		},
+		{
+			"name": "I inserts at start of line",
+			"text": "abc",
+			"cursor": [0, 2],
+			"keys": "Ix<Esc>",
+			"expectText": "xabc"
+		},
+		{
+			"name": "r replaces one character",
+			"text": "abc",
+			"cursor": [0, 0],
+			"keys": "rz",
+			"expectText": "zbc",
+			"expectMode": "normal"
+		},
+		{
+			"name": "R overwrites in replace mode",
+			"text": "abcdef",
+			"cursor": [0, 0],
+			"keys": "RXY<Esc>",
+			"expectText": "XYcdef"
+		},
+		{
+			"name": "~ toggles case and advances",
+			"text": "abc",
+			"cursor": [0, 0],
+			"keys": "~",
+			"expectText": "Abc",
+			"expectCursor": [0, 1]
+		},
+		{
+			"name": "gg jumps to the first line",
+			"text": "aaa\nbbb\nccc",
+			"cursor": [2, 0],
+			"keys": "ggx",
+			"expectText": "aa\nbbb\nccc"
+		},
+		{
+			"name": "G jumps to the last line",
+			"text": "aaa\nbbb\nccc",
+			"cursor": [0, 0],
+			"keys": "Gx",
+			"expectText": "aaa\nbbb\ncc"
+		},
+		{
+			"name": "dG deletes to end of buffer",
+			"text": "aaa\nbbb\nccc",
+			"cursor": [1, 0],
+			"keys": "dG",
+			"expectText": "aaa\n",
+			"note": "Real vim leaves a 1-line buffer; codemirror-vim asks to delete {line:1,ch:0}..{line:3,ch:0} and the out-of-range line clamps to end-of-document, so the newline after line 0 survives. The web lens does the same today — this fixture tracks the web, not vim."
+		},
+		{
+			"name": "dgg deletes to start of buffer",
+			"text": "aaa\nbbb\nccc",
+			"cursor": [1, 0],
+			"keys": "dgg",
+			"expectText": "ccc"
+		},
+		{
+			"name": "$ moves to end of line",
+			"text": "abcd",
+			"cursor": [0, 0],
+			"keys": "$x",
+			"expectText": "abc"
+		},
+		{
+			"name": "0 moves to column zero",
+			"text": "abcd",
+			"cursor": [0, 3],
+			"keys": "0x",
+			"expectText": "bcd"
+		},
+		{
+			"name": "^ moves to first non-blank",
+			"text": "  abcd",
+			"cursor": [0, 5],
+			"keys": "^x",
+			"expectText": "  bcd"
+		},
+		{
+			"name": "f jumps onto the character",
+			"text": "abcabc",
+			"cursor": [0, 0],
+			"keys": "fcx",
+			"expectText": "ababc"
+		},
+		{
+			"name": "t stops before the character",
+			"text": "abcabc",
+			"cursor": [0, 0],
+			"keys": "tcx",
+			"expectText": "acabc"
+		},
+		{
+			"name": "; repeats the last f",
+			"text": "abcabc",
+			"cursor": [0, 0],
+			"keys": "fc;x",
+			"expectText": "abcab"
+		},
+		{
+			"name": "v with motions then d",
+			"text": "abcdef",
+			"cursor": [0, 0],
+			"keys": "vlld",
+			"expectText": "def",
+			"expectMode": "normal"
+		},
+		{
+			"name": "v enters visual mode",
+			"text": "abcdef",
+			"cursor": [0, 0],
+			"keys": "v",
+			"expectText": "abcdef",
+			"expectMode": "visual"
+		},
+		{
+			"name": "V deletes the whole line",
+			"text": "aaa\nbbb\nccc",
+			"cursor": [1, 0],
+			"keys": "Vd",
+			"expectText": "aaa\nccc"
+		},
+		{
+			"name": "viw selects the inner word",
+			"text": "the quick brown",
+			"cursor": [0, 4],
+			"keys": "viwd",
+			"expectText": "the  brown"
+		},
+		{
+			"name": "search moves to the first match",
+			"text": "alpha beta gamma\ndelta beta zeta",
+			"cursor": [0, 0],
+			"keys": "/beta<CR>x",
+			"expectText": "alpha eta gamma\ndelta beta zeta"
+		},
+		{
+			"name": "n advances to the next match",
+			"text": "alpha beta gamma\ndelta beta zeta",
+			"cursor": [0, 0],
+			"keys": "/beta<CR>nx",
+			"expectText": "alpha beta gamma\ndelta eta zeta"
+		},
+		{
+			"name": "N goes back to the previous match",
+			"text": "alpha beta gamma\ndelta beta zeta",
+			"cursor": [0, 0],
+			"keys": "/beta<CR>nNx",
+			"expectText": "alpha eta gamma\ndelta beta zeta"
+		},
+		{
+			"name": "count with a word motion",
+			"text": "one two three four",
+			"cursor": [0, 0],
+			"keys": "2wx",
+			"expectText": "one two hree four"
+		},
+		{
+			"name": "dot repeats the last change",
+			"text": "one two three four",
+			"cursor": [0, 0],
+			"keys": "dw.",
+			"expectText": "three four"
+		},
+		{
+			"name": "dot repeats an insert",
+			"text": "ab",
+			"cursor": [0, 0],
+			"keys": "ix<Esc>.",
+			"expectText": "xxab"
+		},
+		{
+			"name": "u undoes through the host",
+			"text": "one two three",
+			"cursor": [0, 0],
+			"keys": "dwu",
+			"expectText": "one two three"
+		},
+		{
+			"name": "ctrl-r redoes through the host",
+			"text": "one two three",
+			"cursor": [0, 0],
+			"keys": "dwu<C-r>",
+			"expectText": "two three"
+		},
+		{
+			"name": "ex substitute on the current line",
+			"text": "the quick brown fox",
+			"cursor": [0, 0],
+			"keys": ":s/quick/slow/<CR>",
+			"expectText": "the slow brown fox"
+		},
+		{
+			"name": "ex nohlsearch leaves the buffer alone",
+			"text": "alpha beta",
+			"cursor": [0, 0],
+			"keys": "/beta<CR>:noh<CR>",
+			"expectText": "alpha beta"
+		},
+		{
+			"name": "ex delete removes the line",
+			"text": "aaa\nbbb\nccc",
+			"cursor": [1, 0],
+			"keys": ":d<CR>",
+			"expectText": "aaa\nccc"
+		},
+		{
+			"name": "ex global delete",
+			"text": "keep\ndrop me\nkeep2\ndrop me2",
+			"cursor": [0, 0],
+			"keys": ":g/drop/d<CR>",
+			"expectText": "keep\nkeep2"
+		},
+		{
+			"name": "ci( changes inside parens",
+			"text": "foo(bar)baz",
+			"cursor": [0, 5],
+			"keys": "ci(new<Esc>",
+			"expectText": "foo(new)baz"
+		},
+		{
+			"name": "di\" deletes inside quotes",
+			"text": "say \"hello\" now",
+			"cursor": [0, 6],
+			"keys": "di\"",
+			"expectText": "say \"\" now"
+		},
+		{
+			"name": "mark and jump back",
+			"text": "line1\nline2\nline3",
+			"cursor": [0, 0],
+			"keys": "majj`ax",
+			"expectText": "ine1\nline2\nline3"
+		},
+		{
+			"name": "record and replay a macro",
+			"text": "aaa\nbbb\nccc",
+			"cursor": [0, 0],
+			"keys": "qqxjq@q",
+			"expectText": "aa\nbb\nccc"
+		},
+		{
+			"name": "ctrl-a increments a number",
+			"text": "value 41",
+			"cursor": [0, 0],
+			"keys": "<C-a>",
+			"expectText": "value 42"
+		},
+		{
+			"name": "P pastes a yanked line above",
+			"text": "one\ntwo",
+			"cursor": [1, 0],
+			"keys": "yyP",
+			"expectText": "one\ntwo\ntwo"
+		},
+		{
+			"name": "cc changes the whole line",
+			"text": "aaa\nbbb",
+			"cursor": [0, 0],
+			"keys": "ccnew<Esc>",
+			"expectText": "new\nbbb"
+		},
+		{
+			"name": "S is a synonym for cc",
+			"text": "aaa\nbbb",
+			"cursor": [0, 0],
+			"keys": "Snew<Esc>",
+			"expectText": "new\nbbb"
+		},
+		{
+			"name": "s substitutes one character",
+			"text": "abc",
+			"cursor": [0, 0],
+			"keys": "sX<Esc>",
+			"expectText": "Xbc"
+		},
+		{
+			"name": "w moves to the next word",
+			"text": "one two",
+			"cursor": [0, 0],
+			"keys": "wx",
+			"expectText": "one wo"
+		},
+		{
+			"name": "b moves back a word",
+			"text": "one two",
+			"cursor": [0, 4],
+			"keys": "bx",
+			"expectText": "ne two"
+		},
+		{
+			"name": "e moves to word end",
+			"text": "one two",
+			"cursor": [0, 0],
+			"keys": "ex",
+			"expectText": "on two"
+		},
+		{
+			"name": "yiw then viwp replaces a word",
+			"text": "alpha beta",
+			"cursor": [0, 0],
+			"keys": "yiwwviwp",
+			"expectText": "alpha alpha"
+		}
 	]
 }

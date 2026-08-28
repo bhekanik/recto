@@ -3,7 +3,14 @@
 	"vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
 	"files": {
 		"ignoreUnknown": true,
-		"includes": ["**", "!convex/_generated", "!.next"]
+		"includes": [
+			"**",
+			"!convex/_generated",
+			"!.next",
+			"!packages/recto-vim-js/src/generated",
+			"!packages/recto-vim-js/dist",
+			"!apple/Spikes/VimSpike/Sources/RectoVim/Resources"
+		]
 	},
 	"formatter": { "enabled": true, "indentStyle": "tab" },
 	"linter": {

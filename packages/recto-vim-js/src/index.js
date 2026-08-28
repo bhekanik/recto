@@ -125,7 +125,12 @@ class VimSession {
 		// Single printable characters only. Anything bracketed (`<C-x>`, `<Up>`)
 		// is a chord vim declined to handle, and inserting its name would be
 		// worse than dropping it.
-		if (event.key && event.key.length === 1 && !event.ctrlKey && !event.metaKey) {
+		if (
+			event.key &&
+			event.key.length === 1 &&
+			!event.ctrlKey &&
+			!event.metaKey
+		) {
 			insert(event.key);
 			return true;
 		}
@@ -236,4 +241,5 @@ const RectoVim = {
 };
 
 globalObject.RectoVim = RectoVim;
+
 export { RectoVim, Vim, VimSession };

@@ -80,10 +80,15 @@ function countOccurrences(haystack: string, needle: string): number {
 	return count;
 }
 
-async function readPackage(name: string): Promise<{ version: string; dir: string }> {
+async function readPackage(
+	name: string,
+): Promise<{ version: string; dir: string }> {
 	const manifestPath = Bun.resolveSync(`${name}/package.json`, import.meta.dir);
 	const manifest = await Bun.file(manifestPath).json();
-	return { version: manifest.version, dir: manifestPath.replace(/\/package\.json$/, "") };
+	return {
+		version: manifest.version,
+		dir: manifestPath.replace(/\/package\.json$/, ""),
+	};
 }
 
 const vim = await readPackage(VIM_PKG);

@@ -84,7 +84,12 @@ export class Prompt {
 		}
 		if (event.keyCode === 8) {
 			this.value = this.value.slice(0, -1);
-		} else if (event.key && event.key.length === 1 && !event.ctrlKey && !event.metaKey) {
+		} else if (
+			event.key &&
+			event.key.length === 1 &&
+			!event.ctrlKey &&
+			!event.metaKey
+		) {
 			this.value += event.key;
 		}
 		this.options.onKeyUp?.(e, this.value, close);

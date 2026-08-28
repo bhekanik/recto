@@ -27,7 +27,9 @@ export type VimResult = {
 
 export type RectoVimApi = {
 	version: string;
-	init: (text: string, host: unknown) => string;
+	/** `host` is the object JS calls back into; Swift passes its `JSExport`
+	 *  bridge, this harness passes a `TestHost`. */
+	init: (text: string, host: TestHost | null) => string;
 	handleKey: (key: string, mods: number) => string;
 	setCursor: (line: number, ch: number) => string;
 	getText: () => string;
@@ -40,20 +42,20 @@ const MOD_META = 4;
 const MOD_SHIFT = 8;
 
 /** vim key notation → the DOM `key` name the core's `vimKeyFromEvent` expects. */
-const NAMED_KEYS: Record<string, string> = {
-	CR: "Enter",
-	Enter: "Enter",
-	Esc: "Escape",
-	BS: "Backspace",
-	Del: "Delete",
-	Space: " ",
-	Tab: "Tab",
-	Left: "ArrowLeft",
-	Right: "ArrowRight",
-	Up: "ArrowUp",
-	Down: "ArrowDown",
-	lt: "<",
-};
+const NAMED_KEYS = new Map([
+	["CR", "Enter"],
+	["Enter", "Enter"],
+	["Esc", "Escape"],
+	["BS", "Backspace"],
+	["Del", "Delete"],
+	["Space", " "],
+	["Tab", "Tab"],
+	["Left", "ArrowLeft"],
+	["Right", "ArrowRight"],
+	["Up", "ArrowUp"],
+	["Down", "ArrowDown"],
+	["lt", "<"],
+]);
 
 /**
  * Parse a vim-style key string ("3dd", "/fox<CR>nN", "ciw<Esc>") into keys.
@@ -63,8 +65,11 @@ const NAMED_KEYS: Record<string, string> = {
 export function parseKeys(spec: string): KeySpec[] {
 	const out: KeySpec[] = [];
 	let i = 0;
+	// `charAt` rather than `spec[i]`: it returns a plain string, which keeps the
+	// UTF-16 indices consistent with `indexOf`/`slice` below and sidesteps
+	// `noUncheckedIndexedAccess`.
 	while (i < spec.length) {
-		if (spec[i] === "<") {
+		if (spec.charAt(i) === "<") {
 			const end = spec.indexOf(">", i);
 			if (end === -1) throw new Error(`unterminated key group in ${spec}`);
 			const body = spec.slice(i + 1, end);
@@ -85,10 +90,10 @@ export function parseKeys(spec: string): KeySpec[] {
 								: MOD_SHIFT;
 				rest = rest.slice(2);
 			}
-			out.push({ key: NAMED_KEYS[rest] ?? rest, mods });
+			out.push({ key: NAMED_KEYS.get(rest) ?? rest, mods });
 			continue;
 		}
-		const ch = spec[i];
+		const ch = spec.charAt(i);
 		// An uppercase letter is Shift on a real keyboard, and the core checks
 		// `shiftKey` when naming chords.
 		out.push({ key: ch, mods: /^[A-Z]$/.test(ch) ? MOD_SHIFT : 0 });
@@ -117,6 +122,9 @@ export class TestHost {
 	}
 
 	private capture(): Snapshot {
+		// SAFETY: `getState` is the bundle's own serialiser for `VimResult`; the
+		// Swift side decodes the identical payload with `JSONDecoder`, so a shape
+		// mismatch would fail the Swift suite rather than pass silently here.
 		const state = JSON.parse(this.api.getState()) as VimResult;
 		const sel = state.selections[state.mainIndex] ?? { anchor: 0, head: 0 };
 		return { text: this.api.getText(), anchor: sel.anchor, head: sel.head };
@@ -163,7 +171,10 @@ type Snapshot = { text: string; anchor: number; head: number };
 /** Evaluate the built bundle into this realm and hand back the global it sets. */
 export async function loadBundle(path: string): Promise<RectoVimApi> {
 	const source = await Bun.file(path).text();
-	(0, eval)(source);
+	// The bundle is an IIFE that assigns `globalThis.RectoVim`, so it has to be
+	// evaluated rather than imported — the same thing `JSContext.evaluateScript`
+	// does on the Swift side. `Function` keeps it out of this module's scope.
+	new Function(source)();
 	const api = (globalThis as unknown as { RectoVim?: RectoVimApi }).RectoVim;
 	if (!api) throw new Error(`bundle at ${path} did not define RectoVim`);
 	return api;

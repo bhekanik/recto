@@ -6,7 +6,7 @@ import {
 	type RectoVimApi,
 	TestHost,
 	type VimResult,
-} from "./harness.ts";
+} from "./harness";
 
 const api: RectoVimApi = await loadBundle(
 	`${import.meta.dir}/../dist/recto-vim.js`,
@@ -22,8 +22,10 @@ type Case = {
 	expectMode?: string;
 };
 
+type CaseOutcome = { text: string; cursor: [number, number]; mode: string };
+
 /** Drive one fixture case and report where the buffer and caret ended up. */
-function run(testCase: Case): { text: string; cursor: [number, number]; mode: string } {
+function run(testCase: Case): CaseOutcome {
 	const host = new TestHost(api);
 	api.init(testCase.text, host);
 	api.setCursor(testCase.cursor[0], testCase.cursor[1]);
@@ -48,11 +50,15 @@ function offsetToPos(text: string, offset: number): [number, number] {
 }
 
 describe("keystroke suite", () => {
+	// SAFETY: the fixture is imported as JSON, so TypeScript infers a wider shape
+	// than the file actually holds; `Case` is the contract the Swift suite decodes
+	// the same file into, and a mismatch there fails that suite.
 	for (const testCase of suite.cases as Case[]) {
 		test(testCase.name, () => {
 			const result = run(testCase);
 			expect(result.text).toBe(testCase.expectText);
-			if (testCase.expectCursor) expect(result.cursor).toEqual(testCase.expectCursor);
+			if (testCase.expectCursor)
+				expect(result.cursor).toEqual(testCase.expectCursor);
 			if (testCase.expectMode) expect(result.mode).toBe(testCase.expectMode);
 		});
 	}
