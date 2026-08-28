@@ -164,6 +164,21 @@ export function useDocumentHistory(args: {
 		setCurrentNodeId(null);
 	}, [documentId]);
 
+	/**
+	 * Record what became of a pointer move this client started. `appliedAt` is
+	 * the server `updatedAt` it was written at, or null when the move never took
+	 * — a failed write, or a head another writer owns. Either way the guard has
+	 * to go: keeping it would deafen this client to every later remote move. A
+	 * newer move supersedes this one, so only settle the move still outstanding.
+	 */
+	const settleLocalMove = useCallback(
+		(nodeId: string, appliedAt: number | null) => {
+			if (localMoveRef.current?.nodeId !== nodeId) return;
+			localMoveRef.current = appliedAt === null ? null : { nodeId, appliedAt };
+		},
+		[],
+	);
+
 	// Merge the reactive DAG with any optimistically-appended local nodes.
 	const nodes = useMemo<HistoryNode[]>(() => {
 		const remote = (dagRows ?? []) as HistoryNode[];
@@ -233,26 +248,16 @@ export function useDocumentHistory(args: {
 				expectedHeadNodeId: commit.parentNodeId,
 				clientMutationId: ulid(),
 			})
-				.then((result) => {
-					if (localMoveRef.current?.nodeId !== commit.nodeId) return;
-					if (result.committed) {
-						localMoveRef.current.appliedAt = result.updatedAt;
-						return;
-					}
-					// Another writer owns the head. The node is stored either way, so
-					// nothing is lost — drop the guard and let the remote pointer win.
-					localMoveRef.current = null;
-				})
-				.catch(() => {
-					// The write may never have landed; a stuck guard would deafen this
-					// client to every later remote pointer move.
-					if (localMoveRef.current?.nodeId === commit.nodeId) {
-						localMoveRef.current = null;
-					}
-				});
+				.then((result) =>
+					settleLocalMove(
+						commit.nodeId,
+						result.committed ? result.updatedAt : null,
+					),
+				)
+				.catch(() => settleLocalMove(commit.nodeId, null));
 			debouncedAutoVersion();
 		},
-		[commitEdit, debouncedAutoVersion, documentId, origin],
+		[commitEdit, debouncedAutoVersion, documentId, origin, settleLocalMove],
 	);
 
 	// Hydrate the grouping controller once the DAG + pointer are known.
@@ -370,22 +375,15 @@ export function useDocumentHistory(args: {
 				wordCount: countWords(markdown),
 				updatedAt: Date.now(),
 			})
-				.then((result) => {
-					if (localMoveRef.current?.nodeId !== nodeId) return;
-					if (result.applied) {
-						localMoveRef.current.appliedAt = result.updatedAt;
-						return;
-					}
-					localMoveRef.current = null;
-				})
+				.then((result) =>
+					settleLocalMove(nodeId, result.applied ? result.updatedAt : null),
+				)
 				.catch(() => {
-					if (localMoveRef.current?.nodeId === nodeId) {
-						localMoveRef.current = null;
-					}
+					settleLocalMove(nodeId, null);
 					toast("Couldn't sync undo position", "error");
 				});
 		},
-		[documentId, nodesById, updatePointer],
+		[documentId, nodesById, settleLocalMove, updatePointer],
 	);
 
 	const undo = useCallback(() => {

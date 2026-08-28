@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "@/convex/_generated/api";
+import type { Id } from "@/convex/_generated/dataModel";
 import type { EditorHandle } from "@/lib/editor/handle";
 
 import type { HistoryController, HistoryNode } from "./use-document-history";
@@ -32,16 +33,21 @@ vi.mock("convex/react", () => ({
 	},
 }));
 
-/** Args of every `documents.commitEdit` call, in order. */
-function commitCalls(): Array<{
+/** The `documents.commitEdit` payload this harness asserts on. */
+type CommitCall = {
 	node: { nodeId: string; parentNodeId: string | null };
 	markdown: string;
 	expectedHeadNodeId: string;
 	clientMutationId: string;
-}> {
-	return mutationCalls
-		.filter((c) => c.name === getFunctionName(api.documents.commitEdit))
-		.map((c) => c.args as ReturnType<typeof commitCalls>[number]);
+};
+
+/** Args of every `documents.commitEdit` call, in order. */
+function commitCalls(): CommitCall[] {
+	const calls = mutationCalls.filter(
+		(c) => c.name === getFunctionName(api.documents.commitEdit),
+	);
+	// SAFETY: filtered to commitEdit, whose args validator declares this shape.
+	return calls.map((c) => c.args as CommitCall);
 }
 
 const { decideServerPointer, useDocumentHistory } = await import(
@@ -102,7 +108,9 @@ function mountHistory(handle: EditorHandle) {
 
 	function Harness(props: Props) {
 		controller = useDocumentHistory({
-			documentId: "doc1" as never,
+			// SAFETY: Id<"documents"> is a branded string and the mocked Convex
+			// client never dereferences it.
+			documentId: "doc1" as Id<"documents">,
 			getEditorHandle: () => handle,
 			serverCurrentNodeId: props.serverCurrentNodeId,
 			serverMarkdown: "",
@@ -188,6 +196,8 @@ describe("decideServerPointer", () => {
 
 describe("plan 022 — undo pointer race after an AI accept", () => {
 	beforeEach(() => {
+		// SAFETY: React reads this flag off the global object in dev builds; the
+		// cast only names the property it looks for.
 		(
 			globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 		).IS_REACT_ACT_ENVIRONMENT = true;
@@ -218,7 +228,7 @@ describe("plan 022 — undo pointer race after an AI accept", () => {
 		//    together, so the reactive queries now report N1 as the head.
 		dagRows = [
 			rootNode(),
-			...(h.controller.nodes.filter((n) => n.nodeId !== ROOT) as HistoryNode[]),
+			...h.controller.nodes.filter((n) => n.nodeId !== ROOT),
 		];
 		h.render({ serverCurrentNodeId: typedNodeId, serverUpdatedAt: 2_000 });
 
