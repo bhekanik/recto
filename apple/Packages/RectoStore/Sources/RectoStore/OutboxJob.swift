@@ -8,6 +8,10 @@ public enum OutboxKind: String, Codable, Sendable, DatabaseValueConvertible {
   case createDocument
   /// `documents.commitEdit` — node + head + markdown in one server transaction.
   case commitEdit
+  /// `docNodes.append` — upload the node WITHOUT touching `currentNodeId`. What a
+  /// commit becomes when its branch loses a divergence: the text is preserved,
+  /// the pointer is not contested.
+  case appendNode
   /// `documents.updateCurrentNodeId` — an undo/redo/navigate pointer move with
   /// no new node.
   case pointerMove

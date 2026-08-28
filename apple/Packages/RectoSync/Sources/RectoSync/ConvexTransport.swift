@@ -16,8 +16,11 @@ public protocol RectoTransport: Actor {
     documentId: String, currentNodeId: String, markdown: String, wordCount: Int, updatedAt: Double
   ) async throws -> UpdateCurrentNodeResponse
   func updateMarkdown(
-    documentId: String, markdown: String, wordCount: Int, expectedUpdatedAt: Double, title: String?
+    documentId: String, markdown: String, wordCount: Int, expectedUpdatedAt: Double,
+    expectedHeadNodeId: String?, title: String?
   ) async throws -> UpdateMarkdownResponse
+  /// `docNodes.append`: upload a node without touching `currentNodeId`.
+  func appendNode(documentId: String, node: CommitEditRequest) async throws
   func rename(documentId: String, title: String) async throws
   func remove(documentId: String) async throws
   func recordWritingStat(date: String, words: Int) async throws
@@ -66,6 +69,23 @@ public struct CommitEditRequest: Sendable, Equatable {
     self.wordCount = wordCount
     self.expectedHeadNodeId = expectedHeadNodeId
     self.clientMutationId = clientMutationId
+  }
+
+  /// `docNodes.append` arguments: the node, flat, and nothing about the head.
+  var appendArgs: [String: ConvexEncodable?] {
+    var args: [String: ConvexEncodable?] = [
+      "documentId": documentId,
+      "nodeId": nodeId,
+      "parentNodeId": parentNodeId,
+      "patch": patch,
+      "selection": selection.map {
+        ["anchor": Double($0.anchor), "head": Double($0.head)] as [String: ConvexEncodable?]
+      },
+      "origin": origin,
+      "createdAt": createdAt,
+    ]
+    if let snapshot { args["snapshot"] = snapshot }
+    return args
   }
 
   /// Convex arguments.
@@ -227,7 +247,8 @@ public actor ConvexTransport: RectoTransport {
   }
 
   public func updateMarkdown(
-    documentId: String, markdown: String, wordCount: Int, expectedUpdatedAt: Double, title: String?
+    documentId: String, markdown: String, wordCount: Int, expectedUpdatedAt: Double,
+    expectedHeadNodeId: String?, title: String?
   ) async throws -> UpdateMarkdownResponse {
     var args: [String: ConvexEncodable?] = [
       "documentId": documentId,
@@ -235,8 +256,16 @@ public actor ConvexTransport: RectoTransport {
       "wordCount": Double(wordCount),
       "expectedUpdatedAt": expectedUpdatedAt,
     ]
+    // Without this the server accepts a draft written against a branch that is
+    // no longer the head, leaving `documents.markdown` detached from
+    // `currentNodeId`.
+    if let expectedHeadNodeId { args["expectedHeadNodeId"] = expectedHeadNodeId }
     if let title { args["title"] = title }
     return try await client.mutation(ConvexFunction.documentsUpdateMarkdown, with: args)
+  }
+
+  public func appendNode(documentId: String, node: CommitEditRequest) async throws {
+    try await client.mutation(ConvexFunction.docNodesAppend, with: node.appendArgs)
   }
 
   public func rename(documentId: String, title: String) async throws {

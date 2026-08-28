@@ -82,6 +82,30 @@ public struct GroupingController: Sendable {
     hasPendingDraft && lastChangeAt > 0 ? lastChangeAt + groupDelayMS : nil
   }
 
+  /// Re-seed a draft that was persisted but never reached a node boundary.
+  ///
+  /// After a crash or a quit, `DocumentRecord.draftMarkdown` holds text ahead of
+  /// the head that no node describes yet. The controller has to be told about it
+  /// or the next keystroke would compute its patch against the head and the
+  /// recovered text would be committed as if the user had just typed all of it —
+  /// and, worse, `currentState` would show the head instead of what they wrote.
+  ///
+  /// `lastChangeEnd` is deliberately reset: adjacency is a property of a typing
+  /// run, and nothing about where the caret was before the relaunch survives.
+  public mutating func restorePendingDraft(
+    markdown: String, selection: NodeSelection?, now: Double
+  ) {
+    let next = JSString(markdown)
+    guard next != parentMarkdown else { return }
+    draftMarkdown = next
+    draftSelection = selection
+    lastChangeAt = now
+    lastChangeEnd = -1
+  }
+
+  /// The caret stored with the pending draft, for the editor to restore.
+  public var draftSelectionValue: NodeSelection? { draftSelection }
+
   /// Reposition after a navigation/restore. Never commits.
   public mutating func setCurrent(
     nodeId: String, markdown: String, depthSinceSnapshot: Int = 0

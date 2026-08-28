@@ -83,8 +83,29 @@ public actor DocumentSession {
   /// the web's `navigatingRef` guard.
   private var isRepositioning = false
 
+  /// Tail of the transition queue. Actor isolation does NOT prevent reentrancy:
+  /// every `await` is a place another window's keystroke can run a whole edit.
+  /// Each state transition awaits its predecessor, so a navigation that suspends
+  /// while materializing cannot be overtaken by a commit that then gets stranded.
+  private var transitionTail: Task<Void, Never>?
+
   /// How many windows currently hold this session.
   var holderCount: Int { openCount }
+
+  /// Run `body` only after every transition queued before it has finished.
+  ///
+  /// `body` is non-escaping, so it runs inline on this actor and can touch the
+  /// session's state directly. The queue is a chain of gates: each caller
+  /// publishes its own gate as the new tail, waits for the previous one, and
+  /// signals on the way out — including when it throws.
+  private func withTransition<T>(_ body: () async throws -> T) async rethrows -> T {
+    let previous = transitionTail
+    let gate = TransitionGate()
+    transitionTail = Task { await gate.wait() }
+    await previous?.value
+    defer { gate.signal() }
+    return try await body()
+  }
 
   public init(
     documentLocalId: String,
@@ -131,12 +152,20 @@ public actor DocumentSession {
 
     let markdown = try await store.materializedMarkdown(
       documentLocalId: documentLocalId, nodeId: document.localHeadNodeId)
-    controller = GroupingController(
+    var restored = GroupingController(
       rootNodeId: document.localHeadNodeId,
       rootMarkdown: markdown,
       // Resume the snapshot cadence where the branch left it, so a relaunch does
       // not restart the every-50 counter and unbound the replay length.
       depthSinceSnapshot: depthSinceSnapshot(document.localHeadNodeId, nodesById))
+    // Text that was persisted but never reached a node boundary. Without this the
+    // recovery draft is on disk but invisible: the editor would show the head and
+    // the user's last sentences would look lost.
+    if let draft = document.draftMarkdown {
+      restored.restorePendingDraft(
+        markdown: draft, selection: document.draftSelection, now: now())
+    }
+    controller = restored
 
     if let sync {
       await sync.openDocument(localId: documentLocalId)
@@ -217,18 +246,47 @@ public actor DocumentSession {
   public func applyLocalChange(
     markdown: String, selection: NodeSelection?, structural: Bool = false
   ) async throws {
-    guard let document else { throw SessionError.notOpen }
-    let timestamp = now()
-    // Optional chaining on a `var` of struct type mutates in place, so this both
-    // checks that the session is open and records the change.
-    guard
-      let commits = controller?.record(
-        markdown: markdown, selection: selection, structural: structural, now: timestamp)
-    else { throw SessionError.notOpen }
+    try await withTransition {
+      try await performLocalChange(
+        markdown: markdown, selection: selection, structural: structural)
+    }
+  }
 
-    var head = document.localHeadNodeId
-    for commit in commits {
-      head = try await persist(commit, base: head, at: timestamp)
+  private func performLocalChange(
+    markdown: String, selection: NodeSelection?, structural: Bool
+  ) async throws {
+    guard controller != nil, let document else { throw SessionError.notOpen }
+    let timestamp = now()
+
+    // Write-ahead: the text is on disk BEFORE any in-memory state moves. A crash
+    // between here and the commit loses nothing, and a store failure below
+    // leaves a draft row that `open()` restores rather than a controller
+    // advanced past a node SQLite rejected.
+    try await store.saveDraft(
+      documentLocalId: documentLocalId, markdown: markdown, selection: selection,
+      wordCount: countWords(markdown), job: nil, now: timestamp)
+
+    // Stage the grouping decision in a copy; the live controller is only
+    // replaced once every store write for it has succeeded.
+    var staged = controller!
+    let commits = staged.record(
+      markdown: markdown, selection: selection, structural: structural, now: timestamp)
+
+    do {
+      var head = document.localHeadNodeId
+      for commit in commits {
+        head = try await persist(commit, base: head, at: timestamp)
+      }
+      controller = staged
+    } catch {
+      // Rebuild from what is actually on disk. Keeping the staged controller
+      // would name a parent the store does not have.
+      logger.error(
+        "commit failed for \(self.documentLocalId, privacy: .public): \(error.localizedDescription, privacy: .public)"
+      )
+      try? await rebuildControllerFromStore()
+      publish()
+      throw error
     }
 
     try await reload()
@@ -236,6 +294,25 @@ public actor DocumentSession {
     scheduleDraftSave(markdown: markdown, selection: selection)
     publish()
     if !commits.isEmpty { await sync?.requestDrain() }
+  }
+
+  /// Re-seed the controller from the persisted head and draft. The store is the
+  /// only thing that survives a crash, so it is the only thing worth trusting
+  /// after a failed write.
+  private func rebuildControllerFromStore() async throws {
+    try await reload()
+    guard let document else { return }
+    let markdown = try await store.materializedMarkdown(
+      documentLocalId: documentLocalId, nodeId: document.localHeadNodeId)
+    var rebuilt = GroupingController(
+      rootNodeId: document.localHeadNodeId,
+      rootMarkdown: markdown,
+      depthSinceSnapshot: depthSinceSnapshot(document.localHeadNodeId, nodesById))
+    if let draft = document.draftMarkdown {
+      rebuilt.restorePendingDraft(
+        markdown: draft, selection: document.draftSelection, now: now())
+    }
+    controller = rebuilt
   }
 
   /// The idle boundary elapsed (500 ms since the last keystroke).
@@ -298,6 +375,7 @@ public actor DocumentSession {
   @discardableResult
   public func undo() async throws -> Bool {
     try await flush()
+
     guard let document, let parent = nodesById[document.localHeadNodeId]?.parentNodeId,
       nodesById[parent] != nil
     else { return false }
@@ -318,15 +396,21 @@ public actor DocumentSession {
 
   /// Jump anywhere in the DAG. A pointer move: it never grows the tree.
   public func navigate(to nodeId: String) async throws {
+    try await withTransition { try await performNavigate(to: nodeId) }
+  }
+
+  private func performNavigate(to nodeId: String) async throws {
     guard controller != nil, nodesById[nodeId] != nil else { return }
     isRepositioning = true
     defer { isRepositioning = false }
+
     // Commit any pending draft first, so we branch from a real node rather than
     // mid-edit text that would be lost.
     if let document, let commit = controller?.flush() {
       _ = try await persist(commit, base: document.localHeadNodeId, at: now())
       try await reload()
     }
+    guard let base = document?.localHeadNodeId else { return }
 
     let markdown = try await store.materializedMarkdown(
       documentLocalId: documentLocalId, nodeId: nodeId)
@@ -337,12 +421,17 @@ public actor DocumentSession {
       kind: .pointerMove,
       clientMutationId: ulid(),
       baseHeadNodeId: nodeId,
-      payload: OutboxPayload(nodeId: nodeId, markdown: markdown, wordCount: words).encoded,
+      // The event time, so a retry of this move cannot outrank a later one.
+      payload: OutboxPayload(
+        nodeId: nodeId, createdAt: timestamp, markdown: markdown, wordCount: words
+      ).encoded,
       createdAt: timestamp)
 
+    // Materializing suspended. If the head moved in that window the move is
+    // stale, and applying it would strand the newer node's queued commit.
     _ = try await store.moveHead(
       documentLocalId: documentLocalId, to: nodeId, markdown: markdown, wordCount: words,
-      job: job, now: timestamp)
+      expectedHeadNodeId: base, job: job, now: timestamp)
     controller?.setCurrent(
       nodeId: nodeId, markdown: markdown,
       depthSinceSnapshot: depthSinceSnapshot(nodeId, nodesById))
@@ -358,55 +447,64 @@ public actor DocumentSession {
 
   // MARK: - Divergence
 
-  /// Keep the local branch: re-commit the local head's text onto the remote head
-  /// so the server's pointer catches up. Both branches stay in the DAG.
+  /// Keep the local branch: re-commit its text as a child of the remote head so
+  /// the server's pointer catches up. Both branches stay in the DAG.
   public func resolveDivergenceKeepingLocal() async throws {
-    isRepositioning = true
-    defer { isRepositioning = false }
-    // The divergence is written by the sync engine on its own actor; the
-    // session hears about it through an event that may not have arrived yet.
-    try await reload()
-    guard let document, let remoteHead = document.divergedRemoteHeadNodeId,
-      nodesById[remoteHead] != nil
-    else { return }
-    let localMarkdown = try await store.materializedMarkdown(
-      documentLocalId: documentLocalId, nodeId: document.localHeadNodeId)
-    let remoteMarkdown = try await store.materializedMarkdown(
-      documentLocalId: documentLocalId, nodeId: remoteHead)
+    try await withTransition {
+      isRepositioning = true
+      defer { isRepositioning = false }
+      // The divergence is written by the sync engine on its own actor; the
+      // session hears about it through an event that may not have arrived yet.
+      try await reload()
+      guard let document, let remoteHead = document.divergedRemoteHeadNodeId,
+        nodesById[remoteHead] != nil
+      else { return }
 
-    controller?.setCurrent(
-      nodeId: remoteHead, markdown: remoteMarkdown,
-      depthSinceSnapshot: depthSinceSnapshot(remoteHead, nodesById))
-    try await store.setSyncState(
-      documentLocalId: documentLocalId, .pending, divergedRemoteHeadNodeId: .some(nil))
-    _ = try await store.moveHead(
-      documentLocalId: documentLocalId, to: remoteHead, markdown: remoteMarkdown,
-      wordCount: countWords(remoteMarkdown), job: nil, clearDivergence: true, now: now())
-    try await reload()
-    // Re-applying the local text as a new child of the remote head is exactly a
-    // structural edit: one node, parented where the server is.
-    try await applyLocalChange(markdown: localMarkdown, selection: nil, structural: true)
+      let localMarkdown = try await store.materializedMarkdown(
+        documentLocalId: documentLocalId, nodeId: document.localHeadNodeId)
+      let remoteMarkdown = try await store.materializedMarkdown(
+        documentLocalId: documentLocalId, nodeId: remoteHead)
+
+      _ = try await store.moveHead(
+        documentLocalId: documentLocalId, to: remoteHead, markdown: remoteMarkdown,
+        wordCount: countWords(remoteMarkdown), expectedHeadNodeId: document.localHeadNodeId,
+        job: nil, clearDivergence: true, now: now())
+      controller?.setCurrent(
+        nodeId: remoteHead, markdown: remoteMarkdown,
+        depthSinceSnapshot: depthSinceSnapshot(remoteHead, nodesById))
+      try await reload()
+      // Re-applying the local text as a child of the remote head is exactly a
+      // structural edit: one node, parented where the server is.
+      try await performLocalChange(
+        markdown: localMarkdown, selection: nil, structural: true)
+    }
   }
 
   /// Take the server's branch. The local branch stays reachable in the history
-  /// panel — nothing is deleted.
+  /// panel — nothing is deleted — but every queued job that would push its
+  /// pointer back is rewritten or dropped, in the same transaction, or the next
+  /// drain simply recreates the divergence.
   public func resolveDivergenceKeepingRemote() async throws {
-    isRepositioning = true
-    defer { isRepositioning = false }
-    try await reload()
-    guard let document, let remoteHead = document.divergedRemoteHeadNodeId,
-      nodesById[remoteHead] != nil
-    else { return }
-    let markdown = try await store.materializedMarkdown(
-      documentLocalId: documentLocalId, nodeId: remoteHead)
-    _ = try await store.moveHead(
-      documentLocalId: documentLocalId, to: remoteHead, markdown: markdown,
-      wordCount: countWords(markdown), job: nil, clearDivergence: true, now: now())
-    controller?.setCurrent(
-      nodeId: remoteHead, markdown: markdown,
-      depthSinceSnapshot: depthSinceSnapshot(remoteHead, nodesById))
-    try await reload()
-    publish()
+    try await withTransition {
+      isRepositioning = true
+      defer { isRepositioning = false }
+      try await reload()
+      guard let document, let remoteHead = document.divergedRemoteHeadNodeId,
+        nodesById[remoteHead] != nil
+      else { return }
+
+      let markdown = try await store.materializedMarkdown(
+        documentLocalId: documentLocalId, nodeId: remoteHead)
+      try await store.resolveKeepingRemote(
+        documentLocalId: documentLocalId, remoteHeadNodeId: remoteHead, markdown: markdown,
+        wordCount: countWords(markdown), now: now())
+      controller?.setCurrent(
+        nodeId: remoteHead, markdown: markdown,
+        depthSinceSnapshot: depthSinceSnapshot(remoteHead, nodesById))
+      try await reload()
+      publish()
+      await sync?.requestDrain()
+    }
   }
 
   // MARK: - Private
@@ -500,5 +598,38 @@ public actor DocumentSession {
     }
     publish()
     await sync?.requestDrain()
+  }
+}
+
+/// An async gate: one waiter, one signal, no ordering assumptions beyond that.
+///
+/// This is the serialization primitive `withTransition` chains. It cannot be an
+/// actor — the whole point is that waiting on it suspends the caller without
+/// releasing anything the caller is protecting.
+private final class TransitionGate: @unchecked Sendable {
+  private let lock = NSLock()
+  private var continuation: CheckedContinuation<Void, Never>?
+  private var signalled = false
+
+  func wait() async {
+    await withCheckedContinuation { continuation in
+      lock.lock()
+      if signalled {
+        lock.unlock()
+        continuation.resume()
+        return
+      }
+      self.continuation = continuation
+      lock.unlock()
+    }
+  }
+
+  func signal() {
+    lock.lock()
+    signalled = true
+    let waiter = continuation
+    continuation = nil
+    lock.unlock()
+    waiter?.resume()
   }
 }

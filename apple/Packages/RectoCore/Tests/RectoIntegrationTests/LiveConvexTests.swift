@@ -165,8 +165,13 @@ struct LiveConvexTests {
       markdown: "first", wordCount: 1, expectedHeadNodeId: created.rootNodeId,
       clientMutationId: ulid())
     let firstResponse = try await transport.commitEdit(first)
-    #expect(firstResponse.outcome == .committed(
-      headNodeId: first.nodeId, updatedAt: firstResponse.updatedAt ?? 0))
+    #expect(
+      firstResponse.outcome
+        == .committed(
+          headNodeId: first.nodeId, updatedAt: firstResponse.updatedAt ?? 0,
+          pointerRevision: firstResponse.pointerRevision))
+    // The deployed backend carries a monotonic pointer revision (PR #1).
+    #expect((firstResponse.pointerRevision ?? 0) > 0)
 
     // A second client that still thinks the root is the head.
     let stale = CommitEditRequest(
@@ -175,9 +180,12 @@ struct LiveConvexTests {
       origin: "integration-test", createdAt: Date().timeIntervalSince1970 * 1000,
       markdown: "second", wordCount: 1, expectedHeadNodeId: created.rootNodeId,
       clientMutationId: ulid())
+    let staleResponse = try await transport.commitEdit(stale)
     #expect(
-      try await transport.commitEdit(stale).outcome
-        == .diverged(remoteHeadNodeId: first.nodeId))
+      staleResponse.outcome
+        == .diverged(
+          remoteHeadNodeId: first.nodeId,
+          remotePointerRevision: staleResponse.remotePointerRevision))
 
     // The rejected commit's NODE still landed — that is what makes losing text
     // impossible; only the pointer was contended.

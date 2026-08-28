@@ -62,7 +62,10 @@ struct AcceptanceTests {
     let localNodes = try await relaunched.store.nodes(documentLocalId: localId)
     let remoteNodes = try await server.listNodes(documentId: convexId, sinceCreatedAt: nil)
     #expect(Set(remoteNodes.map(\.nodeId)) == Set(localNodes.map(\.nodeId)))
-    #expect(try await relaunched.store.document(localId: localId)?.syncState == .synced)
+    let finalDoc = try #require(try await relaunched.store.document(localId: localId))
+    #expect(finalDoc.syncState == .synced)
+    // Only claimed once the heads actually agree.
+    #expect(finalDoc.remoteHeadNodeId == finalDoc.localHeadNodeId)
   }
 
   @Test("a second client fast-forwards onto the first client's head")

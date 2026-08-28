@@ -139,6 +139,15 @@ enum Migrations {
       }
     }
 
+    // Additive: the server's pointer revision is a monotonic counter, unlike
+    // `updatedAt`, so it settles which of two pointer writes is newer without
+    // trusting either device's clock (`documents.pointerRevision`, PR #1).
+    migrator.registerMigration("v2-pointer-revision") { db in
+      try db.alter(table: "documents") { t in
+        t.add(column: "remotePointerRevision", .double)
+      }
+    }
+
     return migrator
   }
 }

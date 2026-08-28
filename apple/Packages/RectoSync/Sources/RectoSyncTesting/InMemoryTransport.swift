@@ -19,9 +19,11 @@ public actor InMemoryTransport: RectoTransport {
     public var markdown: String
     public var wordCount: Double
     public var currentNodeId: String
+    public var pointerRevision: Double
     public var createdAt: Double
     public var updatedAt: Double
-    public var lastCommit: (clientMutationId: String, headNodeId: String, updatedAt: Double)?
+    public var lastCommit:
+      (clientMutationId: String, headNodeId: String, updatedAt: Double, pointerRevision: Double)?
   }
 
   public enum Fault: Sendable, Equatable {
@@ -45,7 +47,10 @@ public actor InMemoryTransport: RectoTransport {
   private var faults: [Fault] = []
   private var clock: Double
 
-  public init(now: Double = 1_000_000) {
+  /// Epoch milliseconds by default. `updateCurrentNodeId` is last-write-wins on
+  /// `updatedAt`, so a fake clock starting near zero would accept every pointer
+  /// move a client ever sent and the rejection path would be untestable.
+  public init(now: Double = Date().timeIntervalSince1970 * 1000) {
     self.clock = now
   }
 
@@ -98,7 +103,7 @@ public actor InMemoryTransport: RectoTransport {
     let now = tick()
     documents[id] = Document(
       id: id, title: title, markdown: "", wordCount: 0, currentNodeId: rootNodeId,
-      createdAt: now, updatedAt: now, lastCommit: nil)
+      pointerRevision: 0, createdAt: now, updatedAt: now, lastCommit: nil)
     nodes[id] = [
       RemoteNode(
         nodeId: rootNodeId, parentNodeId: nil,
@@ -125,7 +130,10 @@ public actor InMemoryTransport: RectoTransport {
       documents[documentId]?.currentNodeId = nodeId
       documents[documentId]?.markdown = markdown
       documents[documentId]?.updatedAt = now
+      documents[documentId]?.pointerRevision = document.pointerRevision + 1
     }
+    notifyNodeSubscribers(documentId: documentId)
+    notifyDocumentSubscribers()
     return nodeId
   }
 
@@ -149,8 +157,8 @@ public actor InMemoryTransport: RectoTransport {
     // Replay of an attempt already answered — same answer.
     if let last = document.lastCommit, last.clientMutationId == request.clientMutationId {
       return CommitEditResponse(
-        committed: true, headNodeId: last.headNodeId, updatedAt: last.updatedAt, diverged: nil,
-        remoteHeadNodeId: nil)
+        committed: true, headNodeId: last.headNodeId, updatedAt: last.updatedAt,
+        pointerRevision: last.pointerRevision)
     }
 
     // The node row is inserted regardless of the head check: the DAG is
@@ -169,21 +177,24 @@ public actor InMemoryTransport: RectoTransport {
     if document.currentNodeId == request.nodeId {
       return CommitEditResponse(
         committed: true, headNodeId: document.currentNodeId, updatedAt: document.updatedAt,
-        diverged: nil, remoteHeadNodeId: nil)
+        pointerRevision: document.pointerRevision)
     }
 
     guard document.currentNodeId == request.expectedHeadNodeId else {
       return CommitEditResponse(
         committed: false, headNodeId: nil, updatedAt: nil, diverged: true,
-        remoteHeadNodeId: document.currentNodeId)
+        remoteHeadNodeId: document.currentNodeId,
+        remotePointerRevision: document.pointerRevision)
     }
 
     let updatedAt = tick()
+    let pointerRevision = document.pointerRevision + 1
     document.currentNodeId = request.nodeId
     document.markdown = request.markdown
     document.wordCount = Double(request.wordCount)
     document.updatedAt = updatedAt
-    document.lastCommit = (request.clientMutationId, request.nodeId, updatedAt)
+    document.pointerRevision = pointerRevision
+    document.lastCommit = (request.clientMutationId, request.nodeId, updatedAt, pointerRevision)
     documents[request.documentId] = document
 
     if faults.first == .dropAcknowledgement {
@@ -192,8 +203,25 @@ public actor InMemoryTransport: RectoTransport {
     }
 
     return CommitEditResponse(
-      committed: true, headNodeId: request.nodeId, updatedAt: updatedAt, diverged: nil,
-      remoteHeadNodeId: nil)
+      committed: true, headNodeId: request.nodeId, updatedAt: updatedAt,
+      pointerRevision: pointerRevision)
+  }
+
+  /// `docNodes.append`: idempotent on (documentId, nodeId), and it never writes
+  /// `currentNodeId`.
+  public func appendNode(documentId: String, node: CommitEditRequest) async throws {
+    try applyPreFault()
+    guard documents[documentId] != nil else { throw TransportFault.documentNotFound }
+    guard !(nodes[documentId] ?? []).contains(where: { $0.nodeId == node.nodeId }) else { return }
+    nodes[documentId, default: []].append(
+      RemoteNode(
+        nodeId: node.nodeId, parentNodeId: node.parentNodeId, patch: node.patch,
+        snapshot: node.snapshot,
+        selection: node.selection.map {
+          RemoteNode.Selection(anchor: Double($0.anchor), head: Double($0.head))
+        },
+        origin: node.origin, createdAt: node.createdAt))
+    notifyNodeSubscribers(documentId: documentId)
   }
 
   public func updateCurrentNodeId(
@@ -202,25 +230,41 @@ public actor InMemoryTransport: RectoTransport {
     try applyPreFault()
     guard var document = documents[documentId] else { throw TransportFault.documentNotFound }
     if updatedAt < document.updatedAt {
+      // Lost the last-write-wins check: hand back the head that won so the
+      // caller reconciles instead of guessing.
       return UpdateCurrentNodeResponse(
-        applied: false, currentNodeId: document.currentNodeId, updatedAt: nil)
+        applied: false, currentNodeId: document.currentNodeId, updatedAt: nil,
+        pointerRevision: document.pointerRevision)
     }
     let now = tick()
+    let pointerRevision = document.pointerRevision + 1
     document.currentNodeId = currentNodeId
     document.markdown = markdown
     document.wordCount = Double(wordCount)
     document.updatedAt = now
+    document.pointerRevision = pointerRevision
     documents[documentId] = document
-    return UpdateCurrentNodeResponse(applied: true, currentNodeId: currentNodeId, updatedAt: now)
+    notifyDocumentSubscribers()
+    return UpdateCurrentNodeResponse(
+      applied: true, currentNodeId: currentNodeId, updatedAt: now,
+      pointerRevision: pointerRevision)
   }
 
   public func updateMarkdown(
-    documentId: String, markdown: String, wordCount: Int, expectedUpdatedAt: Double, title: String?
+    documentId: String, markdown: String, wordCount: Int, expectedUpdatedAt: Double,
+    expectedHeadNodeId: String?, title: String?
   ) async throws -> UpdateMarkdownResponse {
     try applyPreFault()
     guard var document = documents[documentId] else { throw TransportFault.documentNotFound }
+    // A diverged head is NOT retryable: accepting the draft would leave
+    // `markdown` describing a branch that `currentNodeId` no longer points at.
+    if let expectedHeadNodeId, document.currentNodeId != expectedHeadNodeId {
+      return UpdateMarkdownResponse(
+        updatedAt: document.updatedAt, stale: true, headMoved: true)
+    }
     guard document.updatedAt == expectedUpdatedAt else {
-      return UpdateMarkdownResponse(updatedAt: document.updatedAt, stale: true)
+      return UpdateMarkdownResponse(
+        updatedAt: document.updatedAt, stale: true, headMoved: false)
     }
     let now = tick()
     document.markdown = markdown
@@ -228,13 +272,19 @@ public actor InMemoryTransport: RectoTransport {
     document.updatedAt = now
     if let title { document.title = title }
     documents[documentId] = document
-    return UpdateMarkdownResponse(updatedAt: now, stale: false)
+    notifyDocumentSubscribers()
+    return UpdateMarkdownResponse(updatedAt: now, stale: false, headMoved: false)
   }
+
+  /// Titles in the order `rename` received them, for drain-ordering tests.
+  public private(set) var renameOrder: [String] = []
 
   public func rename(documentId: String, title: String) async throws {
     try applyPreFault()
     documents[documentId]?.title = title
     documents[documentId]?.updatedAt = tick()
+    renameOrder.append(title)
+    notifyDocumentSubscribers()
   }
 
   public func remove(documentId: String) async throws {
@@ -259,32 +309,68 @@ public actor InMemoryTransport: RectoTransport {
     return RemoteDocument(
       id: document.id, title: document.title, markdown: document.markdown,
       wordCount: document.wordCount, currentNodeId: document.currentNodeId,
-      createdAt: document.createdAt, updatedAt: document.updatedAt)
+      pointerRevision: document.pointerRevision, createdAt: document.createdAt,
+      updatedAt: document.updatedAt)
   }
 
-  public nonisolated func documentsStream()
-    -> AsyncThrowingStream<[RemoteDocumentSummary], any Error>
-  {
-    AsyncThrowingStream { continuation in
-      Task { [weak self] in
-        guard let self else { return continuation.finish() }
-        continuation.yield(await self.summaries())
-        continuation.finish()
-      }
+  // MARK: - Live subscriptions
+
+  /// Long-lived streams, like the real client's. A one-shot stream cannot
+  /// exercise a remote update arriving mid-session, a reconnect, or an auth
+  /// transition — the flows this transport exists to test.
+  private var documentSubscribers: [UUID: AsyncThrowingStream<[RemoteDocumentSummary], any Error>.Continuation] = [:]
+  private var nodeSubscribers: [UUID: (documentId: String, continuation: AsyncThrowingStream<[RemoteNode], any Error>.Continuation)] = [:]
+
+  public func documentsStream() -> AsyncThrowingStream<[RemoteDocumentSummary], any Error> {
+    let (stream, continuation) = AsyncThrowingStream<[RemoteDocumentSummary], any Error>
+      .makeStream()
+    let id = UUID()
+    documentSubscribers[id] = continuation
+    continuation.yield(summaries())
+    continuation.onTermination = { [weak self] _ in
+      Task { await self?.dropDocumentSubscriber(id) }
     }
+    return stream
   }
 
-  public nonisolated func nodesStream(documentId: String, sinceCreatedAt: Double?)
+  public func nodesStream(documentId: String, sinceCreatedAt: Double?)
     -> AsyncThrowingStream<[RemoteNode], any Error>
   {
-    AsyncThrowingStream { continuation in
-      Task { [weak self] in
-        guard let self else { return continuation.finish() }
-        continuation.yield((try? await self.listNodes(documentId: documentId, sinceCreatedAt: sinceCreatedAt)) ?? [])
-        continuation.finish()
-      }
+    let (stream, continuation) = AsyncThrowingStream<[RemoteNode], any Error>.makeStream()
+    let id = UUID()
+    nodeSubscribers[id] = (documentId, continuation)
+    continuation.yield(nodes[documentId] ?? [])
+    continuation.onTermination = { [weak self] _ in
+      Task { await self?.dropNodeSubscriber(id) }
+    }
+    return stream
+  }
+
+  private func dropDocumentSubscriber(_ id: UUID) { documentSubscribers[id] = nil }
+  private func dropNodeSubscriber(_ id: UUID) { nodeSubscribers[id] = nil }
+
+  private func notifyDocumentSubscribers() {
+    let current = summaries()
+    for continuation in documentSubscribers.values { continuation.yield(current) }
+  }
+
+  private func notifyNodeSubscribers(documentId: String) {
+    let current = nodes[documentId] ?? []
+    for subscriber in nodeSubscribers.values where subscriber.documentId == documentId {
+      subscriber.continuation.yield(current)
     }
   }
+
+  /// Terminate every live subscription with an error, the way Convex does when a
+  /// query throws — the failure mode that never recovers on its own.
+  public func failAllSubscriptions(_ error: any Error = TransportFault.unauthenticated) {
+    for continuation in documentSubscribers.values { continuation.finish(throwing: error) }
+    for subscriber in nodeSubscribers.values { subscriber.continuation.finish(throwing: error) }
+    documentSubscribers.removeAll()
+    nodeSubscribers.removeAll()
+  }
+
+  public var liveSubscriptionCount: Int { documentSubscribers.count + nodeSubscribers.count }
 
   public func loginFromCache() async -> Bool {
     loginCount += 1

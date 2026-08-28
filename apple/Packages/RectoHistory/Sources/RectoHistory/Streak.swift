@@ -27,37 +27,52 @@ public func localDateKey(_ date: Date = Date(), calendar: Calendar = .current) -
   return "\(pad(parts.year ?? 1970, 4))-\(pad(parts.month ?? 1, 2))-\(pad(parts.day ?? 1, 2))"
 }
 
+private func daysInMonth(year: Int, month: Int) -> Int {
+  if month == 2 {
+    let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+    return leap ? 29 : 28
+  }
+  return (month == 4 || month == 6 || month == 9 || month == 11) ? 30 : 31
+}
+
 /// The local date key one calendar day before `key`.
 ///
-/// A real calendar step, not `midnight - 86_400_000 ms`. The web computes it by
-/// subtracting a fixed day in milliseconds, which lands on the wrong wall-clock
-/// day whenever a DST transition makes the local day 23 or 25 hours long; the
-/// contract everything else assumes — and that `packages/editor-fixtures/streak.json`
-/// asserts — is consecutive *calendar* days.
-func previousDateKey(_ key: String, calendar: Calendar = .current) -> String {
+/// Pure string/integer arithmetic, with no `Date` and no `Calendar`: `key` is
+/// already a local calendar date, so stepping it must not consult a clock or a
+/// timezone. Going through a date and subtracting 24 h lands on the wrong
+/// calendar day wherever DST makes the local day 23 hours long — in
+/// America/Sao_Paulo, 2018-11-05 local midnight minus 24 h is 2018-11-03 23:00,
+/// which reads back as 2018-11-03, skips 2018-11-04 and silently breaks a
+/// streak. `lib/stats/streak.ts` does exactly this arithmetic, so the two
+/// clients agree by construction rather than by fixture.
+func previousDateKey(_ key: String) -> String {
   let parts = key.split(separator: "-").map { Int($0) ?? 0 }
-  var components = DateComponents()
-  components.year = parts.count > 0 ? parts[0] : 1970
-  components.month = parts.count > 1 ? parts[1] : 1
-  components.day = parts.count > 2 ? parts[2] : 1
-  guard let midnight = calendar.date(from: components),
-    let previous = calendar.date(byAdding: .day, value: -1, to: midnight)
-  else { return key }
-  return localDateKey(previous, calendar: calendar)
+  var year = parts.count > 0 ? parts[0] : 1970
+  var month = parts.count > 1 ? parts[1] : 1
+  var day = (parts.count > 2 ? parts[2] : 1) - 1
+  if day < 1 {
+    month -= 1
+    if month < 1 {
+      month = 12
+      year -= 1
+    }
+    day = daysInMonth(year: year, month: month)
+  }
+  func pad2(_ value: Int) -> String { value < 10 ? "0\(value)" : String(value) }
+  return "\(year)-\(pad2(month))-\(pad2(day))"
 }
 
 /// Current streak length counting back from `today`, counting only days with
 /// words > 0.
-public func currentStreak(_ stats: [DailyStat], today: String, calendar: Calendar = .current) -> Int
-{
+public func currentStreak(_ stats: [DailyStat], today: String) -> Int {
   let written = Set(stats.filter { $0.words > 0 }.map(\.date))
   guard !written.isEmpty else { return 0 }
 
-  var cursor = written.contains(today) ? today : previousDateKey(today, calendar: calendar)
+  var cursor = written.contains(today) ? today : previousDateKey(today)
   var streak = 0
   while written.contains(cursor) {
     streak += 1
-    cursor = previousDateKey(cursor, calendar: calendar)
+    cursor = previousDateKey(cursor)
   }
   return streak
 }

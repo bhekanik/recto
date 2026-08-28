@@ -360,3 +360,224 @@ struct OutboxFailureTests {
     #expect(try await store.hasFailedJobs(documentLocalId: "doc-1") == false)
   }
 }
+
+@Suite("round-2 store transactions")
+struct StoreTransactionTests {
+  private func seeded() async throws -> RectoStore {
+    let store = try RectoStore.inMemory()
+    _ = try await seedDocument(store)
+    return store
+  }
+
+  @Test("moveHead refuses when the head moved under it")
+  func moveHeadCAS() async throws {
+    let store = try await seeded()
+    try await store.mergeRemoteNodes(
+      documentLocalId: "doc-1",
+      nodes: [
+        DocNodeRecord(
+          documentLocalId: "doc-1", nodeId: "n1", parentNodeId: "root",
+          patch: computePatch("", "a").encoded, origin: "t", createdAt: 1),
+        DocNodeRecord(
+          documentLocalId: "doc-1", nodeId: "n2", parentNodeId: "root",
+          patch: computePatch("", "b").encoded, origin: "t", createdAt: 2),
+      ])
+    _ = try await store.moveHead(
+      documentLocalId: "doc-1", to: "n1", markdown: "a", wordCount: 1,
+      expectedHeadNodeId: "root", job: nil)
+
+    // A navigation that materialized against the old head must not land.
+    await #expect(throws: StoreError.headMoved(expected: "root", actual: "n1")) {
+      _ = try await store.moveHead(
+        documentLocalId: "doc-1", to: "n2", markdown: "b", wordCount: 1,
+        expectedHeadNodeId: "root", job: nil)
+    }
+    #expect(try await store.document(localId: "doc-1")?.localHeadNodeId == "n1")
+  }
+
+  @Test("adoptRemoteHead is a CAS on the head, the draft and the queue")
+  func adoptRemoteHeadCAS() async throws {
+    let store = try await seeded()
+    try await store.mergeRemoteNodes(
+      documentLocalId: "doc-1",
+      nodes: [
+        DocNodeRecord(
+          documentLocalId: "doc-1", nodeId: "remote", parentNodeId: "root",
+          patch: computePatch("", "theirs").encoded, origin: "other", createdAt: 1)
+      ])
+
+    // A draft appearing between the decision and the write blocks the adopt.
+    try await store.saveDraft(
+      documentLocalId: "doc-1", markdown: "still typing", selection: nil, wordCount: 2, job: nil)
+    #expect(
+      try await store.adoptRemoteHead(
+        documentLocalId: "doc-1", observedLocalHeadNodeId: "root", remoteHeadNodeId: "remote",
+        markdown: "theirs", wordCount: 1, remoteUpdatedAt: 5, remotePointerRevision: 2) == false)
+    #expect(try await store.document(localId: "doc-1")?.draftMarkdown == "still typing")
+    #expect(try await store.document(localId: "doc-1")?.localHeadNodeId == "root")
+
+    // Once idle it lands, and carries the revision.
+    try await store.saveDraft(
+      documentLocalId: "doc-1", markdown: "", selection: nil, wordCount: 0, job: nil)
+    #expect(
+      try await store.adoptRemoteHead(
+        documentLocalId: "doc-1", observedLocalHeadNodeId: "root", remoteHeadNodeId: "remote",
+        markdown: "theirs", wordCount: 1, remoteUpdatedAt: 5, remotePointerRevision: 2) == true)
+    let document = try #require(try await store.document(localId: "doc-1"))
+    #expect(document.localHeadNodeId == "remote")
+    #expect(document.syncState == .synced)
+    #expect(document.remotePointerRevision == 2)
+  }
+
+  @Test("a queued job blocks adoption even when the head and draft match")
+  func adoptBlockedByQueue() async throws {
+    let store = try await seeded()
+    try await store.mergeRemoteNodes(
+      documentLocalId: "doc-1",
+      nodes: [
+        DocNodeRecord(
+          documentLocalId: "doc-1", nodeId: "remote", parentNodeId: "root",
+          patch: computePatch("", "theirs").encoded, origin: "other", createdAt: 1)
+      ])
+    _ = try await store.enqueue(
+      OutboxJob(
+        documentLocalId: "doc-1", kind: .commitEdit, clientMutationId: ulid(), payload: "{}",
+        createdAt: 0))
+    #expect(
+      try await store.adoptRemoteHead(
+        documentLocalId: "doc-1", observedLocalHeadNodeId: "root", remoteHeadNodeId: "remote",
+        markdown: "theirs", wordCount: 1, remoteUpdatedAt: 5, remotePointerRevision: 2) == false)
+  }
+
+  @Test("resolveKeepingRemote rewrites commits to node-only uploads and drops the rest")
+  func keepRemoteQueueRewrite() async throws {
+    let store = try await seeded()
+    try await store.mergeRemoteNodes(
+      documentLocalId: "doc-1",
+      nodes: [
+        DocNodeRecord(
+          documentLocalId: "doc-1", nodeId: "remote", parentNodeId: "root",
+          patch: computePatch("", "theirs").encoded, origin: "other", createdAt: 1)
+      ])
+    for kind in [OutboxKind.commitEdit, .draftSave, .pointerMove, .commitEdit] {
+      _ = try await store.enqueue(
+        OutboxJob(
+          documentLocalId: "doc-1", kind: kind, clientMutationId: ulid(),
+          baseHeadNodeId: "root", payload: "{}", createdAt: 0))
+    }
+
+    try await store.resolveKeepingRemote(
+      documentLocalId: "doc-1", remoteHeadNodeId: "remote", markdown: "theirs", wordCount: 1)
+
+    let queued = try await store.pendingJobs(documentLocalId: "doc-1")
+    #expect(queued.count == 2)
+    #expect(queued.allSatisfy { $0.kind == .appendNode })
+    // A node-only upload must not carry a head to commit onto.
+    #expect(queued.allSatisfy { $0.baseHeadNodeId == nil })
+    let document = try #require(try await store.document(localId: "doc-1"))
+    #expect(document.localHeadNodeId == "remote")
+    #expect(document.divergedRemoteHeadNodeId == nil)
+  }
+
+  @Test("finishOfflineCreate re-keys the root everywhere, including encoded payloads")
+  func finishOfflineCreateRewritesPayloads() async throws {
+    let store = try RectoStore.inMemory()
+    let localRoot = "local-root"
+    try await store.save(
+      DocumentRecord(
+        localId: "doc-1", title: "native-spike", markdown: "", wordCount: 0,
+        localHeadNodeId: localRoot, updatedAt: 0, createdAt: 0))
+    try await store.mergeRemoteNodes(
+      documentLocalId: "doc-1",
+      nodes: [
+        DocNodeRecord(
+          documentLocalId: "doc-1", nodeId: localRoot, parentNodeId: nil,
+          patch: TextPatch(from: 0, to: 0, insert: "").encoded, snapshot: "", origin: "local",
+          createdAt: 0),
+        DocNodeRecord(
+          documentLocalId: "doc-1", nodeId: "child", parentNodeId: localRoot,
+          patch: computePatch("", "text").encoded, origin: "local", createdAt: 1),
+      ])
+    _ = try await store.enqueue(
+      OutboxJob(
+        documentLocalId: "doc-1", kind: .commitEdit, clientMutationId: ulid(),
+        baseHeadNodeId: localRoot,
+        payload: #"{"nodeId":"child","parentNodeId":"local-root","markdown":"text"}"#,
+        createdAt: 1))
+
+    try await store.finishOfflineCreate(
+      documentLocalId: "doc-1", convexId: "j57abc", serverRootNodeId: "server-root",
+      rewritePayloadParent: { raw, oldRoot, newRoot in
+        raw.replacingOccurrences(of: "\"parentNodeId\":\"\(oldRoot)\"", with: "\"parentNodeId\":\"\(newRoot)\"")
+      })
+
+    #expect(try await store.document(localId: "doc-1")?.convexId == "j57abc")
+    #expect(try await store.node(documentLocalId: "doc-1", nodeId: localRoot) == nil)
+    #expect(try await store.node(documentLocalId: "doc-1", nodeId: "child")?.parentNodeId == "server-root")
+    let job = try #require(try await store.pendingJobs(documentLocalId: "doc-1").first)
+    #expect(job.baseHeadNodeId == "server-root")
+    // The encoded payload carries its OWN copy of the parent; rewriting only the
+    // node row would still send the deleted root.
+    #expect(job.payload.contains("server-root"))
+    #expect(!job.payload.contains("local-root"))
+  }
+
+  @Test("finishOfflineCreate is idempotent")
+  func finishOfflineCreateIsIdempotent() async throws {
+    let store = try RectoStore.inMemory()
+    try await store.save(
+      DocumentRecord(
+        localId: "doc-1", convexId: "j57abc", title: "t", markdown: "", wordCount: 0,
+        localHeadNodeId: "server-root", updatedAt: 0, createdAt: 0))
+    try await store.mergeRemoteNodes(
+      documentLocalId: "doc-1",
+      nodes: [
+        DocNodeRecord(
+          documentLocalId: "doc-1", nodeId: "server-root", parentNodeId: nil,
+          patch: TextPatch(from: 0, to: 0, insert: "").encoded, snapshot: "", origin: "server",
+          createdAt: 0)
+      ])
+    try await store.finishOfflineCreate(
+      documentLocalId: "doc-1", convexId: "j57abc", serverRootNodeId: "server-root",
+      rewritePayloadParent: { raw, _, _ in raw })
+    #expect(try await store.nodes(documentLocalId: "doc-1").count == 1)
+    #expect(try await store.document(localId: "doc-1")?.localHeadNodeId == "server-root")
+  }
+
+  @Test("an interrupted hydration is reported as incomplete")
+  func incompleteHydration() async throws {
+    let store = try RectoStore.inMemory()
+    // A row pointing at a head node that never arrived: it can never materialize.
+    try await store.save(
+      DocumentRecord(
+        localId: "doc-1", convexId: "j57abc", title: "t", markdown: "x", wordCount: 1,
+        localHeadNodeId: "missing", updatedAt: 0, createdAt: 0))
+    #expect(try await store.incompleteDocumentIds() == ["doc-1"])
+
+    try await store.hydrate(
+      document: DocumentRecord(
+        localId: "doc-1", convexId: "j57abc", title: "t", markdown: "x", wordCount: 1,
+        localHeadNodeId: "head", updatedAt: 0, createdAt: 0),
+      nodes: [
+        DocNodeRecord(
+          documentLocalId: "doc-1", nodeId: "head", parentNodeId: nil,
+          patch: TextPatch(from: 0, to: 0, insert: "").encoded, snapshot: "x", origin: "server",
+          createdAt: 0)
+      ])
+    #expect(try await store.incompleteDocumentIds().isEmpty)
+  }
+
+  @Test("unsyncedWorkCount counts drafts and queued jobs")
+  func unsyncedWork() async throws {
+    let store = try await seeded()
+    #expect(try await store.unsyncedWorkCount() == 0)
+    try await store.saveDraft(
+      documentLocalId: "doc-1", markdown: "typing", selection: nil, wordCount: 1, job: nil)
+    #expect(try await store.unsyncedWorkCount() == 1)
+    _ = try await store.enqueue(
+      OutboxJob(
+        documentLocalId: "doc-1", kind: .commitEdit, clientMutationId: ulid(), payload: "{}",
+        createdAt: 0))
+    #expect(try await store.unsyncedWorkCount() == 2)
+  }
+}

@@ -12,6 +12,7 @@ public enum RectoAuthError: LocalizedError, Equatable {
   case noToken
   case wrongAudience(String?)
   case featureDisabled(String)
+  case unsyncedWork(count: Int)
 
   public var errorDescription: String? {
     switch self {
@@ -21,6 +22,9 @@ public enum RectoAuthError: LocalizedError, Equatable {
     case .wrongAudience(let audience):
       "Clerk minted a token with audience \(audience ?? "<none>"); Convex requires \"convex\"."
     case .featureDisabled(let name): "\(name) is not enabled on this Clerk instance yet."
+    case .unsyncedWork(let count):
+      "\(count) change\(count == 1 ? "" : "s") have not reached the server yet. "
+        + "Signing out would delete them."
     }
   }
 }

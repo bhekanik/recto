@@ -67,15 +67,13 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-      # The macos-26 image already defaults to Xcode 26 (W3's core-js job builds
-      # Swift on it without selecting one); this only pins it if a differently
-      # named Xcode is ever the default. The versions are printed either way so
-      # the log says which SDK ran.
+      # No `xcode-select`: the macos-26 image ships versioned bundles
+      # (/Applications/Xcode_26.6.app), so pinning an unversioned
+      # /Applications/Xcode_26.app fails before anything runs. The image default
+      # is already Xcode 26 — W3's core-js job builds Swift on it — so take it
+      # and print what actually ran.
       - name: Toolchain
         run: |
-          if [ -d /Applications/Xcode_26.app ]; then
-            sudo xcode-select -s /Applications/Xcode_26.app/Contents/Developer
-          fi
           xcodebuild -version
           swift --version
       - run: bun install --frozen-lockfile

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	currentStreak,
 	type DailyStat,
@@ -79,6 +79,72 @@ describe("currentStreak", () => {
 			{ date: "2026-06-01", words: 200 },
 		];
 		expect(currentStreak(stats, "2026-06-01")).toBe(2);
+	});
+
+	it("rolls over a year boundary correctly", () => {
+		const stats: DailyStat[] = [
+			{ date: "2025-12-31", words: 200 },
+			{ date: "2026-01-01", words: 200 },
+		];
+		expect(currentStreak(stats, "2026-01-01")).toBe(2);
+	});
+
+	it("rolls over a short February correctly", () => {
+		const stats: DailyStat[] = [
+			{ date: "2026-02-28", words: 200 },
+			{ date: "2026-03-01", words: 200 },
+		];
+		expect(currentStreak(stats, "2026-03-01")).toBe(2);
+	});
+
+	it("rolls over a leap day correctly", () => {
+		const stats: DailyStat[] = [
+			{ date: "2028-02-29", words: 200 },
+			{ date: "2028-03-01", words: 200 },
+		];
+		expect(currentStreak(stats, "2028-03-01")).toBe(2);
+	});
+});
+
+/**
+ * The motivating bug: stepping back a day by subtracting 86_400_000ms from a
+ * local midnight lands on the wrong calendar day when DST makes the local day 23
+ * or 25 hours long. In America/Sao_Paulo, 2018 DST began at 2018-11-04 00:00
+ * local, so 2018-11-05 midnight minus 24h reads back as 2018-11-03 — 2018-11-04
+ * is skipped and the streak silently breaks. `currentStreak` must be
+ * timezone-independent because its date keys are already local calendar dates.
+ */
+describe("currentStreak across DST transitions", () => {
+	afterEach(() => {
+		vi.unstubAllEnvs();
+	});
+
+	it("spring-forward at local midnight (America/Sao_Paulo, 2018-11-04 → 11-05)", () => {
+		vi.stubEnv("TZ", "America/Sao_Paulo");
+		const stats: DailyStat[] = [
+			{ date: "2018-11-04", words: 200 },
+			{ date: "2018-11-05", words: 200 },
+		];
+		expect(currentStreak(stats, "2018-11-05")).toBe(2);
+	});
+
+	it("fall-back (America/New_York, 2026-11-01 → 11-02)", () => {
+		vi.stubEnv("TZ", "America/New_York");
+		const stats: DailyStat[] = [
+			{ date: "2026-10-31", words: 200 },
+			{ date: "2026-11-01", words: 200 },
+			{ date: "2026-11-02", words: 200 },
+		];
+		expect(currentStreak(stats, "2026-11-02")).toBe(3);
+	});
+
+	it("boundaries hold regardless of the ambient timezone", () => {
+		vi.stubEnv("TZ", "Pacific/Chatham");
+		const stats: DailyStat[] = [
+			{ date: "2028-02-29", words: 200 },
+			{ date: "2028-03-01", words: 200 },
+		];
+		expect(currentStreak(stats, "2028-03-01")).toBe(2);
 	});
 });
 

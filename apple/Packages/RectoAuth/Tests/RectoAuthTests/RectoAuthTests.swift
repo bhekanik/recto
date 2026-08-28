@@ -105,3 +105,83 @@ struct AuthFeatureTests {
     #expect(await auth.status.userId == nil)
   }
 }
+
+@Suite("sign-out safety")
+struct SignOutTests {
+  /// Records the stop/start calls an identity change makes.
+  private actor RecordingSync: SyncControlling {
+    private(set) var events: [String] = []
+    func stop() async { events.append("stop") }
+    func start() async { events.append("start") }
+  }
+
+  @Test("sign-out refuses while unsent work exists, and says how much")
+  func refusesToDiscardSilently() async throws {
+    let store = try RectoStore.inMemory()
+    try await store.save(
+      DocumentRecord(
+        localId: "doc-1", title: "native-spike", markdown: "", wordCount: 0,
+        localHeadNodeId: "root", updatedAt: 0, createdAt: 0))
+    _ = try await store.enqueue(
+      OutboxJob(
+        documentLocalId: "doc-1", kind: .commitEdit, clientMutationId: "m1", payload: "{}",
+        createdAt: 0))
+
+    let auth = await RectoAuth(store: store)
+    #expect(try await auth.unsyncedWork().count == 1)
+
+    // Offline commits are the user's only copy; deleting them on a train is not
+    // a security win, it is data loss.
+    await #expect(throws: RectoAuthError.unsyncedWork(count: 1)) {
+      try await auth.signOut()
+    }
+    #expect(try await store.pendingJobCount() == 1)
+    #expect(try await store.documents().count == 1)
+  }
+
+  @Test("a draft row counts as unsent work")
+  func draftCountsAsUnsent() async throws {
+    let store = try RectoStore.inMemory()
+    try await store.save(
+      DocumentRecord(
+        localId: "doc-1", title: "native-spike", markdown: "committed",
+        draftMarkdown: "typed but not committed", wordCount: 1, localHeadNodeId: "root",
+        updatedAt: 0, createdAt: 0))
+    let auth = await RectoAuth(store: store)
+    #expect(try await auth.unsyncedWork().count == 1)
+    await #expect(throws: RectoAuthError.unsyncedWork(count: 1)) { try await auth.signOut() }
+  }
+
+  @Test("an explicit discard purges everything, after sync has stopped")
+  func explicitDiscardPurges() async throws {
+    let store = try RectoStore.inMemory()
+    try await store.save(
+      DocumentRecord(
+        localId: "doc-1", title: "native-spike", markdown: "x", wordCount: 1,
+        localHeadNodeId: "root", updatedAt: 0, createdAt: 0))
+    _ = try await store.enqueue(
+      OutboxJob(
+        documentLocalId: "doc-1", kind: .commitEdit, clientMutationId: "m1", payload: "{}",
+        createdAt: 0))
+
+    let auth = await RectoAuth(store: store)
+    let sync = RecordingSync()
+    await auth.attach(sync: sync)
+    try await auth.signOut(discardingUnsynced: true)
+
+    #expect(try await store.documents().isEmpty)
+    #expect(try await store.pendingJobCount() == 0)
+    #expect(await auth.status == .signedOut)
+    // Stopped BEFORE the purge, or a subscription tick re-inserts rows behind
+    // the delete.
+    #expect(await sync.events == ["stop"])
+  }
+
+  @Test("a clean store signs out without ceremony")
+  func cleanSignOut() async throws {
+    let store = try RectoStore.inMemory()
+    let auth = await RectoAuth(store: store)
+    try await auth.signOut()
+    #expect(await auth.status == .signedOut)
+  }
+}

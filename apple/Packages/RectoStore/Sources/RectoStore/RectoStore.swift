@@ -6,6 +6,7 @@ public enum StoreError: Error, Equatable, Sendable {
   case documentNotFound(String)
   case nodeNotFound(document: String, node: String)
   case headMoved(expected: String, actual: String)
+  case rootSnapshotMismatch(String)
 }
 
 /// The local SQLite mirror (plan 023 §4.2).
@@ -166,12 +167,18 @@ public actor RectoStore {
   }
 
   /// Move the head to an existing node (undo, redo, navigate, adopt-remote).
+  ///
+  /// `expectedHeadNodeId` is a compare-and-set. Two windows share one session
+  /// actor but that actor suspends at every `await`, so a navigation that
+  /// materialized its target can find the head already moved by a keystroke from
+  /// the other window; moving it anyway would strand the newer node's queued job.
   @discardableResult
   public func moveHead(
     documentLocalId: String,
     to nodeId: String,
     markdown: String,
     wordCount: Int,
+    expectedHeadNodeId: String?,
     job: OutboxJob?,
     clearDivergence: Bool = false,
     now: Double = Date().timeIntervalSince1970 * 1000
@@ -179,6 +186,10 @@ public actor RectoStore {
     try writer.write { db in
       guard var document = try DocumentRecord.fetchOne(db, key: documentLocalId) else {
         throw StoreError.documentNotFound(documentLocalId)
+      }
+      if let expectedHeadNodeId, document.localHeadNodeId != expectedHeadNodeId {
+        throw StoreError.headMoved(
+          expected: expectedHeadNodeId, actual: document.localHeadNodeId)
       }
       guard
         var node = try DocNodeRecord.fetchOne(
@@ -267,35 +278,234 @@ public actor RectoStore {
     }
   }
 
-  /// Re-key a document's root node.
+  /// Adopt a remote head, but only if nothing has changed since the caller
+  /// observed it (plan 023 §4.4, "adopt when idle, keep caret").
   ///
-  /// `documents.create` mints its own root nodeId server-side, so a document
-  /// created offline has a root the server has never heard of. Every child patch
-  /// applies to the root's snapshot, which is empty on both sides, so swapping
-  /// the id is safe — but only as one transaction: a half-applied rewrite leaves
-  /// orphaned nodes whose parent does not exist.
-  public func replaceRoot(documentLocalId: String, oldRootNodeId: String, newRootNodeId: String)
-    throws
-  {
+  /// The whole check runs inside the write transaction. `reconcileHead` decides
+  /// to adopt, then suspends to materialize the target; a keystroke in that gap
+  /// persists a draft and queues a job, and adopting anyway would delete that
+  /// draft and point the document at someone else's branch. Returns false when
+  /// the CAS fails; the caller treats that as "still pending".
+  public func adoptRemoteHead(
+    documentLocalId: String,
+    observedLocalHeadNodeId: String,
+    remoteHeadNodeId: String,
+    markdown: String,
+    wordCount: Int,
+    remoteUpdatedAt: Double?,
+    remotePointerRevision: Double?,
+    now: Double = Date().timeIntervalSince1970 * 1000
+  ) throws -> Bool {
     try writer.write { db in
+      guard var document = try DocumentRecord.fetchOne(db, key: documentLocalId) else {
+        throw StoreError.documentNotFound(documentLocalId)
+      }
+      guard document.localHeadNodeId == observedLocalHeadNodeId,
+        document.draftMarkdown == nil,
+        try OutboxJob.filter(Column("documentLocalId") == documentLocalId).fetchCount(db) == 0
+      else { return false }
+      guard
+        var node = try DocNodeRecord.fetchOne(
+          db, key: ["documentLocalId": documentLocalId, "nodeId": remoteHeadNodeId])
+      else {
+        throw StoreError.nodeNotFound(document: documentLocalId, node: remoteHeadNodeId)
+      }
+
+      node.materialized = markdown
+      node.materializedAt = now
+      try node.update(db)
+
+      document.localHeadNodeId = remoteHeadNodeId
+      document.remoteHeadNodeId = remoteHeadNodeId
+      if let remoteUpdatedAt { document.remoteUpdatedAt = remoteUpdatedAt }
+      if let remotePointerRevision { document.remotePointerRevision = remotePointerRevision }
+      document.markdown = markdown
+      document.wordCount = wordCount
+      document.divergedRemoteHeadNodeId = nil
+      document.syncState = .synced
+      document.updatedAt = now
+      try document.update(db)
+      try Self.trimMaterializationCache(db, documentLocalId: documentLocalId)
+      return true
+    }
+  }
+
+  /// Take the remote branch after a divergence, in one transaction (§4.4).
+  ///
+  /// The local branch is NOT deleted — the DAG is append-only and the user can
+  /// still reach it from the history panel — but every queued job that would
+  /// push its pointer back has to go, or the next drain simply recreates the
+  /// divergence. Commits for nodes the server has not seen are rewritten to
+  /// `appendNode`, which uploads the node through `docNodes.append` without
+  /// touching `currentNodeId`.
+  public func resolveKeepingRemote(
+    documentLocalId: String,
+    remoteHeadNodeId: String,
+    markdown: String,
+    wordCount: Int,
+    now: Double = Date().timeIntervalSince1970 * 1000
+  ) throws {
+    try writer.write { db in
+      guard var document = try DocumentRecord.fetchOne(db, key: documentLocalId) else {
+        throw StoreError.documentNotFound(documentLocalId)
+      }
+      guard
+        var node = try DocNodeRecord.fetchOne(
+          db, key: ["documentLocalId": documentLocalId, "nodeId": remoteHeadNodeId])
+      else {
+        throw StoreError.nodeNotFound(document: documentLocalId, node: remoteHeadNodeId)
+      }
+
+      // Pointer moves and draft saves belong to the branch being discarded.
       try db.execute(
+        sql: "DELETE FROM outbox WHERE documentLocalId = ? AND kind IN (?, ?)",
+        arguments: [
+          documentLocalId, OutboxKind.pointerMove.rawValue, OutboxKind.draftSave.rawValue,
+        ])
+      // Commits keep the text safe but must stop advancing the head.
+      try db.execute(
+        sql:
+          "UPDATE outbox SET kind = ?, baseHeadNodeId = NULL WHERE documentLocalId = ? AND kind = ?",
+        arguments: [
+          OutboxKind.appendNode.rawValue, documentLocalId, OutboxKind.commitEdit.rawValue,
+        ])
+
+      node.materialized = markdown
+      node.materializedAt = now
+      try node.update(db)
+
+      document.localHeadNodeId = remoteHeadNodeId
+      document.markdown = markdown
+      document.wordCount = wordCount
+      document.draftMarkdown = nil
+      document.draftSelectionAnchor = nil
+      document.draftSelectionHead = nil
+      document.divergedRemoteHeadNodeId = nil
+      document.syncState =
+        try OutboxJob.filter(Column("documentLocalId") == documentLocalId).fetchCount(db) == 0
+        ? .synced : .pending
+      document.updatedAt = now
+      try document.update(db)
+      try Self.trimMaterializationCache(db, documentLocalId: documentLocalId)
+    }
+  }
+
+  /// Everything an offline `documents.create` acknowledgement implies, in one
+  /// transaction (plan 023 §4.1(5)).
+  ///
+  /// `documents.create` mints its own root nodeId, so a document created offline
+  /// has a root the server never heard of, and the queued commits name it as
+  /// their parent — in the node rows AND inside the encoded outbox payloads.
+  /// Splitting this across transactions leaves a document whose first child is
+  /// sent with a parent that does not exist. Idempotent: a retry that finds the
+  /// adoption already done is a no-op.
+  public func finishOfflineCreate(
+    documentLocalId: String,
+    convexId: String,
+    serverRootNodeId: String,
+    rewritePayloadParent: @Sendable (_ payload: String, _ oldRoot: String, _ newRoot: String) -> String
+  ) throws {
+    try writer.write { db in
+      guard var document = try DocumentRecord.fetchOne(db, key: documentLocalId) else {
+        throw StoreError.documentNotFound(documentLocalId)
+      }
+      document.convexId = convexId
+      document.remoteHeadNodeId = serverRootNodeId
+
+      let localRoot = try DocNodeRecord
+        .filter(Column("documentLocalId") == documentLocalId && Column("parentNodeId") == nil)
+        .fetchOne(db)
+
+      if let localRoot, localRoot.nodeId != serverRootNodeId {
+        // Both roots snapshot the empty document, so re-keying cannot change
+        // what any child patch applies to. Refuse if that is ever not true.
+        guard (localRoot.snapshot ?? "").isEmpty else {
+          throw StoreError.rootSnapshotMismatch(documentLocalId)
+        }
+        if try DocNodeRecord.fetchOne(
+          db, key: ["documentLocalId": documentLocalId, "nodeId": serverRootNodeId]) == nil
+        {
+          try DocNodeRecord(
+            documentLocalId: documentLocalId, nodeId: serverRootNodeId, parentNodeId: nil,
+            patch: localRoot.patch, snapshot: "", origin: "server",
+            createdAt: localRoot.createdAt, materialized: "", synced: true
+          ).insert(db)
+        }
+        try db.execute(
+          sql:
+            "UPDATE doc_nodes SET parentNodeId = ? WHERE documentLocalId = ? AND parentNodeId = ?",
+          arguments: [serverRootNodeId, documentLocalId, localRoot.nodeId])
+        try db.execute(
+          sql: "UPDATE outbox SET baseHeadNodeId = ? WHERE documentLocalId = ? AND baseHeadNodeId = ?",
+          arguments: [serverRootNodeId, documentLocalId, localRoot.nodeId])
+
+        // The encoded payload carries its own copy of the parent; rewriting only
+        // the node row would still send the deleted root as the parent.
+        for var job in try OutboxJob
+          .filter(Column("documentLocalId") == documentLocalId)
+          .fetchAll(db)
+        {
+          let rewritten = rewritePayloadParent(job.payload, localRoot.nodeId, serverRootNodeId)
+          guard rewritten != job.payload else { continue }
+          job.payload = rewritten
+          try job.update(db)
+        }
+
+        if document.localHeadNodeId == localRoot.nodeId {
+          document.localHeadNodeId = serverRootNodeId
+        }
+        try db.execute(
+          sql: "DELETE FROM doc_nodes WHERE documentLocalId = ? AND nodeId = ?",
+          arguments: [documentLocalId, localRoot.nodeId])
+      }
+
+      try document.update(db)
+    }
+  }
+
+  /// Insert a freshly pulled document together with its whole DAG.
+  ///
+  /// One transaction: a row whose head node never arrived can never materialize,
+  /// and `mirrorLibrary` would skip re-pulling it because the title and
+  /// `remoteUpdatedAt` already match.
+  public func hydrate(document: DocumentRecord, nodes: [DocNodeRecord]) throws {
+    try writer.write { db in
+      try document.save(db)
+      for node in nodes {
+        guard
+          try DocNodeRecord.fetchOne(
+            db, key: ["documentLocalId": document.localId, "nodeId": node.nodeId]) == nil
+        else { continue }
+        var incoming = node
+        incoming.documentLocalId = document.localId
+        incoming.synced = true
+        try incoming.insert(db)
+      }
+    }
+  }
+
+  /// A local row whose head node is missing — an interrupted hydration. It has
+  /// to be pulled again rather than left as a document that cannot open.
+  public func incompleteDocumentIds() throws -> [String] {
+    try writer.read { db in
+      try String.fetchAll(
+        db,
         sql: """
-          UPDATE doc_nodes SET parentNodeId = ?
-          WHERE documentLocalId = ? AND parentNodeId = ?
-          """,
-        arguments: [newRootNodeId, documentLocalId, oldRootNodeId])
-      try db.execute(
-        sql: """
-          UPDATE documents SET localHeadNodeId = ?, remoteHeadNodeId = ?
-          WHERE localId = ? AND localHeadNodeId = ?
-          """,
-        arguments: [newRootNodeId, newRootNodeId, documentLocalId, oldRootNodeId])
-      try db.execute(
-        sql: "DELETE FROM doc_nodes WHERE documentLocalId = ? AND nodeId = ?",
-        arguments: [documentLocalId, oldRootNodeId])
-      try db.execute(
-        sql: "UPDATE outbox SET baseHeadNodeId = ? WHERE documentLocalId = ? AND baseHeadNodeId = ?",
-        arguments: [newRootNodeId, documentLocalId, oldRootNodeId])
+          SELECT d.localId FROM documents d
+          WHERE d.convexId IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM doc_nodes n
+            WHERE n.documentLocalId = d.localId AND n.nodeId = d.localHeadNodeId
+          )
+          """)
+    }
+  }
+
+  /// Drafts and queued mutations that exist nowhere else. Sign-out asks first.
+  public func unsyncedWorkCount() throws -> Int {
+    try writer.read { db in
+      let jobs = try OutboxJob.fetchCount(db)
+      let drafts = try DocumentRecord.filter(Column("draftMarkdown") != nil).fetchCount(db)
+      return jobs + drafts
     }
   }
 
@@ -488,6 +698,7 @@ public actor RectoStore {
     _ state: SyncState,
     remoteHeadNodeId: String? = nil,
     remoteUpdatedAt: Double? = nil,
+    remotePointerRevision: Double? = nil,
     divergedRemoteHeadNodeId: String?? = nil
   ) throws {
     try writer.write { db in
@@ -497,6 +708,7 @@ public actor RectoStore {
       document.syncState = state
       if let remoteHeadNodeId { document.remoteHeadNodeId = remoteHeadNodeId }
       if let remoteUpdatedAt { document.remoteUpdatedAt = remoteUpdatedAt }
+      if let remotePointerRevision { document.remotePointerRevision = remotePointerRevision }
       if let divergedRemoteHeadNodeId {
         document.divergedRemoteHeadNodeId = divergedRemoteHeadNodeId
       }

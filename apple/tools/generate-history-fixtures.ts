@@ -441,6 +441,28 @@ type StreakCase = {
  */
 const swiftStreakCases: StreakCase[] = [
 	{
+		// The case that breaks a `midnight - 86_400_000 ms` step: in
+		// America/Sao_Paulo the 2018-11-04 local day is 23 hours long, so that
+		// arithmetic skips it entirely. Both clients now step calendar days as
+		// strings, so this is timezone-independent on either side.
+		name: "spring-forward at local midnight (America/Sao_Paulo)",
+		days: [
+			{ date: "2018-11-04", words: 5 },
+			{ date: "2018-11-05", words: 5 },
+		],
+		today: "2018-11-05",
+		streak: 2,
+	},
+	{
+		name: "fall-back boundary (America/New_York)",
+		days: [
+			{ date: "2026-11-01", words: 5 },
+			{ date: "2026-11-02", words: 5 },
+		],
+		today: "2026-11-02",
+		streak: 2,
+	},
+	{
 		name: "leap-day boundary",
 		days: [
 			{ date: "2028-02-28", words: 5 },

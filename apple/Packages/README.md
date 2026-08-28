@@ -62,6 +62,19 @@ await registry.release(documentLocalId)                          // flushes when
 | `navigate(to:)` | Jump anywhere in the DAG. Flushes the pending draft first so you branch from a real node. |
 | `selection(at:)` | The caret stored on a node, to restore after a navigation. |
 | `flush()` | Commit the pending draft and push the queue. Call on background, window close, scene disconnect and mode switch. |
+
+Every one of these is **serialized**: actor isolation does not prevent
+reentrancy, so a navigation that suspends while materializing would otherwise be
+overtaken by the other window's keystroke and strand its commit. The edit path is
+also **write-ahead** — the incoming text is persisted as a draft *before* any
+in-memory state moves, grouping is staged in a copy, and the staged controller is
+installed only once every store write for it has succeeded. A failed write
+rebuilds from the persisted head plus draft rather than leaving a controller
+pointing at a node SQLite rejected.
+
+A draft that was persisted but never reached a node boundary is restored by
+`open()` (`GroupingController.restorePendingDraft`), so the text the user last
+typed is what a relaunched window shows — not the head it was typed on top of.
 | `resolveDivergenceKeepingLocal()` / `…KeepingRemote()` | The two non-manual outcomes of the compare sheet. Neither deletes anything. |
 
 `DocumentState` carries `markdown`, `head`, `wordCount`, `syncState`,
@@ -96,6 +109,21 @@ advanced — would be told `diverged` instead of getting its original answer.
   outliving one is normal.
 - **A commit's node is never lost.** `commitEdit` inserts the node row whatever
   the head check says, so a divergence costs you the pointer, never the text.
+- **One drain, one in-flight job.** Every request joins the single owned drain
+  task; `drainNow()` waits for it rather than starting a second. Two loops would
+  each read the same head job, and the server remembers a single
+  `clientMutationId`, so the slower duplicate comes back as a false divergence.
+- **Round-robin across documents.** At most one head job per document per pass,
+  repeated while any document makes progress; FIFO within a document. A document
+  under continuous editing cannot starve the others.
+- **The backoff survives a relaunch.** `start()`, `resume()` and every completed
+  drain schedule one wake for the persisted `earliestNextAttempt()`.
+- **Job kinds.** `commitEdit` sends node + head together; `appendNode` sends the
+  node ALONE through `docNodes.append` — what a commit becomes when its branch
+  loses a divergence, so the text is preserved without contesting the pointer.
+  `pointerMove` sends its **event** timestamp, not the retry time, and reconciles
+  when the server answers `applied: false`. `draftSave` sends
+  `expectedHeadNodeId`; a `headMoved` answer is reconciled, never retried.
 
 Nothing reaches the network until `SyncEngine.start()`. `requestDrain()` and
 `openDocument(_:)` on a stopped engine record the intent and return — `start()`
@@ -117,9 +145,15 @@ its answer:
 |---|---|---|
 | `inSync` | heads agree | marks `synced` |
 | `uploadAncestors(missing:rebaseOnto:)` | the server is behind us | leaves the outbox to catch it up |
-| `adoptRemote(headNodeId:whenIdle:)` | someone built on our work | adopts when idle, keeping the caret; defers while there is pending local work |
+| `adoptRemote(headNodeId:whenIdle:)` | someone built on our work | adopts when idle, keeping the caret; defers while there is pending local work. The adopt itself is a CAS inside one transaction (`RectoStore.adoptRemoteHead`) on the observed head plus "still no draft and no queued job", because materializing the target suspends and a keystroke can land in that gap |
 | `diverged(local:remote:)` | neither head reaches the other | keeps **both** branches, sets `divergedRemoteHeadNodeId`, emits `.diverged` |
 | `awaitingNodes(remoteHeadNodeId:)` | their head is not in our DAG yet | pulls the branch with `docNodes.listSince` and re-resolves once — it does **not** wait for the subscription to deliver it, because a Convex subscription that hit a server error never returns |
+
+`resolveDivergenceKeepingRemote()` runs as one store transaction: pointer and
+draft jobs for the discarded branch are deleted, its commits are rewritten to
+`appendNode` so the text still uploads without moving the pointer, and the
+divergence is cleared only once that rewrite has succeeded. Without it the next
+drain simply recreates the divergence.
 
 On `diverged`, `DocumentState.divergence` gives you `localHeadNodeId`,
 `remoteHeadNodeId` and the nearest common ancestor as `baseNodeId` — the three
@@ -135,21 +169,40 @@ failure this design exists to avoid.
 |---|---|---|
 | `settings` table + `settings.get/save` | W7 | `RectoStore.settings` is local-only; rows carry `dirty` for the sync that will exist |
 | `workspaces` keyed by `(userId, deviceId)` | W7 | `window_state` is local-only |
-| `documents.create` accepting a client `documentUuid` | W7 | An offline-created document adopts the server's root node id on first sync (`SyncEngine.adoptServerRoot`). Correct, but a `documentUuid` would make it unnecessary. |
-| `updateMarkdown` head CAS | W1/W7 | Draft saves use the existing `expectedUpdatedAt` CAS; a stale answer is dropped, which loses nothing because the next commit carries the text. |
+| `documents.create` accepting a client `documentUuid` | W7 | An offline-created document records the server id first, then finishes the whole root re-key in one transaction (`RectoStore.finishOfflineCreate`), and a retry resumes a partial adoption instead of acknowledging it. Correct, but a real idempotency key would close the remaining window between the server insert and that transaction. |
 | `account.deleteEverything` | W7 | Sign-out purges the local mirror only. |
 | Swift `countWords` / `parseOutline` | W8 | `RectoWordCount.plainText` (see above). |
+
+---
+
+## Sign-out and account switches
+
+`signOut()` **refuses** by default while the outbox or a draft row holds text,
+throwing `RectoAuthError.unsyncedWork(count:)`. Offline commits are not
+re-derivable from Convex — they are the user's only copy — so signing out on a
+train would delete them silently. Ask first with `unsyncedWork()`, then either
+flush or call `signOut(discardingUnsynced: true)` as an explicit, user-visible
+decision. Sync is stopped before the purge either way, or a subscription tick
+re-inserts rows behind the delete.
+
+An account switch stops sync, purges, and only **then** publishes the new
+`signedIn` status — a consumer reading the store in between would show the
+previous user's documents under the new session. A purge failure blocks the
+transition rather than leaking the rows.
+
+Wire the two together with `RectoAuth.attach(sync:)`; `SyncEngine` conforms to
+`SyncControlling`.
 
 ---
 
 ## Tests
 
 ```
-swift test --package-path apple/Packages/RectoHistory   # 35 — web parity
-swift test --package-path apple/Packages/RectoStore     # 16
-swift test --package-path apple/Packages/RectoAuth      #  8
-swift test --package-path apple/Packages/RectoSync      # 17
-swift test --package-path apple/Packages/RectoCore      # 17 — incl. the N4 acceptance list
+swift test --package-path apple/Packages/RectoHistory   # 37 — web parity
+swift test --package-path apple/Packages/RectoStore     # 24
+swift test --package-path apple/Packages/RectoAuth      # 12
+swift test --package-path apple/Packages/RectoSync      # 32 — incl. server-contract + live flows
+swift test --package-path apple/Packages/RectoCore      # 24 — incl. the N4 acceptance list
 ```
 
 SwiftPM has served a **stale cross-package module** here more than once: editing

@@ -151,4 +151,35 @@ struct GroupingTests {
     #expect(commits.count == 1)
     #expect(commits[0].snapshot == "elsewhere!")
   }
+
+  @Test("a restored draft is the visible text and commits against the persisted head")
+  func restorePendingDraft() {
+    let ids = SequentialIDs()
+    var controller = GroupingController(
+      rootNodeId: "head", rootMarkdown: "committed text", mintNodeId: ids.next)
+    controller.restorePendingDraft(
+      markdown: "committed text plus unsaved", selection: NodeSelection(anchor: 3, head: 3),
+      now: 1_000)
+
+    #expect(controller.draft == "committed text plus unsaved")
+    #expect(controller.hasPendingDraft)
+    #expect(controller.draftSelectionValue == NodeSelection(anchor: 3, head: 3))
+    #expect(controller.idleDeadline == 1_500)
+
+    // The recovered text commits as ONE node whose patch is relative to the
+    // persisted head, not as if the user had retyped the whole document.
+    let flushed = controller.flush()
+    let commit = try! #require(flushed)
+    #expect(commit.parentNodeId == "head")
+    #expect(commit.markdown == "committed text plus unsaved")
+    #expect(commit.patch == computePatch("committed text", "committed text plus unsaved").encoded)
+  }
+
+  @Test("restoring a draft equal to the head is a no-op")
+  func restoreNoopDraft() {
+    var controller = GroupingController(rootNodeId: "head", rootMarkdown: "same")
+    controller.restorePendingDraft(markdown: "same", selection: nil, now: 10)
+    #expect(controller.hasPendingDraft == false)
+    #expect(controller.flush() == nil)
+  }
 }

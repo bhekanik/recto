@@ -101,13 +101,13 @@ struct CommitResponseTests {
   @Test("the two commitEdit shapes map to the right outcome")
   func outcomes() {
     let ok = CommitEditResponse(
-      committed: true, headNodeId: "n1", updatedAt: 42, diverged: nil, remoteHeadNodeId: nil)
-    #expect(ok.outcome == .committed(headNodeId: "n1", updatedAt: 42))
+      committed: true, headNodeId: "n1", updatedAt: 42, pointerRevision: 7)
+    #expect(ok.outcome == .committed(headNodeId: "n1", updatedAt: 42, pointerRevision: 7))
 
     let conflict = CommitEditResponse(
       committed: false, headNodeId: nil, updatedAt: nil, diverged: true,
-      remoteHeadNodeId: "other")
-    #expect(conflict.outcome == .diverged(remoteHeadNodeId: "other"))
+      remoteHeadNodeId: "other", remotePointerRevision: 9)
+    #expect(conflict.outcome == .diverged(remoteHeadNodeId: "other", remotePointerRevision: 9))
   }
 
   @Test("commitEdit arguments encode numbers as Convex numbers, not BigInts")

@@ -41,6 +41,9 @@ public struct DocumentRecord: Codable, Sendable, FetchableRecord, PersistableRec
   /// The server's `updatedAt` as last observed — the CAS token `updateMarkdown`
   /// compares against.
   public var remoteUpdatedAt: Double?
+  /// The server's `pointerRevision` as last observed. `updatedAt` is a clock and
+  /// two devices disagree about it; the revision is a counter and does not.
+  public var remotePointerRevision: Double?
   public var syncState: SyncState
   /// Set when `syncState == .diverged`: the remote head we refused to adopt.
   public var divergedRemoteHeadNodeId: String?
@@ -61,6 +64,7 @@ public struct DocumentRecord: Codable, Sendable, FetchableRecord, PersistableRec
     localHeadNodeId: String,
     remoteHeadNodeId: String? = nil,
     remoteUpdatedAt: Double? = nil,
+    remotePointerRevision: Double? = nil,
     syncState: SyncState = .pending,
     divergedRemoteHeadNodeId: String? = nil,
     updatedAt: Double,
@@ -78,6 +82,7 @@ public struct DocumentRecord: Codable, Sendable, FetchableRecord, PersistableRec
     self.localHeadNodeId = localHeadNodeId
     self.remoteHeadNodeId = remoteHeadNodeId
     self.remoteUpdatedAt = remoteUpdatedAt
+    self.remotePointerRevision = remotePointerRevision
     self.syncState = syncState
     self.divergedRemoteHeadNodeId = divergedRemoteHeadNodeId
     self.updatedAt = updatedAt

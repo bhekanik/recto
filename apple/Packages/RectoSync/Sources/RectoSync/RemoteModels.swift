@@ -13,6 +13,7 @@ public enum ConvexFunction {
   public static let documentsRename = "documents:rename"
   public static let documentsRemove = "documents:remove"
   public static let docNodesListSince = "docNodes:listSince"
+  public static let docNodesAppend = "docNodes:append"
   public static let writingStatsRecord = "writingStats:record"
   public static let writingStatsList = "writingStats:list"
 }
@@ -44,23 +45,41 @@ public struct RemoteDocument: Decodable, Sendable, Equatable {
   public let markdown: String
   public let wordCount: Double
   public let currentNodeId: String
+  /// Monotonic counter bumped by every pointer write. Rows predating it read as
+  /// 0. Unlike `updatedAt` it does not depend on either device's clock, so it is
+  /// what decides which of two pointer writes is newer.
+  public let pointerRevision: Double
   public let createdAt: Double
   public let updatedAt: Double
 
   private enum CodingKeys: String, CodingKey {
     case id = "_id"
-    case title, markdown, wordCount, currentNodeId, createdAt, updatedAt
+    case title, markdown, wordCount, currentNodeId, pointerRevision, createdAt, updatedAt
+  }
+
+  public init(from decoder: any Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decode(String.self, forKey: .id)
+    title = try container.decode(String.self, forKey: .title)
+    markdown = try container.decode(String.self, forKey: .markdown)
+    wordCount = try container.decode(Double.self, forKey: .wordCount)
+    currentNodeId = try container.decode(String.self, forKey: .currentNodeId)
+    // Optional on the wire: a deployment that predates PR #1 does not send it.
+    pointerRevision = try container.decodeIfPresent(Double.self, forKey: .pointerRevision) ?? 0
+    createdAt = try container.decode(Double.self, forKey: .createdAt)
+    updatedAt = try container.decode(Double.self, forKey: .updatedAt)
   }
 
   public init(
     id: String, title: String, markdown: String, wordCount: Double, currentNodeId: String,
-    createdAt: Double, updatedAt: Double
+    pointerRevision: Double = 0, createdAt: Double, updatedAt: Double
   ) {
     self.id = id
     self.title = title
     self.markdown = markdown
     self.wordCount = wordCount
     self.currentNodeId = currentNodeId
+    self.pointerRevision = pointerRevision
     self.createdAt = createdAt
     self.updatedAt = updatedAt
   }
@@ -119,31 +138,37 @@ public struct CommitEditResponse: Decodable, Sendable, Equatable {
   public let committed: Bool
   public let headNodeId: String?
   public let updatedAt: Double?
+  public let pointerRevision: Double?
   public let diverged: Bool?
   public let remoteHeadNodeId: String?
+  public let remotePointerRevision: Double?
 
   public init(
-    committed: Bool, headNodeId: String?, updatedAt: Double?, diverged: Bool?,
-    remoteHeadNodeId: String?
+    committed: Bool, headNodeId: String?, updatedAt: Double?, pointerRevision: Double? = nil,
+    diverged: Bool? = nil, remoteHeadNodeId: String? = nil, remotePointerRevision: Double? = nil
   ) {
     self.committed = committed
     self.headNodeId = headNodeId
     self.updatedAt = updatedAt
+    self.pointerRevision = pointerRevision
     self.diverged = diverged
     self.remoteHeadNodeId = remoteHeadNodeId
+    self.remotePointerRevision = remotePointerRevision
   }
 
   public var outcome: CommitOutcome {
     if committed, let headNodeId {
-      return .committed(headNodeId: headNodeId, updatedAt: updatedAt ?? 0)
+      return .committed(
+        headNodeId: headNodeId, updatedAt: updatedAt ?? 0, pointerRevision: pointerRevision)
     }
-    return .diverged(remoteHeadNodeId: remoteHeadNodeId ?? "")
+    return .diverged(
+      remoteHeadNodeId: remoteHeadNodeId ?? "", remotePointerRevision: remotePointerRevision)
   }
 }
 
 public enum CommitOutcome: Sendable, Equatable {
-  case committed(headNodeId: String, updatedAt: Double)
-  case diverged(remoteHeadNodeId: String)
+  case committed(headNodeId: String, updatedAt: Double, pointerRevision: Double?)
+  case diverged(remoteHeadNodeId: String, remotePointerRevision: Double?)
 }
 
 public struct CreateDocumentResponse: Decodable, Sendable, Equatable {
@@ -157,24 +182,46 @@ public struct CreateDocumentResponse: Decodable, Sendable, Equatable {
 }
 
 public struct UpdateCurrentNodeResponse: Decodable, Sendable, Equatable {
+  /// False when the server's `updatedAt` was newer: the move lost the LWW check
+  /// and `currentNodeId` is the head that won, not the one we asked for.
   public let applied: Bool
   public let currentNodeId: String
   public let updatedAt: Double?
+  public let pointerRevision: Double?
 
-  public init(applied: Bool, currentNodeId: String, updatedAt: Double?) {
+  public init(
+    applied: Bool, currentNodeId: String, updatedAt: Double?, pointerRevision: Double? = nil
+  ) {
     self.applied = applied
     self.currentNodeId = currentNodeId
     self.updatedAt = updatedAt
+    self.pointerRevision = pointerRevision
   }
 }
 
 public struct UpdateMarkdownResponse: Decodable, Sendable, Equatable {
   public let updatedAt: Double
   public let stale: Bool
+  /// The head moved elsewhere: this draft belongs to a branch that is no longer
+  /// current, and writing it would detach `documents.markdown` from
+  /// `currentNodeId`. Not retryable — reconcile instead.
+  public let headMoved: Bool
 
-  public init(updatedAt: Double, stale: Bool) {
+  private enum CodingKeys: String, CodingKey {
+    case updatedAt, stale, headMoved
+  }
+
+  public init(from decoder: any Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    updatedAt = try container.decode(Double.self, forKey: .updatedAt)
+    stale = try container.decode(Bool.self, forKey: .stale)
+    headMoved = try container.decodeIfPresent(Bool.self, forKey: .headMoved) ?? false
+  }
+
+  public init(updatedAt: Double, stale: Bool, headMoved: Bool = false) {
     self.updatedAt = updatedAt
     self.stale = stale
+    self.headMoved = headMoved
   }
 }
 

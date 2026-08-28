@@ -25,6 +25,16 @@ public struct AuthFeatures: Sendable, Equatable {
   public static let all = AuthFeatures(appleSignIn: true, passkeys: true)
 }
 
+/// What `RectoAuth` needs from the sync layer around an identity change.
+///
+/// Declared here and conformed to by `SyncEngine`, because the dependency runs
+/// the other way: sync knows about auth, not auth about sync.
+public protocol SyncControlling: Sendable {
+  /// Drop every socket. Must return only once nothing else will write.
+  func stop() async
+  func start() async
+}
+
 public enum AuthStatus: Sendable, Equatable {
   /// Clerk has not finished restoring a keychain session yet.
   case loading
@@ -62,6 +72,7 @@ public final class RectoAuth {
   private let logger = Logger(subsystem: "com.bhekani.recto", category: "auth")
   private let store: RectoStore
   private let features: AuthFeatures
+  private var sync: (any SyncControlling)?
   private var statusContinuations: [UUID: AsyncStream<AuthStatus>.Continuation] = [:]
   private var eventListener: Task<Void, Never>?
 
@@ -81,13 +92,28 @@ public final class RectoAuth {
     self.convexAuthProvider = ConvexTemplateAuthProvider()
   }
 
+  /// Wire the sync engine in after it has been built (it needs the provider this
+  /// object owns, so the two cannot be constructed in one step).
+  public func attach(sync: any SyncControlling) {
+    self.sync = sync
+  }
+
   deinit {
     eventListener?.cancel()
   }
 
+  /// Whether `configureClerk` has run in this process.
+  ///
+  /// `Clerk.shared` calls `fatalError` when it has not been configured, so every
+  /// path that might run before the app's `init` — or in a test, a widget, or a
+  /// share extension that never configures it — has to check first rather than
+  /// crash.
+  public private(set) static var isClerkConfigured = false
+
   /// Configure the Clerk SDK. Call once, from the app's `init`.
   public static func configureClerk(publishableKey: String) {
     Clerk.configure(publishableKey: publishableKey)
+    isClerkConfigured = true
   }
 
   /// Publish the restored session, then follow Clerk's auth events.
@@ -96,6 +122,10 @@ public final class RectoAuth {
   /// session has been restored, and until then the UI must show "checking"
   /// rather than the signed-out screen.
   public func start() async {
+    guard Self.isClerkConfigured else {
+      status = .signedOut
+      return
+    }
     while !Clerk.shared.isLoaded {
       try? await Task.sleep(for: .milliseconds(50))
     }
@@ -160,46 +190,94 @@ public final class RectoAuth {
 
   // MARK: - Sign out
 
-  /// End the Clerk session **and** purge the local mirror.
+  /// Work that exists only on this device.
+  public struct UnsyncedWork: Sendable, Equatable {
+    public var count: Int
+    public var isEmpty: Bool { count == 0 }
+  }
+
+  /// What sign-out would destroy. Ask before offering the button.
+  public func unsyncedWork() async throws -> UnsyncedWork {
+    UnsyncedWork(count: try await store.unsyncedWorkCount())
+  }
+
+  /// End the Clerk session and purge the local mirror.
   ///
-  /// Everything in the mirror is re-derivable from Convex, and leaving a signed
-  /// out user's drafts on a shared Mac is not acceptable. The purge runs even if
-  /// Clerk's sign-out fails — a network error must not leave the text on disk
-  /// (plan 023 §4.1(4)).
-  public func signOut() async throws {
-    defer { status = .signedOut }
+  /// Refuses by default when the outbox or a draft row still holds text: those
+  /// are the user's ONLY copy — offline commits are not re-derivable from
+  /// Convex, whatever the old comment here claimed — and signing out on a train
+  /// would delete them silently. The caller must either flush first or pass
+  /// `discardingUnsynced: true` as an explicit, user-visible decision.
+  public func signOut(discardingUnsynced: Bool = false) async throws {
+    if !discardingUnsynced {
+      let pending = try await store.unsyncedWorkCount()
+      guard pending == 0 else { throw RectoAuthError.unsyncedWork(count: pending) }
+    }
+
+    // Stop sync before purging, or a subscription tick can re-insert rows behind
+    // the delete.
+    await sync?.stop()
     do {
-      try await convexAuthProvider.logout()
+      if Self.isClerkConfigured { try await convexAuthProvider.logout() }
     } catch {
       logger.error("clerk sign-out failed: \(error.localizedDescription, privacy: .public)")
+      // The text still has to go: a network error must not leave a signed-out
+      // user's drafts readable on a shared Mac.
       try await store.purgeEverything()
+      status = .signedOut
       throw error
     }
     try await store.purgeEverything()
+    status = .signedOut
   }
 
   // MARK: - Private
 
   private func handleSessionChanged(_ session: Session?) async {
     let previousUserId = status.userId
-    updateStatus(from: session)
+    let nextUserId = Self.activeUserId(of: session)
+    guard previousUserId != nextUserId else { return }
+
     // A different user on the same device must never see the previous one's
-    // documents; Clerk can switch sessions without our sign-out path running.
-    if let previousUserId, previousUserId != status.userId {
-      try? await store.purgeEverything()
+    // documents. Stop sync, purge, and only THEN publish the new identity: a
+    // consumer that reads the store between those steps would show the old
+    // user's text under the new session.
+    if previousUserId != nil, nextUserId != previousUserId {
+      await sync?.stop()
+      do {
+        try await store.purgeEverything()
+      } catch {
+        // Blocking the transition is the safe failure: leaving the rows in place
+        // under a new identity is not.
+        logger.error(
+          "purge failed during account switch; refusing to publish the new session: \(error.localizedDescription, privacy: .public)"
+        )
+        status = .signedOut
+        return
+      }
     }
+
+    status = nextUserId.map { AuthStatus.signedIn(userId: $0) } ?? .signedOut
+    if nextUserId != nil { await sync?.start() }
   }
 
   private func handleAccountDeleted() async {
-    try? await store.purgeEverything()
+    await sync?.stop()
+    do {
+      try await store.purgeEverything()
+    } catch {
+      logger.error(
+        "purge after account deletion failed: \(error.localizedDescription, privacy: .public)")
+    }
     status = .signedOut
   }
 
   private func updateStatus(from session: Session?) {
-    guard let session, session.status == .active, let userId = session.user?.id else {
-      status = .signedOut
-      return
-    }
-    status = .signedIn(userId: userId)
+    status = Self.activeUserId(of: session).map { AuthStatus.signedIn(userId: $0) } ?? .signedOut
+  }
+
+  private static func activeUserId(of session: Session?) -> String? {
+    guard let session, session.status == .active else { return nil }
+    return session.user?.id
   }
 }
