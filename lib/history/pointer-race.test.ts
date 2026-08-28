@@ -20,6 +20,7 @@ type MutationCall = {
 	name: string;
 	args: Record<string, unknown>;
 	resolve: (result: unknown) => void;
+	reject: (error: unknown) => void;
 	settled: boolean;
 };
 
@@ -73,8 +74,11 @@ vi.mock("convex/react", () => ({
 		const existing = mutationFns.get(name);
 		if (existing) return existing;
 		const fn = (args: Record<string, unknown>) => {
-			const { promise, resolve } = Promise.withResolvers<unknown>();
-			mutationCalls.push({ name, args, resolve, settled: false });
+			const { promise, resolve, reject } = Promise.withResolvers<unknown>();
+			// Nothing else awaits this promise, so an unobserved rejection would
+			// surface as a process warning instead of reaching the hook's catch.
+			promise.catch(() => {});
+			mutationCalls.push({ name, args, resolve, reject, settled: false });
 			return promise;
 		};
 		mutationFns.set(name, fn);
@@ -91,6 +95,7 @@ const NAMES = {
 	commitEdit: getFunctionName(api.documents.commitEdit),
 	updateMarkdown: getFunctionName(api.documents.updateMarkdown),
 	updatePointer: getFunctionName(api.documents.updateCurrentNodeId),
+	ensureRoot: getFunctionName(api.docNodes.ensureRoot),
 };
 
 function callsTo(name: string): MutationCall[] {
@@ -138,6 +143,39 @@ async function respond(
 }
 
 const OK_SAVE = { updatedAt: 1_500, stale: false, headMoved: false };
+
+/**
+ * Answer whatever is outstanding, in send order, by function name. For tests
+ * whose point is the end state rather than the exact sequence of writes.
+ */
+/** Fail the oldest unanswered mutation, as a dropped connection would. */
+async function rejectNext(expectedName: string): Promise<void> {
+	const call = mutationCalls.find((c) => !c.settled);
+	if (!call) throw new Error(`no unanswered mutation; wanted ${expectedName}`);
+	if (call.name !== expectedName) {
+		throw new Error(
+			`next unanswered mutation is ${call.name}, not ${expectedName}`,
+		);
+	}
+	call.settled = true;
+	await act(async () => {
+		call.reject(new Error("network"));
+	});
+}
+
+async function respondAllRemaining(
+	results: Record<string, unknown>,
+): Promise<void> {
+	let next = mutationCalls.find((c) => !c.settled);
+	while (next) {
+		const result = results[next.name];
+		if (result === undefined) {
+			throw new Error(`no result supplied for ${next.name}`);
+		}
+		await respond(next.name, result);
+		next = mutationCalls.find((c) => !c.settled);
+	}
+}
 
 /** A mutation result plus the query state it becomes visible alongside. */
 type Answer = { result: unknown; snapshot?: Snapshot };
@@ -331,8 +369,11 @@ function mountStudio(handle: ReturnType<typeof fakeHandle>) {
 					);
 				} else if (projection.source === "recovered-draft") {
 					syncHook.adoptRecoveredDraft(projection.markdown);
+				} else {
+					syncHook.markLocalProjectionPending(projection.markdown);
 				}
 			},
+			onProjectionSettled: syncHook.settleLocalProjection,
 		});
 		historyApiRef.current = h;
 		history = h;
@@ -424,7 +465,12 @@ describe("decideServerPointer", () => {
 		expect(
 			decideServerPointer({
 				...base,
-				localMove: { token: 1, nodeId: "local", appliedRevision: null },
+				localMove: {
+					token: 1,
+					nodeId: "local",
+					appliedRevision: null,
+					markdown: "x",
+				},
 			}),
 		).toBe("ignore");
 	});
@@ -434,7 +480,12 @@ describe("decideServerPointer", () => {
 			decideServerPointer({
 				...base,
 				serverPointerRevision: 6,
-				localMove: { token: 1, nodeId: "local", appliedRevision: 7 },
+				localMove: {
+					token: 1,
+					nodeId: "local",
+					appliedRevision: 7,
+					markdown: "x",
+				},
 			}),
 		).toBe("ignore");
 	});
@@ -444,7 +495,12 @@ describe("decideServerPointer", () => {
 			decideServerPointer({
 				...base,
 				serverPointerRevision: 8,
-				localMove: { token: 1, nodeId: "local", appliedRevision: 7 },
+				localMove: {
+					token: 1,
+					nodeId: "local",
+					appliedRevision: 7,
+					markdown: "x",
+				},
 			}),
 		).toBe("adopt");
 	});
@@ -457,7 +513,12 @@ describe("decideServerPointer", () => {
 			decideServerPointer({
 				...base,
 				serverPointerRevision: 7,
-				localMove: { token: 1, nodeId: "local", appliedRevision: 7 },
+				localMove: {
+					token: 1,
+					nodeId: "local",
+					appliedRevision: 7,
+					markdown: "x",
+				},
 			}),
 		).toBe("adopt");
 	});
@@ -467,7 +528,12 @@ describe("decideServerPointer", () => {
 			decideServerPointer({
 				...base,
 				serverCurrentNodeId: "local",
-				localMove: { token: 1, nodeId: "local", appliedRevision: null },
+				localMove: {
+					token: 1,
+					nodeId: "local",
+					appliedRevision: null,
+					markdown: "x",
+				},
 			}),
 		).toBe("settled");
 	});
@@ -1403,6 +1469,167 @@ describe("studio sync + history contract", () => {
 
 		expect(removedKeys.slice(clearsBefore)).toEqual([]);
 		expect(s.syncStatus).not.toBe("saved");
+		s.unmount();
+	});
+
+	it("T1: an AI accept whose commit is rejected stays recoverable", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode()];
+		const s = mountStudio(handle);
+		s.render(AT_ROOT);
+
+		s.type(TYPED);
+		await settle(600);
+		await respond(NAMES.updateMarkdown, OK_SAVE, {
+			server: {
+				currentNodeId: ROOT,
+				markdown: TYPED,
+				updatedAt: 1_500,
+				pointerRevision: 1,
+				markdownHeadNodeId: ROOT,
+			},
+		});
+
+		// Accepting an AI transform seeds programmatically — it never reaches the
+		// editor's change handler, so nothing else marks it dirty.
+		s.run(() => {
+			s.history.commitProgrammatic(AI, { origin: "ai:grammar" });
+		});
+		expect(handle.text).toBe(AI);
+
+		// Its commit is refused. The text must survive a reload: with sync still
+		// reading "saved" and no recovery copy, it would simply be gone.
+		await respondAllRemaining({
+			[NAMES.commitEdit]: {
+				committed: false,
+				diverged: true,
+				remoteHeadNodeId: REMOTE,
+				remotePointerRevision: 9,
+			},
+			[NAMES.updateMarkdown]: {
+				updatedAt: 2_000,
+				stale: true,
+				headMoved: true,
+			},
+		});
+
+		expect(s.syncStatus).not.toBe("saved");
+		expect(loadDraft(DOC_ID)?.markdown).toBe(AI);
+		s.unmount();
+	});
+
+	it("T1: an undo whose pointer write fails stays unsynced", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode(), remoteNode()];
+		const s = mountStudio(handle);
+		s.render(AT_ROOT);
+
+		s.run(() => s.history.navigateTo(REMOTE));
+		expect(s.projectedMarkdown).toBe(REMOTE_TEXT);
+
+		// A pointer move changes no text, so nothing used to mark it dirty: the
+		// pane showed a node the server had never heard of while reporting the
+		// document "saved".
+		expect(s.syncStatus).toBe("unsynced");
+
+		// The write never lands. The client must not settle showing the node it
+		// failed to move to — it re-syncs to the head the server does have.
+		await rejectNext(NAMES.updatePointer);
+		await settle();
+
+		const strandedOnFailedTarget =
+			s.projectedMarkdown === REMOTE_TEXT && s.syncStatus === "saved";
+		expect(strandedOnFailedTarget).toBe(false);
+		expect(s.history.currentNodeId).toBe(ROOT);
+		s.unmount();
+	});
+
+	it("T3: bounds ensureRoot retries and reports the failure once", async () => {
+		const handle = fakeHandle();
+		dagRows = []; // a legacy document with no root node
+		const s = mountStudio(handle);
+
+		const toasts: string[] = [];
+		const onToast = (event: Event) => {
+			toasts.push((event as CustomEvent<{ message: string }>).detail.message);
+		};
+		window.addEventListener("recto:toast", onToast);
+
+		s.render(AT_ROOT);
+
+		// Fail every attempt, allowing plenty of time for any backoff to elapse.
+		for (let round = 0; round < 8; round += 1) {
+			const outstanding = mutationCalls.find(
+				(c) => !c.settled && c.name === NAMES.ensureRoot,
+			);
+			if (outstanding) await rejectNext(NAMES.ensureRoot);
+			await settle(30_000);
+		}
+		window.removeEventListener("recto:toast", onToast);
+
+		// Unbounded, this re-sent immediately on every failure and raised a toast
+		// each time — a hot loop against the server and a wall of notifications.
+		const attempts = callsTo(NAMES.ensureRoot).length;
+		expect(attempts).toBeGreaterThan(1);
+		expect(attempts).toBeLessThanOrEqual(4);
+		expect(toasts).toHaveLength(1);
+		expect(toasts[0]).toContain("Reload");
+		s.unmount();
+	});
+
+	it("T1: an acknowledged pointer move becomes saved", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode(), remoteNode()];
+		const s = mountStudio(handle);
+		s.render(AT_ROOT);
+
+		s.run(() => s.history.navigateTo(REMOTE));
+		expect(s.syncStatus).toBe("unsynced");
+
+		// A pointer move writes no markdown, so nothing else can report it saved:
+		// the acknowledgement of the pointer write is the only signal there is.
+		await respond(NAMES.updatePointer, {
+			applied: true,
+			currentNodeId: REMOTE,
+			updatedAt: 4_000,
+			pointerRevision: 5,
+		});
+
+		expect(s.syncStatus).toBe("saved");
+		expect(s.history.currentNodeId).toBe(REMOTE);
+		s.unmount();
+	});
+
+	it("T1: an acknowledged local commit becomes saved", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode()];
+		const s = mountStudio(handle);
+		s.render(AT_ROOT);
+
+		s.type(TYPED);
+		await settle(600);
+		const head = s.history.currentNodeId ?? ROOT;
+		const after: ServerDoc = {
+			currentNodeId: head,
+			markdown: TYPED,
+			updatedAt: 2_000,
+			pointerRevision: 2,
+			markdownHeadNodeId: head,
+		};
+		await respondAllRemaining({
+			[NAMES.updateMarkdown]: OK_SAVE,
+			[NAMES.commitEdit]: {
+				committed: true,
+				headNodeId: head,
+				updatedAt: 2_000,
+				pointerRevision: 2,
+			},
+		});
+		s.render(after);
+
+		// Pending until the server takes it, saved once it has — not stuck dirty.
+		expect(s.syncStatus).toBe("saved");
+		expect(loadDraft(DOC_ID)).toBeNull();
 		s.unmount();
 	});
 
