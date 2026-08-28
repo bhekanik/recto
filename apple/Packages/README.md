@@ -11,23 +11,37 @@ Both packages ship a JavaScript bundle, and neither bundle is committed:
 
 ```sh
 bun install --frozen-lockfile
-bun run core:build          # packages/recto-core-js/dist/recto-core.js
-bun run vim:build           # packages/recto-vim-js/dist/recto-vim.js
-apple/scripts/copy-js-bundles.sh
+apple/scripts/copy-js-bundles.sh    # builds both bundles, checks and installs
 swift test --package-path apple/Packages/RectoCoreJS
 swift test --package-path apple/Packages/RectoVim
 ```
 
-**Why not commit them.** They are 1.0 MB and 120 kB of generated JavaScript.
+**Why not commit them.** They are 1.0 MB and 126 kB of generated JavaScript.
 Committed, every change to `lib/` would produce a diff no reviewer can read, and
-the copy in `Sources/` could silently disagree with the source it was built
-from. `copy-js-bundles.sh` compares each bundle's sha256 against the
-`manifest.json` its build wrote, so a stale copy is a build error instead. In
-Xcode it is a run-script phase; on Xcode Cloud it runs from
-`ci_scripts/ci_post_clone.sh`, which installs a pinned Bun first (the images
-have none). The same script also refuses to install a bundle containing a
-localhost URL, a `sourceMappingURL=` pragma, an `sk_`/`pk_live_` key or the
-string `OPENROUTER` (plan 023 §2).
+the copy in `Sources/` could silently disagree with the source it was built from.
+
+**`copy-js-bundles.sh` builds; it does not merely check.** Comparing a bundle
+against the manifest written beside it only proves the bundle has not been
+corrupted since — edit `lib/`, keep the matching pair, and it passes, which is
+exactly the case that matters. Running the build makes staleness impossible:
+`build.ts` is deterministic, so an unchanged tree reproduces the same bytes, and
+the script only copies when they differ. Without `bun` on PATH it falls back to
+verifying what is in `dist/` and says out loud that it could not check staleness.
+
+It also refuses to install a bundle carrying a loopback URL, a
+`sourceMappingURL=` pragma, or anything shaped like a Clerk, Stripe, OpenRouter,
+OpenAI, GitHub, AWS, Google, Slack or Convex key (plan 023 §2). Matching is
+case-insensitive, and every pattern is deliberately narrower than the word it
+guards, because the bare words occur all over a megabyte of dependencies and a
+gate that cries wolf gets switched off — `recto-core.js` really does contain
+`node:url`'s "File URL host must be \"localhost\"" message.
+`apple/scripts/scan-samples.sh` runs each pattern against a positive and a
+negative sample, so one that stops matching fails CI instead of going quiet.
+
+In Xcode it is a run-script phase; on Xcode Cloud it runs from
+`ci_scripts/ci_post_clone.sh`, which first installs the **same pinned Bun** the
+GitHub workflow pins, downloaded as a versioned release artefact and verified
+against its published checksum.
 
 Without the bundle the packages still compile; `RectoCore.init` and
 `VimEngine.init` throw an error naming the command to run. That is deliberate —
@@ -100,42 +114,55 @@ reproduces exactly two things: `lib/markdown/count-words.ts` (visit every MDAST
 Its rule is "emit the characters of every `text` node and one space in place of
 everything else", which reproduces remark's join without building a tree.
 
-It is checked three ways: against `word-count.json` and `outline.json`, against
-the 24 corpus cases and 10 unicode cases, and — where the bundle is built —
-against `RectoCore.countWords`/`parseOutline` themselves, on 49 adversarial
-documents that the shared fixtures do not cover (`SwiftPortAdversarialTests`).
-A divergence is a red test, not a wrong number in a status bar.
+**The contract is "agrees with the gate", not "agrees with remark".** It is
+checked four ways: against `word-count.json` and `outline.json`; against the 24
+corpus cases and 10 unicode cases; against `RectoCore.countWords`/`parseOutline`
+themselves on a named list of adversarial documents
+(`SwiftPortAdversarialTests`); and against the core again on **256 seeded
+generated documents** (`SwiftPortDifferentialTests`) composed from every block
+and inline construct the dialect has, including CRLF, lone CR, NBSP, ZWSP and the
+corpus's emoji. A divergence is a red test, not a wrong number in a status bar —
+and a divergence found in the wild is a new case for the gate, not a reason to
+soften this paragraph.
 
-Known limits, all deliberate: link reference definitions are recognised by shape
-rather than resolved through a full parse (an over-collected label can only turn
-a bare `[x]` into a link, which changes no word count); HTML blocks implement
-CommonMark types 1, 2, 6 and 7; nothing outside the Recto dialect is supported.
-`Outline` offsets are UTF-16 code units — the same units `NSRange` and
-`NSTextContentStorage` use — so a heading offset scrolls to without conversion.
+Everything the gate does not reach is unproven. The round-2 review found six
+real divergences outside the corpus — unclosed frontmatter, `alpha\n2. beta`
+(only `1.` may interrupt a paragraph), `&amp;` decoding, HTML block types 3–5,
+link definitions inside fenced code, and shortcut images — all now fixed and in
+the gate, which is the shape of how the next one will be found. `Outline` offsets
+are UTF-16 code units, the same units `NSRange` and `NSTextContentStorage` use,
+so a heading offset scrolls to without conversion.
 
 ## Latency, and the entitlement that decides it
 
-Measured 2026-08-28, M-series, macOS 26 / Xcode 26.6, `apple/Spikes/JSCPerf`:
+Median of 10 samples over 2 fresh processes, sizes reshuffled each round;
+M-series, macOS 26 / Xcode 26.6, release build, `apple/Spikes/JSCPerf`,
+2026-08-28:
 
-| document | no `allow-jit` | with `allow-jit` |
-|---|---|---|
-| 8 kB `normalize` | 89.7 ms | 21.6 ms |
-| 50 kB | 525.0 ms | 53.6 ms |
-| 64 kB | 669.4 ms | 51.9 ms |
-| 250 kB | 3244.8 ms | 731.5 ms |
+| document | no `allow-jit` | with `allow-jit` | ratio |
+|---|---|---|---|
+| 8 kB `normalize` | 92.7 ms | 6.0 ms | 15.5× |
+| 50 kB | 570.5 ms | 40.8 ms | 14.0× |
+| 64 kB | 724.6 ms | 54.1 ms | 13.4× |
+| 250 kB | 3450.1 ms | 760.5 ms | 4.5× |
 
 **A hardened-runtime macOS process without `com.apple.security.cs.allow-jit`
-gets no JIT from JavaScriptCore.** Nothing reports this; it just runs ~13×
-slower, and the unentitled numbers match `jsc --useJIT=false` exactly. **The Mac
-app must ship that entitlement** — plan 023 §2's list (`app-sandbox`,
-`network.client`, `files.user-selected.read-write`) is missing it. It is a
-hardened-runtime exception, not a sandbox escape, and Mac App Store apps may
-carry it.
+gets no JIT from JavaScriptCore.** Nothing reports this; it just runs 13–15×
+slower up to 64 kB (4.5× at 250 kB, where the entitled run turns
+allocation-bound), and the unentitled numbers match `jsc --useJIT=false` at every
+size. **The Mac app must ship that entitlement** — plan 023 §2's list
+(`app-sandbox`, `network.client`, `files.user-selected.read-write`) is missing
+it. It is a hardened-runtime exception, not a sandbox escape; `app-sandbox`
+stays, and Mac App Store apps may carry it. macOS only — there is no iOS
+equivalent.
 
-**iOS has no such entitlement**, on 17, 18 or 26, so the interpreter column is
-permanent there. The iOS *simulator* does have the JIT (it is a Mac process), so
-simulator numbers are an upper bound and never the go/no-go. Full evidence,
-sources and the device invocation are in `apple/Spikes/JSCPerf/README.md`.
+**iOS appears to have no such entitlement**, on 17, 18 or 26. That conclusion is
+read from WebKit's source (`isJITEnabled()` in `ExecutableAllocator.cpp` and
+`process-entitlements.sh`), **not measured on a device**, and the device
+measurement is still the N3 go/no-go. The iOS *simulator* does have the JIT (it
+is a Mac process), so simulator numbers are an upper bound and never the answer.
+Evidence, citations and the device invocation are in
+`apple/Spikes/JSCPerf/README.md`.
 
 Either way, `WordCount` and `Outline` are what the keystroke path calls: both are
 well under a millisecond on a 64 kB document.
@@ -174,6 +201,32 @@ conversion. `{line, ch}` never leaves the JS adapter. Swift's `String.count` is
 graphemes and is **never** the right length here — use `utf16.count` and
 `NSString`.
 
+**Line endings are never normalised.** The mirror holds `\r\n` and lone `\r`
+exactly as the document has them. A normalising mirror reported `x` on line 2 of
+`a\r\nb` as `{from: 2, to: 3}`, which against the real storage deletes the `\n`
+of the CRLF rather than the `b`; both sides have to be indexing the same string.
+Text vim inserts itself (`o`, `O`, `<CR>`) takes the nearest line's ending, which
+is what `fileformat` means in vim, so a CRLF document does not end up mixed.
+
+**Text input comes from the text view, not from key names.** A `keyDown` event
+carries one key name; real input does not — NFD arrives as a base letter plus a
+combining mark, an emoji as several scalars, a dead key as a composition, an IME
+as marked text rewritten before it commits. So the engine runs with
+`setExternalInput(true)`: it declines printable keys in insert mode, and
+`BlockCaretTextView` routes `insertText(_:replacementRange:)` back through
+`VimTextViewAdapter.insertText`, which is one transaction — the mirror, the
+edit, and the change the core needs for `.` to replay it. **A custom text view
+must forward `insertText(_:replacementRange:)` the same way.** IME composition is
+the exception: AppKit owns the storage while marked text is up, and the adapter
+resyncs when it ends.
+
+**Replay is transactional.** The engine has already committed every edit to its
+mirror by the time the journal arrives, so a partial replay leaves the two
+disagreeing and every later range pointing at the wrong text. If a delegate
+vetoes a change or a range does not fit the document, the adapter stops, resyncs
+the engine *from the storage*, and reports `VimReplayFailure` through
+`onReplayFailure`. Surface it; do not swallow it.
+
 **Grapheme clamping lives in JS, and Swift must not repeat it.** The vim core
 clips to code points, which severs ZWJ families, flags, skin tones and combining
 marks; `packages/recto-vim-js/src/grapheme.js` clamps with the same UAX #29 code
@@ -207,13 +260,19 @@ it is a protocol. Three things this cost the spike, in case they bite again:
   has no undo manager at all. Either one makes `u` do nothing, silently.
 - Edits must go through `shouldChangeText`/`didChangeText`. Writing to
   `textStorage` directly is invisible to undo.
-- `undoManager.groupsByEvent` must be **off**: it groups per run-loop pass, and
-  with no run loop turning it swallows a whole session into one group.
+- `undoManager.groupsByEvent` must be off **for our own writes and only those**.
+  It groups per run-loop pass, and with no run loop turning it swallows a whole
+  session into one group — but leaving it off breaks IME, because
+  `setMarkedText` reaches `-[NSUndoManager _prepareEventGrouping]` through
+  AppKit's coalescing path, which raises when event grouping is disabled. The
+  adapter turns it off around the batch and restores it afterwards.
 
-**Known gap for the undo tree (W9b):** after `u`, vim puts the caret at the start
-of the restored change, while `NSUndoManager` restores whatever selection it
-recorded. The undo tree must compute a vim-shaped caret from the patch it
-applied rather than read it back off the text view.
+**The caret after `u` is vim's, not the undo manager's.** Vim puts it at the
+start of the change it restored; `NSUndoManager` restores whatever selection it
+recorded, which in the spike's proof was two lines away. `performHistory`
+derives it as the first offset at which the two versions differ, which needs no
+cooperation from whoever owns undo — the same derivation `RectoHistory` will use
+from its own patch.
 
 **Coexisting with the rich lens.** The vim lens uses the raw/source presentation,
 which is what makes the mirror sound: nothing is hidden, so JS and the text view
@@ -251,20 +310,31 @@ These come from upstream and are what the web lens does today, so matching them
 is *correct* for parity. Do not "fix" them without changing the web too.
 
 - `dG` at the end of a buffer leaves a trailing empty line.
-- After `r` on a multi-codepoint cluster the caret lands one position past the
-  replacement; the text is right. Recorded in the fixture with a note.
 - `getTokenTypeAt` returns `""` (no syntax tree), so `%` matches brackets inside
   strings, and the `it`/`at` tag objects do nothing.
 - `<C-q>` is an alias for `<C-v>` upstream — "looks unbound" is not unbound.
 
+`r` is the one action this package **replaces** rather than adapts
+(`Vim.defineAction`), because upstream computes both its range and its resulting
+caret in code units and there is no way to correct the caret afterwards — "one
+character before the end" is character arithmetic, not an offset mapping. The
+replacement counts grapheme clusters and is otherwise upstream's behaviour,
+including clamping a too-large count to the end of the line. It is the first
+thing to re-check on an upstream bump.
+
 ## Tests
 
 `RectoVimTests` runs `packages/recto-vim-js/fixtures/keystroke-suite.json` —
-128 cases, 21 of them grapheme cases — twice: once headless through `JSContext`,
-and once replayed through a real `NSTextView`, asserting the storage stays byte
-for byte equal to the engine's mirror. The same file runs in Bun
-(`bun run vim:test`), so a case that passes there and fails here is a bridge bug,
-which is a much smaller place to look.
+143 cases, 21 of them grapheme cases and 6 CRLF — twice: once headless through
+`JSContext`, and once replayed through a real `NSTextView`, asserting the storage
+stays byte for byte equal to the engine's mirror. The text-view pass drives keys
+the way `keyDown` does, so everything vim declines goes through the real
+`insertText` path rather than a synthetic one. `AdapterContractTests` covers what
+is not a keystroke: CRLF replay, NFD, emoji and ZWJ input, an IME composition,
+dot-repeat through the input system, a vetoing delegate, an out-of-bounds range,
+the undo caret, and the `gj`/`gk` goal column across a soft wrap. The same
+fixture file runs in Bun (`bun run vim:test`), so a case that passes there and
+fails here is a bridge bug, which is a much smaller place to look.
 
 `RectoVimPerfTests` and `RectoCoreJSPerfTests` are opt-in
 (`RECTO_VIM_PERF=1`, `RECTO_CORE_PERF=1`) and measure CPU time, not wall clock —

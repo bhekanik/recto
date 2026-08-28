@@ -11,45 +11,62 @@ xcodebuild test -scheme JSCPerf \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro'   # simulator
 ```
 
-## The finding: `com.apple.security.cs.allow-jit` is worth 13×
+## The finding: the JIT entitlement is worth ~14× on macOS
 
 A hardened-runtime macOS process that does not carry
 `com.apple.security.cs.allow-jit` cannot map JIT pages, so JavaScriptCore runs
-the LLInt interpreter. Nothing reports this — no API, no warning, no crash — it
-just runs an order of magnitude slower.
+the interpreter. Nothing reports this — no API, no warning, no crash — it just
+runs an order of magnitude slower.
 
-Measured 2026-08-28, M-series, macOS 26 / Xcode 26.6, the same
-`dist/recto-core.js` in all four columns:
+**Conditions**, because a performance number without them is a rumour: M-series
+Mac, macOS 26 / Xcode 26.6, `swift build -c release`, the same
+`dist/recto-core.js` in every column, `measure.sh 2` — two fresh processes per
+configuration, five rounds per process, the four sizes reshuffled each round,
+median of 10 samples. Entitlements are printed by each run and recorded below.
+The machine was otherwise idle.
 
-| document | JSContext, no entitlement | JSContext, `allow-jit` | `jsc --useJIT=false` | `jsc` |
-|---|---|---|---|---|
-| 10⁸ add loop | 490 ms | **79 ms** | 936 ms | 134 ms |
-| load (`evaluateScript`) | 20.8 ms | 18.5 ms | 16 ms | 15 ms |
-| 8 kB | 89.7 ms | **21.6 ms** | 88 ms | 19 ms |
-| 50 kB | 525.0 ms | **53.6 ms** | 519 ms | 45 ms |
-| 64 kB | 669.4 ms | **51.9 ms** | 662 ms | 49 ms |
-| 250 kB | 3244.8 ms | **731.5 ms** | 2566 ms | 167 ms |
-| per kB | 10.4–13.0 ms | 0.8–2.9 ms | 10.3–11.0 ms | 0.7–2.4 ms |
+| document | JSContext, no entitlement | JSContext, `allow-jit` | ratio | `jsc --useJIT=false` | `jsc` |
+|---|---|---|---|---|---|
+| 10⁸ add loop | 490 ms | **80 ms** | 6.1× | 979 ms | 151 ms |
+| load (`evaluateScript`) | 20.5 ms | 20.1 ms | — | 18 ms | 17 ms |
+| 8 kB | 92.7 ms | **6.0 ms** | 15.5× | 88 ms | 6 ms |
+| 50 kB | 570.5 ms | **40.8 ms** | 14.0× | 554 ms | 36 ms |
+| 64 kB | 724.6 ms | **54.1 ms** | 13.4× | 708 ms | 45 ms |
+| 250 kB | 3450.1 ms | **760.5 ms** | 4.5× | 2723 ms | 174 ms |
+| per kB | 11.3–13.8 ms | 0.7–3.1 ms | | 10.9–11.1 ms | 0.7 ms |
 
-The unentitled column and `jsc --useJIT=false` agree to within noise at every
-size. That is the cross-check that makes the claim safe: the unentitled process
-is not on a slow JIT tier, it has no JIT at all.
+So: **13–15× between 8 kB and 64 kB, and 4.5× at 250 kB**, where the entitled
+run becomes allocation-bound rather than execution-bound. Quoting a single "13×"
+without the size is wrong, and an earlier version of this file did.
+
+The unentitled column and `jsc --useJIT=false` agree to within a few percent at
+every size. That is the cross-check that makes the claim safe: the unentitled
+process is not on a slow JIT tier, it has no JIT at all.
+
+An earlier version of this harness took one sample per size in a fixed order and
+reported 64 kB as *faster* than 50 kB — the signature of the engine tiering up
+during the run rather than of the documents differing. Hence the reshuffling and
+the percentiles. `jsc-bench.js` had the matching problem: its "is the JIT on"
+threshold was 3000 ms, so it labelled the 979 ms `--useJIT=false` run as "JIT"
+and the cross-check asserted nothing. It is 400 ms now, between the two measured
+regimes.
 
 **Consequences:**
 
 1. **Plan §1.5's "~10 ms per kB in the system `JSContext`" is the
-   interpreter-only figure.** With the entitlement it is ~1 ms/kB, which is
-   *faster* than Bun's `node:vm` realm on the same bundle (~1.6 ms/kB). The
-   engine was never the problem.
+   interpreter-only figure.** With the entitlement it is ~0.8 ms/kB up to 64 kB,
+   which is *faster* than Bun's `node:vm` realm on the same bundle (~1.6 ms/kB).
+   The engine was never the problem.
 2. **Plan §2's Mac entitlement list is missing `com.apple.security.cs.allow-jit`.**
    It lists `app-sandbox`, `network.client` and
    `files.user-selected.read-write`. Without the JIT exception, opening a 250 kB
-   document costs 3.2 s instead of 0.7 s. It is a hardened-runtime exception,
-   not a sandbox escape, and Mac App Store apps may ship it.
-3. **Swift⇄JS string marshalling is not a factor.** A 50 kB document built
-   inside JavaScript and normalized from JavaScript costs the same as one handed
-   in as a Swift `String` (520 ms unentitled, 38 ms entitled). The bridge is not
-   where the time goes.
+   document costs 3.5 s instead of 0.8 s. It is a hardened-runtime exception, not
+   a sandbox escape — `app-sandbox` stays — and Mac App Store apps may ship it.
+   It applies to macOS only; there is no iOS equivalent (see below).
+3. **Swift⇄JS string marshalling is not a factor.** A 50 kB document built inside
+   JavaScript and normalized from JavaScript costs the same as one handed in as a
+   Swift `String` (520 ms unentitled, 38 ms entitled). The bridge is not where
+   the time goes.
 
 `JSC_useJIT=0` and friends are ignored by the system framework, and the hardened
 runtime flag alone changes nothing — only the entitlement does. The `jsc` shell
@@ -58,18 +75,21 @@ cross-check above possible.
 
 ## iOS: no entitlement exists, so the interpreter is permanent
 
-Third-party in-process JavaScriptCore on iOS has no JIT, on 17, 18 and 26 alike.
-This is in WebKit's own source, not folklore — `isJITEnabled()` in
-`Source/JavaScriptCore/jit/ExecutableAllocator.cpp` gates on
-`processHasEntitlement("dynamic-codesigning")` or
-`com.apple.developer.cs.allow-jit` under `HAVE(IOS_JIT_RESTRICTIONS)`, and
-`Source/JavaScriptCore/Scripts/process-entitlements.sh` only grants the latter to
+**This conclusion is source-based, not device-measured.** No iPhone was
+available; what follows is read from WebKit's own source, and it is the reason
+the device measurement below still has to happen.
+
+`isJITEnabled()` in
+[`Source/JavaScriptCore/jit/ExecutableAllocator.cpp`](https://github.com/WebKit/WebKit/blob/main/Source/JavaScriptCore/jit/ExecutableAllocator.cpp)
+gates the JIT, under `HAVE(IOS_JIT_RESTRICTIONS)`, on the process holding
+`dynamic-codesigning` or `com.apple.developer.cs.allow-jit`.
+`Source/JavaScriptCore/Scripts/process-entitlements.sh` grants the latter only to
 Apple's own WebContent targets, paired with the private
 `com.apple.private.verified-jit`. The mechanism landed in March 2024 (bug 270723,
 the EU-DMA browser-engine work) and has not changed since. BrowserEngineKit and
-`com.apple.developer.embedded-web-browser-engine` are EU/Japan-gated, approval-only,
-and are about hosting an *alternative* engine — the wrong shape for an app that
-just wants its own scripting to be fast.
+`com.apple.developer.embedded-web-browser-engine` are EU/Japan-gated,
+approval-only, and are about hosting an *alternative* engine — the wrong shape
+for an app that just wants its own scripting to be fast.
 
 **The simulator has the JIT** — `HAVE_IOS_JIT_RESTRICTIONS` is explicitly not
 defined for `PLATFORM(IOS_FAMILY_SIMULATOR)` in `wtf/PlatformHave.h`, because a
@@ -79,20 +99,21 @@ simulator process is an ordinary Mac process. Measured on the iOS 26.2 simulator
 ```
 JIT probe   10^8 add loop: 99 ms  →  JIT is running
 load        evaluateScript: 174.5 ms
-normalize   8 kB     55.7 ms  (6.8 ms/kB)
-normalize   50 kB     61.4 ms  (1.2 ms/kB)
-normalize   64 kB     66.3 ms  (1.0 ms/kB)
-normalize   250 kB   454.6 ms  (1.8 ms/kB)
+normalize   8 kB     55.7 ms
+normalize   50 kB    61.4 ms
+normalize   64 kB    66.3 ms
+normalize   250 kB   454.6 ms
 ```
 
 Those match the entitled Mac column, as they must. **They are not the go/no-go.**
 
 ## What a device will show, and how to run it
 
-The device regime is the unentitled column: ~10.4 ms/kB. Scaling that by an
-iPhone's single-core deficit against this Mac (roughly 1.3–2×) puts **50 kB at
-0.7–1.1 s** — on the budget line, not comfortably inside it. 250 kB would be
-4–6 s. That has to be measured, not extrapolated.
+If the source reading holds, the device regime is the unentitled column:
+~11.3 ms/kB. Scaling that by an iPhone's single-core deficit against this Mac
+(roughly 1.3–2×) puts **50 kB at 0.75–1.15 s** — on the budget line, not
+comfortably inside it. 250 kB would be 4.5–7 s. That is an extrapolation from an
+extrapolation and has to be measured.
 
 BK: to run it on an iPhone,
 
@@ -133,5 +154,5 @@ Sources/jsc-perf/      macOS CLI; sign it two ways to see both regimes
 Tests/JSCPerfTests/    the same measurement under xcodebuild (simulator, device)
 jsc-bench.js           the cross-check, for the system `jsc` shell
 allow-jit.entitlements the one key that matters
-measure.sh             runs all four columns of the table above
+measure.sh             runs every column of the table above, N fresh processes
 ```
