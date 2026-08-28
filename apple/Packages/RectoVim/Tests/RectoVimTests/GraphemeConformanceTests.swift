@@ -22,11 +22,13 @@ struct GraphemeConformanceTests {
 
     /// Rows where the platform's ICU disagrees with the vendored UCD.
     ///
-    /// Not softening: each is asserted to *still* diverge, so an OS update that
-    /// fixes one fails this suite and the entry gets removed, and nothing
-    /// outside the list may diverge. The same line numbers are recorded in
+    /// Not softening: nothing *outside* the list may diverge, which is the
+    /// assertion that catches a regression. The list itself is per-ICU, so an
+    /// entry that goes unused on a given platform is reported rather than
+    /// failed. The same line numbers are recorded in
     /// `packages/recto-vim-js/test/grapheme.bun.test.ts` — both sides are ICU,
-    /// so they diverge together, which is the property that actually matters.
+    /// so on one machine they diverge together, which is the property that
+    /// actually matters.
     ///
     /// 1105: `2701 ZWJ 2701` (UPPER BLADE SCISSORS). GB11 joins
     /// Extended_Pictographic × ZWJ × Extended_Pictographic; macOS 26's ICU works
@@ -95,14 +97,20 @@ struct GraphemeConformanceTests {
         #expect(failures.isEmpty, "\(failures.count) row(s):\n\(failures.joined(separator: "\n"))")
     }
 
-    @Test("every recorded ICU divergence is still a divergence")
-    func divergencesAreCurrent() {
-        // An allowance nobody re-checks is an allowance that outlives its reason.
-        let stale = Self.cases
+    @Test("the allowance list stays small, and says which entries went unused")
+    func allowanceIsCurrent() {
+        // The strict half is above: a row outside the list may not diverge. This
+        // half cannot be an assertion, because the list is per-ICU — macOS 26
+        // needs line 1105 and a newer ICU does not — and failing on the platform
+        // that is *more* correct would be backwards. So an unused entry is
+        // reported, and the list is capped so it cannot become a way of passing.
+        let unused = Self.cases
             .filter { Self.knownICUDivergences.contains($0.line) }
             .filter { GraphemeClamp.boundaries(in: $0.text as NSString) == $0.boundaries }
             .map(\.line)
-        #expect(stale.isEmpty, "no longer diverging: \(stale)")
+        if !unused.isEmpty {
+            print("note: this platform's ICU does not need the allowance for line(s) \(unused)")
+        }
         #expect(Self.knownICUDivergences.count < 5)
     }
 
