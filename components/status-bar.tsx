@@ -128,6 +128,11 @@ const SYNC_META: Record<
 		dot: "bg-[var(--color-warning)]",
 		text: "text-[var(--color-warning)]",
 	},
+	unresolved: {
+		label: "Not synced",
+		dot: "bg-[var(--color-danger)]",
+		text: "text-[var(--color-danger)]",
+	},
 };
 
 // Fixed-width slot with an always-present (transparent when idle) dot, so the

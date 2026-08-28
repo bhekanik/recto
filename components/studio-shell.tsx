@@ -675,7 +675,11 @@ function StudioWorkspace() {
 						<StatusBar
 							wordCount={activeSync.wordCount}
 							readingMinutes={readingTimeMinutes(activeSync.wordCount)}
-							syncStatus={activeSync.syncStatus}
+							syncStatus={
+								activeSync.hasUnresolvedWrites
+									? "unresolved"
+									: activeSync.syncStatus
+							}
 							mode={activeMode}
 							onModeChange={(m) => dispatchModeSwitch(m)}
 							theme={settings.theme}

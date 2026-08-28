@@ -91,29 +91,53 @@ const ENSURE_ROOT_BASE_DELAY_MS = 400;
 const OUTBOX_BASE_DELAY_MS = 500;
 const OUTBOX_MAX_DELAY_MS = 15_000;
 
-/** A commit waiting to be accepted, retried under its original identity. */
+/**
+ * One history-dependent write, waiting its turn.
+ *
+ * Commits, pointer moves and version tags all go through a SINGLE ordered
+ * queue. They are not independent: a pointer move sent while a rejected commit
+ * waits to be retried would be overtaken when that retry finally lands, so an
+ * undo the writer had already performed was silently reversed. The queue
+ * preserves the order the writer produced the events in.
+ */
 type OutboxEntry = {
-	moveToken: number;
-	projectionId: string;
-	clientMutationId: string;
+	/** The pointer move this entry settles, if any. */
+	moveToken: number | null;
+	/** The unsaved work it carries, for the acknowledgement to name. */
+	projectionId: string | null;
 	attempts: number;
-	args: {
-		documentId: Id<"documents">;
-		node: {
+} & (
+	| {
+			kind: "commit";
+			args: {
+				documentId: Id<"documents">;
+				node: {
+					nodeId: string;
+					parentNodeId: string | null;
+					patch: string;
+					snapshot?: string;
+					selection: { anchor: number; head: number } | null;
+					origin: string;
+					createdAt: number;
+				};
+				markdown: string;
+				wordCount: number;
+				expectedHeadNodeId: string;
+				clientMutationId: string;
+			};
+	  }
+	| {
+			kind: "pointer";
 			nodeId: string;
-			parentNodeId: string | null;
-			patch: string;
-			snapshot?: string;
-			selection: { anchor: number; head: number } | null;
-			origin: string;
-			createdAt: number;
-		};
-		markdown: string;
-		wordCount: number;
-		expectedHeadNodeId: string;
-		clientMutationId: string;
-	};
-};
+			markdown: string;
+	  }
+	| {
+			kind: "version";
+			nodeId: string;
+			label: string;
+			versionKind: "auto" | "manual";
+	  }
+);
 
 /**
  * This client's own most recent pointer move, tracked until the server echoes it
@@ -254,7 +278,9 @@ export function useDocumentHistory(args: {
 		/** Identity of the unsaved work, for anything but a server projection. */
 		projectionId?: string;
 		/** Whether this work is text the writer produced or a pointer move. */
-		kind?: "text" | "pointer";
+		kind?: "draft" | "commit" | "pointer";
+		/** For pointer work: the node the move was trying to reach. */
+		pointerNodeId?: string;
 		/**
 		 * For a server projection that RESOLVES a refused transition: the id it
 		 * settles. Without it the pane showed the server's head while the
@@ -423,7 +449,11 @@ export function useDocumentHistory(args: {
 			source: "server" | "recovered-draft" | "local",
 			serverUpdatedAt = 0,
 			projectionId?: string,
-			extra?: { kind?: "text" | "pointer"; resolvedProjectionId?: string },
+			extra?: {
+				kind?: "draft" | "commit" | "pointer";
+				pointerNodeId?: string;
+				resolvedProjectionId?: string;
+			},
 		) => {
 			onProjectionRef.current?.({
 				markdown,
@@ -431,6 +461,7 @@ export function useDocumentHistory(args: {
 				source,
 				projectionId,
 				kind: extra?.kind,
+				pointerNodeId: extra?.pointerNodeId,
 				resolvedProjectionId: extra?.resolvedProjectionId,
 			});
 		},
@@ -475,7 +506,13 @@ export function useDocumentHistory(args: {
 	 * nothing else would re-run the reconciliation for it.
 	 */
 	const settleLocalMove = useCallback(
-		(token: number, appliedRevision: number | null, serverUpdatedAt = 0) => {
+		(
+			token: number | null,
+			appliedRevision: number | null,
+			serverUpdatedAt = 0,
+		) => {
+			// A version tag settles no pointer move.
+			if (token === null) return;
 			// A local transition is only SAVED once the server has taken it. Until
 			// then its text must stay recoverable: a programmatic seed (AI accept,
 			// version restore) never goes through the editor's change handler, so
@@ -538,15 +575,19 @@ export function useDocumentHistory(args: {
 		const id = currentNodeIdRef.current;
 		if (!id || id === lastAutoNodeIdRef.current) return;
 		lastAutoNodeIdRef.current = id;
-		void createVersion({
-			documentId,
+		outboxRef.current.push({
+			kind: "version",
+			moveToken: null,
+			projectionId: null,
+			attempts: 0,
 			nodeId: id,
 			label: `Autosave ${new Date().toLocaleTimeString([], {
 				hour: "2-digit",
 				minute: "2-digit",
 			})}`,
-			kind: "auto",
-		}).catch(() => {});
+			versionKind: "auto",
+		});
+		pumpOutboxRef.current();
 	}, AUTO_VERSION_MS);
 
 	// A one-shot origin override consumed by the next commit (AI transforms tag
@@ -555,59 +596,135 @@ export function useDocumentHistory(args: {
 	const originOverrideRef = useRef<string | null>(null);
 
 	/**
-	 * Send the head of the outbox, and only the head. Nothing behind a commit the
-	 * server has not accepted may go out: the node it depends on may not exist.
+	 * Send the head of the queue, and only the head.
+	 *
+	 * Nothing behind an unanswered write may go out. A commit's descendants would
+	 * chain off a node the server may not have; a pointer move sent past a
+	 * waiting commit is overtaken when that commit's retry lands, silently
+	 * reversing an undo the writer had already performed.
 	 */
 	const pumpOutbox = useCallback(() => {
 		if (outboxTimerRef.current !== null) return;
 		const entry = outboxRef.current[0];
 		if (!entry) return;
-		if (entry.attempts > 0 && !documentId) return;
+		if (!documentId) return;
 		entry.attempts += 1;
 
-		void commitEdit(entry.args)
-			.then((result) => {
-				if (outboxRef.current[0] !== entry) return;
-				outboxRef.current.shift();
-				setOutboxStalled(false);
-				if (result.committed) {
-					settleLocalMove(
-						entry.moveToken,
-						result.pointerRevision,
-						result.updatedAt,
-					);
-				} else {
-					// Another writer owns the head. Queue theirs so the next safe
-					// moment adopts it; the writer is probably still mid-sentence, and
-					// re-projecting under their caret is not an option.
-					queueRemotePointer({
-						nodeId: result.remoteHeadNodeId,
-						revision: result.remotePointerRevision,
-					});
-					// The server has definitively refused this transition, so it is
-					// resolved and reconciliation may replace it. Work it has NOT
-					// answered stays untouchable.
-					resyncProjectionIdRef.current = entry.projectionId;
-					settleLocalMove(entry.moveToken, null);
-				}
+		const onAnswered = () => {
+			if (outboxRef.current[0] !== entry) return false;
+			outboxRef.current.shift();
+			setOutboxStalled(false);
+			return true;
+		};
+
+		/**
+		 * Unanswered is NOT refused: the write may have landed and the reply been
+		 * lost. The entry stays at the head under its original identity — which
+		 * the server replays idempotently — and nothing behind it is sent.
+		 */
+		const onUnanswered = () => {
+			if (outboxRef.current[0] !== entry) return;
+			setOutboxStalled(true);
+			const delay = Math.min(
+				OUTBOX_BASE_DELAY_MS * 2 ** (entry.attempts - 1),
+				OUTBOX_MAX_DELAY_MS,
+			);
+			outboxTimerRef.current = window.setTimeout(() => {
+				outboxTimerRef.current = null;
+				pumpOutboxRef.current();
+			}, delay);
+		};
+
+		if (entry.kind === "commit") {
+			void commitEdit(entry.args)
+				.then((result) => {
+					if (!onAnswered()) return;
+					if (result.committed) {
+						settleLocalMove(
+							entry.moveToken,
+							result.pointerRevision,
+							result.updatedAt,
+						);
+					} else {
+						// Another writer owns the head. Queue theirs so the next safe
+						// moment adopts it; the writer is probably still mid-sentence,
+						// and re-projecting under their caret is not an option.
+						queueRemotePointer({
+							nodeId: result.remoteHeadNodeId,
+							revision: result.remotePointerRevision,
+						});
+						// The server has definitively refused this transition, so it is
+						// resolved and reconciliation may replace it. Work it has NOT
+						// answered stays untouchable.
+						resyncProjectionIdRef.current = entry.projectionId;
+						settleLocalMove(entry.moveToken, null);
+					}
+					pumpOutboxRef.current();
+				})
+				.catch(onUnanswered);
+			return;
+		}
+
+		if (entry.kind === "pointer") {
+			// The last-write-wins stamp is taken HERE, not when the move was made:
+			// a move that waited behind a retry would otherwise carry a timestamp
+			// older than writes the server has since accepted, and lose to them.
+			void updatePointer({
+				documentId,
+				currentNodeId: entry.nodeId,
+				markdown: entry.markdown,
+				wordCount: countWords(entry.markdown),
+				updatedAt: Date.now(),
+			})
+				.then((result) => {
+					if (!onAnswered()) return;
+					if (result.applied) {
+						// Only now is the queue known to be superseded. Clearing it
+						// before the write would drop a remote head this move never
+						// managed to overwrite.
+						pendingRemotePointerRef.current = null;
+						settleLocalMove(
+							entry.moveToken,
+							result.pointerRevision,
+							result.updatedAt,
+						);
+					} else {
+						// Rejected: the server told us which head won — keep it.
+						queueRemotePointer({
+							nodeId: result.currentNodeId,
+							revision: result.pointerRevision,
+						});
+						resyncProjectionIdRef.current = entry.projectionId;
+						settleLocalMove(entry.moveToken, null);
+					}
+					pumpOutboxRef.current();
+				})
+				.catch((error) => {
+					onUnanswered();
+					void error;
+				});
+			return;
+		}
+
+		void createVersion({
+			documentId,
+			nodeId: entry.nodeId,
+			label: entry.label,
+			kind: entry.versionKind,
+		})
+			.then(() => {
+				if (!onAnswered()) return;
 				pumpOutboxRef.current();
 			})
-			.catch(() => {
-				if (outboxRef.current[0] !== entry) return;
-				// NOT a refusal. The write may have landed and the answer been lost,
-				// so the entry stays queued under the same clientMutationId — which
-				// the server replays idempotently — and nothing behind it is sent.
-				setOutboxStalled(true);
-				const delay = Math.min(
-					OUTBOX_BASE_DELAY_MS * 2 ** (entry.attempts - 1),
-					OUTBOX_MAX_DELAY_MS,
-				);
-				outboxTimerRef.current = window.setTimeout(() => {
-					outboxTimerRef.current = null;
-					pumpOutboxRef.current();
-				}, delay);
-			});
-	}, [commitEdit, documentId, queueRemotePointer, settleLocalMove]);
+			.catch(onUnanswered);
+	}, [
+		commitEdit,
+		createVersion,
+		documentId,
+		queueRemotePointer,
+		settleLocalMove,
+		updatePointer,
+	]);
 
 	// The pump re-enters itself through a ref so a retry scheduled by an older
 	// render still reaches the current implementation.
@@ -641,15 +758,15 @@ export function useDocumentHistory(args: {
 				projectionId,
 			);
 			publishProjection(commit.markdown, "local", 0, projectionId, {
-				kind: "text",
+				kind: "commit",
 			});
 
 			// One transaction: the node, the pointer, the markdown. See the
 			// documents.commitEdit doc comment for why these can't be separate.
 			outboxRef.current.push({
+				kind: "commit",
 				moveToken,
 				projectionId,
-				clientMutationId: commit.nodeId,
 				attempts: 0,
 				args: {
 					documentId,
@@ -870,54 +987,22 @@ export function useDocumentHistory(args: {
 			// it landed — two nodes can hold identical markdown.
 			publishProjection(markdown, "local", 0, projectionId, {
 				kind: "pointer",
+				pointerNodeId: nodeId,
 			});
-			void updatePointer({
-				documentId,
-				currentNodeId: nodeId,
+			// Through the SAME queue as commits. Sent directly, this move would be
+			// overtaken by the retry of a commit still waiting ahead of it, which
+			// silently reversed an undo the writer had already performed.
+			outboxRef.current.push({
+				kind: "pointer",
+				moveToken,
+				projectionId,
+				attempts: 0,
+				nodeId,
 				markdown,
-				wordCount: countWords(markdown),
-				updatedAt: Date.now(),
-			})
-				.then((result) => {
-					if (result.applied) {
-						// Only now is the queue known to be superseded. Clearing it
-						// before the write would drop a remote head this move never
-						// managed to overwrite.
-						pendingRemotePointerRef.current = null;
-						settleLocalMove(
-							moveToken,
-							result.pointerRevision,
-							result.updatedAt,
-						);
-						return;
-					}
-					// Rejected: the server told us which head won — keep it.
-					queueRemotePointer({
-						nodeId: result.currentNodeId,
-						revision: result.pointerRevision,
-					});
-					// This move is the pending work reconciliation may resolve. If the
-					// writer has typed since, that text is newer than the failure and
-					// must not be projected over.
-					resyncProjectionIdRef.current = projectionId;
-					settleLocalMove(moveToken, null);
-				})
-				.catch(() => {
-					resyncProjectionIdRef.current = projectionId;
-					settleLocalMove(moveToken, null);
-					toast("Couldn't sync undo position", "error");
-				});
+			});
+			pumpOutboxRef.current();
 		},
-		[
-			documentId,
-			nodesById,
-			publishProjection,
-			queueRemotePointer,
-			setPointer,
-			settleLocalMove,
-			startLocalMove,
-			updatePointer,
-		],
+		[documentId, nodesById, publishProjection, setPointer, startLocalMove],
 	);
 
 	const undo = useCallback(() => {
@@ -950,11 +1035,20 @@ export function useDocumentHistory(args: {
 			// the node the writer actually means to tag.
 			const id = currentNodeIdRef.current;
 			if (!id) return;
-			await createVersion({ documentId, nodeId: id, label, kind }).catch(() => {
-				toast("Couldn't save version — it may not be synced", "error");
+			// Queued behind the commit that created this node. Sent directly, a tag
+			// can reach the server before the node it names exists.
+			outboxRef.current.push({
+				kind: "version",
+				moveToken: null,
+				projectionId: null,
+				attempts: 0,
+				nodeId: id,
+				label,
+				versionKind: kind,
 			});
+			pumpOutboxRef.current();
 		},
-		[createVersion, documentId],
+		[documentId],
 	);
 
 	// Additive restore (D9): fork forward — seed the version's materialized state
@@ -1240,14 +1334,27 @@ export function useDocumentHistory(args: {
 		return () => window.clearInterval(timer);
 	}, [reconcileTick, serverCurrentNodeId, serverPointerRevision]);
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: teardown reads live refs; the debounced callbacks are stable
 	useEffect(() => {
 		return () => {
+			// The grouping controller goes FIRST. Its idle timer is the one thing
+			// here that can still create work: left armed, it fired after teardown,
+			// published a recovery id through a host that no longer exists, and
+			// sent a commit for a document the writer had already closed — which a
+			// reopened host then had to reconcile against.
+			controllerRef.current?.dispose();
+			controllerRef.current = null;
+
 			outboxRef.current = [];
 			inFlightRef.current.clear();
 			if (outboxTimerRef.current !== null) {
 				window.clearTimeout(outboxTimerRef.current);
 				outboxTimerRef.current = null;
 			}
+			// Every other hook-owned timer, so nothing survives to touch state or
+			// storage behind us.
+			markEditorIdle.cancel();
+			debouncedAutoVersion.cancel();
 			// Invalidate first, then cancel: an in-flight ensureRoot rejection has
 			// no timer to clear and would otherwise schedule a new one after the
 			// hook is gone.

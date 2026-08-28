@@ -45,6 +45,8 @@ export type DocumentSyncState = {
 	 * document. Panes key their mode snapshot on it.
 	 */
 	projectionGeneration: string;
+	/** A write the server never answered is still outstanding (N3). */
+	hasUnresolvedWrites: boolean;
 	handleEditorChange: () => void;
 	flushMarkdown: (markdown: string) => Promise<void>;
 	recordHistory: (opts?: { structural?: boolean }) => void;
@@ -214,7 +216,8 @@ function OwnerSyncHost({
 			serverUpdatedAt: number;
 			source: "server" | "recovered-draft" | "local";
 			projectionId?: string;
-			kind?: "text" | "pointer";
+			kind?: "draft" | "commit" | "pointer";
+			pointerNodeId?: string;
 			resolvedProjectionId?: string;
 		}) => {
 			// Publish first: this is how the text reaches a preview-only pane, and
@@ -240,7 +243,8 @@ function OwnerSyncHost({
 				markLocalProjectionPending(
 					projection.markdown,
 					projection.projectionId ?? crypto.randomUUID(),
-					projection.kind ?? "text",
+					projection.kind ?? "draft",
+					projection.pointerNodeId,
 				);
 			}
 		},
@@ -304,6 +308,7 @@ function OwnerSyncHost({
 		pendingConflict: sync.pendingConflict,
 		markdown: projectedMarkdown,
 		projectionGeneration,
+		hasUnresolvedWrites: history.hasUnresolvedWrites,
 		handleEditorChange,
 		flushMarkdown: sync.flushMarkdown,
 		recordHistory: history.recordChange,
@@ -323,6 +328,7 @@ function OwnerSyncHost({
 		sync.wordCount,
 		sync.syncStatus,
 		sync.pendingConflict,
+		history.hasUnresolvedWrites,
 		// The PROJECTION, not documents.markdown: a change that only moves what
 		// the panes should render — an undo, a branch switch, a remote projection
 		// at the same word count — never touched the raw field, so it never
@@ -443,6 +449,7 @@ function ReviewerSyncHost({
 		pendingConflict: false,
 		markdown: shared?.markdown ?? "",
 		projectionGeneration: "reviewer",
+		hasUnresolvedWrites: false,
 		handleEditorChange,
 		// No owner write path for a grantee — flushing markdown is a no-op.
 		flushMarkdown: async () => {},
@@ -524,7 +531,8 @@ export function WorkspaceProvider({
 				prev.markdown !== state.markdown ||
 				// An undo can republish identical text; without this the panes never
 				// learn that their mode snapshot has been superseded.
-				prev.projectionGeneration !== state.projectionGeneration
+				prev.projectionGeneration !== state.projectionGeneration ||
+				prev.hasUnresolvedWrites !== state.hasUnresolvedWrites
 			) {
 				setSyncVersion((v) => v + 1);
 			}

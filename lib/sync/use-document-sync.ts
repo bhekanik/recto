@@ -19,7 +19,17 @@ import {
 
 export const DEBOUNCE_MS = 500;
 
-export type SyncStatus = "idle" | "saving" | "saved" | "unsynced";
+/**
+ * `unresolved` is neither saved nor refused: a write the server never
+ * answered is still being retried, so the document's fate is unknown and a
+ * reassuring tick would be a lie.
+ */
+export type SyncStatus =
+	| "idle"
+	| "saving"
+	| "saved"
+	| "unsynced"
+	| "unresolved";
 
 /** A local draft restored from storage. `present: false` means there was none. */
 export type RecoveredDraft = { present: boolean; markdown: string };
@@ -27,9 +37,17 @@ export type RecoveredDraft = { present: boolean; markdown: string };
 /** Unsaved work waiting on the server. */
 export type PendingProjection = {
 	id: string;
-	/** Text the writer produced, or a pointer move that changes no text. */
-	kind: "text" | "pointer";
+	/**
+	 * `draft` is plain autosaved markdown; `commit` is a node the undo tree
+	 * created; `pointer` is a move that changes no text at all. They are not
+	 * interchangeable: matching content proves a DRAFT was reverted, but a node
+	 * commit is a separate fact the server must confirm, and a pointer move
+	 * changes nothing a content match could speak for.
+	 */
+	kind: "draft" | "commit" | "pointer";
 	markdown: string;
+	/** For pointer work: the node the move was trying to reach. */
+	pointerNodeId?: string;
 };
 
 type UseDocumentSyncArgs = {
@@ -83,7 +101,8 @@ type UseDocumentSyncResult = {
 	markLocalProjectionPending: (
 		markdown: string,
 		projectionId: string,
-		kind: "text" | "pointer",
+		kind: "draft" | "commit" | "pointer",
+		pointerNodeId?: string,
 	) => void;
 	/** That transition was accepted (or refused) by the server. */
 	settleLocalProjection: (settled: {
@@ -261,7 +280,10 @@ export function useDocumentSync({
 			// and retiring pointer work here lost an undo the server never took.
 			if (markdown === lastFlushedMarkdownRef.current) {
 				const pending = pendingProjectionRef.current;
-				if (pending && pending.kind === "text") {
+				// Only a plain autosaved DRAFT. A node commit is a separate fact —
+				// the tree gained a node — that an identical body says nothing about,
+				// and retiring it here reported an unsaved node as saved.
+				if (pending && pending.kind === "draft") {
 					retirePending(pending.id);
 				} else if (!pending) {
 					pendingMarkdownRef.current = null;
@@ -275,7 +297,7 @@ export function useDocumentSync({
 			// pending id nothing would ever acknowledge.
 			if (pendingProjectionRef.current === null) {
 				const id = newProjectionId();
-				pendingProjectionRef.current = { id, kind: "text", markdown };
+				pendingProjectionRef.current = { id, kind: "draft", markdown };
 				saveDraft(documentId, markdown, id);
 			}
 			const projectionId = pendingProjectionRef.current.id;
@@ -405,10 +427,12 @@ export function useDocumentSync({
 		const projectionId = newProjectionId();
 		pendingProjectionRef.current = {
 			id: projectionId,
-			kind: "text",
+			kind: "draft",
 			markdown,
 		};
-		if (documentId) saveDraft(documentId, markdown, projectionId);
+		if (documentId) {
+			saveDraft(documentId, markdown, projectionId, { kind: "draft" });
+		}
 		pendingMarkdownRef.current = markdown;
 		setSyncStatus("unsynced");
 		debouncedFlush();
@@ -422,14 +446,18 @@ export function useDocumentSync({
 		if (!enabled || !documentId || serverMarkdown === undefined) return;
 		if (hasSeededRef.current) return;
 
-		const { markdown, hadConflict, draftOrigin } = reconcileDraft(
-			serverMarkdown,
-			serverUpdatedAt ?? 0,
-			documentId,
-		);
+		const { markdown, hadConflict, draftOrigin, pendingPointerNodeId } =
+			reconcileDraft(
+				serverMarkdown,
+				serverUpdatedAt ?? 0,
+				documentId,
+				getCurrentHeadNodeId?.() ?? undefined,
+			);
 		// A draft that deletes everything is still a draft the writer meant to
-		// keep, so presence is a flag rather than "the text is non-empty".
-		const present = markdown !== serverMarkdown;
+		// keep, so presence is a flag rather than "the text is non-empty" — and a
+		// pending POINTER move is present even though its text matches the
+		// server's exactly, because a move changes no text at all.
+		const present = markdown !== serverMarkdown || pendingPointerNodeId != null;
 		recoveredRef.current = { present, markdown };
 
 		expectedUpdatedAtRef.current = serverUpdatedAt ?? 0;
@@ -460,7 +488,14 @@ export function useDocumentSync({
 			if (trySeed()) window.clearInterval(interval);
 		}, 50);
 		return () => window.clearInterval(interval);
-	}, [enabled, documentId, reconcileRemote, serverMarkdown, serverUpdatedAt]);
+	}, [
+		enabled,
+		documentId,
+		getCurrentHeadNodeId,
+		reconcileRemote,
+		serverMarkdown,
+		serverUpdatedAt,
+	]);
 
 	const getRecoveredDraft = useCallback(() => recoveredRef.current, []);
 
@@ -472,11 +507,26 @@ export function useDocumentSync({
 	 * status still reading "saved".
 	 */
 	const markLocalProjectionPending = useCallback(
-		(markdown: string, projectionId: string, kind: "text" | "pointer") => {
+		(
+			markdown: string,
+			projectionId: string,
+			kind: "draft" | "commit" | "pointer",
+			pointerNodeId?: string,
+		) => {
 			setWordCount(countWords(markdown));
 			pendingMarkdownRef.current = markdown;
-			pendingProjectionRef.current = { id: projectionId, kind, markdown };
-			if (documentId) saveDraft(documentId, markdown, projectionId);
+			pendingProjectionRef.current = {
+				id: projectionId,
+				kind,
+				markdown,
+				pointerNodeId,
+			};
+			// The kind is persisted too: on reload a pointer move must still be
+			// recognisable as one, or recovery judges it by its body and throws it
+			// away.
+			if (documentId) {
+				saveDraft(documentId, markdown, projectionId, { kind, pointerNodeId });
+			}
 			setSyncStatus("unsynced");
 		},
 		[documentId],
@@ -508,11 +558,27 @@ export function useDocumentSync({
 	 * copy kept until a write actually succeeds. Treating it as flushed lost the
 	 * draft on the next open: cleared from storage, never sent.
 	 */
-	const adoptRecoveredDraft = useCallback((markdown: string) => {
-		setWordCount(countWords(markdown));
-		pendingMarkdownRef.current = markdown;
-		setSyncStatus("unsynced");
-	}, []);
+	const adoptRecoveredDraft = useCallback(
+		(markdown: string) => {
+			setWordCount(countWords(markdown));
+			pendingMarkdownRef.current = markdown;
+			// Adopt the STORED identity, not a fresh one. Without it the next flush
+			// saw nothing pending, claimed a new id and re-stamped the record as a
+			// plain draft — which erased the fact that a pointer move was still
+			// waiting, and the reload after that threw it away.
+			const stored = documentId ? loadDraft(documentId) : null;
+			if (stored?.projectionId) {
+				pendingProjectionRef.current = {
+					id: stored.projectionId,
+					kind: stored.projectionKind ?? "draft",
+					markdown,
+					pointerNodeId: stored.pointerNodeId,
+				};
+			}
+			setSyncStatus("unsynced");
+		},
+		[documentId],
+	);
 
 	// Idle re-hydrate when remote write arrives (G7.4 origin/updatedAt guard)
 	useEffect(() => {
