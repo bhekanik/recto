@@ -144,6 +144,11 @@ function OwnerSyncHost({
 
 	const enabled = editorReady && document !== undefined && document !== null;
 
+	// The sync hook is declared first but needs the history hook's head, so the
+	// head is read through a ref that this render keeps current (see below).
+	const historyHeadRef = useRef<string | null>(null);
+	const getCurrentHeadNodeId = useCallback(() => historyHeadRef.current, []);
+
 	const sync = useDocumentSync({
 		documentId,
 		getEditorHandle,
@@ -152,6 +157,7 @@ function OwnerSyncHost({
 		enabled,
 		deriveTitle: deriveTitleFromMarkdown,
 		isManualTitle: registry.isManuallyRenamed(documentId),
+		getCurrentHeadNodeId,
 	});
 
 	const history = useDocumentHistory({
@@ -163,6 +169,7 @@ function OwnerSyncHost({
 		enabled,
 		origin: getDeviceOrigin(),
 	});
+	historyHeadRef.current = history.currentNodeId;
 
 	// One change handler feeds both the autosave and the undo-tree grouping.
 	const syncChange = sync.handleEditorChange;

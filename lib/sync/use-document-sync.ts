@@ -27,6 +27,13 @@ type UseDocumentSyncArgs = {
 	enabled: boolean;
 	deriveTitle?: (markdown: string) => string | undefined;
 	isManualTitle?: boolean;
+	/**
+	 * The undo-tree head this device's text belongs to, read at flush time. The
+	 * server rejects a draft written against a head another device has moved on
+	 * from, so this is what keeps `documents.markdown` in step with
+	 * `documents.currentNodeId` (ADR-19).
+	 */
+	getCurrentHeadNodeId?: () => string | null;
 };
 
 type UseDocumentSyncResult = {
@@ -61,6 +68,7 @@ export function useDocumentSync({
 	enabled,
 	deriveTitle,
 	isManualTitle = false,
+	getCurrentHeadNodeId,
 }: UseDocumentSyncArgs): UseDocumentSyncResult {
 	const updateMarkdown = useMutation(api.documents.updateMarkdown);
 
@@ -126,7 +134,19 @@ export function useDocumentSync({
 					wordCount: words,
 					expectedUpdatedAt: expected,
 					title: derivedTitle,
+					expectedHeadNodeId: getCurrentHeadNodeId?.() ?? undefined,
 				});
+
+				if (result.headMoved) {
+					// Another device owns the head now. Retrying would republish this
+					// draft on top of their branch, detaching documents.markdown from
+					// documents.currentNodeId. Stand down and let the history hook's
+					// pointer adoption re-seed; the text is not lost — it is in the
+					// local draft buffer and in the node commitEdit stored anyway.
+					pendingMarkdownRef.current = null;
+					setSyncStatus("unsynced");
+					return "done";
+				}
 
 				if (result.stale) {
 					expectedUpdatedAtRef.current = result.updatedAt;
@@ -147,7 +167,13 @@ export function useDocumentSync({
 				return "done";
 			}
 		},
-		[documentId, deriveTitle, isManualTitle, updateMarkdown],
+		[
+			documentId,
+			deriveTitle,
+			getCurrentHeadNodeId,
+			isManualTitle,
+			updateMarkdown,
+		],
 	);
 
 	const runFlush = useCallback(
