@@ -184,7 +184,7 @@ in-flight workers are producing (§4).
 |---|---|---|---|---|---|---|
 | W1 history-commit | N1a + N0e | 023/history-commit | round 2 fixed (8/8, revert-verified); Codex round 2 on the delta running; e2e ×5 proof still blocked on CLERK_SECRET_KEY | #1 | Claude r1+r2 / Codex r1 done | |
 | W2 light-theme | N1c | 023/light-theme | in review, round 2 (Codex: 2 blocking contrast findings on raised/overlay layers and dark-palette on-accent) | #3 | Claude r1+r2 / Codex r1 done | |
-| W3 core-js | N1d + N0d | 023/core-js | in review (round 1 sent; Codex running) | #6 | Claude r1 / Codex running | n/a (CI) |
+| W3 core-js | N1d + N0d | 023/core-js | in review, round 2 (Codex: 1 blocking: Swift String equality is canonical-equivalence; 4 should-fix) | #6 | Claude r1 / Codex r1 done | n/a (CI) |
 | W4 editor-spike | N0b | spike/editor-engine | **done: GO** (fork @ 08ff3c07) | #2 (draft, not merged) | n/a | n/a |
 | W5 native-spike | N0a | spike/native-core | **done: GO** (clerk-ios 1.5.0 + convex-swift 0.8.1; own templated auth provider) | #4 (draft, not merged) | n/a | n/a |
 | W6 vim-spike | N0c | spike/vim-jsc | **done: GO** (verbatim core split, ~20× latency headroom) | #5 (draft, not merged) | n/a | n/a |
