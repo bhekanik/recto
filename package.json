@@ -14,7 +14,10 @@
 		"test:e2e": "playwright test",
 		"convex:dev": "convex dev",
 		"convex:configure": "convex dev --configure new --team bhekani-khumalo --project recto --dev-deployment cloud --once",
-		"convex:codegen": "convex codegen"
+		"convex:codegen": "convex codegen",
+		"core:build": "bun run packages/recto-core-js/build.ts",
+		"core:parity": "bun run packages/recto-core-js/parity.ts",
+		"fixtures:build": "bun run packages/editor-fixtures/build.ts"
 	},
 	"devDependencies": {
 		"@clerk/testing": "^2.1.7",

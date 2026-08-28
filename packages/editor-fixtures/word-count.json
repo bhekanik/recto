@@ -1,0 +1,35 @@
+{
+	"$source": "lib/markdown/count-words.ts",
+	"cases": [
+		{
+			"name": "empty string",
+			"markdown": "",
+			"words": 0
+		},
+		{
+			"name": "whitespace only",
+			"markdown": "   \n\n  ",
+			"words": 0
+		},
+		{
+			"name": "prose words, not markdown syntax",
+			"markdown": "# Hello world\n\nThis is **bold** and _italic_.",
+			"words": 8
+		},
+		{
+			"name": "list item text",
+			"markdown": "- first item\n- second item",
+			"words": 4
+		},
+		{
+			"name": "GFM table cells count as prose",
+			"markdown": "| col a | col b |\n| ----- | ----- |\n| one   | two   |",
+			"words": 6
+		},
+		{
+			"name": "fenced code is not prose",
+			"markdown": "Some prose here.\n\n```ts\nconst x = 1;\n```\n",
+			"words": 3
+		}
+	]
+}

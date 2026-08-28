@@ -1,0 +1,1520 @@
+{
+	"$source": "lib/history/diff.ts (mirrored byte-for-byte in convex/history.ts)",
+	"$contract": "accepting no hunk yields a, accepting every hunk yields b, and each hunk index is independently applicable",
+	"cases": [
+		{
+			"name": "identical",
+			"granularity": "word",
+			"a": "the quick brown fox",
+			"b": "the quick brown fox",
+			"runs": [
+				{
+					"type": "same",
+					"text": "the quick brown fox"
+				}
+			],
+			"hunks": [],
+			"accepts": [
+				{
+					"hunks": [],
+					"markdown": "the quick brown fox"
+				}
+			]
+		},
+		{
+			"name": "identical",
+			"granularity": "line",
+			"a": "the quick brown fox",
+			"b": "the quick brown fox",
+			"runs": [
+				{
+					"type": "same",
+					"text": "the quick brown fox"
+				}
+			],
+			"hunks": [],
+			"accepts": [
+				{
+					"hunks": [],
+					"markdown": "the quick brown fox"
+				}
+			]
+		},
+		{
+			"name": "empty/empty",
+			"granularity": "word",
+			"a": "",
+			"b": "",
+			"runs": [],
+			"hunks": [],
+			"accepts": [
+				{
+					"hunks": [],
+					"markdown": ""
+				}
+			]
+		},
+		{
+			"name": "empty/empty",
+			"granularity": "line",
+			"a": "",
+			"b": "",
+			"runs": [],
+			"hunks": [],
+			"accepts": [
+				{
+					"hunks": [],
+					"markdown": ""
+				}
+			]
+		},
+		{
+			"name": "pure insertion from empty",
+			"granularity": "word",
+			"a": "",
+			"b": "brand new document",
+			"runs": [
+				{
+					"type": "add",
+					"text": "brand new document"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0
+					]
+				}
+			],
+			"accepts": [
+				{
+					"hunks": [],
+					"markdown": ""
+				},
+				{
+					"hunks": [
+						0
+					],
+					"markdown": "brand new document"
+				}
+			]
+		},
+		{
+			"name": "pure insertion from empty",
+			"granularity": "line",
+			"a": "",
+			"b": "brand new document",
+			"runs": [
+				{
+					"type": "add",
+					"text": "brand new document"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0
+					]
+				}
+			],
+			"accepts": [
+				{
+					"hunks": [],
+					"markdown": ""
+				},
+				{
+					"hunks": [
+						0
+					],
+					"markdown": "brand new document"
+				}
+			]
+		},
+		{
+			"name": "word inserted",
+			"granularity": "word",
+			"a": "alpha gamma",
+			"b": "alpha beta gamma",
+			"runs": [
+				{
+					"type": "same",
+					"text": "alpha "
+				},
+				{
+					"type": "add",
+					"text": "beta "
+				},
+				{
+					"type": "same",
+					"text": "gamma"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1
+					]
+				}
+			],
+			"accepts": [
+				{
+					"hunks": [],
+					"markdown": "alpha gamma"
+				},
+				{
+					"hunks": [
+						0
+					],
+					"markdown": "alpha beta gamma"
+				}
+			]
+		},
+		{
+			"name": "word inserted",
+			"granularity": "line",
+			"a": "alpha gamma",
+			"b": "alpha beta gamma",
+			"runs": [
+				{
+					"type": "del",
+					"text": "alpha gamma"
+				},
+				{
+					"type": "add",
+					"text": "alpha beta gamma"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0,
+						1
+					]
+				}
+			],
+			"accepts": [
+				{
+					"hunks": [],
+					"markdown": "alpha gamma"
+				},
+				{
+					"hunks": [
+						0
+					],
+					"markdown": "alpha beta gamma"
+				}
+			]
+		},
+		{
+			"name": "pure deletion to empty",
+			"granularity": "word",
+			"a": "brand new document",
+			"b": "",
+			"runs": [
+				{
+					"type": "del",
+					"text": "brand new document"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0
+					]
+				}
+			],
+			"accepts": [
+				{
+					"hunks": [],
+					"markdown": "brand new document"
+				},
+				{
+					"hunks": [
+						0
+					],
+					"markdown": ""
+				}
+			]
+		},
+		{
+			"name": "pure deletion to empty",
+			"granularity": "line",
+			"a": "brand new document",
+			"b": "",
+			"runs": [
+				{
+					"type": "del",
+					"text": "brand new document"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0
+					]
+				}
+			],
+			"accepts": [
+				{
+					"hunks": [],
+					"markdown": "brand new document"
+				},
+				{
+					"hunks": [
+						0
+					],
+					"markdown": ""
+				}
+			]
+		},
+		{
+			"name": "word deleted",
+			"granularity": "word",
+			"a": "alpha beta gamma",
+			"b": "alpha gamma",
+			"runs": [
+				{
+					"type": "same",
+					"text": "alpha "
+				},
+				{
+					"type": "del",
+					"text": "beta "
+				},
+				{
+					"type": "same",
+					"text": "gamma"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1
+					]
+				}
+			],
+			"accepts": [
+				{
+					"hunks": [],
+					"markdown": "alpha beta gamma"
+				},
+				{
+					"hunks": [
+						0
+					],
+					"markdown": "alpha gamma"
+				}
+			]
+		},
+		{
+			"name": "word deleted",
+			"granularity": "line",
+			"a": "alpha beta gamma",
+			"b": "alpha gamma",
+			"runs": [
+				{
+					"type": "del",
+					"text": "alpha beta gamma"
+				},
+				{
+					"type": "add",
+					"text": "alpha gamma"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0,
+						1
+					]
+				}
+			],
+			"accepts": [
+				{
+					"hunks": [],
+					"markdown": "alpha beta gamma"
+				},
+				{
+					"hunks": [
+						0
+					],
+					"markdown": "alpha gamma"
+				}
+			]
+		},
+		{
+			"name": "single word change",
+			"granularity": "word",
+			"a": "the quick brown fox",
+			"b": "the slow brown fox",
+			"runs": [
+				{
+					"type": "same",
+					"text": "the "
+				},
+				{
+					"type": "del",
+					"text": "quick"
+				},
+				{
+					"type": "add",
+					"text": "slow"
+				},
+				{
+					"type": "same",
+					"text": " brown fox"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1,
+						2
+					]
+				}
+			],
+			"accepts": [
+				{
+					"hunks": [],
+					"markdown": "the quick brown fox"
+				},
+				{
+					"hunks": [
+						0
+					],
+					"markdown": "the slow brown fox"
+				}
+			]
+		},
+		{
+			"name": "single word change",
+			"granularity": "line",
+			"a": "the quick brown fox",
+			"b": "the slow brown fox",
+			"runs": [
+				{
+					"type": "del",
+					"text": "the quick brown fox"
+				},
+				{
+					"type": "add",
+					"text": "the slow brown fox"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0,
+						1
+					]
+				}
+			],
+			"accepts": [
+				{
+					"hunks": [],
+					"markdown": "the quick brown fox"
+				},
+				{
+					"hunks": [
+						0
+					],
+					"markdown": "the slow brown fox"
+				}
+			]
+		},
+		{
+			"name": "two separated hunks",
+			"granularity": "word",
+			"a": "the quick brown fox jumps",
+			"b": "the slow brown fox leaps",
+			"runs": [
+				{
+					"type": "same",
+					"text": "the "
+				},
+				{
+					"type": "del",
+					"text": "quick"
+				},
+				{
+					"type": "add",
+					"text": "slow"
+				},
+				{
+					"type": "same",
+					"text": " brown fox "
+				},
+				{
+					"type": "del",
+					"text": "jumps"
+				},
+				{
+					"type": "add",
+					"text": "leaps"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1,
+						2
+					]
+				},
+				{
+					"index": 1,
+					"runIndices": [
+						4,
+						5
+					]
+				}
+			],
+			"accepts": [
+				{
+					"hunks": [],
+					"markdown": "the quick brown fox jumps"
+				},
+				{
+					"hunks": [
+						0
+					],
+					"markdown": "the slow brown fox jumps"
+				},
+				{
+					"hunks": [
+						1
+					],
+					"markdown": "the quick brown fox leaps"
+				},
+				{
+					"hunks": [
+						0,
+						1
+					],
+					"markdown": "the slow brown fox leaps"
+				}
+			]
+		},
+		{
+			"name": "two separated hunks",
+			"granularity": "line",
+			"a": "the quick brown fox jumps",
+			"b": "the slow brown fox leaps",
+			"runs": [
+				{
+					"type": "del",
+					"text": "the quick brown fox jumps"
+				},
+				{
+					"type": "add",
+					"text": "the slow brown fox leaps"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0,
+						1
+					]
+				}
+			],
+			"accepts": [
+				{
+					"hunks": [],
+					"markdown": "the quick brown fox jumps"
+				},
+				{
+					"hunks": [
+						0
+					],
+					"markdown": "the slow brown fox leaps"
+				}
+			]
+		},
+		{
+			"name": "adjacent changes",
+			"granularity": "word",
+			"a": "one two three four",
+			"b": "ONE TWO three four",
+			"runs": [
+				{
+					"type": "del",
+					"text": "one"
+				},
+				{
+					"type": "add",
+					"text": "ONE"
+				},
+				{
+					"type": "same",
+					"text": " "
+				},
+				{
+					"type": "del",
+					"text": "two"
+				},
+				{
+					"type": "add",
+					"text": "TWO"
+				},
+				{
+					"type": "same",
+					"text": " three four"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0,
+						1
+					]
+				},
+				{
+					"index": 1,
+					"runIndices": [
+						3,
+						4
+					]
+				}
+			],
+			"accepts": [
+				{
+					"hunks": [],
+					"markdown": "one two three four"
+				},
+				{
+					"hunks": [
+						0
+					],
+					"markdown": "ONE two three four"
+				},
+				{
+					"hunks": [
+						1
+					],
+					"markdown": "one TWO three four"
+				},
+				{
+					"hunks": [
+						0,
+						1
+					],
+					"markdown": "ONE TWO three four"
+				}
+			]
+		},
+		{
+			"name": "adjacent changes",
+			"granularity": "line",
+			"a": "one two three four",
+			"b": "ONE TWO three four",
+			"runs": [
+				{
+					"type": "del",
+					"text": "one two three four"
+				},
+				{
+					"type": "add",
+					"text": "ONE TWO three four"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0,
+						1
+					]
+				}
+			],
+			"accepts": [
+				{
+					"hunks": [],
+					"markdown": "one two three four"
+				},
+				{
+					"hunks": [
+						0
+					],
+					"markdown": "ONE TWO three four"
+				}
+			]
+		},
+		{
+			"name": "change at both ends",
+			"granularity": "word",
+			"a": "start middle end",
+			"b": "begin middle finish",
+			"runs": [
+				{
+					"type": "del",
+					"text": "start"
+				},
+				{
+					"type": "add",
+					"text": "begin"
+				},
+				{
+					"type": "same",
+					"text": " middle "
+				},
+				{
+					"type": "del",
+					"text": "end"
+				},
+				{
+					"type": "add",
+					"text": "finish"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0,
+						1
+					]
+				},
+				{
+					"index": 1,
+					"runIndices": [
+						3,
+						4
+					]
+				}
+			],
+			"accepts": [
+				{
+					"hunks": [],
+					"markdown": "start middle end"
+				},
+				{
+					"hunks": [
+						0
+					],
+					"markdown": "begin middle end"
+				},
+				{
+					"hunks": [
+						1
+					],
+					"markdown": "start middle finish"
+				},
+				{
+					"hunks": [
+						0,
+						1
+					],
+					"markdown": "begin middle finish"
+				}
+			]
+		},
+		{
+			"name": "change at both ends",
+			"granularity": "line",
+			"a": "start middle end",
+			"b": "begin middle finish",
+			"runs": [
+				{
+					"type": "del",
+					"text": "start middle end"
+				},
+				{
+					"type": "add",
+					"text": "begin middle finish"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0,
+						1
+					]
+				}
+			],
+			"accepts": [
+				{
+					"hunks": [],
+					"markdown": "start middle end"
+				},
+				{
+					"hunks": [
+						0
+					],
+					"markdown": "begin middle finish"
+				}
+			]
+		},
+		{
+			"name": "multi-paragraph, one paragraph edited",
+			"granularity": "word",
+			"a": "# Title\n\nFirst para.\n\nSecond para.\n",
+			"b": "# Title\n\nFirst para edited.\n\nSecond para.\n",
+			"runs": [
+				{
+					"type": "same",
+					"text": "# Title\n\nFirst para"
+				},
+				{
+					"type": "add",
+					"text": " edited"
+				},
+				{
+					"type": "same",
+					"text": ".\n\nSecond para.\n"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1
+					]
+				}
+			],
+			"accepts": [
+				{
+					"hunks": [],
+					"markdown": "# Title\n\nFirst para.\n\nSecond para.\n"
+				},
+				{
+					"hunks": [
+						0
+					],
+					"markdown": "# Title\n\nFirst para edited.\n\nSecond para.\n"
+				}
+			]
+		},
+		{
+			"name": "multi-paragraph, one paragraph edited",
+			"granularity": "line",
+			"a": "# Title\n\nFirst para.\n\nSecond para.\n",
+			"b": "# Title\n\nFirst para edited.\n\nSecond para.\n",
+			"runs": [
+				{
+					"type": "same",
+					"text": "# Title\n\n"
+				},
+				{
+					"type": "del",
+					"text": "First para.\n"
+				},
+				{
+					"type": "add",
+					"text": "First para edited.\n"
+				},
+				{
+					"type": "same",
+					"text": "\nSecond para.\n"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1,
+						2
+					]
+				}
+			],
+			"accepts": [
+				{
+					"hunks": [],
+					"markdown": "# Title\n\nFirst para.\n\nSecond para.\n"
+				},
+				{
+					"hunks": [
+						0
+					],
+					"markdown": "# Title\n\nFirst para edited.\n\nSecond para.\n"
+				}
+			]
+		},
+		{
+			"name": "multi-paragraph, paragraph inserted",
+			"granularity": "word",
+			"a": "alpha\n\nbeta\n",
+			"b": "alpha\n\ninserted\n\nbeta\n",
+			"runs": [
+				{
+					"type": "same",
+					"text": "alpha\n\n"
+				},
+				{
+					"type": "add",
+					"text": "inserted\n\n"
+				},
+				{
+					"type": "same",
+					"text": "beta\n"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1
+					]
+				}
+			],
+			"accepts": [
+				{
+					"hunks": [],
+					"markdown": "alpha\n\nbeta\n"
+				},
+				{
+					"hunks": [
+						0
+					],
+					"markdown": "alpha\n\ninserted\n\nbeta\n"
+				}
+			]
+		},
+		{
+			"name": "multi-paragraph, paragraph inserted",
+			"granularity": "line",
+			"a": "alpha\n\nbeta\n",
+			"b": "alpha\n\ninserted\n\nbeta\n",
+			"runs": [
+				{
+					"type": "same",
+					"text": "alpha\n\n"
+				},
+				{
+					"type": "add",
+					"text": "inserted\n\n"
+				},
+				{
+					"type": "same",
+					"text": "beta\n"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1
+					]
+				}
+			],
+			"accepts": [
+				{
+					"hunks": [],
+					"markdown": "alpha\n\nbeta\n"
+				},
+				{
+					"hunks": [
+						0
+					],
+					"markdown": "alpha\n\ninserted\n\nbeta\n"
+				}
+			]
+		},
+		{
+			"name": "multi-paragraph, paragraph removed",
+			"granularity": "word",
+			"a": "alpha\n\nbeta\n\ngamma\n",
+			"b": "alpha\n\ngamma\n",
+			"runs": [
+				{
+					"type": "same",
+					"text": "alpha\n\n"
+				},
+				{
+					"type": "del",
+					"text": "beta\n\n"
+				},
+				{
+					"type": "same",
+					"text": "gamma\n"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1
+					]
+				}
+			],
+			"accepts": [
+				{
+					"hunks": [],
+					"markdown": "alpha\n\nbeta\n\ngamma\n"
+				},
+				{
+					"hunks": [
+						0
+					],
+					"markdown": "alpha\n\ngamma\n"
+				}
+			]
+		},
+		{
+			"name": "multi-paragraph, paragraph removed",
+			"granularity": "line",
+			"a": "alpha\n\nbeta\n\ngamma\n",
+			"b": "alpha\n\ngamma\n",
+			"runs": [
+				{
+					"type": "same",
+					"text": "alpha\n\n"
+				},
+				{
+					"type": "del",
+					"text": "beta\n\n"
+				},
+				{
+					"type": "same",
+					"text": "gamma\n"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1
+					]
+				}
+			],
+			"accepts": [
+				{
+					"hunks": [],
+					"markdown": "alpha\n\nbeta\n\ngamma\n"
+				},
+				{
+					"hunks": [
+						0
+					],
+					"markdown": "alpha\n\ngamma\n"
+				}
+			]
+		},
+		{
+			"name": "reflow: one word inserted in a long line",
+			"granularity": "word",
+			"a": "The quiet river wound its way through the valley before the storm.",
+			"b": "The quiet river wound its way slowly through the valley before the storm.",
+			"runs": [
+				{
+					"type": "same",
+					"text": "The quiet river wound its way "
+				},
+				{
+					"type": "add",
+					"text": "slowly "
+				},
+				{
+					"type": "same",
+					"text": "through the valley before the storm."
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1
+					]
+				}
+			],
+			"accepts": [
+				{
+					"hunks": [],
+					"markdown": "The quiet river wound its way through the valley before the storm."
+				},
+				{
+					"hunks": [
+						0
+					],
+					"markdown": "The quiet river wound its way slowly through the valley before the storm."
+				}
+			]
+		},
+		{
+			"name": "reflow: one word inserted in a long line",
+			"granularity": "line",
+			"a": "The quiet river wound its way through the valley before the storm.",
+			"b": "The quiet river wound its way slowly through the valley before the storm.",
+			"runs": [
+				{
+					"type": "del",
+					"text": "The quiet river wound its way through the valley before the storm."
+				},
+				{
+					"type": "add",
+					"text": "The quiet river wound its way slowly through the valley before the storm."
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0,
+						1
+					]
+				}
+			],
+			"accepts": [
+				{
+					"hunks": [],
+					"markdown": "The quiet river wound its way through the valley before the storm."
+				},
+				{
+					"hunks": [
+						0
+					],
+					"markdown": "The quiet river wound its way slowly through the valley before the storm."
+				}
+			]
+		},
+		{
+			"name": "one line rewritten",
+			"granularity": "word",
+			"a": "line a\nline b\nline c",
+			"b": "line a\nLINE B\nline c",
+			"runs": [
+				{
+					"type": "same",
+					"text": "line a\n"
+				},
+				{
+					"type": "del",
+					"text": "line"
+				},
+				{
+					"type": "add",
+					"text": "LINE"
+				},
+				{
+					"type": "same",
+					"text": " "
+				},
+				{
+					"type": "del",
+					"text": "b"
+				},
+				{
+					"type": "add",
+					"text": "B"
+				},
+				{
+					"type": "same",
+					"text": "\nline c"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1,
+						2
+					]
+				},
+				{
+					"index": 1,
+					"runIndices": [
+						4,
+						5
+					]
+				}
+			],
+			"accepts": [
+				{
+					"hunks": [],
+					"markdown": "line a\nline b\nline c"
+				},
+				{
+					"hunks": [
+						0
+					],
+					"markdown": "line a\nLINE b\nline c"
+				},
+				{
+					"hunks": [
+						1
+					],
+					"markdown": "line a\nline B\nline c"
+				},
+				{
+					"hunks": [
+						0,
+						1
+					],
+					"markdown": "line a\nLINE B\nline c"
+				}
+			]
+		},
+		{
+			"name": "one line rewritten",
+			"granularity": "line",
+			"a": "line a\nline b\nline c",
+			"b": "line a\nLINE B\nline c",
+			"runs": [
+				{
+					"type": "same",
+					"text": "line a\n"
+				},
+				{
+					"type": "del",
+					"text": "line b\n"
+				},
+				{
+					"type": "add",
+					"text": "LINE B\n"
+				},
+				{
+					"type": "same",
+					"text": "line c"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1,
+						2
+					]
+				}
+			],
+			"accepts": [
+				{
+					"hunks": [],
+					"markdown": "line a\nline b\nline c"
+				},
+				{
+					"hunks": [
+						0
+					],
+					"markdown": "line a\nLINE B\nline c"
+				}
+			]
+		},
+		{
+			"name": "total rewrite",
+			"granularity": "word",
+			"a": "completely different here",
+			"b": "nothing matches now",
+			"runs": [
+				{
+					"type": "del",
+					"text": "completely"
+				},
+				{
+					"type": "add",
+					"text": "nothing"
+				},
+				{
+					"type": "same",
+					"text": " "
+				},
+				{
+					"type": "del",
+					"text": "different"
+				},
+				{
+					"type": "add",
+					"text": "matches"
+				},
+				{
+					"type": "same",
+					"text": " "
+				},
+				{
+					"type": "del",
+					"text": "here"
+				},
+				{
+					"type": "add",
+					"text": "now"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0,
+						1
+					]
+				},
+				{
+					"index": 1,
+					"runIndices": [
+						3,
+						4
+					]
+				},
+				{
+					"index": 2,
+					"runIndices": [
+						6,
+						7
+					]
+				}
+			],
+			"accepts": [
+				{
+					"hunks": [],
+					"markdown": "completely different here"
+				},
+				{
+					"hunks": [
+						0
+					],
+					"markdown": "nothing different here"
+				},
+				{
+					"hunks": [
+						1
+					],
+					"markdown": "completely matches here"
+				},
+				{
+					"hunks": [
+						0,
+						1
+					],
+					"markdown": "nothing matches here"
+				},
+				{
+					"hunks": [
+						2
+					],
+					"markdown": "completely different now"
+				},
+				{
+					"hunks": [
+						0,
+						2
+					],
+					"markdown": "nothing different now"
+				},
+				{
+					"hunks": [
+						1,
+						2
+					],
+					"markdown": "completely matches now"
+				},
+				{
+					"hunks": [
+						0,
+						1,
+						2
+					],
+					"markdown": "nothing matches now"
+				}
+			]
+		},
+		{
+			"name": "total rewrite",
+			"granularity": "line",
+			"a": "completely different here",
+			"b": "nothing matches now",
+			"runs": [
+				{
+					"type": "del",
+					"text": "completely different here"
+				},
+				{
+					"type": "add",
+					"text": "nothing matches now"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0,
+						1
+					]
+				}
+			],
+			"accepts": [
+				{
+					"hunks": [],
+					"markdown": "completely different here"
+				},
+				{
+					"hunks": [
+						0
+					],
+					"markdown": "nothing matches now"
+				}
+			]
+		},
+		{
+			"name": "many interleaved edits",
+			"granularity": "word",
+			"a": "a x b y c z d",
+			"b": "a 1 b 2 c 3 d",
+			"runs": [
+				{
+					"type": "same",
+					"text": "a "
+				},
+				{
+					"type": "del",
+					"text": "x"
+				},
+				{
+					"type": "add",
+					"text": "1"
+				},
+				{
+					"type": "same",
+					"text": " b "
+				},
+				{
+					"type": "del",
+					"text": "y"
+				},
+				{
+					"type": "add",
+					"text": "2"
+				},
+				{
+					"type": "same",
+					"text": " c "
+				},
+				{
+					"type": "del",
+					"text": "z"
+				},
+				{
+					"type": "add",
+					"text": "3"
+				},
+				{
+					"type": "same",
+					"text": " d"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						1,
+						2
+					]
+				},
+				{
+					"index": 1,
+					"runIndices": [
+						4,
+						5
+					]
+				},
+				{
+					"index": 2,
+					"runIndices": [
+						7,
+						8
+					]
+				}
+			],
+			"accepts": [
+				{
+					"hunks": [],
+					"markdown": "a x b y c z d"
+				},
+				{
+					"hunks": [
+						0
+					],
+					"markdown": "a 1 b y c z d"
+				},
+				{
+					"hunks": [
+						1
+					],
+					"markdown": "a x b 2 c z d"
+				},
+				{
+					"hunks": [
+						0,
+						1
+					],
+					"markdown": "a 1 b 2 c z d"
+				},
+				{
+					"hunks": [
+						2
+					],
+					"markdown": "a x b y c 3 d"
+				},
+				{
+					"hunks": [
+						0,
+						2
+					],
+					"markdown": "a 1 b y c 3 d"
+				},
+				{
+					"hunks": [
+						1,
+						2
+					],
+					"markdown": "a x b 2 c 3 d"
+				},
+				{
+					"hunks": [
+						0,
+						1,
+						2
+					],
+					"markdown": "a 1 b 2 c 3 d"
+				}
+			]
+		},
+		{
+			"name": "many interleaved edits",
+			"granularity": "line",
+			"a": "a x b y c z d",
+			"b": "a 1 b 2 c 3 d",
+			"runs": [
+				{
+					"type": "del",
+					"text": "a x b y c z d"
+				},
+				{
+					"type": "add",
+					"text": "a 1 b 2 c 3 d"
+				}
+			],
+			"hunks": [
+				{
+					"index": 0,
+					"runIndices": [
+						0,
+						1
+					]
+				}
+			],
+			"accepts": [
+				{
+					"hunks": [],
+					"markdown": "a x b y c z d"
+				},
+				{
+					"hunks": [
+						0
+					],
+					"markdown": "a 1 b 2 c 3 d"
+				}
+			]
+		}
+	]
+}

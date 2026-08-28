@@ -1,0 +1,112 @@
+{
+	"$source": "lib/outline/extract.ts",
+	"cases": [
+		{
+			"name": "nested headings in document order",
+			"markdown": "# A\n\n## B\n\n### C\n\n## D\n",
+			"outline": [
+				{
+					"depth": 1,
+					"text": "A",
+					"offset": 0,
+					"index": 0
+				},
+				{
+					"depth": 2,
+					"text": "B",
+					"offset": 5,
+					"index": 1
+				},
+				{
+					"depth": 3,
+					"text": "C",
+					"offset": 11,
+					"index": 2
+				},
+				{
+					"depth": 2,
+					"text": "D",
+					"offset": 18,
+					"index": 3
+				}
+			]
+		},
+		{
+			"name": "no headings",
+			"markdown": "Just a plain paragraph.\n\nAnd another one.\n",
+			"outline": []
+		},
+		{
+			"name": "duplicate titles stay distinct by index",
+			"markdown": "## Notes\n\nfirst\n\n## Notes\n\nsecond\n",
+			"outline": [
+				{
+					"depth": 2,
+					"text": "Notes",
+					"offset": 0,
+					"index": 0
+				},
+				{
+					"depth": 2,
+					"text": "Notes",
+					"offset": 17,
+					"index": 1
+				}
+			]
+		},
+		{
+			"name": "### inside a fenced code block is not a heading",
+			"markdown": "```\n### not a heading\n```\n\n## Real\n",
+			"outline": [
+				{
+					"depth": 2,
+					"text": "Real",
+					"offset": 27,
+					"index": 0
+				}
+			]
+		},
+		{
+			"name": "inline markdown stripped from heading text",
+			"markdown": "## Hello **world**\n",
+			"outline": [
+				{
+					"depth": 2,
+					"text": "Hello world",
+					"offset": 0,
+					"index": 0
+				}
+			]
+		},
+		{
+			"name": "YAML frontmatter is not a heading",
+			"markdown": "---\ntitle: My Doc\n---\n\n# Title\n",
+			"outline": [
+				{
+					"depth": 1,
+					"text": "Title",
+					"offset": 23,
+					"index": 0
+				}
+			]
+		},
+		{
+			"name": "empty-text headings keep index alignment",
+			"markdown": "# \n\n## Real\n",
+			"outline": [
+				{
+					"depth": 1,
+					"text": "",
+					"offset": 0,
+					"index": 0
+				},
+				{
+					"depth": 2,
+					"text": "Real",
+					"offset": 4,
+					"index": 1
+				}
+			]
+		}
+	]
+}
