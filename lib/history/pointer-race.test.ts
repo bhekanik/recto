@@ -139,19 +139,43 @@ async function respond(
 
 const OK_SAVE = { updatedAt: 1_500, stale: false, headMoved: false };
 
+/** A mutation result plus the query state it becomes visible alongside. */
+type Answer = { result: unknown; snapshot?: Snapshot };
+
+/** Did this response say the write landed? Those must carry a snapshot. */
+function isSuccessfulWrite(result: unknown): boolean {
+	const r = result as {
+		committed?: boolean;
+		applied?: boolean;
+		stale?: boolean;
+	};
+	if (r.committed === true) return true;
+	if (r.applied === true) return true;
+	if (r.stale === false) return true;
+	return false;
+}
+
 /**
  * Answer every outstanding mutation in the order the client sent them, taking
- * each result from `results` by function name. Tests that only care about one
- * function still have to answer the others, because the real client does.
+ * each answer from `answers` by function name.
+ *
+ * A successful write MUST supply a snapshot. On the real client a write that
+ * landed is already reflected in the reactive queries by the time its result
+ * arrives, so a test that reports success while leaving the queries on the old
+ * document is describing a state the backend cannot produce — and that is
+ * exactly the state in which stale-pointer bugs hide.
  */
-async function drain(results: Record<string, unknown>): Promise<void> {
+async function drain(answers: Record<string, Answer>): Promise<void> {
 	let next = mutationCalls.find((c) => !c.settled);
 	while (next) {
-		const result = results[next.name];
-		if (result === undefined) {
-			throw new Error(`no result supplied for ${next.name}`);
+		const answer = answers[next.name];
+		if (!answer) throw new Error(`no answer supplied for ${next.name}`);
+		if (isSuccessfulWrite(answer.result) && !answer.snapshot) {
+			throw new Error(
+				`${next.name} reports success with no query snapshot; a landed write is always already visible to the queries`,
+			);
 		}
-		await respond(next.name, result);
+		await respond(next.name, answer.result, answer.snapshot);
 		next = mutationCalls.find((c) => !c.settled);
 	}
 }
@@ -191,12 +215,19 @@ function remoteNode(): HistoryNode {
 }
 
 /** A minimal EditorHandle whose text the harness reads and writes. */
-function fakeHandle(): EditorHandle & { text: string; focused: boolean } {
+function fakeHandle(): EditorHandle & {
+	text: string;
+	focused: boolean;
+	seeds: string[];
+} {
 	const handle = {
 		text: "",
 		focused: false,
 		caret: 0,
+		/** Every value ever seeded, so a test can assert what was never shown. */
+		seeds: [] as string[],
 		seed(markdown: string) {
+			handle.seeds.push(markdown);
 			handle.text = markdown;
 		},
 		getCanonicalMarkdown: () => handle.text,
@@ -470,23 +501,33 @@ describe("studio sync + history contract", () => {
 		if (!typedNodeId) throw new Error("the typed sentence committed no node");
 		expect(typedNodeId).not.toBe(ROOT);
 
-		dagRows = [rootNode(), ...s.history.nodes.filter((n) => n.nodeId !== ROOT)];
-		await drain({
-			[NAMES.commitEdit]: {
-				committed: true,
-				headNodeId: typedNodeId,
-				updatedAt: 2_000,
-				pointerRevision: 2,
-			},
-			[NAMES.updateMarkdown]: OK_SAVE,
-		});
-		s.render({
+		const afterCommit: ServerDoc = {
 			currentNodeId: typedNodeId,
 			markdown: TYPED,
 			updatedAt: 2_000,
 			pointerRevision: 2,
 			markdownHeadNodeId: typedNodeId,
+		};
+		const dagAfterCommit = [
+			rootNode(),
+			...s.history.nodes.filter((n) => n.nodeId !== ROOT),
+		];
+		await drain({
+			[NAMES.commitEdit]: {
+				result: {
+					committed: true,
+					headNodeId: typedNodeId,
+					updatedAt: 2_000,
+					pointerRevision: 2,
+				},
+				snapshot: { server: afterCommit, dag: dagAfterCommit },
+			},
+			[NAMES.updateMarkdown]: {
+				result: OK_SAVE,
+				snapshot: { server: afterCommit, dag: dagAfterCommit },
+			},
 		});
+		s.render(afterCommit);
 
 		// The AI transform's own commit path: seed, record, flush, one node.
 		s.run(() => {
@@ -531,10 +572,11 @@ describe("studio sync + history contract", () => {
 		s.render(AT_ROOT);
 		await settle();
 
+		// It names the head that existed when the flush ran — the root, since the
+		// held keystrokes are still an open draft at that point.
 		const saves = callsTo(NAMES.updateMarkdown);
 		expect(saves.length).toBeGreaterThan(0);
-		expect(saves[0]?.args.expectedHeadNodeId).toBe(s.history.currentNodeId);
-		expect(saves[0]?.args.expectedHeadNodeId).not.toBeNull();
+		expect(saves[0]?.args.expectedHeadNodeId).toBe(ROOT);
 		s.unmount();
 	});
 
@@ -553,15 +595,15 @@ describe("studio sync + history contract", () => {
 		const clearsBefore = removedKeys.length;
 		await drain({
 			[NAMES.updateMarkdown]: {
-				updatedAt: 5_000,
-				stale: true,
-				headMoved: true,
+				result: { updatedAt: 5_000, stale: true, headMoved: true },
 			},
 			[NAMES.commitEdit]: {
-				committed: false,
-				diverged: true,
-				remoteHeadNodeId: REMOTE,
-				remotePointerRevision: 5,
+				result: {
+					committed: false,
+					diverged: true,
+					remoteHeadNodeId: REMOTE,
+					remotePointerRevision: 5,
+				},
 			},
 		});
 
@@ -612,14 +654,32 @@ describe("studio sync + history contract", () => {
 		handle.focused = true;
 		s.type(TYPED);
 		await settle(600);
+		const typedHead = s.history.currentNodeId ?? ROOT;
+		const afterTyping: ServerDoc = {
+			currentNodeId: typedHead,
+			markdown: TYPED,
+			updatedAt: 1_500,
+			pointerRevision: 2,
+			markdownHeadNodeId: typedHead,
+		};
+		const dagAfterTyping = [
+			rootNode(),
+			...s.history.nodes.filter((n) => n.nodeId !== ROOT),
+		];
 		await drain({
 			[NAMES.commitEdit]: {
-				committed: true,
-				headNodeId: "x",
-				updatedAt: 1_500,
-				pointerRevision: 2,
+				result: {
+					committed: true,
+					headNodeId: typedHead,
+					updatedAt: 1_500,
+					pointerRevision: 2,
+				},
+				snapshot: { server: afterTyping, dag: dagAfterTyping },
 			},
-			[NAMES.updateMarkdown]: OK_SAVE,
+			[NAMES.updateMarkdown]: {
+				result: OK_SAVE,
+				snapshot: { server: afterTyping, dag: dagAfterTyping },
+			},
 		});
 
 		dagRows = [rootNode(), remoteNode()];
@@ -679,13 +739,27 @@ describe("studio sync + history contract", () => {
 		// assertion below would hold for the wrong reason. The commit is refused:
 		// another device owns the head, and its node is NOT in this client's DAG
 		// yet, so the projection cannot run.
+		const savedHead = s.history.currentNodeId ?? ROOT;
 		await drain({
-			[NAMES.updateMarkdown]: OK_SAVE,
+			[NAMES.updateMarkdown]: {
+				result: OK_SAVE,
+				snapshot: {
+					server: {
+						currentNodeId: savedHead,
+						markdown: TYPED,
+						updatedAt: 1_500,
+						pointerRevision: 2,
+						markdownHeadNodeId: savedHead,
+					},
+				},
+			},
 			[NAMES.commitEdit]: {
-				committed: false,
-				diverged: true,
-				remoteHeadNodeId: REMOTE,
-				remotePointerRevision: 5,
+				result: {
+					committed: false,
+					diverged: true,
+					remoteHeadNodeId: REMOTE,
+					remotePointerRevision: 5,
+				},
 			},
 		});
 		await settle(0);
@@ -937,6 +1011,154 @@ describe("studio sync + history contract", () => {
 		s.unmount();
 	});
 
+	it("Z1: first open never shows an unstamped legacy body, and never commits it", async () => {
+		const handle = fakeHandle();
+		const LEGACY = "body a pre-deploy tab saved under an unknown head";
+		dagRows = [rootNode(), localNode()];
+		const s = mountStudio(handle);
+
+		// documents.markdown holds text with no provenance while the head's own
+		// materialization is LOCAL_TEXT.
+		s.render({
+			currentNodeId: LOCAL_NODE,
+			markdown: LEGACY,
+			updatedAt: 2_000,
+			pointerRevision: 2,
+			markdownHeadNodeId: undefined,
+		});
+		await settle(0);
+
+		// The DAG is the only thing we know to be true — and the legacy body must
+		// never reach the editor at all, not even for a frame before a correction.
+		expect(handle.text).toBe(LOCAL_TEXT);
+		expect(handle.seeds).not.toContain(LEGACY);
+
+		// And nothing may turn the legacy body into a node under this head.
+		s.type(`${LOCAL_TEXT} typed after opening`);
+		await settle(600);
+		const commits = callsTo(NAMES.commitEdit);
+		expect(commits.some((c) => String(c.args.markdown).includes(LEGACY))).toBe(
+			false,
+		);
+		expect(lastCallTo(NAMES.commitEdit)?.args.expectedHeadNodeId).toBe(
+			LOCAL_NODE,
+		);
+		s.unmount();
+	});
+
+	it("Z1: first open shows a stamped same-head draft and an undo keeps it", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode(), localNode()];
+		const s = mountStudio(handle);
+
+		s.render({
+			currentNodeId: LOCAL_NODE,
+			markdown: AHEAD_TEXT,
+			updatedAt: 2_000,
+			pointerRevision: 2,
+			markdownHeadNodeId: LOCAL_NODE,
+		});
+		await settle(0);
+
+		expect(handle.text).toBe(AHEAD_TEXT);
+
+		// Undo immediately, before typing anything. The draft must reach the DAG
+		// first or this navigation would discard the other device's work.
+		s.run(() => s.history.undo());
+
+		const rescued = callsTo(NAMES.commitEdit).find(
+			(c) => c.args.markdown === AHEAD_TEXT,
+		);
+		expect(rescued?.args.expectedHeadNodeId).toBe(LOCAL_NODE);
+		expect(handle.text).toBe(LOCAL_TEXT);
+		s.unmount();
+	});
+
+	it("Z1: first open keeps an AI replacement as a child of the stamped draft", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode(), localNode()];
+		const s = mountStudio(handle);
+
+		s.render({
+			currentNodeId: LOCAL_NODE,
+			markdown: AHEAD_TEXT,
+			updatedAt: 2_000,
+			pointerRevision: 2,
+			markdownHeadNodeId: LOCAL_NODE,
+		});
+		await settle(0);
+
+		// Accepting an AI transform straight after opening: the draft it replaced
+		// has to survive as its own node, or undo lands on the wrong text.
+		s.run(() => {
+			s.history.commitProgrammatic(AI, { origin: "ai:grammar" });
+		});
+
+		const drafts = callsTo(NAMES.commitEdit).map((c) => c.args);
+		const rescued = drafts.find((a) => a.markdown === AHEAD_TEXT);
+		expect(rescued?.expectedHeadNodeId).toBe(LOCAL_NODE);
+		const aiCommit = drafts.find((a) => a.markdown === AI);
+		expect(aiCommit?.expectedHeadNodeId).toBe(
+			(rescued?.node as { nodeId: string }).nodeId,
+		);
+		s.unmount();
+	});
+
+	it("Z2: a deferred projection is still newer than what the editor shows", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode(), localNode()];
+		const s = mountStudio(handle);
+		s.render({
+			currentNodeId: LOCAL_NODE,
+			markdown: LOCAL_TEXT,
+			updatedAt: 1_000,
+			pointerRevision: 2,
+			markdownHeadNodeId: LOCAL_NODE,
+		});
+		await settle(0);
+
+		// This device is mid-sentence: an OPEN draft, which defers any projection.
+		s.type("device A is mid-sentence");
+
+		// Device B saves a stamped draft at the same head. Deferring it advances
+		// the compare-and-set token so a later save can still land — and that
+		// token used to double as "what the editor shows", so the retry below
+		// decided 3000 was not newer than 3000 and projected the node text over
+		// B's draft.
+		s.render({
+			currentNodeId: LOCAL_NODE,
+			markdown: AHEAD_TEXT,
+			updatedAt: 3_000,
+			pointerRevision: 2,
+			markdownHeadNodeId: LOCAL_NODE,
+		});
+		await settle(0);
+		expect(handle.text).toBe("device A is mid-sentence");
+
+		// The draft closes into a node and goes out.
+		await settle(600);
+
+		// A's own commit loses the head, so its draft stops blocking and the
+		// projection finally runs.
+		await drain({
+			[NAMES.commitEdit]: {
+				result: {
+					committed: false,
+					diverged: true,
+					remoteHeadNodeId: LOCAL_NODE,
+					remotePointerRevision: 2,
+				},
+			},
+			[NAMES.updateMarkdown]: {
+				result: { updatedAt: 3_000, stale: true, headMoved: true },
+			},
+		});
+		await settle();
+
+		expect(handle.text).toBe(AHEAD_TEXT);
+		s.unmount();
+	});
+
 	it("X4: a newer observation of our own head clears a stale queued pointer", async () => {
 		const handle = fakeHandle();
 		dagRows = [rootNode()];
@@ -1090,7 +1312,7 @@ describe("studio sync + history contract", () => {
 		s.unmount();
 	});
 
-	it("replays keystrokes typed before the DAG query resolved", () => {
+	it("replays keystrokes typed before the DAG query resolved", async () => {
 		const handle = fakeHandle();
 		dagRows = undefined;
 		const s = mountStudio(handle);
@@ -1102,6 +1324,10 @@ describe("studio sync + history contract", () => {
 		dagRows = [rootNode()];
 		s.render(AT_ROOT);
 
+		// Held as an open draft on the root, so continued typing merges into one
+		// node rather than being forced into its own; the boundary closes it.
+		expect(handle.text).toBe(TYPED);
+		await settle(600);
 		expect(s.history.currentNodeId).not.toBe(ROOT);
 		expect(lastCallTo(NAMES.commitEdit)?.args.markdown).toBe(TYPED);
 		s.unmount();
