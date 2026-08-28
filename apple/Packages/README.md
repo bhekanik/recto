@@ -223,6 +223,25 @@ edit, and the change the core needs for `.` to replay it. **A custom text view
 must forward `insertText(_:replacementRange:)` and `keyDown` the same way**;
 `start()` installs both hooks on a `BlockCaretTextView` for you.
 
+**The text view moves the caret too, and the engine has to follow.** Insert mode
+declines the bracketed keys — `<Left>`, `<Home>`, and the rest — to the text
+view, which moves the selection itself; a click and a menu command do the same.
+Watching only the *text* left the engine two units behind after `iab<Left>`, so
+the next character was inserted at the engine's offset (`abctail` where vim gives
+`acbtail`). `BlockCaretTextView` reports a settled selection through
+`selectionDidChangeExternally`, and the adapter hands it to
+`VimEngine.moveCursorFromHost`, which sets the selection **without** cancelling
+insert mode. That is what lets the core's own `onCursorActivity` do what it does
+on the web: end the recorded insert, so `.` replays what was typed after the
+move. A custom AppKit text view must forward
+`setSelectedRanges(_:affinity:stillSelecting:)`; on UIKit the host calls
+`selectionDidChangeExternally()` from `textViewDidChangeSelection(_:)`.
+
+Vim starts a **new undo block** at a cursor key, so the handoff closes the open
+insert group first — `iab<Left>c<Esc>u` leaves `abtail`, not `tail`. `<C-g>U`
+is vim's exception to that and the core has no command for it, so the bridge
+consumes the two keys and reports the decision back on `VimResult.undoBreak`.
+
 **Composition wins over vim.** While `hasMarkedText()` (or UIKit's
 `markedTextRange`) is set, keys go straight to the input manager: Space selects a
 candidate, Return commits, Escape cancels, Backspace deletes a jamo. Handing them
@@ -231,6 +250,27 @@ holding text the mirror never saw. AppKit owns the storage for the duration, and
 the adapter takes it back through `textDidChangeExternally` — hooked on *any*
 change the text view made itself rather than on composition-end, because
 Backspace can end a composition and leave no `unmarkText` to hang the resync on.
+
+**A composition is not an external edit.** `textDidChangeExternally` carries a
+`VimTextChangeSource`, and the two need opposite treatment. A composition goes to
+`VimEngine.adoptText`, which updates the mirror and keeps insert mode; routing it
+through `setText` cancelled through `<Esc>` on the *first* marked-text change, so
+after committing `日` mid-insert the next `y` ran as a normal-mode operator. The
+cancelling `setText` path is for document-level sync only. `adoptText` also takes
+a `composing` flag: every provisional update rewrites the whole marked run, so
+recording them all would make `.` replay `ni日` — provisional updates go in under
+an origin the core's `onChange` ignores, and the commit, which arrives with the
+marked run already gone, is the one that is recorded.
+
+**A non-vim edit must close the vim undo group before it registers one.**
+`didChangeText` is too late: AppKit has already registered the external undo
+action, and an action registered inside the open insert group made one `u` undo
+the external edit and the whole insert session together. `BlockCaretTextView`
+overrides `shouldChangeText(in:replacementString:)` and calls
+`willChangeTextExternally` for any change the input system did not announce as
+its own. UIKit has no such funnel — `shouldChangeTextIn` is only asked about user
+input — so the host calls `willChangeTextExternally()` before a programmatic
+edit.
 
 **Replay is transactional.** The engine has already committed every edit to its
 mirror by the time the journal arrives, so a partial replay leaves the two
@@ -341,12 +381,24 @@ and it is why two documents sharing a context share their registers.
 ## Platforms
 
 `VimTextViewAdapter` is AppKit; `VimUITextViewAdapter` is UIKit, behind
-`#if canImport(UIKit)`, and is compile-checked in CI by building the package for
-the iOS simulator. Two things differ there, both forced by UIKit: edits go
-through `UITextInput.replace(_:withText:)` because `UITextView` has no
-`shouldChangeText`, and the block caret is an overlay the app layer draws
-because there is no `drawInsertionPoint` seam. Vim is gated on a hardware
-keyboard being attached (`GCKeyboard`), not on device class — plan 023 D-N6.
+`#if canImport(UIKit)`. Both are *run*, not just compiled: `xcodebuild test
+-scheme RectoVim -destination 'platform=iOS Simulator,…'` runs the
+platform-neutral suites plus `UIInsertModeHandoffTests` against a real
+`UITextView` in a key window. Three things differ there, all forced by UIKit:
+edits go through `UITextInput.replace(_:withText:)` because `UITextView` has no
+`shouldChangeText`; the block caret is an overlay the app layer draws because
+there is no `drawInsertionPoint` seam; and there are no hooks to install, so the
+host calls `selectionDidChangeExternally()`, `syncCompositionFromTextView()` and
+`willChangeTextExternally()` itself. Vim is gated on a hardware keyboard being
+attached (`GCKeyboard`), not on device class — plan 023 D-N6.
+
+One UIKit defect worth knowing: `UITextView`'s **own** undo of a committed
+marked-text composition restores the wrong range, with no vim layer present at
+all — `X`, marked `ni`, commit `日`, undo, and the storage is `Xil`. The iOS host
+routes undo through `RectoHistory` rather than the text view's undo manager, so
+this should not reach the product; the UIKit test therefore asserts that the
+engine follows whatever the undo manager did rather than asserting the text,
+while the AppKit test, where undo is sound, asserts the text.
 
 ## Divergences from real vim
 
@@ -381,9 +433,18 @@ Around that: `GraphemeConformanceTests` runs Unicode's own break test;
 Backspace during an IME composition; `AdapterContractTests` covers what is not a
 keystroke — CRLF replay, NFD, emoji and ZWJ input, dot-repeat through the input
 system, a vetoing delegate, an out-of-bounds range, the undo caret with repeated
-text around the patch, and the `gj`/`gk` goal column across a soft wrap. The same
-fixture file runs in Bun (`bun run vim:test`), so a case that passes there and
-fails here is a bridge bug, which is a much smaller place to look.
+text around the patch, and the `gj`/`gk` goal column across a soft wrap;
+`InsertModeHandoffTests` and its UIKit twin cover everything the text view does
+that vim did not ask for — cursor keys, `<C-g>U`, clicks and drags, a
+composition's mode/undo/dot-repeat, and an external edit before, during and after
+an insert session. The same fixture file runs in Bun (`bun run vim:test`), so a
+case that passes there and fails here is a bridge bug, which is a much smaller
+place to look.
+
+An undo test with no run loop needs `RunLoop.current.run(until: Date())` after an
+external edit. With `groupsByEvent` on, the undo manager opens a group for the
+registration and closes it when the event ends; without a pass the next vim group
+nests inside it and one `u` unwinds both.
 
 `RectoVimPerfTests` and `RectoCoreJSPerfTests` are opt-in
 (`RECTO_VIM_PERF=1`, `RECTO_CORE_PERF=1`) and measure CPU time, not wall clock —

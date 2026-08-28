@@ -66,6 +66,8 @@ public final class VimEngine {
         let getText: JSValue
         let getState: JSValue
         let insertText: JSValue
+        let moveCursorFromHost: JSValue
+        let adoptText: JSValue
         let setExternalInput: JSValue
         let map: JSValue
         let noremap: JSValue
@@ -133,6 +135,8 @@ public final class VimEngine {
             getText: try member("getText"),
             getState: try member("getState"),
             insertText: try member("insertText"),
+            moveCursorFromHost: try member("moveCursorFromHost"),
+            adoptText: try member("adoptText"),
             setExternalInput: try member("setExternalInput"),
             map: try member("map"),
             noremap: try member("noremap"),
@@ -218,6 +222,44 @@ public final class VimEngine {
             arguments.append(to ?? from)
         }
         return try decode("insertText", functions.insertText.call(withArguments: arguments))
+    }
+
+    /// The host's own input system moved the caret: an arrow key insert mode
+    /// declined to the text view, Home/End, a click, a menu command.
+    ///
+    /// Not `setText`. That cancels through `<Esc>` and leaves insert mode, which
+    /// through a real `NSTextView` made `iab<Left>c` produce `abctail` instead of
+    /// vim's `acbtail`. This keeps the mode and lets the core do what it does on
+    /// the web when the cursor moves on its own: end the recorded insert, so `.`
+    /// replays what was typed after the move.
+    ///
+    /// The result's `undoBreak` says whether the host must close its current undo
+    /// group — true for a cursor key in insert mode, false when `<C-g>U` asked
+    /// for the block to continue.
+    @discardableResult
+    public func moveCursorFromHost(anchor: Int, head: Int) throws -> VimResult {
+        try decode(
+            "moveCursorFromHost",
+            functions.moveCursorFromHost.call(withArguments: [anchor, head]))
+    }
+
+    /// Text the host's input system rewrote and has **already applied** to its
+    /// own storage — an IME composition, which AppKit and UIKit own from the
+    /// first marked-text change to the commit.
+    ///
+    /// Keeps the mode and the selection, and records the change so `.` can
+    /// replay it. No edits come back: the host is handing over text it has.
+    ///
+    /// `composing` must be true while marked text is still up. Each provisional
+    /// update rewrites the whole marked run, so recording them all would make `.`
+    /// replay the candidate keys as well as the character that was committed.
+    @discardableResult
+    public func adoptText(
+        _ text: String, anchor: Int, head: Int, composing: Bool
+    ) throws -> VimResult {
+        try decode(
+            "adoptText",
+            functions.adoptText.call(withArguments: [text, anchor, head, composing]))
     }
 
     /// Place the caret. `ch` is a UTF-16 column.

@@ -40,6 +40,8 @@ public final class VimUITextViewAdapter: NSObject, VimGeometryProvider, VimHisto
 
     private struct InsertGroup {
         var patchStart: Int
+        /// What `groupsByEvent` was before the session opened.
+        let previousGroupsByEvent: Bool
     }
     private static let log = Logger(subsystem: "com.bhekani.recto", category: "RectoVim")
 
@@ -130,6 +132,69 @@ public final class VimUITextViewAdapter: NSObject, VimGeometryProvider, VimHisto
                 textView.text ?? "", anchor: selection.location, head: NSMaxRange(selection)))
     }
 
+    /// The same, for a change the input system made to its own marked text.
+    ///
+    /// Call from `textViewDidChange(_:)` (or the subclass's own change hook)
+    /// whenever `markedTextRange` is or has just been non-nil. A composition is
+    /// not an external edit: `setText`'s cancelling `<Esc>` dropped the engine
+    /// into normal mode on the first marked-text change, so committing a
+    /// character mid-insert left the next key running as a normal-mode operator.
+    ///
+    /// While marked text is up UIKit owns the selection, so the engine's answer
+    /// is deliberately not pushed back.
+    public func syncCompositionFromTextView() throws {
+        guard !applyingEdits else { return }
+        let text = textView.text ?? ""
+        let selection = GraphemeClamp.range(in: text as NSString, textView.selectedRange)
+        let composing = textView.markedTextRange != nil
+        let result = try engine.adoptText(
+            text, anchor: selection.location, head: NSMaxRange(selection),
+            composing: composing)
+        guard !composing else {
+            onStatusChange?(VimStatus(result: result))
+            return
+        }
+        try apply(result)
+    }
+
+    /// Something that is not vim is about to change the text.
+    ///
+    /// UIKit has no pre-mutation funnel of its own — `shouldChangeTextIn` is only
+    /// asked about user input — so the host calls this before a programmatic
+    /// edit. It has to happen *before* the mutation: once UIKit has registered
+    /// the external undo action, an action registered inside the open vim group
+    /// makes one `u` undo that edit and the whole insert session together.
+    public func willChangeTextExternally() {
+        guard !applyingEdits else { return }
+        closeInsertGroup()
+    }
+
+    /// The text view moved the caret without asking the engine — an arrow key
+    /// insert mode declined, a tap, a selection handle. Call from
+    /// `textViewDidChangeSelection(_:)`.
+    ///
+    /// Vim starts a new undo block at a cursor key, so the open insert group is
+    /// closed first unless `<C-g>U` asked for it to continue.
+    public func selectionDidChangeExternally() {
+        guard !applyingEdits, !applyingSelection, textView.markedTextRange == nil else {
+            return
+        }
+        let selection = textView.selectedRange
+        // The engine's own answer coming back around; nothing moved.
+        guard selection != lastAppliedSelection else { return }
+        do {
+            let clamped = GraphemeClamp.range(
+                in: (textView.text ?? "") as NSString, selection)
+            let result = try engine.moveCursorFromHost(
+                anchor: clamped.location, head: NSMaxRange(clamped))
+            if result.undoBreak { closeInsertGroup() }
+            try apply(result)
+        } catch {
+            Self.log.error(
+                "selection handoff failed: \(String(describing: error), privacy: .public)")
+        }
+    }
+
     // MARK: - Applying results
 
     private func apply(_ result: VimResult) throws {
@@ -199,10 +264,21 @@ public final class VimUITextViewAdapter: NSObject, VimGeometryProvider, VimHisto
         return nil
     }
 
+    /// Opens an undo group if one is not already open, and turns off event
+    /// grouping for its duration.
+    ///
+    /// Off only while our own writes are happening, exactly as on AppKit. Left
+    /// on, `UndoManager` opens a group of its own for the first registration and
+    /// closes it when the event ends, so our explicit group nests inside it and
+    /// the first `undo()` unwinds the outer one — which took the whole insert
+    /// session, the external edit before it, and everything else in the event.
     private func openGroupIfNeeded() {
         guard openInsertGroup == nil else { return }
-        textView.undoManager?.beginUndoGrouping()
-        openInsertGroup = InsertGroup(patchStart: Int.max)
+        let undoManager = textView.undoManager
+        let previous = undoManager?.groupsByEvent ?? true
+        undoManager?.groupsByEvent = false
+        undoManager?.beginUndoGrouping()
+        openInsertGroup = InsertGroup(patchStart: Int.max, previousGroupsByEvent: previous)
     }
 
     /// Registers the caret **inside** the group, so an external edit's undo step
@@ -215,6 +291,7 @@ public final class VimUITextViewAdapter: NSObject, VimGeometryProvider, VimHisto
             registerCaret(group.patchStart, on: undoManager)
         }
         undoManager?.endUndoGrouping()
+        undoManager?.groupsByEvent = group.previousGroupsByEvent
     }
 
     private func registerCaret(_ start: Int, on undoManager: UndoManager?) {
@@ -230,8 +307,17 @@ public final class VimUITextViewAdapter: NSObject, VimGeometryProvider, VimHisto
         var range = result.primarySelection.range
         range.location = min(range.location, length)
         range.length = min(range.length, length - range.location)
+        // Remembered, and suppressed on the way out: a vim command's own answer
+        // must not come round again as if the user had moved the caret.
+        lastAppliedSelection = range
+        applyingSelection = true
+        defer { applyingSelection = false }
         textView.selectedRange = range
     }
+
+    /// True while `applySelection` is writing; see `selectionDidChangeExternally`.
+    private var applyingSelection = false
+    private var lastAppliedSelection: NSRange?
 
     private func applyScroll(_ scroll: VimScrollRequest) {
         switch scroll.kind {

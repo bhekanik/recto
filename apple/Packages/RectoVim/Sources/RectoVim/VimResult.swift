@@ -69,6 +69,10 @@ public struct VimResult: Decodable, Sendable {
     /// The host's own undo came back through JS; the edits were already applied
     /// by the host and must not be replayed.
     public let resynced: Bool
+    /// The cursor handoff that produced this result has to start a new undo
+    /// block — vim's rule for a cursor key in insert mode, which `<C-g>U`
+    /// suppresses. Every other call leaves it false.
+    public let undoBreak: Bool
 
     public var primarySelection: VimSelection {
         guard mainIndex >= 0, mainIndex < selections.count else {
@@ -76,6 +80,22 @@ public struct VimResult: Decodable, Sendable {
         }
         return selections[mainIndex]
     }
+}
+
+/// Who made a text change the vim layer did not make.
+///
+/// The distinction decides two things that used to be wrong together. A
+/// composition must keep insert mode — routing it through the cancelling
+/// `setText` path left the engine in normal mode after a commit, so the next
+/// typed character ran as an operator. A genuinely external edit must close the
+/// vim undo group *before* it registers its own undo action, or one `u` throws
+/// away the edit and the whole insert session with it.
+public enum VimTextChangeSource: Sendable, Equatable {
+    /// The input system is rewriting its own marked text, or committing it.
+    case composition
+    /// Anything else: a menu command, a drag, a sync landing, a programmatic
+    /// edit made through the text view.
+    case external
 }
 
 /// Why replaying the edit journal onto the text storage had to stop.

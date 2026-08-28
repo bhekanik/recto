@@ -79,9 +79,20 @@ public final class VimTextViewAdapter: NSObject, VimGeometryProvider, VimHistory
             }
             // Anything that changed the storage without going through us —
             // a composition, a menu command, a drag — is taken back here.
-            // `syncFromTextView` is a no-op while we are applying our own edits.
-            hooked.textDidChangeExternally = { [weak self] in
-                try? self?.syncFromTextView()
+            // Both are no-ops while we are applying our own edits.
+            hooked.willChangeTextExternally = { [weak self] in
+                self?.willChangeTextExternally()
+            }
+            hooked.textDidChangeExternally = { [weak self] source in
+                switch source {
+                case .composition: try? self?.syncCompositionFromTextView()
+                case .external: try? self?.syncFromTextView()
+                }
+            }
+            // An arrow key insert mode declines, Home/End, a click: the text
+            // view moves the caret and the engine has to follow it.
+            hooked.selectionDidChangeExternally = { [weak self] in
+                self?.selectionDidChangeExternally()
             }
         }
         try apply(engine.state())
@@ -163,6 +174,63 @@ public final class VimTextViewAdapter: NSObject, VimGeometryProvider, VimHistory
                 textView.string,
                 anchor: selection.location,
                 head: NSMaxRange(selection)))
+    }
+
+    /// The same, for a change the input system made to its own marked text.
+    ///
+    /// A composition is not an external edit: it is the user typing, in insert
+    /// mode, and `setText`'s cancelling `<Esc>` dropped the engine into normal
+    /// mode on the *first* marked-text change. Committing `日` mid-insert then
+    /// left the next `y` running as an operator. `adoptText` records the change
+    /// and keeps the mode.
+    ///
+    /// While marked text is up AppKit owns the selection, so the engine's answer
+    /// is deliberately not pushed back — doing so can end the composition.
+    public func syncCompositionFromTextView() throws {
+        guard !applyingEdits else { return }
+        let string = textView.string as NSString
+        let selection = GraphemeClamp.range(in: string, textView.selectedRange())
+        let result = try engine.adoptText(
+            textView.string, anchor: selection.location, head: NSMaxRange(selection),
+            composing: textView.hasMarkedText())
+        guard !textView.hasMarkedText() else {
+            onStatusChange?(VimStatus(result: result))
+            return
+        }
+        try apply(result)
+    }
+
+    /// Something that is not vim is about to change the text.
+    ///
+    /// Closing the group here rather than in `didChangeText` is the whole point:
+    /// by then AppKit has already registered the external undo action, and an
+    /// action registered inside the open vim group makes one `u` undo the
+    /// external edit and the whole insert session together.
+    public func willChangeTextExternally() {
+        guard !applyingEdits else { return }
+        closeInsertGroup()
+    }
+
+    /// The text view moved the caret without asking the engine — an arrow key or
+    /// Home/End that insert mode declined, a click, a menu command.
+    ///
+    /// Vim starts a new undo block at a cursor key, so the open insert group is
+    /// closed first unless `<C-g>U` asked for it to continue.
+    public func selectionDidChangeExternally() {
+        guard !applyingEdits, !applyingSelection, !textView.hasMarkedText() else { return }
+        let selection = textView.selectedRange()
+        // The engine's own answer coming back around; nothing moved.
+        guard selection != lastAppliedSelection else { return }
+        do {
+            let clamped = GraphemeClamp.range(in: textView.string as NSString, selection)
+            let result = try engine.moveCursorFromHost(
+                anchor: clamped.location, head: NSMaxRange(clamped))
+            if result.undoBreak { closeInsertGroup() }
+            try apply(result)
+        } catch {
+            Self.log.error(
+                "selection handoff failed: \(String(describing: error), privacy: .public)")
+        }
     }
 
     // MARK: - Applying results
@@ -321,8 +389,18 @@ public final class VimTextViewAdapter: NSObject, VimGeometryProvider, VimHistory
         range.location = min(range.location, length)
         range.length = min(range.length, length - range.location)
         assertClampIsIdentity(range, "selection")
+        // Remembered, and suppressed on the way out: the text view reports every
+        // selection change back to us, and a vim command's own answer must not
+        // come round again as if the user had moved the caret.
+        lastAppliedSelection = range
+        applyingSelection = true
+        defer { applyingSelection = false }
         textView.setSelectedRange(range)
     }
+
+    /// True while `applySelection` is writing; see `selectionDidChangeExternally`.
+    private var applyingSelection = false
+    private var lastAppliedSelection: NSRange?
 
     /// Debug-only check that the JS mirror and ICU agree about cluster
     /// boundaries. A disagreement is a real bug — the two buffers would drift —

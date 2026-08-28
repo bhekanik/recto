@@ -30,7 +30,7 @@ public final class BlockCaretTextView: NSTextView {
     /// directly changes the storage without telling the JS mirror.
     public var inputHook: ((String, NSRange) -> Bool)?
 
-    /// The text view changed its own storage.
+    /// The text view changed its own storage, and who did it.
     ///
     /// AppKit owns the storage during a composition and modelling that as vim
     /// edits would fight the input system, so the adapter stands aside and takes
@@ -39,8 +39,35 @@ public final class BlockCaretTextView: NSTextView {
     /// marked run can end the composition itself, so there is no later
     /// `unmarkText` to hang the resync on.
     ///
+    /// The source matters because the two changes need opposite treatment — see
+    /// `VimTextChangeSource`.
+    ///
     /// The adapter ignores this while it is applying its own edits.
-    public var textDidChangeExternally: (() -> Void)?
+    public var textDidChangeExternally: ((VimTextChangeSource) -> Void)?
+
+    /// A change the vim layer did not make is about to be registered with the
+    /// undo manager.
+    ///
+    /// This has to be *before* the mutation, not after it. `didChangeText` runs
+    /// once AppKit has already registered the external undo action, and if the
+    /// vim insert group is still open that action lands inside it: typing `iab`
+    /// and then letting something else insert `Z` made one `u` undo `Z` and `ab`
+    /// together.
+    public var willChangeTextExternally: (() -> Void)?
+
+    /// The text view moved the caret itself — an arrow key insert mode declines
+    /// to AppKit, Home/End, a click, a menu command.
+    ///
+    /// Without this the engine never learns: `iab<Left>` moved the selection to
+    /// offset 1 and left the engine at 2, so the next character was inserted in
+    /// the wrong place.
+    public var selectionDidChangeExternally: (() -> Void)?
+
+    /// Set for the duration of a change the input system owns, so
+    /// `shouldChangeText` can tell a composition from an outside edit *before*
+    /// the mutation happens. Cleared at each `didChangeText`, and by the
+    /// overrides below once `super` has returned.
+    private var pendingChangeSource: VimTextChangeSource?
 
     public override func keyDown(with event: NSEvent) {
         // **Composition wins.** While marked text is up, Space, Return, Escape
@@ -67,12 +94,60 @@ public final class BlockCaretTextView: NSTextView {
         if let text, !hasMarkedText(), inputHook?(text, replacementRange) == true {
             return
         }
+        if hasMarkedText() { pendingChangeSource = .composition }
         super.insertText(string, replacementRange: replacementRange)
+        pendingChangeSource = nil
+    }
+
+    public override func setMarkedText(
+        _ string: Any, selectedRange: NSRange, replacementRange: NSRange
+    ) {
+        pendingChangeSource = .composition
+        super.setMarkedText(
+            string, selectedRange: selectedRange, replacementRange: replacementRange)
+        pendingChangeSource = nil
+    }
+
+    public override func unmarkText() {
+        pendingChangeSource = .composition
+        super.unmarkText()
+        pendingChangeSource = nil
+    }
+
+    public override func shouldChangeText(
+        in affectedCharRange: NSRange, replacementString: String?
+    ) -> Bool {
+        // Whoever is about to mutate the storage has not said who they are, so
+        // they are not the input system: give the adapter its chance to close
+        // the vim undo group before the mutation registers one of its own.
+        if pendingChangeSource == nil {
+            pendingChangeSource = .external
+            willChangeTextExternally?()
+        }
+        return super.shouldChangeText(
+            in: affectedCharRange, replacementString: replacementString)
     }
 
     public override func didChangeText() {
+        let source = pendingChangeSource ?? .external
+        pendingChangeSource = nil
         super.didChangeText()
-        textDidChangeExternally?()
+        textDidChangeExternally?(source)
+    }
+
+    /// The primitive every selection change funnels through, including the
+    /// arrow keys AppKit handles when insert mode declines them and the click
+    /// that placed the caret.
+    public override func setSelectedRanges(
+        _ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool
+    ) {
+        super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
+        // Mid-drag the selection is not settled yet, and the engine has no use
+        // for the intermediate ranges. Nor for the ones AppKit produces in the
+        // middle of a change it is already going to report: the caret that
+        // matters is the one the change leaves behind.
+        guard !stillSelecting, pendingChangeSource == nil else { return }
+        selectionDidChangeExternally?()
     }
 
     public override func drawInsertionPoint(
