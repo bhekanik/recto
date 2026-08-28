@@ -2,6 +2,7 @@ import type { GenericMutationCtx } from "convex/server";
 import { v } from "convex/values";
 import type { DataModel, Id } from "./_generated/dataModel";
 import { internalMutation, mutation, query } from "./_generated/server";
+import { assertNotDeleting } from "./accountGuard";
 import { requireUserId } from "./documents";
 
 /**
@@ -11,12 +12,61 @@ import { requireUserId } from "./documents";
  * short-lived URL and inserts a canonical `![alt](url)` reference.
  */
 
-/** Signed, short-lived URL the client POSTs the image bytes to. Auth-gated. */
+/**
+ * LEGACY signed-upload URL. Superseded by the `/upload-image` HTTP action
+ * (`convex/http.ts`), which stores the bytes and claims ownership in one
+ * server-side step.
+ *
+ * The two-step protocol could not be made correct: the bytes land in
+ * `_storage` when the client POSTs them, and ownership was only recorded by a
+ * separate `registerUpload` call afterwards. A crash, a rejected mutation, a
+ * closed tab — or a browser tab still running the code deployed before this
+ * change — leaves a file nothing can attribute, which account deletion then
+ * cannot find. Kept only so those tabs keep working until they age out; it is
+ * not used by this build.
+ */
 export const generateUploadUrl = mutation({
 	args: {},
 	handler: async (ctx) => {
 		await requireUserId(ctx); // single-user; only the owner may upload
 		return await ctx.storage.generateUploadUrl();
+	},
+});
+
+/**
+ * Ceiling on one uploaded file. Convex storage itself allows far more; this is
+ * about what a writing app should accept inline, and it keeps a single request
+ * bounded.
+ */
+export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
+
+export const UPLOAD_TOO_LARGE_MESSAGE =
+	"That image is too large to upload (20 MiB limit).";
+
+/**
+ * Claim a blob the HTTP upload action has just stored, and return its URL.
+ * Internal because the storage id comes from the action that created it, and
+ * the user id from the JWT that action already verified.
+ */
+export const claimUpload = internalMutation({
+	args: { storageId: v.id("_storage"), userId: v.string() },
+	handler: async (ctx, args) => {
+		// Same fence as every user-facing mutation: an upload started before a
+		// deletion must not land a file the purge has already been past.
+		await assertNotDeleting(ctx, args.userId);
+		const existing = await ctx.db
+			.query("blobs")
+			.withIndex("by_storage", (q) => q.eq("storageId", args.storageId))
+			.unique();
+		if (!existing) {
+			await ctx.db.insert("blobs", {
+				storageId: args.storageId,
+				ownerUserId: args.userId,
+				kind: "upload",
+				createdAt: Date.now(),
+			});
+		}
+		return await ctx.storage.getUrl(args.storageId);
 	},
 });
 
@@ -62,6 +112,12 @@ export const registerUpload = mutation({
 export const registerExport = internalMutation({
 	args: { storageId: v.id("_storage"), userId: v.string() },
 	handler: async (ctx, args) => {
+		// The action authenticated before rendering, which can take long enough
+		// for a deletion to run to completion underneath it. Without this the
+		// export would register — and hand out a working bearer URL — for an
+		// account that no longer exists. Throwing here makes `export.docx`'s
+		// catch delete the file it just stored.
+		await assertNotDeleting(ctx, args.userId);
 		const existing = await ctx.db
 			.query("blobs")
 			.withIndex("by_storage", (q) => q.eq("storageId", args.storageId))

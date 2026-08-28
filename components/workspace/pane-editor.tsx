@@ -1,6 +1,7 @@
 "use client";
 
-import { useMutation, useQuery } from "convex/react";
+import { useAuth } from "@clerk/nextjs";
+import { useQuery } from "convex/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Skeleton } from "@/components/ui/skeleton";
@@ -8,7 +9,6 @@ import { DocumentHeader } from "@/components/workspace/document-header";
 import { EmptyPaneBound } from "@/components/workspace/empty-pane";
 import { PaneShell } from "@/components/workspace/pane-shell";
 import { api } from "@/convex/_generated/api";
-import type { Id } from "@/convex/_generated/dataModel";
 import {
 	CodeMirrorEditor,
 	type CodeMirrorEditorHandle,
@@ -48,6 +48,20 @@ import {
 	useDocumentSyncFor,
 	useWorkspace,
 } from "@/lib/workspace/workspace-context";
+
+/**
+ * Convex's HTTP-actions origin (`.convex.site`), a different host from the
+ * WebSocket API (`.convex.cloud`). Derived rather than required as its own
+ * variable so an environment that only sets `NEXT_PUBLIC_CONVEX_URL` still
+ * uploads.
+ */
+const CONVEX_SITE_URL = (
+	process.env.NEXT_PUBLIC_CONVEX_SITE_URL ??
+	(process.env.NEXT_PUBLIC_CONVEX_URL ?? "").replace(
+		/\.convex\.cloud$/,
+		".convex.site",
+	)
+).replace(/\/$/, "");
 
 type PaneEditorProps = {
 	leaf: PaneLeaf;
@@ -108,20 +122,18 @@ export function PaneEditor({
 	// paste/drop handler (CodeMirror or Milkdown) inserts a canonical image. The
 	// URL resolve happens inside an event handler, so use the imperative client
 	// (not a reactive useQuery).
-	const generateUploadUrl = useMutation(api.files.generateUploadUrl);
-	// registerUpload, not getImageUrl: the same round trip, but it also records
-	// who owns the blob, which is the only way account deletion can find it
-	// later (ADR-21).
-	const registerUpload = useMutation(api.files.registerUpload);
+	// One POST to Convex's HTTP endpoint, which stores the bytes and records who
+	// owns them before answering. Splitting those two steps across the network
+	// is what left files unattributed (ADR-21).
+	const { getToken } = useAuth();
 	const handleUploadImage = useCallback(
 		(file: File | Blob) =>
 			uploadImage({
 				file,
-				generateUploadUrl,
-				resolveUrl: (storageId) =>
-					registerUpload({ storageId: storageId as Id<"_storage"> }),
+				siteUrl: CONVEX_SITE_URL,
+				getToken: () => getToken({ template: "convex" }),
 			}),
-		[generateUploadUrl, registerUpload],
+		[getToken],
 	);
 
 	// Milkdown reports frontmatter on every seed. While the writer is editing the

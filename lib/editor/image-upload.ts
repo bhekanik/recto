@@ -7,40 +7,52 @@ export function isImageFile(file: File | Blob): boolean {
 
 type UploadImageArgs = {
 	file: File | Blob;
-	/** Bound Convex mutation returning a signed upload URL. */
-	generateUploadUrl: () => Promise<string>;
-	/** Resolve a stored file id to a servable URL. */
-	resolveUrl: (storageId: string) => Promise<string | null>;
+	/** Convex HTTP-actions origin (`NEXT_PUBLIC_CONVEX_SITE_URL`). */
+	siteUrl: string;
+	/** A Convex-templated Clerk JWT for the current user. */
+	getToken: () => Promise<string | null>;
 };
 
+type UploadResponse = { storageId?: string; url?: string; error?: string };
+
 /**
- * Upload an image blob to Convex file storage via the signed-upload-URL pattern
- * and return a servable URL + a derived alt text. The bytes go straight to the
- * upload URL (POST) — never through a mutation arg (the ~1 MiB ceiling is why
- * images use storage at all, overview §8). Errors surface a toast and rethrow so
- * the caller can fall through to default paste behavior.
+ * Upload an image to Convex and return a servable URL plus a derived alt text.
+ *
+ * One POST to the server-mediated `/upload-image` endpoint, which stores the
+ * bytes AND records who owns them before answering (`convex/http.ts`). The
+ * previous shape — ask for a signed URL, POST the bytes to storage, then call a
+ * mutation to claim the result — left a file with no owner whenever anything
+ * interrupted the second step, and an unowned file is one account deletion
+ * cannot find.
+ *
+ * Errors surface a toast and rethrow so the caller can fall through to default
+ * paste behavior.
  */
 export async function uploadImage(
 	args: UploadImageArgs,
 ): Promise<{ url: string; alt: string }> {
 	try {
-		const postUrl = await args.generateUploadUrl();
-		const res = await fetch(postUrl, {
+		const token = await args.getToken();
+		if (!token) throw new Error("Not signed in");
+
+		const res = await fetch(`${args.siteUrl}/upload-image`, {
 			method: "POST",
 			headers: {
+				Authorization: `Bearer ${token}`,
 				"Content-Type": args.file.type || "application/octet-stream",
 			},
 			body: args.file,
 		});
-		if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
-		const { storageId } = (await res.json()) as { storageId: string };
-		const url = await args.resolveUrl(storageId);
-		if (!url) throw new Error("Could not resolve uploaded image URL");
+		const body = (await res.json().catch(() => ({}))) as UploadResponse;
+		if (!res.ok || !body.url) {
+			throw new Error(body.error ?? `Upload failed: ${res.status}`);
+		}
+
 		const alt =
 			args.file instanceof File
 				? args.file.name.replace(/\.[^.]+$/, "")
 				: "image";
-		return { url, alt };
+		return { url: body.url, alt };
 	} catch (error) {
 		toast("Image upload failed", "error");
 		throw error;

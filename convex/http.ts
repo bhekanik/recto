@@ -1,0 +1,104 @@
+import { httpRouter } from "convex/server";
+import { internal } from "./_generated/api";
+import { httpAction } from "./_generated/server";
+import { MAX_UPLOAD_BYTES, UPLOAD_TOO_LARGE_MESSAGE } from "./files";
+
+/**
+ * Server-mediated image upload (ADR-21).
+ *
+ * The previous protocol had the client ask for a signed URL, POST the bytes
+ * straight to storage, and then call a mutation to record who owned the result.
+ * The file exists from the moment the POST completes, so anything that stopped
+ * the second call — a crash, a closed tab, a rejected mutation, an account
+ * deletion landing in between — left a file with no owner. Nothing could then
+ * attribute it, and account deletion could not find it.
+ *
+ * Here the bytes and the ownership row are the server's problem: `store` and
+ * `claimUpload` both happen before the client is told anything, and a claim
+ * that is refused (the account is being deleted) deletes the file it just
+ * stored rather than leaving it behind.
+ */
+
+const ALLOWED_HEADERS = "Content-Type, Authorization, Digest";
+
+function corsHeaders(origin: string | null): Record<string, string> {
+	return {
+		// The studio is served from a different origin than convex.site, so the
+		// browser preflights this. Echoing the origin rather than `*` keeps
+		// credentialed requests legal.
+		"Access-Control-Allow-Origin": origin ?? "*",
+		Vary: "Origin",
+		"Access-Control-Allow-Methods": "POST, OPTIONS",
+		"Access-Control-Allow-Headers": ALLOWED_HEADERS,
+		"Access-Control-Max-Age": "86400",
+	};
+}
+
+function json(body: unknown, status: number, origin: string | null): Response {
+	return new Response(JSON.stringify(body), {
+		status,
+		headers: { "Content-Type": "application/json", ...corsHeaders(origin) },
+	});
+}
+
+const uploadImage = httpAction(async (ctx, request) => {
+	const origin = request.headers.get("Origin");
+
+	const identity = await ctx.auth.getUserIdentity();
+	if (!identity) return json({ error: "Unauthenticated" }, 401, origin);
+
+	// Checked before reading the body so an oversized upload is refused without
+	// buffering it. `content-length` is advisory, hence the second check below.
+	const declared = Number(request.headers.get("Content-Length") ?? "0");
+	if (Number.isFinite(declared) && declared > MAX_UPLOAD_BYTES) {
+		return json({ error: UPLOAD_TOO_LARGE_MESSAGE }, 413, origin);
+	}
+
+	const blob = await request.blob();
+	if (blob.size === 0) return json({ error: "Empty upload" }, 400, origin);
+	if (blob.size > MAX_UPLOAD_BYTES) {
+		return json({ error: UPLOAD_TOO_LARGE_MESSAGE }, 413, origin);
+	}
+
+	const storageId = await ctx.storage.store(blob);
+	let url: string | null;
+	try {
+		url = await ctx.runMutation(internal.files.claimUpload, {
+			storageId,
+			userId: identity.subject,
+		});
+	} catch (error) {
+		// An unclaimed file is one nothing can attribute later, which is the whole
+		// failure this endpoint exists to remove.
+		await ctx.storage.delete(storageId);
+		return json(
+			{ error: error instanceof Error ? error.message : "Upload failed" },
+			409,
+			origin,
+		);
+	}
+
+	if (url === null) {
+		await ctx.runMutation(internal.files.deleteStoredFile, { storageId });
+		return json({ error: "Stored file could not be resolved" }, 500, origin);
+	}
+
+	return json({ storageId, url }, 200, origin);
+});
+
+const http = httpRouter();
+
+http.route({ path: "/upload-image", method: "POST", handler: uploadImage });
+http.route({
+	path: "/upload-image",
+	method: "OPTIONS",
+	handler: httpAction(
+		async (_ctx, request) =>
+			new Response(null, {
+				status: 204,
+				headers: corsHeaders(request.headers.get("Origin")),
+			}),
+	),
+});
+
+export default http;

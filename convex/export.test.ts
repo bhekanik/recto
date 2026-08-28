@@ -3,6 +3,7 @@ import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { ACCOUNT_DELETION_IN_PROGRESS_MESSAGE } from "./accountGuard";
 import { EXPORT_TTL_MS } from "./export";
 import schema from "./schema";
 
@@ -13,6 +14,9 @@ const modules: Record<string, () => Promise<unknown>> = {
 	"./export.ts": () => import("./export"),
 	"./documents.ts": () => import("./documents"),
 	"./files.ts": () => import("./files"),
+	"./account.ts": () => import("./account"),
+	"./accountGuard.ts": () => import("./accountGuard"),
+	"./accountPurge.ts": () => import("./accountPurge"),
 	"./_generated/api.js": () => import("./_generated/api"),
 	"./_generated/server.js": () => import("./_generated/server"),
 };
@@ -148,6 +152,47 @@ describe("export.docx", () => {
 		expect(scheduled[0]?.scheduledTime).toBeGreaterThanOrEqual(
 			before + EXPORT_TTL_MS,
 		);
+	});
+
+	it("refuses, and leaves no file, when the account is deleted mid-render", async () => {
+		const t = convexTest(schema, modules);
+		const documentId = await seedDocument(t, OWNER.subject);
+
+		// The race this closes: the action authenticated and read the document
+		// while it still existed, rendering took a while, and the deletion ran to
+		// completion underneath. Registering now would hand a deleted account a
+		// working bearer URL for a file the purge has already been past.
+		await t.mutation(internal.account.beginDeletion, { userId: OWNER.subject });
+
+		await expect(
+			t.withIdentity(OWNER).action(api.export.docx, { documentId }),
+		).rejects.toThrow(ACCOUNT_DELETION_IN_PROGRESS_MESSAGE);
+
+		// The stored bytes are cleaned up by the action's own catch.
+		expect(
+			await t.run((ctx) => ctx.db.system.query("_storage").collect()),
+		).toHaveLength(0);
+		expect(await t.run((ctx) => ctx.db.query("blobs").collect())).toHaveLength(
+			0,
+		);
+	});
+
+	it("records ownership of the file it generates", async () => {
+		const t = convexTest(schema, modules);
+		const documentId = await seedDocument(t, OWNER.subject);
+		const result = await t
+			.withIdentity(OWNER)
+			.action(api.export.docx, { documentId });
+
+		// Nothing references a generated export, so without this row the account
+		// purge has no way to find it.
+		const blobs = await t.run((ctx) => ctx.db.query("blobs").collect());
+		expect(blobs).toHaveLength(1);
+		expect(blobs[0]).toMatchObject({
+			ownerUserId: OWNER.subject,
+			kind: "export",
+			storageId: result.storageId,
+		});
 	});
 
 	it("deletes the file when that scheduled job runs, and tolerates a repeat", async () => {
