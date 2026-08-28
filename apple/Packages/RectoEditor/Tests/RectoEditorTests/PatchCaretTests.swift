@@ -23,12 +23,9 @@ struct PatchCaretTests {
         var out = "---\ntitle: Sediment\n---\n\n"
         for index in 0..<400 {
             out += "## Section \(index)\n\n"
-            out += """
-            The **sediment** settles into *layers* that record the weather of a \
-            year, and the `core` taken from the lake bed reads like a \
-            [ledger](https://example.com) of every summer since the ice left.
-
-            """
+            out += "The **sediment** settles into *layers* that record the weather"
+            out += " of a year, and the `core` taken from the lake bed reads like"
+            out += " a [ledger](https://example.com) of every summer since the ice left.\n\n"
             if index % 20 == 0 {
                 out += "```swift\nlet depth = \(index) // cm\n```\n\n"
                 out += "| year | depth |\n| --- | --- |\n| \(1900 + index) | \(index) |\n\n"
