@@ -2408,23 +2408,31 @@ describe("studio sync + history contract", () => {
 		s.unmount();
 	});
 
-	it("L2: discarding names every queued write and clears the recovery record", async () => {
+	it("L2: discard summary tracks work queued after the write blocks", async () => {
 		const handle = fakeHandle();
 		dagRows = [rootNode()];
 		const s = mountStudio(handle);
 		s.render(AT_ROOT);
 
-		// A queue with one of everything: the refused commit, an AI commit behind
-		// it, a version tag, and a pointer move.
+		// The dialog opens for one refused commit.
 		s.type(TYPED);
 		await settle(600);
 		await settleSavesAhead();
+		await refuseNext(NAMES.commitEdit, "Server Error: refused", "too_large");
+		expect(s.history.blockedWrite?.discards).toEqual({
+			commits: 1,
+			aiCommits: 0,
+			pointers: 0,
+			versions: 0,
+		});
+
+		// Editing stays enabled while blocked. Each new write must update the
+		// confirmation before Discard can clear it.
 		s.run(() => {
 			s.history.commitProgrammatic(AI, { origin: "ai:grammar" });
 			void s.history.tagVersion("Chapter one");
 			s.history.undo();
 		});
-		await refuseNext(NAMES.commitEdit, "Server Error: refused", "too_large");
 
 		const blocked = s.history.blockedWrite;
 		expect(blocked?.discards).toEqual({

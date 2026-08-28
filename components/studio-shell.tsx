@@ -19,8 +19,7 @@ import { OutlinePanel } from "@/components/outline/outline-panel";
 import { CommentsPanel } from "@/components/review/comments-panel";
 import { ReviewSurface } from "@/components/review/review-surface";
 import { ShareDialog } from "@/components/share-dialog";
-import { StatusBar } from "@/components/status-bar";
-import { BlockedWriteDialog } from "@/components/sync/blocked-write-dialog";
+import { SyncStatusBar } from "@/components/sync/sync-status-bar";
 import { Toaster } from "@/components/toaster";
 import { TopFormatToolbar } from "@/components/top-format-toolbar";
 import { Button } from "@/components/ui/button";
@@ -57,7 +56,6 @@ import {
 } from "@/lib/studio/use-studio-settings";
 import { useWritingStats } from "@/lib/studio/use-writing-stats";
 import { useZenMode } from "@/lib/studio/use-zen-mode";
-import { syncIndicatorProps } from "@/lib/sync/sync-indicator";
 import { cn } from "@/lib/utils";
 import { findLeaf } from "@/lib/workspace/queries";
 import {
@@ -168,7 +166,6 @@ function StudioWorkspace() {
 			: activeShareState.role === "owner";
 	const effectiveAiEnabled = settings.aiEnabled && !activeDocShared;
 	const [shareDialogOpen, setShareDialogOpen] = useState(false);
-	const [blockedDialogOpen, setBlockedDialogOpen] = useState(false);
 
 	// Comments (plan 010 Phase B). Available whenever the caller can see the active
 	// doc with at least commenter access: the owner always can; a grantee can (any
@@ -675,15 +672,10 @@ function StudioWorkspace() {
 
 				{!showEmpty && statusVisible && activeSync && (
 					<div className={bottomChromeClass} {...chromeHoverProps}>
-						<StatusBar
+						<SyncStatusBar
+							sync={activeSync}
 							wordCount={activeSync.wordCount}
 							readingMinutes={readingTimeMinutes(activeSync.wordCount)}
-							syncStatus={syncIndicatorProps(activeSync).syncStatus}
-							onShowBlocked={
-								syncIndicatorProps(activeSync).blocked
-									? () => setBlockedDialogOpen(true)
-									: undefined
-							}
 							mode={activeMode}
 							onModeChange={(m) => dispatchModeSwitch(m)}
 							theme={settings.theme}
@@ -827,19 +819,6 @@ function StudioWorkspace() {
 							settings.setOutlineOpen(false);
 							dispatchFocusEditor();
 						}}
-					/>
-				)}
-
-				{activeSync && (
-					<BlockedWriteDialog
-						blocked={activeSync.blockedWrite}
-						open={blockedDialogOpen && activeSync.blockedWrite !== null}
-						onOpenChange={(open) => {
-							setBlockedDialogOpen(open);
-							if (!open) dispatchFocusEditor();
-						}}
-						onRetry={activeSync.retryBlockedWrite}
-						onDiscard={activeSync.resolveBlockedWrite}
 					/>
 				)}
 

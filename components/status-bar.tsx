@@ -49,7 +49,7 @@ const MODE_ICON: Record<Mode, typeof Type> = {
 	preview: Eye,
 };
 
-type StatusBarProps = {
+export type StatusBarProps = {
 	wordCount: number;
 	readingMinutes: number;
 	syncStatus: SyncStatus;

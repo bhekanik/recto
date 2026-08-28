@@ -662,11 +662,24 @@ export function useDocumentHistory(args: {
 	}, []);
 
 	/** Queue a write and report the new depth, then try to send. */
-	const enqueue = useCallback((entry: OutboxEntry) => {
-		outboxRef.current.push(entry);
-		setPendingWriteCount(outboxRef.current.length);
-		pumpOutboxRef.current();
-	}, []);
+	const enqueue = useCallback(
+		(entry: OutboxEntry) => {
+			outboxRef.current.push(entry);
+			setPendingWriteCount(outboxRef.current.length);
+			// Editing stays enabled while the queue is stuck, so work keeps arriving
+			// behind the write the writer is being asked about. The summary they are
+			// shown has to keep up: it was taken once, at the first rejection, so a
+			// confirmation could say "1 unsaved edit" and then discard four.
+			if (blockedRef.current !== null) {
+				setBlockedWrite({
+					...blockedRef.current,
+					discards: summariseQueue(),
+				});
+			}
+			pumpOutboxRef.current();
+		},
+		[setBlockedWrite, summariseQueue],
+	);
 
 	// Merge the reactive DAG with any optimistically-appended local nodes.
 	const nodes = useMemo<HistoryNode[]>(() => {
