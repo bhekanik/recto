@@ -14,9 +14,13 @@ extension MarkdownProse {
         }
 
         func run() -> (prose: String, headings: [OutlineHeading]) {
+            var definitionScanner = BlockScanner(
+                source: source, lines: lines, definitionLabels: [], footnoteDefinitionLabels: [])
+            let definitions = definitionScanner.run(allowsFrontmatter: true)
             var scanner = BlockScanner(
                 source: source, lines: lines,
-                definitionLabels: Self.definitionLabels(source, lines))
+                definitionLabels: definitions.definitionLabels,
+                footnoteDefinitionLabels: definitions.footnoteDefinitionLabels)
             let result = scanner.run(allowsFrontmatter: true)
             return (
                 String(decoding: result.prose, as: UTF16.self),
@@ -27,46 +31,6 @@ extension MarkdownProse {
         /// Splits physical lines without losing their original line endings.
         /// `\r\n` is one line ending but two UTF-16 units, and every offset this
         /// walker emits is a UTF-16 offset into the original string.
-        /// Every link-reference label the document defines, normalised.
-        ///
-        /// A bare `[label]` is a `linkReference` node — whose child text is
-        /// prose — only when a matching definition exists somewhere in the
-        /// document; otherwise remark leaves the brackets as literal text, and
-        /// `foo[bar]baz` is one word rather than three. Definitions resolve
-        /// document-wide and in any order, so this has to be a pre-pass.
-        ///
-        /// Recognising the shape line by line rather than only at block starts
-        /// can over-collect (a `[x]: y` inside a fenced code block), which at
-        /// worst turns a bare `[x]` elsewhere into a link. That direction is
-        /// harmless: a link's text is prose either way, and only the bracket
-        /// characters differ.
-        private static func definitionLabels(_ source: [UInt16], _ lines: [SourceLine])
-            -> Set<String>
-        {
-            var labels: Set<String> = []
-            for line in lines {
-                var cursor = line.contentStart
-                var indent = 0
-                while cursor < line.end, indent < 4,
-                    source[cursor] == ASCII.space || source[cursor] == ASCII.tab
-                {
-                    cursor += 1
-                    indent += 1
-                }
-                guard cursor < line.end, source[cursor] == ASCII.leftBracket,
-                    cursor + 1 < line.end, source[cursor + 1] != ASCII.caret
-                else { continue }
-                cursor += 1
-                let labelStart = cursor
-                while cursor < line.end, source[cursor] != ASCII.rightBracket { cursor += 1 }
-                guard cursor > labelStart, cursor + 1 < line.end,
-                    source[cursor + 1] == ASCII.colon
-                else { continue }
-                labels.insert(normalizedLabel(source[labelStart..<cursor]))
-            }
-            return labels
-        }
-
         /// CommonMark matches labels case-insensitively with whitespace
         /// collapsed, so `[Foo  Bar]` and `[foo bar]` are the same label.
         static func normalizedLabel(_ units: ArraySlice<UInt16>) -> String {
@@ -123,6 +87,7 @@ private enum ASCII {
     static let exclamation: UInt16 = 0x21
     static let quote: UInt16 = 0x22
     static let hash: UInt16 = 0x23
+    static let ampersand: UInt16 = 0x26
     static let apostrophe: UInt16 = 0x27
     static let leftParenthesis: UInt16 = 0x28
     static let rightParenthesis: UInt16 = 0x29
@@ -134,6 +99,7 @@ private enum ASCII {
     static let zero: UInt16 = 0x30
     static let nine: UInt16 = 0x39
     static let colon: UInt16 = 0x3A
+    static let semicolon: UInt16 = 0x3B
     static let lessThan: UInt16 = 0x3C
     static let equals: UInt16 = 0x3D
     static let greaterThan: UInt16 = 0x3E
@@ -173,6 +139,8 @@ private struct SourceLine {
 private struct BlockResult {
     var prose: [UInt16] = []
     var headings: [OutlineHeading] = []
+    var definitionLabels: Set<String> = []
+    var footnoteDefinitionLabels: Set<String> = []
 }
 
 /// The two views of one inline sequence required by the JavaScript behavior.
@@ -195,6 +163,7 @@ private struct BlockScanner {
     /// Document-wide, so a nested scanner resolves a definition that appears
     /// outside the blockquote or list item it is scanning.
     let definitionLabels: Set<String>
+    let footnoteDefinitionLabels: Set<String>
 
     /// CommonMark's tag names for HTML block type 6. These tags consume through
     /// the next blank line rather than becoming inline HTML inside a paragraph.
@@ -224,15 +193,8 @@ private struct BlockScanner {
         var result = BlockResult()
         var lineIndex = 0
 
-        if allowsFrontmatter, lines.first.map({ exactText($0, "---") }) == true {
-            lineIndex = 1
-            while lineIndex < lines.count {
-                if exactText(lines[lineIndex], "---") || exactText(lines[lineIndex], "...") {
-                    lineIndex += 1
-                    break
-                }
-                lineIndex += 1
-            }
+        if allowsFrontmatter, let closingIndex = closingFrontmatterIndex() {
+            lineIndex = closingIndex + 1
             result.prose.append(ASCII.space)
         }
 
@@ -286,11 +248,12 @@ private struct BlockScanner {
             if let heading = atxHeading(in: line) {
                 let inline = InlineScanner(
                     units: Array(slice(heading.contentStart..<heading.contentEnd)),
-                    definitionLabels: definitionLabels
+                    definitionLabels: definitionLabels,
+                    footnoteDefinitionLabels: footnoteDefinitionLabels
                 ).run()
                 result.prose.append(ASCII.space)
                 result.prose.append(contentsOf: inline.prose)
-                if heading.hasClosingSequence { result.prose.append(ASCII.space) }
+                result.prose.append(ASCII.space)
                 result.headings.append(
                     OutlineHeading(
                         depth: heading.depth,
@@ -308,17 +271,20 @@ private struct BlockScanner {
                 continue
             }
 
-            if let contentStart = footnoteDefinitionContentStart(line) {
-                let consumed = consumeFootnote(from: lineIndex, contentStart: contentStart)
+            if let definition = footnoteDefinition(in: line) {
+                let consumed = consumeFootnote(
+                    from: lineIndex, contentStart: definition.contentStart)
                 result.prose.append(ASCII.space)
                 result.prose.append(contentsOf: inlineContent(consumed.lines).prose)
+                result.footnoteDefinitionLabels.insert(definition.label)
                 lineIndex = consumed.nextIndex
                 continue
             }
 
-            if let definitionEnd = linkReferenceDefinitionEnd(from: lineIndex) {
+            if let definition = linkReferenceDefinition(from: lineIndex) {
                 result.prose.append(ASCII.space)
-                lineIndex = definitionEnd
+                result.definitionLabels.insert(definition.label)
+                lineIndex = definition.endIndex
                 continue
             }
 
@@ -350,6 +316,8 @@ private struct BlockScanner {
     private func appendNested(_ nested: BlockResult, markerCount: Int, to result: inout BlockResult) {
         result.prose.append(contentsOf: repeatElement(ASCII.space, count: markerCount))
         result.prose.append(contentsOf: nested.prose)
+        result.definitionLabels.formUnion(nested.definitionLabels)
+        result.footnoteDefinitionLabels.formUnion(nested.footnoteDefinitionLabels)
         for heading in nested.headings {
             result.headings.append(
                 OutlineHeading(
@@ -384,7 +352,9 @@ private struct BlockScanner {
             }
         }
 
-        var scanner = BlockScanner(source: source, lines: nestedLines, definitionLabels: definitionLabels)
+        var scanner = BlockScanner(
+            source: source, lines: nestedLines, definitionLabels: definitionLabels,
+            footnoteDefinitionLabels: footnoteDefinitionLabels)
         return (scanner.run(), cursor, markerCount)
     }
 
@@ -425,7 +395,9 @@ private struct BlockScanner {
             cursor += 1
         }
 
-        var scanner = BlockScanner(source: source, lines: nestedLines, definitionLabels: definitionLabels)
+        var scanner = BlockScanner(
+            source: source, lines: nestedLines, definitionLabels: definitionLabels,
+            footnoteDefinitionLabels: footnoteDefinitionLabels)
         return (scanner.run(), cursor, item.markerCount)
     }
 
@@ -448,7 +420,11 @@ private struct BlockScanner {
         let cells = tableCells(in: line)
         for cell in cells {
             prose.append(ASCII.space)
-            prose.append(contentsOf: InlineScanner(units: Array(slice(cell)), definitionLabels: definitionLabels).run().prose)
+            prose.append(
+                contentsOf: InlineScanner(
+                    units: Array(slice(cell)), definitionLabels: definitionLabels,
+                    footnoteDefinitionLabels: footnoteDefinitionLabels
+                ).run().prose)
             prose.append(ASCII.space)
         }
     }
@@ -523,7 +499,10 @@ private struct BlockScanner {
             units.append(contentsOf: slice(line.contentStart..<line.end))
             units.append(contentsOf: slice(line.end..<line.endingEnd))
         }
-        return InlineScanner(units: units, definitionLabels: definitionLabels).run()
+        return InlineScanner(
+            units: units, definitionLabels: definitionLabels,
+            footnoteDefinitionLabels: footnoteDefinitionLabels
+        ).run()
     }
 
     /// Whether this line ends an open paragraph rather than continuing it
@@ -534,16 +513,25 @@ private struct BlockScanner {
         // type except 7 interrupt a paragraph, which is what keeps
         // `alpha\n<span>\nbeta` one paragraph with inline HTML in the middle.
         blockquoteContentStart(line) != nil
-            || listItem(in: line) != nil
+            || listItem(in: line).map(\.canInterruptParagraph) == true
             || openingFence(in: line) != nil
             || htmlBlockStart(line).map({ $0 != .completeTag }) == true
             || atxHeading(in: line) != nil
             || isThematicBreak(line)
-            || footnoteDefinitionContentStart(line) != nil
+            || footnoteDefinition(in: line) != nil
     }
 
     private func exactText(_ line: SourceLine, _ text: String) -> Bool {
         slice(line.contentStart..<line.end).elementsEqual(text.utf16)
+    }
+
+    /// An opening YAML fence is ordinary markdown when EOF arrives first.
+    /// remark-frontmatter backtracks in that case instead of consuming the file.
+    private func closingFrontmatterIndex() -> Int? {
+        guard lines.first.map({ exactText($0, "---") }) == true else { return nil }
+        return lines.indices.dropFirst().first(where: {
+            exactText(lines[$0], "---") || exactText(lines[$0], "...")
+        })
     }
 
     private func isBlank(_ line: SourceLine) -> Bool {
@@ -609,6 +597,7 @@ private struct BlockScanner {
         let contentStart: Int
         let contentColumn: Int
         let markerCount: Int
+        let canInterruptParagraph: Bool
     }
 
     /// Recognises CommonMark bullet and ordered markers with at most three
@@ -618,6 +607,7 @@ private struct BlockScanner {
         guard indent.columns <= 3 else { return nil }
         var cursor = indent.end
         guard cursor < line.end else { return nil }
+        var orderedStart: Int?
 
         if source[cursor] == ASCII.hyphen || source[cursor] == ASCII.plus
             || source[cursor] == ASCII.asterisk
@@ -633,6 +623,7 @@ private struct BlockScanner {
             guard cursor > digitsStart, cursor < line.end,
                 source[cursor] == ASCII.period || source[cursor] == ASCII.rightParenthesis
             else { return nil }
+            orderedStart = Int(String(decoding: source[digitsStart..<cursor], as: UTF16.self))
             cursor += 1
         }
 
@@ -656,7 +647,8 @@ private struct BlockScanner {
             markerCount += 1
         }
         return ListItem(
-            contentStart: cursor, contentColumn: contentColumn, markerCount: markerCount)
+            contentStart: cursor, contentColumn: contentColumn, markerCount: markerCount,
+            canInterruptParagraph: cursor < line.end && (orderedStart == nil || orderedStart == 1))
     }
 
     /// The delimiter identity needed to reject shorter or mismatched closing
@@ -694,14 +686,13 @@ private struct BlockScanner {
         return source[end..<line.end].allSatisfy(isSpaceOrTab)
     }
 
-    /// Heading metadata kept in source coordinates. Closing `#` characters need
-    /// a separate flag because they create a syntax separator after the text.
+    /// Heading metadata stays in source coordinates so outline offsets do not
+    /// need rebasing after nested scans.
     private struct ATXHeading {
         let depth: Int
         let offset: Int
         let contentStart: Int
         let contentEnd: Int
-        let hasClosingSequence: Bool
     }
 
     /// Applies CommonMark's six-level limit and three-space indent allowance,
@@ -732,8 +723,7 @@ private struct BlockScanner {
             }
         }
         return ATXHeading(
-            depth: depth, offset: start, contentStart: contentStart, contentEnd: contentEnd,
-            hasClosingSequence: hasClosingSequence)
+            depth: depth, offset: start, contentStart: contentStart, contentEnd: contentEnd)
     }
 
     /// Recognises a setext underline only when the rest of the line is spaces or
@@ -770,26 +760,21 @@ private struct BlockScanner {
         return count >= 3
     }
 
-    /// The termination rules for the implemented CommonMark HTML block forms.
-    /// Raw tags are type 1, comments are type 2, and blank-line termination is
-    /// shared by types 6 and 7.
-    /// Which CommonMark HTML block type started here. Only the four we need are
-    /// implemented; the distinction the rest of the scanner cares about is
-    /// `completeTag` (type 7), the one type that may **not** interrupt an open
-    /// paragraph.
+    /// The distinction the rest of the scanner cares about is `completeTag`
+    /// (type 7), the one HTML block type that may not interrupt a paragraph.
     private enum HTMLBlock: Equatable {
         /// Type 1: `<script`, `<pre`, `<style`, `<textarea`.
         case rawTag(String)
         /// Type 2: `<!--`.
         case comment
+        /// Types 3 to 5 each end at their first marker.
+        case untilMarker(String)
         /// Type 6: a known block-level tag name.
         case untilBlank
         /// Type 7: a complete tag alone on the line.
         case completeTag
     }
 
-    /// Recognises CommonMark HTML block types 1, 2, 6, and 7 only.
-    ///
     /// Type 7 is needed to keep a complete tag on its own line block-level while
     /// leaving `<span>safe</span>` inside a paragraph as inline HTML around the
     /// text node `safe`. By contrast, `<script>alert(1)</script>` is type 1 and
@@ -799,6 +784,17 @@ private struct BlockScanner {
         guard start < line.end, source[start] == ASCII.lessThan else { return nil }
         if starts(with: "<!--", at: start, limit: line.end, caseInsensitive: false) {
             return .comment
+        }
+        if starts(with: "<?", at: start, limit: line.end, caseInsensitive: false) {
+            return .untilMarker("?>")
+        }
+        if starts(with: "<![CDATA[", at: start, limit: line.end, caseInsensitive: false) {
+            return .untilMarker("]]>")
+        }
+        if start + 2 < line.end, source[start + 1] == ASCII.exclamation,
+            source[start + 2] >= 0x41, source[start + 2] <= 0x5A
+        {
+            return .untilMarker(">")
         }
         for tag in ["script", "pre", "style", "textarea"] {
             let tagStart = start + 1
@@ -835,6 +831,12 @@ private struct BlockScanner {
                 let line = lines[cursor]
                 cursor += 1
                 if contains("-->", in: line, caseInsensitive: false) { break }
+            }
+        case .untilMarker(let marker):
+            while cursor < lines.count {
+                let line = lines[cursor]
+                cursor += 1
+                if contains(marker, in: line, caseInsensitive: false) { break }
             }
         // Types 6 and 7 both end at the next blank line; they differ only in
         // whether they may interrupt a paragraph, which `startsInterruptingBlock`
@@ -932,10 +934,14 @@ private struct BlockScanner {
         return ranges
     }
 
-    /// Returns the body start for `[^label]: body`. The label identifies the
-    /// definition and contributes no prose; only the body crosses into inline
-    /// scanning.
-    private func footnoteDefinitionContentStart(_ line: SourceLine) -> Int? {
+    private struct FootnoteDefinition {
+        let label: String
+        let contentStart: Int
+    }
+
+    /// The label is needed in the document-wide resolution pass; only the body
+    /// crosses into prose scanning.
+    private func footnoteDefinition(in line: SourceLine) -> FootnoteDefinition? {
         var cursor = skipSpaces(line.contentStart, limit: line.end, maximum: 3)
         guard cursor + 3 < line.end, source[cursor] == ASCII.leftBracket,
             source[cursor + 1] == ASCII.caret
@@ -948,15 +954,22 @@ private struct BlockScanner {
         else {
             return nil
         }
+        let labelEnd = cursor
         cursor += 2
         while cursor < line.end, isSpaceOrTab(source[cursor]) { cursor += 1 }
-        return cursor
+        return FootnoteDefinition(
+            label: MarkdownProse.Walker.normalizedLabel(source[labelStart..<labelEnd]),
+            contentStart: cursor)
     }
 
-    /// Recognises a link reference definition by source shape without resolving
-    /// its label. Definitions produce no MDAST prose, including an optional
-    /// title on the same line or one indented continuation line.
-    private func linkReferenceDefinitionEnd(from lineIndex: Int) -> Int? {
+    private struct ReferenceDefinition {
+        let label: String
+        let endIndex: Int
+    }
+
+    /// Returns the normalized label as well as the block boundary. Collecting
+    /// here keeps definition-looking lines inside code and HTML blocks inert.
+    private func linkReferenceDefinition(from lineIndex: Int) -> ReferenceDefinition? {
         let line = lines[lineIndex]
         var cursor = skipSpaces(line.contentStart, limit: line.end, maximum: 3)
         guard cursor < line.end, source[cursor] == ASCII.leftBracket,
@@ -968,6 +981,7 @@ private struct BlockScanner {
         guard cursor > labelStart, cursor + 1 < line.end, source[cursor + 1] == ASCII.colon else {
             return nil
         }
+        let label = MarkdownProse.Walker.normalizedLabel(source[labelStart..<cursor])
         cursor += 2
         while cursor < line.end, isSpaceOrTab(source[cursor]) { cursor += 1 }
         guard cursor < line.end else { return nil }
@@ -979,11 +993,12 @@ private struct BlockScanner {
                 indentation(of: lines[lineIndex + 1]).columns > 0,
                 isLinkTitle(trimmedRange(of: lines[lineIndex + 1]))
             {
-                return lineIndex + 2
+                return ReferenceDefinition(label: label, endIndex: lineIndex + 2)
             }
-            return lineIndex + 1
+            return ReferenceDefinition(label: label, endIndex: lineIndex + 1)
         }
-        return isLinkTitle(cursor..<line.end) ? lineIndex + 1 : nil
+        return isLinkTitle(cursor..<line.end)
+            ? ReferenceDefinition(label: label, endIndex: lineIndex + 1) : nil
     }
 
     private func isLinkTitle(_ range: Range<Int>) -> Bool {
@@ -1056,6 +1071,7 @@ private struct BlockScanner {
 private struct InlineScanner {
     let units: [UInt16]
     let definitionLabels: Set<String>
+    let footnoteDefinitionLabels: Set<String>
 
     /// A possible emphasis or deletion delimiter. Its token index lets the
     /// pairing pass replace matched syntax while preserving unmatched literals.
@@ -1066,6 +1082,20 @@ private struct InlineScanner {
         let canOpen: Bool
         let canClose: Bool
     }
+
+    /// The bundle reads the full `character-entities` table, but shipping its
+    /// 2,125 names in the typing-path scanner would add more source than the
+    /// scanner itself. This covers the HTML5 names used in ordinary prose and
+    /// Recto's generated markdown. Numeric references below remain complete.
+    private static let namedCharacterReferences: [String: String] = [
+        "AMP": "&", "COPY": "©", "GT": ">", "LT": "<", "QUOT": "\"",
+        "amp": "&", "apos": "'", "bull": "•", "cent": "¢", "copy": "©",
+        "deg": "°", "divide": "÷", "euro": "€", "gt": ">", "hellip": "…",
+        "laquo": "«", "ldquo": "“", "lsquo": "‘", "lt": "<", "mdash": "—",
+        "middot": "·", "nbsp": "\u{00A0}", "ndash": "–", "plusmn": "±",
+        "pound": "£", "quot": "\"", "raquo": "»", "rdquo": "”", "reg": "®",
+        "rsquo": "’", "times": "×", "trade": "™", "yen": "¥",
+    ]
 
     /// A delayed inline emission. The cases preserve the distinction between
     /// MDAST text children, non-text nodes, and nodes whose `value` is visible
@@ -1110,6 +1140,14 @@ private struct InlineScanner {
                 continue
             }
 
+            if units[cursor] == ASCII.ampersand,
+                let reference = characterReference(at: cursor)
+            {
+                tokens.append(.text(reference.value))
+                cursor = reference.end
+                continue
+            }
+
             if units[cursor] == ASCII.backtick {
                 let runEnd = endOfRun(from: cursor, value: ASCII.backtick)
                 if let closeEnd = codeSpanClose(after: runEnd, length: runEnd - cursor) {
@@ -1148,7 +1186,7 @@ private struct InlineScanner {
             if units[cursor] == ASCII.exclamation, cursor + 1 < units.count,
                 units[cursor + 1] == ASCII.leftBracket,
                 let close = matchingBracket(from: cursor + 1),
-                let constructEnd = referenceSuffixEnd(after: close + 1)
+                let constructEnd = imageEnd(open: cursor + 1, close: close)
             {
                 tokens.append(.separator)
                 cursor = constructEnd
@@ -1157,7 +1195,9 @@ private struct InlineScanner {
 
             if units[cursor] == ASCII.leftBracket {
                 if cursor + 2 < units.count, units[cursor + 1] == ASCII.caret,
-                    let close = first(ASCII.rightBracket, after: cursor + 2)
+                    let close = first(ASCII.rightBracket, after: cursor + 2),
+                    footnoteDefinitionLabels.contains(
+                        MarkdownProse.Walker.normalizedLabel(units[(cursor + 2)..<close]))
                 {
                     tokens.append(.separator)
                     cursor = close + 1
@@ -1168,7 +1208,8 @@ private struct InlineScanner {
                 {
                     let child = InlineScanner(
                         units: Array(units[(cursor + 1)..<close]),
-                        definitionLabels: definitionLabels
+                        definitionLabels: definitionLabels,
+                        footnoteDefinitionLabels: footnoteDefinitionLabels
                     ).run()
                     tokens.append(.separator)
                     tokens.append(.text(child.flattened))
@@ -1270,6 +1311,23 @@ private struct InlineScanner {
             ? close + 1 : nil
     }
 
+    /// Images use link-reference resolution, but their alt label is metadata,
+    /// not an MDAST `text` child. An unresolved form stays literal markdown.
+    private func imageEnd(open: Int, close: Int) -> Int? {
+        let suffix = referenceSuffixEnd(after: close + 1)
+        if let suffix, units[close + 1] == ASCII.leftParenthesis { return suffix }
+        if let suffix {
+            let label =
+                suffix - 1 > close + 2
+                ? units[(close + 2)..<(suffix - 1)] : units[(open + 1)..<close]
+            return definitionLabels.contains(MarkdownProse.Walker.normalizedLabel(label))
+                ? suffix : nil
+        }
+        return definitionLabels.contains(
+            MarkdownProse.Walker.normalizedLabel(units[(open + 1)..<close]))
+            ? close + 1 : nil
+    }
+
     private func pairedDelimiterTokenIndices(_ delimiters: [Delimiter]) -> Set<Int> {
         var openers: [Delimiter] = []
         var paired: Set<Int> = []
@@ -1332,6 +1390,60 @@ private struct InlineScanner {
             )
         }
         return (leftFlanking, rightFlanking)
+    }
+
+    private func characterReference(at start: Int) -> (value: [UInt16], end: Int)? {
+        guard start + 2 < units.count else { return nil }
+        var cursor = start + 1
+
+        if units[cursor] == ASCII.hash {
+            cursor += 1
+            var radix = 10
+            var maximumDigits = 7
+            if cursor < units.count, units[cursor] == 0x78 || units[cursor] == 0x58 {
+                radix = 16
+                maximumDigits = 6
+                cursor += 1
+            }
+            let digitsStart = cursor
+            while cursor < units.count, cursor - digitsStart < maximumDigits,
+                radix == 16 ? isASCIIHexDigit(units[cursor]) : isASCIIDigit(units[cursor])
+            {
+                cursor += 1
+            }
+            guard cursor > digitsStart, cursor < units.count,
+                units[cursor] == ASCII.semicolon
+            else { return nil }
+            let digits = String(decoding: units[digitsStart..<cursor], as: UTF16.self)
+            guard let code = UInt32(digits, radix: radix) else { return nil }
+            return (Self.decodedNumericReference(code), cursor + 1)
+        }
+
+        let nameStart = cursor
+        while cursor < units.count, cursor - nameStart < 31,
+            isASCIILetterOrDigit(units[cursor])
+        {
+            cursor += 1
+        }
+        guard cursor > nameStart, cursor < units.count, units[cursor] == ASCII.semicolon else {
+            return nil
+        }
+        let name = String(decoding: units[nameStart..<cursor], as: UTF16.self)
+        guard let decoded = Self.namedCharacterReferences[name] else { return nil }
+        return (Array(decoded.utf16), cursor + 1)
+    }
+
+    /// Mirrors `micromark-util-decode-numeric-character-reference`, including
+    /// its replacement of controls, surrogates, noncharacters, and overflow.
+    private static func decodedNumericReference(_ code: UInt32) -> [UInt16] {
+        let invalid = code < 9 || code == 11 || (code > 13 && code < 32)
+            || (code > 126 && code < 160)
+            || (code > 55_295 && code < 57_344)
+            || (code > 64_975 && code < 65_008)
+            || (code & 65_535) == 65_535 || (code & 65_535) == 65_534
+            || code > 1_114_111
+        guard !invalid, let scalar = UnicodeScalar(code) else { return [0xFFFD] }
+        return Array(String(scalar).utf16)
     }
 
     /// A code span's `value`, as `mdast-util-from-markdown` computes it.
@@ -1503,6 +1615,7 @@ private struct InlineScanner {
         while cursor < units.count {
             let value = units[cursor]
             if value == ASCII.backslash || value == ASCII.backtick || value == ASCII.lessThan
+                || value == ASCII.ampersand
                 || value == ASCII.exclamation || value == ASCII.leftBracket
                 || value == ASCII.asterisk || value == ASCII.underscore || value == ASCII.tilde
                 || value == ASCII.space || value == ASCII.lineFeed || value == ASCII.carriageReturn
@@ -1608,7 +1721,16 @@ private func isASCIILetter(_ value: UInt16) -> Bool {
 }
 
 private func isASCIILetterOrDigit(_ value: UInt16) -> Bool {
-    isASCIILetter(value) || (value >= ASCII.zero && value <= ASCII.nine)
+    isASCIILetter(value) || isASCIIDigit(value)
+}
+
+private func isASCIIDigit(_ value: UInt16) -> Bool {
+    value >= ASCII.zero && value <= ASCII.nine
+}
+
+private func isASCIIHexDigit(_ value: UInt16) -> Bool {
+    isASCIIDigit(value) || (value >= 0x41 && value <= 0x46)
+        || (value >= 0x61 && value <= 0x66)
 }
 
 private func asciiLowercased(_ value: UInt16) -> UInt16 {

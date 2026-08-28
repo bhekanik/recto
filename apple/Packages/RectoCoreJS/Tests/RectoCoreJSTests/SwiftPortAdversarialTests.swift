@@ -63,6 +63,21 @@ struct SwiftPortAdversarialTests {
         ("bare brackets with a definition", "foo[bar]baz qux\n\n[bar]: https://e.com\n"),
         ("crlf inside a code span", "a `one\r\ntwo` b\n"),
         ("code span in a setext heading", "A `one\ntwo` heading\n===\n"),
+        ("unclosed frontmatter", "---\ntitle: X\n# Heading\n"),
+        ("ordered list paragraph interruption", "alpha\n2. beta\n\nalpha\n1. beta\n\nalpha\n2.\n"),
+        ("named and numeric character references", "# A &amp; B &#38; C &#x26; D\n"),
+        (
+            "html block types 3 4 and 5",
+            "<?php hidden words ?>\n\n<!DOCTYPE hidden words>\n\n<![CDATA[ hidden words ]]>\n\nVisible.\n"
+        ),
+        (
+            "definition inside fenced code",
+            "```\n[ref]: https://example.com\n```\n\n![alt][ref] and [text][ref]\n"
+        ),
+        (
+            "shortcut and collapsed images",
+            "![missing][ref] ![missing] ![defined][] ![defined]\n\n[defined]: /image.png\n"
+        ),
     ]
 
     @Test("WordCount agrees with the JS core", arguments: documents)

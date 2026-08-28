@@ -1,16 +1,16 @@
 import Foundation
 
-/// Prose word count, matching `lib/markdown/count-words.ts` exactly.
+/// Fast typing-path model of `lib/markdown/count-words.ts`.
 ///
 /// The web counts words by walking the MDAST and joining every `text` node's
 /// value with a single space, then splitting on whitespace. `MarkdownProse`
-/// reproduces that segmentation without building a tree; the contract and the
-/// gaps are documented there.
+/// models that segmentation without building a tree. It matches the JS core on
+/// the fixture, adversarial, and 256-document differential gates.
 ///
 /// This is the typing-path count. `RectoCore.countWords` is the authority and
-/// runs at document boundaries; `SwiftPortTests` asserts the two agree on every
-/// corpus case, so a divergence is a test failure rather than a wrong number in
-/// the status bar.
+/// runs at document boundaries and corrects this value there. A divergence from
+/// a real document is a new differential case, not evidence that this scanner
+/// has the full remark grammar. `MarkdownProse` lists the omitted constructs.
 public enum WordCount {
     /// Words in the prose of `markdown` — markdown syntax, code and URLs excluded.
     public static func count(_ markdown: String) -> Int {
