@@ -2,28 +2,37 @@
  * Emit the parity fixtures RectoHistoryTests replays.
  *
  * The Swift ports of patch/materialize/grouping/diff/streak must agree with the
- * web byte-for-byte, so the expectations are produced by running the ACTUAL web
- * implementations here rather than being written by hand.
+ * web byte-for-byte, so every expectation here is produced by running the ACTUAL
+ * web implementations in `lib/` rather than being written by hand. CI reruns
+ * this and diffs the result, so a change to `lib/` that nobody propagated fails
+ * the build instead of leaving the Swift suite passing against stale answers.
  *
- * When W3's `packages/editor-fixtures/` lands, this script reads its
- * `history-patches.json` / `diff-runs.json` case lists instead of the local ones
- * (the expectations are still computed from `lib/`, so a drift between W3's
- * fixtures and the web code shows up as a failure here rather than in Swift).
+ * The input corpus is vendored below rather than read from
+ * `packages/editor-fixtures/` (W3, branch `023/core-js`): that package is not on
+ * `main` yet, and reading a file that may or may not exist would make the output
+ * — and therefore the CI diff — depend on which branches happen to be merged.
+ * The streak cases ARE W3's, copied verbatim; when `023/core-js` merges, point
+ * `sharedCorpus` at the real directory and delete the copies.
  *
  *   bun run apple/tools/generate-history-fixtures.ts
  */
-import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { diffRuns, groupHunks, applyAcceptedHunks, diffLines, nodeLabel } from "../../lib/history/diff";
+import {
+	applyAcceptedHunks,
+	diffLines,
+	diffRuns,
+	groupHunks,
+	nodeLabel,
+} from "../../lib/history/diff";
 import { GroupingController } from "../../lib/history/grouping";
-import { materialize, type DocNode } from "../../lib/history/materialize";
+import { type DocNode, materialize } from "../../lib/history/materialize";
 import { applyPatch, computePatch, encodePatch } from "../../lib/history/patch";
 import {
 	currentStreak,
-	goalProgress,
 	type DailyStat,
 	type GoalKind,
+	goalProgress,
 } from "../../lib/stats/streak";
 
 const repoRoot = join(import.meta.dir, "..", "..");
@@ -31,11 +40,9 @@ const outDir = join(
 	repoRoot,
 	"apple/Packages/RectoHistory/Tests/RectoHistoryTests/Fixtures",
 );
-const sharedFixtures =
-	process.env.EDITOR_FIXTURES_DIR ?? join(repoRoot, "packages/editor-fixtures");
 
 /** Pairs that stress the patch algorithm, including the UTF-16 boundary cases. */
-const defaultPatchPairs: Array<[string, string]> = [
+const patchPairs: Array<[string, string]> = [
 	["", ""],
 	["", "hello"],
 	["hello", ""],
@@ -52,7 +59,10 @@ const defaultPatchPairs: Array<[string, string]> = [
 	["a\u{1F600}b", "a\u{1F601}b"],
 	["\u{1F600}\u{1F601}", "\u{1F600}\u{1F602}"],
 	["cafe\u{301} time", "café time"],
-	["family \u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467} here", "family \u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F466} here"],
+	[
+		"family \u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467} here",
+		"family \u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F466} here",
+	],
 	["\u{1F1FF}\u{1F1E6}", "\u{1F1FA}\u{1F1F8}"],
 	["नमस्ते", "नमस्कार"],
 	["tab\there", "tab\u{00A0}here"],
@@ -60,7 +70,7 @@ const defaultPatchPairs: Array<[string, string]> = [
 ];
 
 /** (current, branch) pairs for the diff parity table. */
-const defaultDiffPairs: Array<[string, string]> = [
+const diffPairs: Array<[string, string]> = [
 	["the quick brown fox", "the quick brown fox"],
 	["", ""],
 	["", "brand new document"],
@@ -86,12 +96,6 @@ const defaultDiffPairs: Array<[string, string]> = [
 	["# H\n\n- a\n- b\n", "# H\n\n- a\n- c\n- b\n"],
 ];
 
-async function readShared<T>(name: string): Promise<T | null> {
-	const path = join(sharedFixtures, name);
-	if (!existsSync(path)) return null;
-	return JSON.parse(await readFile(path, "utf8")) as T;
-}
-
 async function write(name: string, value: unknown) {
 	const path = join(outDir, name);
 	await mkdir(dirname(path), { recursive: true });
@@ -100,11 +104,7 @@ async function write(name: string, value: unknown) {
 }
 
 async function patchFixtures() {
-	const shared = await readShared<{ pairs: Array<[string, string]> }>(
-		"history-patches.json",
-	);
-	const pairs = shared?.pairs ?? defaultPatchPairs;
-	const cases = pairs.map(([parent, next]) => {
+	const cases = patchPairs.map(([parent, next]) => {
 		const patch = encodePatch(computePatch(parent, next));
 		return {
 			parent,
@@ -115,12 +115,11 @@ async function patchFixtures() {
 			label: nodeLabel(patch, "root", undefined),
 		};
 	});
-	await write("patch-cases.json", { source: shared ? "editor-fixtures" : "builtin", cases });
+	await write("patch-cases.json", { cases });
 }
 
 async function materializeFixtures() {
-	// A branch long enough to cross the 50-node snapshot cadence twice, with a
-	// fork off the middle so the walk-to-nearest-snapshot path is exercised.
+	// A branch long enough to cross the 50-node snapshot cadence twice.
 	const nodes: DocNode[] = [];
 	const controller = new GroupingController({
 		rootNodeId: "root",
@@ -150,23 +149,44 @@ async function materializeFixtures() {
 	});
 
 	let markdown = "";
-	const expected: Array<{ nodeId: string; markdown: string }> = [];
+	const heads: string[] = [];
 	for (let i = 0; i < 120; i++) {
 		markdown += i % 7 === 0 ? `\n\nParagraph ${i} \u{1F600}.` : ` word${i}`;
-		controller.record(markdown, { anchor: markdown.length, head: markdown.length }, {
-			structural: true,
-		});
-		expected.push({ nodeId: controller.currentNodeId, markdown });
+		controller.record(
+			markdown,
+			{ anchor: markdown.length, head: markdown.length },
+			{ structural: true },
+		);
+		heads.push(controller.currentNodeId);
 	}
 
 	const byId = new Map(nodes.map((n) => [n.nodeId, n]));
+	// ULIDs are random, so the emitted fixture would differ on every run and CI's
+	// "fixtures are current" diff could never pass. Rewrite the ids to a stable
+	// sequence; nothing under test depends on their values, only on the shape of
+	// the graph.
+	const stableId = new Map<string, string>([["root", "root"]]);
+	for (const node of nodes) {
+		if (!stableId.has(node.nodeId))
+			stableId.set(node.nodeId, `n${stableId.size}`);
+	}
+	const rename = (id: string | null) =>
+		id == null ? null : (stableId.get(id) ?? id);
+
 	await write("materialize-cases.json", {
-		nodes: nodes.map((n) => ({ ...n, snapshot: n.snapshot ?? null })),
-		expected: expected.map(({ nodeId }) => ({
-			nodeId,
+		nodes: nodes.map((n) => ({
+			...n,
+			nodeId: rename(n.nodeId),
+			parentNodeId: rename(n.parentNodeId),
+			snapshot: n.snapshot ?? null,
+		})),
+		expected: heads.map((nodeId) => ({
+			nodeId: rename(nodeId),
 			markdown: materialize(nodeId, byId),
 		})),
-		snapshotNodeIds: nodes.filter((n) => n.snapshot != null).map((n) => n.nodeId),
+		snapshotNodeIds: nodes
+			.filter((n) => n.snapshot != null)
+			.map((n) => rename(n.nodeId)),
 	});
 }
 
@@ -204,11 +224,12 @@ async function groupingFixtures() {
 	type("hello w");
 	type("hello wo");
 	// selection-only move (same markdown) must not commit
+	now += 10;
 	steps.push({
 		markdown: "hello wo",
 		selection: { anchor: 0, head: 0 },
 		structural: false,
-		now: (now += 10),
+		now,
 		kind: "record",
 	});
 	// adjacency break: edit jumps to the start
@@ -217,9 +238,23 @@ async function groupingFixtures() {
 	type("Xhello wo\n\n## Pasted heading\n", 30, true);
 	// emoji edit
 	type("Xhello wo\n\n## Pasted heading \u{1F600}\n");
-	steps.push({ markdown: "", selection: null, structural: false, now: (now += 600), kind: "tick" });
+	now += 600;
+	steps.push({
+		markdown: "",
+		selection: null,
+		structural: false,
+		now,
+		kind: "tick",
+	});
 	type("Xhello wo\n\n## Pasted heading \u{1F601}\n");
-	steps.push({ markdown: "", selection: null, structural: false, now: (now += 10), kind: "flush" });
+	now += 10;
+	steps.push({
+		markdown: "",
+		selection: null,
+		structural: false,
+		now,
+		kind: "flush",
+	});
 
 	const commits: unknown[] = [];
 	let seq = 0;
@@ -232,7 +267,6 @@ async function groupingFixtures() {
 			seq += 1;
 			commits.push({
 				sequence: seq,
-				parentNodeId: commit.parentNodeId,
 				patch: commit.patch,
 				snapshot: commit.snapshot ?? null,
 				selection: commit.selection,
@@ -243,7 +277,9 @@ async function groupingFixtures() {
 	for (const step of steps) {
 		now = step.now;
 		if (step.kind === "record") {
-			controller.record(step.markdown, step.selection, { structural: step.structural });
+			controller.record(step.markdown, step.selection, {
+				structural: step.structural,
+			});
 		} else if (step.kind === "tick") {
 			controller.tick();
 		} else {
@@ -254,9 +290,7 @@ async function groupingFixtures() {
 }
 
 async function diffFixtures() {
-	const shared = await readShared<{ pairs: Array<[string, string]> }>("diff-runs.json");
-	const pairs = shared?.pairs ?? defaultDiffPairs;
-	const cases = pairs.flatMap(([current, branch]) =>
+	const cases = diffPairs.flatMap(([current, branch]) =>
 		(["word", "line"] as const).map((granularity) => {
 			const runs = diffRuns(current, branch, granularity);
 			const hunks = groupHunks(runs);
@@ -276,58 +310,122 @@ async function diffFixtures() {
 			};
 		}),
 	);
-	const lineCases = pairs.map(([current, branch]) => ({
+	const lineCases = diffPairs.map(([current, branch]) => ({
 		current,
 		branch,
 		lines: diffLines(current, branch),
 	}));
-	await write("diff-cases.json", {
-		source: shared ? "editor-fixtures" : "builtin",
-		cases,
-		lineCases,
-	});
+	await write("diff-cases.json", { cases, lineCases });
 }
 
-type SharedStreakCase = {
+type StreakCase = {
 	name: string;
 	days: DailyStat[];
 	today: string;
 	streak: number;
 };
 
-async function streakFixtures() {
-	const shared = await readShared<{ cases: SharedStreakCase[] }>("streak.json");
-	// Extra cases the shared fixture does not cover: the leap-day and year
-	// boundaries that catch a "subtract 86_400_000 ms" implementation.
-	const extra: SharedStreakCase[] = [
-		{
-			name: "leap-day boundary",
-			days: [
-				{ date: "2028-02-28", words: 5 },
-				{ date: "2028-02-29", words: 5 },
-			],
-			today: "2028-02-29",
-			streak: 2,
-		},
-		{
-			name: "year boundary",
-			days: [
-				{ date: "2025-12-31", words: 5 },
-				{ date: "2026-01-01", words: 5 },
-			],
-			today: "2026-01-01",
-			streak: 2,
-		},
-	];
+/**
+ * `packages/editor-fixtures/streak.json` from W3, verbatim, plus the leap-day
+ * and year boundaries it does not cover. Those two are what catch an
+ * implementation that steps back by a fixed 86_400_000 ms instead of one
+ * calendar day — which is what `lib/stats/streak.ts` itself does, and why the
+ * Swift port deliberately differs (see RectoHistory/Streak.swift).
+ */
+const streakCases: StreakCase[] = [
+	{ name: "empty list", days: [], today: "2026-06-17", streak: 0 },
+	{
+		name: "wrote today only",
+		days: [{ date: "2026-06-17", words: 120 }],
+		today: "2026-06-17",
+		streak: 1,
+	},
+	{
+		name: "three consecutive days including today",
+		days: [
+			{ date: "2026-06-15", words: 200 },
+			{ date: "2026-06-16", words: 200 },
+			{ date: "2026-06-17", words: 200 },
+		],
+		today: "2026-06-17",
+		streak: 3,
+	},
+	{
+		name: "wrote yesterday but not yet today (no break-shame)",
+		days: [
+			{ date: "2026-06-15", words: 200 },
+			{ date: "2026-06-16", words: 200 },
+		],
+		today: "2026-06-17",
+		streak: 2,
+	},
+	{
+		name: "a skipped day ends the backward walk",
+		days: [
+			{ date: "2026-06-14", words: 200 },
+			{ date: "2026-06-17", words: 200 },
+		],
+		today: "2026-06-17",
+		streak: 1,
+	},
+	{
+		name: "a zero-word day counts as unwritten",
+		days: [
+			{ date: "2026-06-15", words: 200 },
+			{ date: "2026-06-16", words: 0 },
+			{ date: "2026-06-17", words: 200 },
+		],
+		today: "2026-06-17",
+		streak: 1,
+	},
+	{
+		name: "duplicate date entries do not double-count",
+		days: [
+			{ date: "2026-06-16", words: 200 },
+			{ date: "2026-06-16", words: 50 },
+			{ date: "2026-06-17", words: 200 },
+		],
+		today: "2026-06-17",
+		streak: 2,
+	},
+	{
+		name: "rolls over a month boundary",
+		days: [
+			{ date: "2026-05-31", words: 200 },
+			{ date: "2026-06-01", words: 200 },
+		],
+		today: "2026-06-01",
+		streak: 2,
+	},
+	{
+		name: "leap-day boundary",
+		days: [
+			{ date: "2028-02-28", words: 5 },
+			{ date: "2028-02-29", words: 5 },
+		],
+		today: "2028-02-29",
+		streak: 2,
+	},
+	{
+		name: "year boundary",
+		days: [
+			{ date: "2025-12-31", words: 5 },
+			{ date: "2026-01-01", words: 5 },
+		],
+		today: "2026-01-01",
+		streak: 2,
+	},
+];
 
-	const cases = [...(shared?.cases ?? []), ...extra].map((c) => {
+async function streakFixtures() {
+	const streaks = streakCases.map((c) => {
 		const computed = currentStreak(c.days, c.today);
-		// The fixture's asserted answer and the web implementation must agree. If
-		// they stop agreeing that is a web bug, and this script says so rather than
-		// baking the disagreement into the Swift expectations.
+		// The asserted answer and the web implementation must agree. If they stop
+		// agreeing that is a web bug, and this script says so rather than baking
+		// the disagreement into the Swift expectations.
 		if (computed !== c.streak) {
 			throw new Error(
-				`streak fixture "${c.name}" expects ${c.streak}, lib/stats/streak.ts computes ${computed}`,
+				`streak case "${c.name}" expects ${c.streak}, lib/stats/streak.ts computes ${computed}`,
 			);
 		}
 		return { name: c.name, stats: c.days, today: c.today, streak: c.streak };
@@ -343,8 +441,7 @@ async function streakFixtures() {
 	] as const;
 
 	await write("streak-cases.json", {
-		source: shared ? "editor-fixtures" : "builtin",
-		streaks: cases,
+		streaks,
 		goals: goals.map((g) => ({
 			...g,
 			progress: goalProgress(g.words, g.target, g.kind as GoalKind),

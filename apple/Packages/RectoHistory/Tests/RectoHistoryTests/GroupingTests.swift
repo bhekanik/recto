@@ -27,7 +27,6 @@ struct GroupingCases: Decodable {
   }
   struct Commit: Decodable {
     let sequence: Int
-    let parentNodeId: String
     let patch: String
     let snapshot: String?
     let selection: NodeSelection?

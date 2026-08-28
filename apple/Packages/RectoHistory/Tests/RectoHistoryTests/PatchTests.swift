@@ -11,7 +11,6 @@ struct PatchCases: Decodable {
     let applied: String
     let label: String
   }
-  let source: String
   let cases: [Case]
 }
 

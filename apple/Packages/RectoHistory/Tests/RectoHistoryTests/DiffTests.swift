@@ -27,7 +27,6 @@ struct DiffCases: Decodable {
     let branch: String
     let lines: [Run]
   }
-  let source: String
   let cases: [Case]
   let lineCases: [LineCase]
 }

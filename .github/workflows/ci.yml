@@ -54,6 +54,40 @@ jobs:
       - run: bunx playwright install --with-deps chromium
       - run: bun run tokens:cascade
 
+  # Swift packages under apple/Packages (plan 023 N4). Hermetic: the live Convex
+  # tests in RectoIntegrationTests skip themselves unless RECTO_CONVEX_URL and
+  # RECTO_CLERK_PUBLISHABLE_KEY are set, and CI deliberately does not set them —
+  # the shared dev deployment is not isolated per run.
+  #
+  # Needs the macOS 26 SDK: the packages declare .macOS(.v26) per D-N9.
+  apple-core:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: sudo xcode-select -s /Applications/Xcode_26.app/Contents/Developer
+      - run: swift --version
+      - run: bun install --frozen-lockfile
+      # The Swift history ports must agree with lib/ byte-for-byte. Regenerating
+      # the fixtures from the web implementations and diffing catches the case
+      # where lib/ changed and nobody re-ran the generator — which would
+      # otherwise leave the parity suite passing against stale expectations.
+      - name: History fixtures are current
+        run: |
+          bun run apple/tools/generate-history-fixtures.ts
+          git diff --exit-code apple/Packages/RectoHistory/Tests/RectoHistoryTests/Fixtures
+      - name: swift test
+        run: |
+          set -euo pipefail
+          for package in RectoHistory RectoStore RectoAuth RectoSync RectoCore; do
+            echo "::group::$package"
+            swift test --package-path "apple/Packages/$package" \
+              --skip RectoIntegrationTests
+            echo "::endgroup::"
+          done
+
   # Browser smoke suite (plan 021). Non-blocking (continue-on-error) for the
   # first iteration — flip it to blocking once it has been stable ~2 weeks.
   #

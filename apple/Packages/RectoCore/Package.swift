@@ -12,6 +12,7 @@ let package = Package(
     .package(path: "../RectoSync"),
     .package(path: "../RectoAuth"),
     .package(path: "../RectoHistory"),
+    .package(url: "https://github.com/clerk/clerk-ios.git", from: "1.5.0"),
   ],
   targets: [
     .target(
@@ -24,6 +25,17 @@ let package = Package(
       dependencies: [
         "RectoCore",
         .product(name: "RectoSyncTesting", package: "RectoSync"),
+      ],
+      swiftSettings: [.swiftLanguageMode(.v6)]
+    ),
+    // Live tests against a real Convex deployment. They skip themselves with a
+    // clear message unless RECTO_CONVEX_URL and RECTO_CLERK_PUBLISHABLE_KEY are
+    // set, so `swift test` stays hermetic by default.
+    .testTarget(
+      name: "RectoIntegrationTests",
+      dependencies: [
+        "RectoCore",
+        .product(name: "ClerkKit", package: "clerk-ios"),
       ],
       swiftSettings: [.swiftLanguageMode(.v6)]
     ),

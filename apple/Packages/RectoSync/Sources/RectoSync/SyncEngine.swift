@@ -123,7 +123,9 @@ public actor SyncEngine {
     }
   }
 
-  func mirrorLibrary(_ summaries: [RemoteDocumentSummary]) async throws {
+  /// Apply a `documents.list` result. Public so a caller can force a refresh
+  /// without waiting for the subscription to tick.
+  public func mirrorLibrary(_ summaries: [RemoteDocumentSummary]) async throws {
     let known = try await store.documents()
     let byConvexId = Dictionary(
       known.compactMap { doc in doc.convexId.map { ($0, doc) } }, uniquingKeysWith: { first, _ in first })
