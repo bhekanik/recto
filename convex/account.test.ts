@@ -2,17 +2,29 @@ import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { ACCOUNT_DELETION_UNAVAILABLE_MESSAGE } from "./account";
+import {
+	ACCOUNT_DELETION_UNAVAILABLE_MESSAGE,
+	CLERK_USER_UNREACHABLE_MESSAGE,
+} from "./account";
+import { ACCOUNT_DELETION_IN_PROGRESS_MESSAGE } from "./accountGuard";
 import { PURGE_BATCH } from "./accountPurge";
 import schema from "./schema";
 
 const modules: Record<string, () => Promise<unknown>> = {
 	"./schema.ts": () => import("./schema"),
 	"./account.ts": () => import("./account"),
+	"./accountGuard.ts": () => import("./accountGuard"),
 	"./accountPurge.ts": () => import("./accountPurge"),
 	"./documents.ts": () => import("./documents"),
 	"./docNodes.ts": () => import("./docNodes"),
 	"./files.ts": () => import("./files"),
+	"./history.ts": () => import("./history"),
+	"./migrations.ts": () => import("./migrations"),
+	"./review.ts": () => import("./review"),
+	"./settings.ts": () => import("./settings"),
+	"./versions.ts": () => import("./versions"),
+	"./workspaces.ts": () => import("./workspaces"),
+	"./writingStats.ts": () => import("./writingStats"),
 	"./_generated/api.js": () => import("./_generated/api"),
 	"./_generated/server.js": () => import("./_generated/server"),
 };
@@ -20,16 +32,39 @@ const modules: Record<string, () => Promise<unknown>> = {
 const OWNER = { subject: "owner-user", email: "Owner@Example.com" };
 const OTHER = { subject: "other-user", email: "other@example.com" };
 
-type Seeded = { documentId: Id<"documents">; otherDocumentId: Id<"documents"> };
+type Seeded = {
+	documentId: Id<"documents">;
+	otherDocumentId: Id<"documents">;
+	acceptedDocumentId: Id<"documents">;
+};
 
 /**
- * A user with something in every table that keys off them, plus a second user
- * whose rows must survive untouched.
+ * A user with something in every table that keys off them — including
+ * suggestion nodes they wrote inside OTHER people's documents — plus a second
+ * user whose rows must survive untouched.
  */
 async function seed(t: ReturnType<typeof convexTest>): Promise<Seeded> {
 	return await t.run(async (ctx) => {
 		const now = Date.now();
 
+		const node = (
+			documentId: Id<"documents">,
+			nodeId: string,
+			parentNodeId: string | null,
+			authorUserId?: string,
+		) =>
+			ctx.db.insert("docNodes", {
+				documentId,
+				nodeId,
+				parentNodeId,
+				patch: JSON.stringify({ from: 0, to: 0, insert: "" }),
+				selection: null,
+				origin: authorUserId ? `review:${authorUserId}` : "test",
+				authorUserId,
+				createdAt: now,
+			});
+
+		// --- another user's document, with an OPEN suggestion branch from OWNER ---
 		const otherDocumentId = await ctx.db.insert("documents", {
 			userId: OTHER.subject,
 			title: "Theirs",
@@ -39,35 +74,65 @@ async function seed(t: ReturnType<typeof convexTest>): Promise<Seeded> {
 			createdAt: now,
 			updatedAt: now,
 		});
-		await ctx.db.insert("docNodes", {
+		await node(otherDocumentId, "other-root", null);
+		await node(
+			otherDocumentId,
+			"owner-suggestion",
+			"other-root",
+			OWNER.subject,
+		);
+		await ctx.db.insert("reviewBranches", {
 			documentId: otherDocumentId,
-			nodeId: "other-root",
-			parentNodeId: null,
-			patch: "{}",
-			selection: null,
-			origin: "test",
+			reviewerUserId: OWNER.subject,
+			baseNodeId: "other-root",
+			headNodeId: "owner-suggestion",
+			status: "open",
 			createdAt: now,
+			updatedAt: now,
 		});
 
+		// --- another user's document where OWNER's suggestion was ACCEPTED ---
+		const acceptedDocumentId = await ctx.db.insert("documents", {
+			userId: OTHER.subject,
+			title: "Merged",
+			markdown: "merged",
+			wordCount: 1,
+			currentNodeId: "accepted-merge",
+			createdAt: now,
+			updatedAt: now,
+		});
+		await node(acceptedDocumentId, "accepted-root", null);
+		await node(
+			acceptedDocumentId,
+			"accepted-suggestion",
+			"accepted-root",
+			OWNER.subject,
+		);
+		// review.acceptBranch writes a NEW owner-authored node carrying the merged
+		// text; the reviewer's node is not its ancestor.
+		await node(acceptedDocumentId, "accepted-merge", "accepted-root");
+		await ctx.db.insert("reviewBranches", {
+			documentId: acceptedDocumentId,
+			reviewerUserId: OWNER.subject,
+			baseNodeId: "accepted-root",
+			headNodeId: "accepted-suggestion",
+			status: "accepted",
+			createdAt: now,
+			updatedAt: now,
+		});
+
+		// --- OWNER's own document and everything hanging off it ---
 		const documentId = await ctx.db.insert("documents", {
 			userId: OWNER.subject,
 			title: "Mine",
 			markdown: "hello",
 			wordCount: 1,
-			currentNodeId: "root",
+			currentNodeId: "node-2",
 			createdAt: now,
 			updatedAt: now,
 		});
 		for (let i = 0; i < 3; i += 1) {
-			await ctx.db.insert("docNodes", {
-				documentId,
-				nodeId: `node-${i}`,
-				parentNodeId: i === 0 ? null : `node-${i - 1}`,
-				patch: "{}",
-				selection: null,
-				origin: "test",
-				createdAt: now,
-			});
+			await node(documentId, `node-${i}`, i === 0 ? null : `node-${i - 1}`);
 		}
 		await ctx.db.insert("versions", {
 			documentId,
@@ -112,7 +177,7 @@ async function seed(t: ReturnType<typeof convexTest>): Promise<Seeded> {
 			updatedAt: now,
 		});
 
-		// The owner's traces on ANOTHER user's document.
+		// --- OWNER's traces on ANOTHER user's document ---
 		await ctx.db.insert("comments", {
 			documentId: otherDocumentId,
 			authorUserId: OWNER.subject,
@@ -122,16 +187,6 @@ async function seed(t: ReturnType<typeof convexTest>): Promise<Seeded> {
 			resolved: false,
 			createdAt: now,
 		});
-		await ctx.db.insert("reviewBranches", {
-			documentId: otherDocumentId,
-			reviewerUserId: OWNER.subject,
-			baseNodeId: "other-root",
-			headNodeId: "other-root",
-			status: "open",
-			createdAt: now,
-			updatedAt: now,
-		});
-		// An invite addressed to the owner's email but never claimed.
 		await ctx.db.insert("documentShares", {
 			documentId: otherDocumentId,
 			ownerUserId: OTHER.subject,
@@ -139,7 +194,6 @@ async function seed(t: ReturnType<typeof convexTest>): Promise<Seeded> {
 			role: "suggester",
 			createdAt: now,
 		});
-		// And one already resolved to their user id.
 		await ctx.db.insert("documentShares", {
 			documentId: otherDocumentId,
 			ownerUserId: OTHER.subject,
@@ -174,8 +228,37 @@ async function seed(t: ReturnType<typeof convexTest>): Promise<Seeded> {
 			updatedAt: now,
 		});
 
-		return { documentId, otherDocumentId };
+		return { documentId, otherDocumentId, acceptedDocumentId };
 	});
+}
+
+/** Store two blobs and record ownership, one per user. */
+async function seedBlobs(t: ReturnType<typeof convexTest>) {
+	return await t.run(async (ctx) => {
+		const mine = await ctx.storage.store(new Blob(["mine"]));
+		const theirs = await ctx.storage.store(new Blob(["theirs"]));
+		const unattributed = await ctx.storage.store(new Blob(["nobody"]));
+		const now = Date.now();
+		await ctx.db.insert("blobs", {
+			storageId: mine,
+			ownerUserId: OWNER.subject,
+			kind: "upload",
+			createdAt: now,
+		});
+		await ctx.db.insert("blobs", {
+			storageId: theirs,
+			ownerUserId: OTHER.subject,
+			kind: "upload",
+			createdAt: now,
+		});
+		return { mine, theirs, unattributed };
+	});
+}
+
+async function storageIds(t: ReturnType<typeof convexTest>) {
+	return await t.run(async (ctx) =>
+		(await ctx.db.system.query("_storage").collect()).map((file) => file._id),
+	);
 }
 
 async function countAll(t: ReturnType<typeof convexTest>) {
@@ -190,10 +273,17 @@ async function countAll(t: ReturnType<typeof convexTest>) {
 		writingStats: (await ctx.db.query("writingStats").collect()).length,
 		workspaces: (await ctx.db.query("workspaces").collect()).length,
 		settings: (await ctx.db.query("settings").collect()).length,
+		blobs: (await ctx.db.query("blobs").collect()).length,
 	}));
 }
 
-/** Drive the purge mutations the way the action does, and report the rounds. */
+async function nodeIds(t: ReturnType<typeof convexTest>) {
+	return await t.run(async (ctx) =>
+		(await ctx.db.query("docNodes").collect()).map((node) => node.nodeId),
+	);
+}
+
+/** Drive the row purge the way the action does, and report the rounds. */
 async function purgeToCompletion(
 	t: ReturnType<typeof convexTest>,
 	userId: string,
@@ -222,18 +312,14 @@ describe("accountPurge.purgeData", () => {
 
 		await purgeToCompletion(t, OWNER.subject, OWNER.email);
 
-		expect(await countAll(t)).toEqual({
-			documents: 1, // the other user's
-			docNodes: 1,
-			versions: 0,
-			documentShares: 0,
-			reviewBranches: 0,
-			comments: 0,
-			docChunks: 0,
-			writingStats: 1,
-			workspaces: 0,
-			settings: 0,
-		});
+		const counts = await countAll(t);
+		expect(counts.documents).toBe(2); // the other user's two
+		expect(counts.versions).toBe(0);
+		expect(counts.documentShares).toBe(0);
+		expect(counts.docChunks).toBe(0);
+		expect(counts.settings).toBe(0);
+		expect(counts.workspaces).toBe(0);
+		expect(counts.writingStats).toBe(1); // the other user's
 
 		const survivor = await t.run((ctx) => ctx.db.get(otherDocumentId));
 		expect(survivor?.markdown).toBe("not yours");
@@ -262,7 +348,6 @@ describe("accountPurge.purgeData", () => {
 	it("removes unclaimed invites addressed to the user's email, case-insensitively", async () => {
 		const t = convexTest(schema, modules);
 		await seed(t);
-		// OWNER.email is mixed-case; shares store it lowercased.
 		await purgeToCompletion(t, OWNER.subject, OWNER.email);
 
 		expect((await countAll(t)).documentShares).toBe(0);
@@ -273,7 +358,6 @@ describe("accountPurge.purgeData", () => {
 		await seed(t);
 		await purgeToCompletion(t, OWNER.subject, undefined);
 
-		// The unclaimed invite is the only share that cannot be reached without it.
 		const shares = await t.run((ctx) =>
 			ctx.db.query("documentShares").collect(),
 		);
@@ -296,7 +380,6 @@ describe("accountPurge.purgeData", () => {
 		const t = convexTest(schema, modules);
 		await seed(t);
 
-		// One tiny batch, then stop — the state a crashed action leaves behind.
 		const partial = await t.mutation(internal.accountPurge.purgeData, {
 			userId: OWNER.subject,
 			granteeEmail: OWNER.email,
@@ -306,7 +389,7 @@ describe("accountPurge.purgeData", () => {
 		expect(partial.done).toBe(false);
 
 		await purgeToCompletion(t, OWNER.subject, OWNER.email);
-		expect((await countAll(t)).documents).toBe(1);
+		expect((await countAll(t)).documents).toBe(2);
 	});
 
 	it("clears an account far larger than one batch", async () => {
@@ -328,7 +411,7 @@ describe("accountPurge.purgeData", () => {
 
 		const { rounds } = await purgeToCompletion(t, OWNER.subject, OWNER.email);
 		expect(rounds).toBeGreaterThan(1);
-		expect((await countAll(t)).docNodes).toBe(1);
+		expect(await nodeIds(t)).not.toContain("bulk-0");
 	});
 
 	it("does nothing for a user who has never written anything", async () => {
@@ -342,41 +425,436 @@ describe("accountPurge.purgeData", () => {
 	});
 });
 
-describe("accountPurge.purgeStorage", () => {
-	it("deletes blobs the user's markdown references and leaves others alone", async () => {
+describe("accountPurge — suggestion nodes inside other people's documents", () => {
+	it("deletes the reviewer's nodes on an open branch", async () => {
 		const t = convexTest(schema, modules);
-		const { documentId } = await seed(t);
+		await seed(t);
+		await purgeToCompletion(t, OWNER.subject, OWNER.email);
 
-		const [mine, theirs] = await t.run(async (ctx) => [
-			await ctx.storage.store(new Blob(["mine"])),
-			await ctx.storage.store(new Blob(["theirs"])),
-		]);
+		// Nothing keyed to the reviewer reaches these rows; they live in the
+		// OWNER's docNodes and are only findable by authorUserId.
+		expect(await nodeIds(t)).not.toContain("owner-suggestion");
+		// The document owner's own node is untouched.
+		expect(await nodeIds(t)).toContain("other-root");
+	});
 
-		// Point the owner's markdown at their blob the way the editor does — by
-		// the served URL, whose last segment is what the reference check matches.
-		const url = await t.run((ctx) => ctx.storage.getUrl(mine));
-		await t.run((ctx) =>
-			ctx.db.patch(documentId, { markdown: `text ![alt](${url}) more` }),
+	it("keeps the reviewer's nodes on an accepted branch — that is the owner's content now", async () => {
+		const t = convexTest(schema, modules);
+		await seed(t);
+		await purgeToCompletion(t, OWNER.subject, OWNER.email);
+
+		expect(await nodeIds(t)).toContain("accepted-suggestion");
+		expect(await nodeIds(t)).toContain("accepted-merge");
+
+		// The content stays; the departed user's id does not. This also makes the
+		// decision stick — the branch row that says "accepted" is deleted by a
+		// later pass of this same purge, so a node left attributed would be
+		// reconsidered with nothing left to justify keeping it.
+		const kept = await t.run(async (ctx) =>
+			(await ctx.db.query("docNodes").collect()).find(
+				(node) => node.nodeId === "accepted-suggestion",
+			),
 		);
+		expect(kept?.authorUserId).toBeUndefined();
+		expect(kept?.origin).not.toContain(OWNER.subject);
+	});
 
-		const result = await t.mutation(internal.accountPurge.purgeStorage, {
+	it("keeps a suggestion the owner has since built on, even on an open branch", async () => {
+		const t = convexTest(schema, modules);
+		const { otherDocumentId } = await seed(t);
+		// The owner navigated onto the suggestion and typed from there, so it is
+		// now an ancestor of their head — deleting it would break materialization.
+		await t.run(async (ctx) => {
+			await ctx.db.insert("docNodes", {
+				documentId: otherDocumentId,
+				nodeId: "owner-followup",
+				parentNodeId: "owner-suggestion",
+				patch: "{}",
+				selection: null,
+				origin: "test",
+				createdAt: Date.now(),
+			});
+			await ctx.db.patch(otherDocumentId, { currentNodeId: "owner-followup" });
+		});
+
+		await purgeToCompletion(t, OWNER.subject, OWNER.email);
+		expect(await nodeIds(t)).toContain("owner-suggestion");
+	});
+
+	it("leaves another reviewer's nodes alone", async () => {
+		const t = convexTest(schema, modules);
+		const { otherDocumentId } = await seed(t);
+		await t.run(async (ctx) => {
+			await ctx.db.insert("docNodes", {
+				documentId: otherDocumentId,
+				nodeId: "someone-else-suggestion",
+				parentNodeId: "other-root",
+				patch: "{}",
+				selection: null,
+				origin: "review:third-user",
+				authorUserId: "third-user",
+				createdAt: Date.now(),
+			});
+		});
+
+		await purgeToCompletion(t, OWNER.subject, OWNER.email);
+		expect(await nodeIds(t)).toContain("someone-else-suggestion");
+	});
+});
+
+describe("accountPurge.purgeBlobs", () => {
+	it("deletes only the blobs this user owns", async () => {
+		const t = convexTest(schema, modules);
+		const { theirs, unattributed } = await seedBlobs(t);
+
+		const result = await t.mutation(internal.accountPurge.purgeBlobs, {
 			userId: OWNER.subject,
 		});
 		expect(result).toEqual({ deleted: 1, done: true });
 
-		const left = await t.run((ctx) =>
-			ctx.db.system.query("_storage").collect(),
-		);
-		expect(left.map((file) => file._id)).toEqual([theirs]);
+		const left = await storageIds(t);
+		expect(left).toContain(theirs);
+		// Unattributed files are not this user's to delete; the orphan sweep
+		// collects them once nothing references them.
+		expect(left).toContain(unattributed);
+		expect(left).toHaveLength(2);
 	});
 
-	it("reports done with nothing to do once the user has no documents", async () => {
+	it("does not delete a file merely because the user's markdown names its URL", async () => {
 		const t = convexTest(schema, modules);
-		expect(
-			await t.mutation(internal.accountPurge.purgeStorage, {
+		const { documentId } = await seed(t);
+		const { theirs } = await seedBlobs(t);
+
+		// The old ownership rule was "whose markdown mentions this URL", which
+		// this shared reference would have satisfied.
+		const url = await t.run((ctx) => ctx.storage.getUrl(theirs));
+		await t.run((ctx) =>
+			ctx.db.patch(documentId, { markdown: `look ![alt](${url})` }),
+		);
+
+		await t.mutation(internal.accountPurge.purgeBlobs, {
+			userId: OWNER.subject,
+		});
+		expect(await storageIds(t)).toContain(theirs);
+	});
+
+	it("deletes a generated export, which no markdown ever references", async () => {
+		const t = convexTest(schema, modules);
+		const exportId = await t.run(async (ctx) => {
+			const storageId = await ctx.storage.store(new Blob(["docx"]));
+			await ctx.db.insert("blobs", {
+				storageId,
+				ownerUserId: OWNER.subject,
+				kind: "export",
+				createdAt: Date.now(),
+			});
+			return storageId;
+		});
+
+		await t.mutation(internal.accountPurge.purgeBlobs, {
+			userId: OWNER.subject,
+		});
+		expect(await storageIds(t)).not.toContain(exportId);
+	});
+
+	it("pages, and reports done only when the owner has none left", async () => {
+		const t = convexTest(schema, modules);
+		await t.run(async (ctx) => {
+			for (let i = 0; i < 5; i += 1) {
+				const storageId = await ctx.storage.store(new Blob([`f${i}`]));
+				await ctx.db.insert("blobs", {
+					storageId,
+					ownerUserId: OWNER.subject,
+					kind: "upload",
+					createdAt: Date.now(),
+				});
+			}
+		});
+
+		const first = await t.mutation(internal.accountPurge.purgeBlobs, {
+			userId: OWNER.subject,
+			limit: 2,
+		});
+		expect(first).toEqual({ deleted: 2, done: false });
+
+		let guard = 0;
+		let result = first;
+		while (!result.done && guard++ < 10) {
+			result = await t.mutation(internal.accountPurge.purgeBlobs, {
 				userId: OWNER.subject,
+				limit: 2,
+			});
+		}
+		expect(result.done).toBe(true);
+		expect(await storageIds(t)).toHaveLength(0);
+	});
+
+	it("drops an ownership row whose file is already gone, so it cannot loop forever", async () => {
+		const t = convexTest(schema, modules);
+		await t.run(async (ctx) => {
+			const storageId = await ctx.storage.store(new Blob(["x"]));
+			await ctx.db.insert("blobs", {
+				storageId,
+				ownerUserId: OWNER.subject,
+				kind: "upload",
+				createdAt: Date.now(),
+			});
+			await ctx.storage.delete(storageId);
+		});
+
+		await t.mutation(internal.accountPurge.purgeBlobs, {
+			userId: OWNER.subject,
+		});
+		const second = await t.mutation(internal.accountPurge.purgeBlobs, {
+			userId: OWNER.subject,
+		});
+		expect(second).toEqual({ deleted: 0, done: true });
+	});
+});
+
+describe("the deletion tombstone", () => {
+	/**
+	 * Every user-facing mutation, with an argument set that reaches its auth
+	 * check. The point is coverage of the guard, not of each mutation's own
+	 * behaviour: a mutation that skips `requireUserId`/`requireDocumentAccess`
+	 * would be a hole a stale client could write through.
+	 */
+	function userMutations(seeded: Seeded) {
+		const documentId = seeded.documentId;
+		return [
+			["documents.create", () => api.documents.create, {}],
+			[
+				"documents.rename",
+				() => api.documents.rename,
+				{ documentId, title: "x" },
+			],
+			["documents.remove", () => api.documents.remove, { documentId }],
+			[
+				"documents.updateMarkdown",
+				() => api.documents.updateMarkdown,
+				{
+					documentId,
+					markdown: "x",
+					wordCount: 1,
+					expectedUpdatedAt: Date.now(),
+				},
+			],
+			[
+				"documents.updateCurrentNodeId",
+				() => api.documents.updateCurrentNodeId,
+				{
+					documentId,
+					currentNodeId: "node-1",
+					markdown: "x",
+					wordCount: 1,
+					updatedAt: Date.now(),
+				},
+			],
+			[
+				"documents.commitEdit",
+				() => api.documents.commitEdit,
+				{
+					documentId,
+					node: {
+						nodeId: "new-node",
+						parentNodeId: "node-2",
+						patch: "{}",
+						selection: null,
+						origin: "test",
+						createdAt: Date.now(),
+					},
+					markdown: "x",
+					wordCount: 1,
+					expectedHeadNodeId: "node-2",
+					clientMutationId: "m1",
+				},
+			],
+			[
+				"docNodes.append",
+				() => api.docNodes.append,
+				{
+					documentId,
+					nodeId: "n9",
+					parentNodeId: "node-2",
+					patch: "{}",
+					selection: null,
+					origin: "test",
+					createdAt: Date.now(),
+				},
+			],
+			["docNodes.ensureRoot", () => api.docNodes.ensureRoot, { documentId }],
+			[
+				"versions.create",
+				() => api.versions.create,
+				{ documentId, nodeId: "node-1", label: "v", kind: "manual" as const },
+			],
+			["settings.save", () => api.settings.save, { json: "{}" }],
+			[
+				"workspaces.saveForDevice",
+				() => api.workspaces.saveForDevice,
+				{ deviceId: "d1", deviceClass: "web" as const, json: "{}" },
+			],
+			[
+				"workspaces.save",
+				() => api.workspaces.save,
+				{
+					paneTree: "{}",
+					openDocumentIds: [],
+					activePaneId: "p",
+					perPaneViewState: "{}",
+				},
+			],
+			[
+				"writingStats.record",
+				() => api.writingStats.record,
+				{ date: "2026-08-28", words: 1 },
+			],
+			["files.generateUploadUrl", () => api.files.generateUploadUrl, {}],
+			[
+				"review.addShare",
+				() => api.review.addShare,
+				{ documentId, email: "x@example.com", role: "commenter" as const },
+			],
+			[
+				"review.addComment",
+				() => api.review.addComment,
+				{
+					documentId,
+					anchor: { quote: "hello", prefix: "", suffix: "", offsetHint: 0 },
+					body: "hi",
+				},
+			],
+			[
+				"review.reviewerAppend",
+				() => api.review.reviewerAppend,
+				{
+					documentId: seeded.otherDocumentId,
+					nodeId: "sug-1",
+					parentNodeId: "other-root",
+					patch: JSON.stringify({ from: 0, to: 0, insert: "x" }),
+					selection: null,
+					createdAt: Date.now(),
+				},
+			],
+		] as const;
+	}
+
+	it("refuses every user-facing mutation while a deletion is in flight", async () => {
+		const t = convexTest(schema, modules);
+		const seeded = await seed(t);
+		const owner = t.withIdentity(OWNER);
+		const cases = userMutations(seeded);
+
+		// Sanity: without the tombstone at least one of these succeeds, so a
+		// blanket failure cannot be mistaken for the guard working.
+		await expect(
+			owner.mutation(api.settings.save, { json: "{}" }),
+		).resolves.toBeDefined();
+
+		await t.mutation(internal.account.beginDeletion, {
+			userId: OWNER.subject,
+			granteeEmail: OWNER.email,
+		});
+
+		for (const [name, reference, args] of cases) {
+			await expect(
+				// biome-ignore lint/suspicious/noExplicitAny: one call site over 17 differently-typed mutations
+				owner.mutation(reference() as any, args as any),
+				`${name} must refuse while the account is being deleted`,
+			).rejects.toThrow(ACCOUNT_DELETION_IN_PROGRESS_MESSAGE);
+		}
+	});
+
+	it("still allows reads, so the deleting client's own UI does not explode", async () => {
+		const t = convexTest(schema, modules);
+		await seed(t);
+		await t.mutation(internal.account.beginDeletion, {
+			userId: OWNER.subject,
+		});
+
+		await expect(
+			t.withIdentity(OWNER).query(api.documents.list, {}),
+		).resolves.toBeDefined();
+	});
+
+	it("does not block a different user", async () => {
+		const t = convexTest(schema, modules);
+		await seed(t);
+		await t.mutation(internal.account.beginDeletion, {
+			userId: OWNER.subject,
+		});
+
+		await expect(
+			t.withIdentity(OTHER).mutation(api.settings.save, { json: "{}" }),
+		).resolves.toBeDefined();
+	});
+
+	it("blocks a reviewer from appending to a document whose OWNER is being deleted", async () => {
+		const t = convexTest(schema, modules);
+		const seeded = await seed(t);
+		await t.mutation(internal.account.beginDeletion, { userId: OTHER.subject });
+
+		await expect(
+			t.withIdentity(OWNER).mutation(api.review.reviewerAppend, {
+				documentId: seeded.otherDocumentId,
+				nodeId: "sug-2",
+				parentNodeId: "other-root",
+				patch: JSON.stringify({ from: 0, to: 0, insert: "x" }),
+				selection: null,
+				createdAt: Date.now(),
 			}),
-		).toEqual({ deleted: 0, done: true });
+		).rejects.toThrow(ACCOUNT_DELETION_IN_PROGRESS_MESSAGE);
+	});
+
+	it("is idempotent and preserves the phase across a retry", async () => {
+		const t = convexTest(schema, modules);
+		const first = await t.mutation(internal.account.beginDeletion, {
+			userId: OWNER.subject,
+		});
+		expect(first).toMatchObject({ phase: "blobs", resumed: false });
+
+		await t.mutation(internal.account.setDeletionPhase, {
+			userId: OWNER.subject,
+			phase: "identity",
+		});
+		const second = await t.mutation(internal.account.beginDeletion, {
+			userId: OWNER.subject,
+		});
+		// Resetting the phase here would turn a legitimate "already deleted" 404
+		// from Clerk back into a wrong-instance error.
+		expect(second).toMatchObject({ phase: "identity", resumed: true });
+
+		const rows = await t.run((ctx) =>
+			ctx.db.query("accountDeletions").collect(),
+		);
+		expect(rows).toHaveLength(1);
+	});
+
+	it("is swept only once its retention window has passed", async () => {
+		const t = convexTest(schema, modules);
+		await t.mutation(internal.account.beginDeletion, { userId: OWNER.subject });
+
+		// In flight: no expiry, so the sweep must leave it.
+		expect(await t.mutation(internal.account.sweepTombstones, {})).toEqual({
+			deleted: 0,
+		});
+
+		await t.mutation(internal.account.setDeletionPhase, {
+			userId: OWNER.subject,
+			phase: "purged",
+		});
+		// Finished, but still inside the retention window.
+		expect(await t.mutation(internal.account.sweepTombstones, {})).toEqual({
+			deleted: 0,
+		});
+
+		await t.run(async (ctx) => {
+			const row = await ctx.db.query("accountDeletions").first();
+			if (row) await ctx.db.patch(row._id, { expiresAt: Date.now() - 1 });
+		});
+		expect(await t.mutation(internal.account.sweepTombstones, {})).toEqual({
+			deleted: 1,
+		});
 	});
 });
 
@@ -399,6 +877,7 @@ describe("account.deleteEverything", () => {
 			externalAccounts?: { provider: string }[];
 			deleteStatus?: number;
 			userStatus?: number;
+			body?: unknown;
 		} = {},
 	) {
 		const calls: { method: string; url: string }[] = [];
@@ -406,14 +885,17 @@ describe("account.deleteEverything", () => {
 			"fetch",
 			vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
 				const url = String(input);
-				calls.push({ method: init?.method ?? "GET", url });
-				if ((init?.method ?? "GET") === "DELETE") {
+				const method = init?.method ?? "GET";
+				calls.push({ method, url });
+				if (method === "DELETE") {
 					return new Response("{}", { status: options.deleteStatus ?? 200 });
 				}
 				return new Response(
-					JSON.stringify({
-						external_accounts: options.externalAccounts ?? [],
-					}),
+					JSON.stringify(
+						options.body ?? {
+							external_accounts: options.externalAccounts ?? [],
+						},
+					),
 					{ status: options.userStatus ?? 200 },
 				);
 			}),
@@ -439,13 +921,33 @@ describe("account.deleteEverything", () => {
 			t.withIdentity(OWNER).action(api.account.deleteEverything, {}),
 		).rejects.toThrow(ACCOUNT_DELETION_UNAVAILABLE_MESSAGE);
 
-		// The one failure mode worse than not deleting: data gone, login alive.
 		expect(await countAll(t)).toEqual(before);
 	});
 
-	it("purges the data and deletes the Clerk user last", async () => {
+	it("refuses, without deleting anything, when the secret cannot see this user", async () => {
 		const t = convexTest(schema, modules);
 		await seed(t);
+		await seedBlobs(t);
+		const before = await countAll(t);
+		// A secret for the WRONG Clerk instance answers 404 to every call.
+		stubClerk({ userStatus: 404, deleteStatus: 404 });
+
+		await expect(
+			t.withIdentity(OWNER).action(api.account.deleteEverything, {}),
+		).rejects.toThrow(CLERK_USER_UNREACHABLE_MESSAGE);
+
+		expect(await countAll(t)).toEqual(before);
+		expect(await storageIds(t)).toHaveLength(3);
+		// And no tombstone was written, so the account is not bricked.
+		expect(
+			await t.run((ctx) => ctx.db.query("accountDeletions").collect()),
+		).toHaveLength(0);
+	});
+
+	it("purges blobs and rows, then deletes the Clerk user last", async () => {
+		const t = convexTest(schema, modules);
+		await seed(t);
+		const { theirs } = await seedBlobs(t);
 		const calls = stubClerk();
 
 		const result = await t
@@ -454,13 +956,38 @@ describe("account.deleteEverything", () => {
 
 		expect(result.clerkUserDeleted).toBe(true);
 		expect(result.rowsDeleted).toBeGreaterThan(0);
+		expect(result.blobsDeleted).toBe(1);
 		expect(result.appleRevocation).toEqual({ status: "not-applicable" });
-		expect((await countAll(t)).documents).toBe(1); // other user's survives
+		expect((await countAll(t)).documents).toBe(2);
+		expect(await storageIds(t)).toContain(theirs);
 
-		const deleteCall = calls.find((call) => call.method === "DELETE");
-		expect(deleteCall?.url).toBe(
+		const deleteIndex = calls.findIndex((call) => call.method === "DELETE");
+		expect(deleteIndex).toBeGreaterThan(-1);
+		expect(calls[deleteIndex]?.url).toBe(
 			`https://api.clerk.com/v1/users/${OWNER.subject}`,
 		);
+		// The identity goes after the data, never before.
+		expect(deleteIndex).toBe(calls.length - 1);
+	});
+
+	it("leaves the tombstone behind, purged, so late writes still fail", async () => {
+		const t = convexTest(schema, modules);
+		await seed(t);
+		stubClerk();
+
+		await t.withIdentity(OWNER).action(api.account.deleteEverything, {});
+
+		const tombstone = await t.query(internal.account.getDeletion, {
+			userId: OWNER.subject,
+		});
+		expect(tombstone?.phase).toBe("purged");
+		expect(tombstone?.expiresAt).toBeGreaterThan(Date.now());
+
+		// A stale tab's queued write, arriving with a JWT that has not expired yet.
+		await expect(
+			t.withIdentity(OWNER).mutation(api.settings.save, { json: '{"a":1}' }),
+		).rejects.toThrow(ACCOUNT_DELETION_IN_PROGRESS_MESSAGE);
+		expect((await countAll(t)).settings).toBe(0);
 	});
 
 	it("reports what blocks Apple revocation when the user signed in with Apple", async () => {
@@ -490,19 +1017,7 @@ describe("account.deleteEverything", () => {
 	it("says 'unknown' rather than 'no Apple account' for a response it cannot read", async () => {
 		const t = convexTest(schema, modules);
 		await seed(t);
-		vi.stubGlobal(
-			"fetch",
-			vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
-				if ((init?.method ?? "GET") === "DELETE") {
-					return new Response("{}", { status: 200 });
-				}
-				// Not the shape the code expects — reporting "no Apple account" here
-				// would silently claim a compliance box was ticked.
-				return new Response(JSON.stringify({ external_accounts: "nope" }), {
-					status: 200,
-				});
-			}),
-		);
+		stubClerk({ body: { external_accounts: "nope" } });
 
 		const result = await t
 			.withIdentity(OWNER)
@@ -510,10 +1025,20 @@ describe("account.deleteEverything", () => {
 		expect(result.appleRevocation.status).toBe("unknown");
 	});
 
-	it("treats an already-deleted Clerk user as success", async () => {
+	it("accepts a 404 on the retry of a deletion that already reached Clerk", async () => {
 		const t = convexTest(schema, modules);
 		await seed(t);
-		stubClerk({ deleteStatus: 404, userStatus: 404 });
+		// The state a crashed action leaves: data purged, identity already asked
+		// for. Clerk now 404s because the user really is gone.
+		await t.mutation(internal.account.beginDeletion, {
+			userId: OWNER.subject,
+			granteeEmail: OWNER.email,
+		});
+		await t.mutation(internal.account.setDeletionPhase, {
+			userId: OWNER.subject,
+			phase: "identity",
+		});
+		stubClerk({ userStatus: 404, deleteStatus: 404 });
 
 		const result = await t
 			.withIdentity(OWNER)
@@ -521,7 +1046,7 @@ describe("account.deleteEverything", () => {
 		expect(result.clerkUserDeleted).toBe(true);
 	});
 
-	it("fails loudly when Clerk refuses, so the caller knows to retry", async () => {
+	it("fails loudly when Clerk refuses the delete, so the caller knows to retry", async () => {
 		const t = convexTest(schema, modules);
 		await seed(t);
 		stubClerk({ deleteStatus: 500 });
@@ -529,8 +1054,9 @@ describe("account.deleteEverything", () => {
 		await expect(
 			t.withIdentity(OWNER).action(api.account.deleteEverything, {}),
 		).rejects.toThrow("Clerk refused to delete the user");
-		// The data is already gone; the account stays reachable for a retry.
-		expect((await countAll(t)).documents).toBe(1);
+		// The data is already gone; the tombstone keeps the account inert until a
+		// retry finishes the job.
+		expect((await countAll(t)).documents).toBe(2);
 	});
 
 	it("is idempotent end to end", async () => {
@@ -543,5 +1069,116 @@ describe("account.deleteEverything", () => {
 		const second = await owner.action(api.account.deleteEverything, {});
 		expect(second.rowsDeleted).toBe(0);
 		expect(second.clerkUserDeleted).toBe(true);
+	});
+
+	it("resumeDeletion finishes a deletion the action did not", async () => {
+		const t = convexTest(schema, modules);
+		await seed(t);
+		stubClerk();
+		await t.mutation(internal.account.beginDeletion, {
+			userId: OWNER.subject,
+			granteeEmail: OWNER.email,
+		});
+
+		await t.action(internal.account.resumeDeletion, {
+			userId: OWNER.subject,
+			attempt: 1,
+		});
+
+		expect((await countAll(t)).documents).toBe(2);
+		expect(
+			(await t.query(internal.account.getDeletion, { userId: OWNER.subject }))
+				?.phase,
+		).toBe("purged");
+	});
+
+	it("resumeDeletion is a no-op once the deletion is finished", async () => {
+		const t = convexTest(schema, modules);
+		await seed(t);
+		const calls = stubClerk();
+		await t.mutation(internal.account.beginDeletion, { userId: OWNER.subject });
+		await t.mutation(internal.account.setDeletionPhase, {
+			userId: OWNER.subject,
+			phase: "purged",
+		});
+
+		await t.action(internal.account.resumeDeletion, {
+			userId: OWNER.subject,
+			attempt: 1,
+		});
+		expect(calls).toHaveLength(0);
+		expect((await countAll(t)).documents).toBe(3);
+	});
+});
+
+describe("migrations", () => {
+	it("backfills authorUserId from the review: origin", async () => {
+		const t = convexTest(schema, modules);
+		const { otherDocumentId } = await seed(t);
+		await t.run(async (ctx) => {
+			await ctx.db.insert("docNodes", {
+				documentId: otherDocumentId,
+				nodeId: "legacy-suggestion",
+				parentNodeId: "other-root",
+				patch: "{}",
+				selection: null,
+				origin: `review:${OWNER.subject}`,
+				createdAt: Date.now(),
+			});
+		});
+
+		const result = await t.mutation(
+			internal.migrations.backfillNodeAuthors,
+			{},
+		);
+		expect(result.updated).toBe(1);
+		expect(result.done).toBe(true);
+
+		const patched = await t.run(async (ctx) =>
+			(await ctx.db.query("docNodes").collect()).find(
+				(node) => node.nodeId === "legacy-suggestion",
+			),
+		);
+		expect(patched?.authorUserId).toBe(OWNER.subject);
+	});
+
+	it("attributes a blob referenced by exactly one user, and only that one", async () => {
+		const t = convexTest(schema, modules);
+		const { documentId } = await seed(t);
+		const storageId = await t.run((ctx) =>
+			ctx.storage.store(new Blob(["img"])),
+		);
+		const url = await t.run((ctx) => ctx.storage.getUrl(storageId));
+		await t.run((ctx) =>
+			ctx.db.patch(documentId, { markdown: `mine ![a](${url})` }),
+		);
+
+		const result = await t.mutation(internal.migrations.backfillBlobOwners, {});
+		expect(result.claimed).toBe(1);
+
+		const rows = await t.run((ctx) => ctx.db.query("blobs").collect());
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.ownerUserId).toBe(OWNER.subject);
+	});
+
+	it("leaves a blob two users both reference unattributed", async () => {
+		const t = convexTest(schema, modules);
+		const { documentId, otherDocumentId } = await seed(t);
+		const storageId = await t.run((ctx) =>
+			ctx.storage.store(new Blob(["img"])),
+		);
+		const url = await t.run((ctx) => ctx.storage.getUrl(storageId));
+		await t.run(async (ctx) => {
+			await ctx.db.patch(documentId, { markdown: `mine ![a](${url})` });
+			await ctx.db.patch(otherDocumentId, { markdown: `theirs ![a](${url})` });
+		});
+
+		const result = await t.mutation(internal.migrations.backfillBlobOwners, {});
+		// Guessing here would let one account's deletion take the other's file.
+		expect(result.claimed).toBe(0);
+		expect(result.shared).toBe(1);
+		expect(await t.run((ctx) => ctx.db.query("blobs").collect())).toHaveLength(
+			0,
+		);
 	});
 });
