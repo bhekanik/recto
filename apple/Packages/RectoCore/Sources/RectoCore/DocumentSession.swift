@@ -202,10 +202,14 @@ public actor DocumentSession {
   public func applyLocalChange(
     markdown: String, selection: NodeSelection?, structural: Bool = false
   ) async throws {
-    guard controller != nil, let document else { throw SessionError.notOpen }
+    guard let document else { throw SessionError.notOpen }
     let timestamp = now()
-    let commits = controller!.record(
-      markdown: markdown, selection: selection, structural: structural, now: timestamp)
+    // Optional chaining on a `var` of struct type mutates in place, so this both
+    // checks that the session is open and records the change.
+    guard
+      let commits = controller?.record(
+        markdown: markdown, selection: selection, structural: structural, now: timestamp)
+    else { throw SessionError.notOpen }
 
     var head = document.localHeadNodeId
     for commit in commits {
@@ -221,8 +225,7 @@ public actor DocumentSession {
 
   /// The idle boundary elapsed (500 ms since the last keystroke).
   public func tickIdle() async throws {
-    guard controller != nil, let document else { return }
-    guard let commit = controller!.tick() else { return }
+    guard let document, let commit = controller?.tick() else { return }
     _ = try await persist(commit, base: document.localHeadNodeId, at: now())
     try await reload()
     publish()
@@ -237,7 +240,7 @@ public actor DocumentSession {
     draftTask?.cancel()
     draftTask = nil
 
-    if controller != nil, let document, let commit = controller!.flush() {
+    if let document, let commit = controller?.flush() {
       _ = try await persist(commit, base: document.localHeadNodeId, at: now())
       try await reload()
       publish()
@@ -303,7 +306,7 @@ public actor DocumentSession {
     guard controller != nil, nodesById[nodeId] != nil else { return }
     // Commit any pending draft first, so we branch from a real node rather than
     // mid-edit text that would be lost.
-    if let document, let commit = controller!.flush() {
+    if let document, let commit = controller?.flush() {
       _ = try await persist(commit, base: document.localHeadNodeId, at: now())
       try await reload()
     }
@@ -323,7 +326,7 @@ public actor DocumentSession {
     _ = try await store.moveHead(
       documentLocalId: documentLocalId, to: nodeId, markdown: markdown, wordCount: words,
       job: job, now: timestamp)
-    controller!.setCurrent(
+    controller?.setCurrent(
       nodeId: nodeId, markdown: markdown,
       depthSinceSnapshot: depthSinceSnapshot(nodeId, nodesById))
     try await reload()
@@ -396,7 +399,13 @@ public actor DocumentSession {
     case .libraryChanged:
       return
     }
-    try? await reload()
+    do {
+      try await reload()
+    } catch {
+      logger.error(
+        "reload after a sync event failed: \(error.localizedDescription, privacy: .public)")
+      return
+    }
     // A remote head adoption re-materialized the head under us; the controller
     // has to be repositioned or the next commit would patch against stale text.
     if let document, controller?.currentNodeId != document.localHeadNodeId,
@@ -456,10 +465,18 @@ public actor DocumentSession {
       baseHeadNodeId: document.localHeadNodeId,
       payload: OutboxPayload(markdown: markdown, wordCount: words).encoded,
       createdAt: now())
-    try? await store.saveDraft(
-      documentLocalId: documentLocalId, markdown: markdown, selection: selection,
-      wordCount: words, job: job, now: now())
-    try? await reload()
+    do {
+      try await store.saveDraft(
+        documentLocalId: documentLocalId, markdown: markdown, selection: selection,
+        wordCount: words, job: job, now: now())
+      try await reload()
+    } catch {
+      // The draft row is the crash-recovery guarantee; losing it silently is the
+      // one failure the user would never be warned about.
+      logger.error(
+        "draft save failed for \(self.documentLocalId, privacy: .public): \(error.localizedDescription, privacy: .public)"
+      )
+    }
     publish()
     await sync?.requestDrain()
   }

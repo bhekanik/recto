@@ -56,7 +56,11 @@ public actor InMemoryTransport: RectoTransport {
 
   // MARK: - Fault injection
 
-  /// Queue faults; each applies to one call, in order.
+  /// Queue faults; each applies to one MUTATION, in order.
+  ///
+  /// Reads (`listNodes`, `getDocument`, the streams) are deliberately exempt: a
+  /// background node subscription would otherwise race the drain for the next
+  /// queued fault and the test would pass or fail on timing.
   public func inject(_ faults: [Fault]) { self.faults = faults }
 
   private func takeFault() -> Fault? {
@@ -245,14 +249,12 @@ public actor InMemoryTransport: RectoTransport {
   }
 
   public func listNodes(documentId: String, sinceCreatedAt: Double?) async throws -> [RemoteNode] {
-    try applyPreFault()
     let all = nodes[documentId] ?? []
     guard let sinceCreatedAt else { return all }
     return all.filter { $0.createdAt > sinceCreatedAt }
   }
 
   public func getDocument(documentId: String) async throws -> RemoteDocument? {
-    try applyPreFault()
     guard let document = documents[documentId] else { return nil }
     return RemoteDocument(
       id: document.id, title: document.title, markdown: document.markdown,

@@ -7,17 +7,17 @@
  * this and diffs the result, so a change to `lib/` that nobody propagated fails
  * the build instead of leaving the Swift suite passing against stale answers.
  *
- * The corpus comes from `packages/editor-fixtures/` (W3) — the same cases the
- * web and the JS core are held to — plus the Swift-specific ones below, which
- * cover what a Swift port gets wrong and JavaScript cannot: surrogate pairs
- * split by a patch boundary, canonical-equivalence traps in `String ==`, and
- * calendar boundaries that a fixed-86_400_000-ms day step gets wrong. Reading
- * the shared files is deliberate: if W3's corpus changes, this regenerates and
- * CI's diff shows it.
+ * The corpus is imported from `packages/editor-fixtures/src/cases.ts` (W3) —
+ * the typed source the web and the JS core are held to, not its JSON build
+ * output — plus the Swift-specific cases below, which cover what a Swift port
+ * gets wrong and JavaScript cannot reach: surrogate pairs split by a patch
+ * boundary, canonical-equivalence traps in `String ==`, and calendar boundaries
+ * a fixed-86_400_000-ms day step gets wrong. If W3's corpus changes, this
+ * regenerates and CI's diff shows it.
  *
  *   bun run apple/tools/generate-history-fixtures.ts
  */
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
 	applyAcceptedHunks,
@@ -35,14 +35,13 @@ import {
 	type GoalKind,
 	goalProgress,
 } from "../../lib/stats/streak";
+import {
+	DIFF_CASES,
+	PATCH_CASES,
+	STREAK_CASES,
+} from "../../packages/editor-fixtures/src/cases";
 
 const repoRoot = join(import.meta.dir, "..", "..");
-const sharedCorpus = join(repoRoot, "packages/editor-fixtures");
-
-async function readShared<T>(name: string): Promise<T> {
-	return JSON.parse(await readFile(join(sharedCorpus, name), "utf8")) as T;
-}
-
 const outDir = join(
 	repoRoot,
 	"apple/Packages/RectoHistory/Tests/RectoHistoryTests/Fixtures",
@@ -108,7 +107,83 @@ const swiftDiffPairs: Array<[string, string]> = [
 	["# H\n\n- a\n- b\n", "# H\n\n- a\n- c\n- b\n"],
 ];
 
-async function write(name: string, value: unknown) {
+/**
+ * The five files this script emits. The Swift `Decodable` structs in
+ * RectoHistoryTests mirror these shapes; changing one means changing both.
+ */
+type PatchCase = {
+	parent: string;
+	next: string;
+	patch: string;
+	applied: string;
+	label: string;
+};
+
+type FixtureNode = {
+	nodeId: string;
+	parentNodeId: string | null;
+	patch: string;
+	snapshot: string | null;
+	selection: { anchor: number; head: number } | null;
+	origin: string;
+	createdAt: number;
+};
+
+type MaterializedNode = { nodeId: string; markdown: string };
+
+type GroupingCommit = {
+	sequence: number;
+	patch: string;
+	snapshot: string | null;
+	selection: { anchor: number; head: number } | null;
+	markdown: string;
+};
+
+type DiffRunCase = { type: string; text: string };
+
+type DiffCase = {
+	current: string;
+	branch: string;
+	granularity: "word" | "line";
+	runs: DiffRunCase[];
+	hunks: Array<{ index: number; runIndices: number[] }>;
+	mergedNone: string;
+	mergedAll: string;
+	mergedEven: string;
+};
+
+type LineDiffCase = {
+	current: string;
+	branch: string;
+	lines: DiffRunCase[];
+};
+
+type StreakExpectation = {
+	name: string;
+	stats: DailyStat[];
+	today: string;
+	streak: number;
+};
+
+type GoalExpectation = {
+	words: number;
+	target: number;
+	kind: GoalKind;
+	progress: { ratio: number; met: boolean; remaining: number };
+};
+
+type FixtureFile =
+	| { cases: PatchCase[] }
+	| {
+			nodes: FixtureNode[];
+			expected: MaterializedNode[];
+			snapshotNodeIds: string[];
+	  }
+	| { steps: GroupingStep[]; commits: GroupingCommit[] }
+	| { cases: DiffCase[]; lineCases: LineDiffCase[] }
+	| { streaks: StreakExpectation[]; goals: GoalExpectation[] };
+
+async function write(name: string, value: FixtureFile) {
 	const path = join(outDir, name);
 	await mkdir(dirname(path), { recursive: true });
 	await writeFile(path, `${JSON.stringify(value, null, "\t")}\n`);
@@ -116,26 +191,10 @@ async function write(name: string, value: unknown) {
 }
 
 async function patchFixtures() {
-	const shared = await readShared<{
-		patches: Array<{ parent: string; next: string; encoded: string }>;
-	}>("history-patches.json");
 	const pairs: Array<[string, string]> = [
-		...shared.patches.map(
-			({ parent, next }) => [parent, next] as [string, string],
-		),
+		...PATCH_CASES.map(({ parent, next }): [string, string] => [parent, next]),
 		...swiftPatchPairs,
 	];
-
-	// The shared corpus asserts its own encodings; if lib/ and W3 ever disagree,
-	// say so here rather than baking the disagreement into the Swift fixtures.
-	for (const patchCase of shared.patches) {
-		const encoded = encodePatch(computePatch(patchCase.parent, patchCase.next));
-		if (encoded !== patchCase.encoded) {
-			throw new Error(
-				`editor-fixtures history-patches disagrees with lib/history/patch.ts: ${encoded} vs ${patchCase.encoded}`,
-			);
-		}
-	}
 
 	const cases = pairs.map(([parent, next]) => {
 		const patch = encodePatch(computePatch(parent, next));
@@ -203,15 +262,18 @@ async function materializeFixtures() {
 		if (!stableId.has(node.nodeId))
 			stableId.set(node.nodeId, `n${stableId.size}`);
 	}
-	const rename = (id: string | null) =>
-		id == null ? null : (stableId.get(id) ?? id);
+	const rename = (id: string) => stableId.get(id) ?? id;
+	const renameParent = (id: string | null) => (id === null ? null : rename(id));
 
 	await write("materialize-cases.json", {
 		nodes: nodes.map((n) => ({
-			...n,
 			nodeId: rename(n.nodeId),
-			parentNodeId: rename(n.parentNodeId),
+			parentNodeId: renameParent(n.parentNodeId),
+			patch: n.patch,
 			snapshot: n.snapshot ?? null,
+			selection: n.selection ?? null,
+			origin: n.origin ?? "fixture",
+			createdAt: n.createdAt ?? 0,
 		})),
 		expected: heads.map((nodeId) => ({
 			nodeId: rename(nodeId),
@@ -289,7 +351,7 @@ async function groupingFixtures() {
 		kind: "flush",
 	});
 
-	const commits: unknown[] = [];
+	const commits: GroupingCommit[] = [];
 	let seq = 0;
 	const controller = new GroupingController({
 		rootNodeId: "root",
@@ -323,17 +385,13 @@ async function groupingFixtures() {
 }
 
 async function diffFixtures() {
-	const shared = await readShared<{ cases: Array<{ a: string; b: string }> }>(
-		"diff-runs.json",
-	);
 	const seen = new Set<string>();
 	const diffPairs: Array<[string, string]> = [];
 	for (const [current, branch] of [
-		...shared.cases.map(({ a, b }) => [a, b] as [string, string]),
+		...DIFF_CASES.map(({ a, b }): [string, string] => [a, b]),
 		...swiftDiffPairs,
 	]) {
-		// The shared corpus lists each pair once per granularity; both are covered
-		// below, so keep one entry each.
+		// Both granularities are emitted below, so each pair is listed once.
 		const key = JSON.stringify([current, branch]);
 		if (seen.has(key)) continue;
 		seen.add(key);
@@ -403,8 +461,13 @@ const swiftStreakCases: StreakCase[] = [
 ];
 
 async function streakFixtures() {
-	const shared = await readShared<{ cases: StreakCase[] }>("streak.json");
-	const streaks = [...shared.cases, ...swiftStreakCases].map((c) => {
+	const shared: StreakCase[] = STREAK_CASES.map((c) => ({
+		name: c.name,
+		days: c.days,
+		today: c.today,
+		streak: c.expectStreak,
+	}));
+	const streaks = [...shared, ...swiftStreakCases].map((c) => {
 		const computed = currentStreak(c.days, c.today);
 		// The asserted answer and the web implementation must agree. If they stop
 		// agreeing that is a web bug, and this script says so rather than baking
@@ -430,7 +493,7 @@ async function streakFixtures() {
 		streaks,
 		goals: goals.map((g) => ({
 			...g,
-			progress: goalProgress(g.words, g.target, g.kind as GoalKind),
+			progress: goalProgress(g.words, g.target, g.kind),
 		})),
 	});
 }

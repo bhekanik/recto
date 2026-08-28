@@ -291,8 +291,13 @@ public actor SyncEngine {
   /// Drain everything now and return when the queue is empty or stuck. Used by
   /// `DocumentSession.flush()` and by the tests.
   public func drainNow() async {
-    let documents = (try? await store.documentsWithPendingJobs()) ?? []
-    for localId in documents { await drainDocument(localId: localId) }
+    do {
+      for localId in try await store.documentsWithPendingJobs() {
+        await drainDocument(localId: localId)
+      }
+    } catch {
+      storeFailed(error, while: "listing documents with queued work")
+    }
   }
 
   private func drainLoop() async {
@@ -303,6 +308,14 @@ public actor SyncEngine {
       if Task.isCancelled { return }
       await drainNow()
     }
+  }
+
+  /// A local-store failure during a drain is not "nothing to send" — it means the
+  /// mirror is unreadable, and sync would otherwise sit silently idle forever.
+  private func storeFailed(_ error: any Error, while action: String) {
+    logger.error(
+      "local store failed while \(action, privacy: .public): \(error.localizedDescription, privacy: .public)"
+    )
   }
 
   private enum JobOutcome {
