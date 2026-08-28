@@ -212,7 +212,7 @@ in-flight workers are producing (§4).
 | W8 js-cores | N3 | 023/js-cores | round 3 fixed (verified by orchestrator: vim 211, parity green, RectoCoreJS 25, RectoVim 50, gate ok); Codex r3 running | #10 | Claude r1 / Codex r1 | n/a (CI) |
 | W9a editor-engine stage 1 (fork plumbing + dialect + RectoEditor skeleton) | N5 | 023/editor-engine | round 4 (Codex r3: 6 fixed, 3 partial, 1 not fixed; 4 blocking: controller swap SIGTRAPs on the old selection, presentation lock is advisory, Writing Tools overlap publishes nothing, suffix extension is quadratic (9 KB alternating doc → 0.5 s/keystroke)) | #9 + fork PR #1 (`5e6a00e`) | Claude r1 / Codex r1+r2 | n/a (CI) |
 | W9b editor-engine stage 2 (blocks, features, undo-tree, typewriter) | N5 | 023/editor-engine-2 | blocked on W9a | | | |
-| W10 native-core | N4 | 023/native-core | round 5 fixed (11/11; 181 tests; live green); dev deployment redeployed from main 06:58 (it had drifted behind PR #11); orchestrator verifying; Codex r5 running | #7 | Claude r1 / Codex r1+r2 | n/a (CI) |
+| W10 native-core | N4 | 023/native-core | round 5 fixed (verified: 181 tests; live 52/52 incl. the server parent rule asserted after the dev redeploy; orchestrator removed the withKnownIssue wrapper, pushed); Codex r5 running; agent EXPIRED → fresh agent for round 6 | #7 | Claude r1 / Codex r1+r2 | n/a (CI) |
 | W11 ai-on-convex | N2 | 023/ai-convex | blocked on W7 | | | |
 | W12 mac-alpha | N6 | 023/mac-alpha | blocked on W9, W10, W8, W2 | | | |
 | W13 mac-beta | N7 | 023/mac-beta | blocked on W12, W11 | | | |
