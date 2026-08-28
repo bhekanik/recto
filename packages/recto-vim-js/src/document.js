@@ -8,16 +8,26 @@
  * replays the edit list onto the NSTextStorage; the two strings stay identical
  * because both apply the same ops in the same order.
  *
+ * **The document is the string.** Line endings are stored exactly as they
+ * arrived, never normalised. CodeMirror 6 normalises before the vim core sees a
+ * document and this mirror did too, until that turned out to break the one
+ * invariant the whole design rests on: given `a\r\nb`, a normalising mirror
+ * holds `a\nb` and reports `x` on line 2 as `{from: 2, to: 3}`, which against
+ * the native storage deletes the `\n` of the CRLF instead of the `b`. Both
+ * sides have to be indexing the same string.
+ *
  * The line array is the source of truth; the flat string and the offset index
  * are caches rebuilt on demand. Two measured decisions are baked in here, both
- * from the 950 kB benchmark in `VimSpikeSuite` (p95 CPU per keystroke):
+ * from the 950 kB benchmark in `RectoVimPerfTests` (p95 CPU per keystroke):
  *
  *   - Splicing only the lines an edit touches, instead of re-splitting the
  *     whole buffer: 1.42 ms -> 0.54 ms.
  *   - Rebuilding the offset index lazily rather than patching it in place.
  *     Patching sounds cheaper but measured worse (0.86 ms vs 0.54 ms): it walks
  *     the tail eagerly on every edit, while the rebuild is one tight
- *     typed-array loop that runs once however many edits a command made.
+ *     typed-array loop that runs once however many edits a command made. That
+ *     only holds while a command makes *one* edit, which is why `replaceAt`
+ *     exists — see `RectoCM.replaceSelections`.
  *
  * Offsets are UTF-16 code units throughout, which is what JS string indices and
  * `NSRange` both already are, so an offset produced here drops straight into an
@@ -28,6 +38,36 @@
 
 /** @typedef {{line: number, ch: number}} Pos */
 
+/** The three line endings. `\r\n` is one ending and two code units. */
+const LINE_ENDING = /\r\n|\n|\r/g;
+
+/**
+ * Split into content lines and the ending that followed each one.
+ *
+ * The last entry always has an empty ending, so `lines.length` equals
+ * `endings.length` and a document ending in a newline has a final empty line —
+ * exactly what `split("\n")` produced before, and what vim means by "the last
+ * line".
+ *
+ * @param {string} text
+ */
+export function splitLines(text) {
+	const lines = [];
+	const endings = [];
+	let at = 0;
+	LINE_ENDING.lastIndex = 0;
+	let match = LINE_ENDING.exec(text);
+	while (match) {
+		lines.push(text.slice(at, match.index));
+		endings.push(match[0]);
+		at = match.index + match[0].length;
+		match = LINE_ENDING.exec(text);
+	}
+	lines.push(text.slice(at));
+	endings.push("");
+	return { lines, endings };
+}
+
 export class RectoDoc {
 	/** @param {string} text */
 	constructor(text) {
@@ -36,9 +76,9 @@ export class RectoDoc {
 
 	/** @param {string} text */
 	setText(text) {
-		// CM6 normalises line endings before the vim core ever sees them; do the
-		// same so a CRLF document does not produce phantom \r at line ends.
-		this.lines = text.replace(/\r\n?/g, "\n").split("\n");
+		const split = splitLines(text);
+		this.lines = split.lines;
+		this.endings = split.endings;
 		this._invalidate();
 	}
 
@@ -51,7 +91,13 @@ export class RectoDoc {
 
 	/** Flat buffer. Materialised on demand — search and `getValue` are the users. */
 	get text() {
-		if (this._text === null) this._text = this.lines.join("\n");
+		if (this._text === null) {
+			const parts = [];
+			for (let i = 0; i < this.lines.length; i++) {
+				parts.push(this.lines[i], this.endings[i]);
+			}
+			this._text = parts.join("");
+		}
 		return this._text;
 	}
 
@@ -78,10 +124,23 @@ export class RectoDoc {
 		let at = 0;
 		for (let i = 0; i < n; i++) {
 			starts[i] = at;
-			at += this.lines[i].length + 1; // +1 for the newline
+			at += this.lines[i].length + this.endings[i].length;
 		}
 		this._starts = starts;
 		return starts;
+	}
+
+	/**
+	 * The ending to use for a line vim inserts itself (`o`, `O`, `<CR>`).
+	 *
+	 * Since the mirror keeps endings verbatim, inserting a bare `\n` into a CRLF
+	 * document would leave it mixed. Vim reads `fileformat` for this; the nearest
+	 * line's ending is the same answer without a second source of truth.
+	 *
+	 * @param {number} row
+	 */
+	lineEndingFor(row) {
+		return this.endings[row] || this.endings[Math.max(0, row - 1)] || "\n";
 	}
 
 	/** @param {number} row */
@@ -114,7 +173,14 @@ export class RectoDoc {
 		return Math.min(from + Math.max(0, ch), to);
 	}
 
-	/** @param {number} offset @returns {Pos} */
+	/**
+	 * `ch` is clamped into the line's *content*, so an offset landing between the
+	 * `\r` and the `\n` of a CRLF resolves to the end of that line rather than to
+	 * a column that does not exist.
+	 *
+	 * @param {number} offset
+	 * @returns {Pos}
+	 */
 	posFromIndex(offset) {
 		const starts = this._lineStarts();
 		const clamped = Math.max(0, Math.min(offset, this.length));
@@ -125,7 +191,10 @@ export class RectoDoc {
 			if (starts[mid] <= clamped) lo = mid;
 			else hi = mid - 1;
 		}
-		return { line: lo, ch: clamped - starts[lo] };
+		return {
+			line: lo,
+			ch: Math.min(clamped - starts[lo], this.lines[lo].length),
+		};
 	}
 
 	/** @param {number} from @param {number} to */
@@ -135,10 +204,15 @@ export class RectoDoc {
 		if (start.line === end.line) {
 			return this.lines[start.line].slice(start.ch, end.ch);
 		}
-		const parts = [this.lines[start.line].slice(start.ch)];
-		for (let i = start.line + 1; i < end.line; i++) parts.push(this.lines[i]);
+		const parts = [
+			this.lines[start.line].slice(start.ch),
+			this.endings[start.line],
+		];
+		for (let i = start.line + 1; i < end.line; i++) {
+			parts.push(this.lines[i], this.endings[i]);
+		}
 		parts.push(this.lines[end.line].slice(0, end.ch));
-		return parts.join("\n");
+		return parts.join("");
 	}
 
 	/**
@@ -146,19 +220,41 @@ export class RectoDoc {
 	 * @param {number} from @param {number} to @param {string} insert
 	 */
 	replace(from, to, insert) {
-		const start = this.posFromIndex(from);
-		const end = this.posFromIndex(to);
+		this.replaceAt(this.posFromIndex(from), this.posFromIndex(to), insert);
+	}
+
+	/**
+	 * The same replacement, addressed by position instead of by offset.
+	 *
+	 * Resolving an offset needs the line index and every edit invalidates it, so
+	 * a command making N edits through `replace` rebuilds the index N times —
+	 * 164 ms for a 1,000-selection visual-block edit on a 20,000-line document.
+	 * `RectoCM.replaceSelections` resolves every position first, against a single
+	 * index build, then applies the edits back-to-front so those positions are
+	 * still valid when their turn comes.
+	 *
+	 * @param {Pos} start @param {Pos} end @param {string} insert
+	 */
+	replaceAt(start, end, insert) {
 		const head = this.lines[start.line].slice(0, start.ch);
 		const tail = this.lines[end.line].slice(end.ch);
-		const replacement = (head + insert + tail).split("\n");
+		// The replaced span ends inside `end.line`, so whatever ended that line
+		// still ends the last line of the replacement.
+		const tailEnding = this.endings[end.line];
+		const replacement = splitLines(head + insert + tail);
+		replacement.endings[replacement.endings.length - 1] = tailEnding;
 		const removedLines = end.line - start.line + 1;
 
-		if (replacement.length > 30000) {
+		if (replacement.lines.length > 30000) {
 			this.lines = this.lines
 				.slice(0, start.line)
-				.concat(replacement, this.lines.slice(end.line + 1));
+				.concat(replacement.lines, this.lines.slice(end.line + 1));
+			this.endings = this.endings
+				.slice(0, start.line)
+				.concat(replacement.endings, this.endings.slice(end.line + 1));
 		} else {
-			this.lines.splice(start.line, removedLines, ...replacement);
+			this.lines.splice(start.line, removedLines, ...replacement.lines);
+			this.endings.splice(start.line, removedLines, ...replacement.endings);
 		}
 		this._invalidate();
 	}

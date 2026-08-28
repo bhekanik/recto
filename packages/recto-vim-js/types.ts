@@ -50,8 +50,17 @@ export type RectoVimApi = {
 	init: (text: string, host: VimHost | null) => string;
 	handleKey: (key: string, mods: number) => string;
 	setCursor: (line: number, ch: number) => string;
+	/** Adopt text the host changed while vim was idle; cancels any pending command. */
+	setText: (text: string, anchor: number, head: number) => string;
 	getText: () => string;
 	getState: () => string;
+	/**
+	 * Hand text input to the host's own input system instead of synthesising it
+	 * from key names. Native adapters turn this on; the headless suites do not.
+	 */
+	setExternalInput: (enabled: boolean) => string;
+	/** Text the host's input system produced, as one transaction. */
+	insertText: (text: string, from?: number, to?: number) => string;
 	/** Registers and marks as JSON, for persistence across a relaunch. */
 	saveState: () => string;
 	restoreState: (json: string) => string;

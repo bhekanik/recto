@@ -486,8 +486,7 @@
 			"cursor": [0, 1],
 			"keys": "r-",
 			"expectText": "a-b",
-			"expectCursor": [0, 2],
-			"note": "Real vim leaves the caret on the replacement (ch 1). The core computes the caret as `curEnd - 1` from the range it asked for (its surrogate-pair bump, ch 3) rather than the wider range the grapheme clamp actually replaced, so the caret lands one character further on. The text is right; only the caret differs, and only on a multi-codepoint cluster."
+			"expectCursor": [0, 1]
 		},
 		{
 			"name": "l counts a family as one character",
@@ -914,6 +913,112 @@
 			"keys": "V",
 			"expectText": "one\ntwo\n",
 			"expectMode": "visual"
+		},
+		{
+			"name": "x on the second line of a CRLF document",
+			"text": "a\r\nb\r\n",
+			"cursor": [1, 0],
+			"keys": "x",
+			"expectText": "a\r\n\r\n"
+		},
+		{
+			"name": "dd on a CRLF document keeps the remaining ending",
+			"text": "a\r\nb\r\n",
+			"cursor": [0, 0],
+			"keys": "dd",
+			"expectText": "b\r\n"
+		},
+		{
+			"name": "J joins across a CRLF",
+			"text": "a\r\nb\r\n",
+			"cursor": [0, 0],
+			"keys": "J",
+			"expectText": "a b\r\n"
+		},
+		{
+			"name": "$ lands on the last character of a CRLF line",
+			"text": "ab\r\ncd\r\n",
+			"cursor": [0, 0],
+			"keys": "$x",
+			"expectText": "a\r\ncd\r\n"
+		},
+		{
+			"name": "o follows the document's line ending",
+			"text": "a\r\nb\r\n",
+			"cursor": [0, 0],
+			"keys": "oX<Esc>",
+			"expectText": "a\r\nX\r\nb\r\n"
+		},
+		{
+			"name": "a lone CR is a line ending too",
+			"text": "a\rb\r",
+			"cursor": [1, 0],
+			"keys": "x",
+			"expectText": "a\r\r"
+		},
+		{
+			"name": "a appends after a whole emoji family",
+			"text": "a👨‍👩‍👧‍👦b",
+			"cursor": [0, 1],
+			"keys": "aQ<Esc>",
+			"expectText": "a👨‍👩‍👧‍👦Qb"
+		},
+		{
+			"name": "i inserts before a whole emoji family",
+			"text": "a👨‍👩‍👧‍👦b",
+			"cursor": [0, 1],
+			"keys": "iQ<Esc>",
+			"expectText": "aQ👨‍👩‍👧‍👦b"
+		},
+		{
+			"name": "$ lands on an emoji family at the end of a line",
+			"text": "a👨‍👩‍👧‍👦",
+			"cursor": [0, 0],
+			"keys": "$x",
+			"expectText": "a"
+		},
+		{
+			"name": "3r replaces three characters",
+			"text": "abcd\n",
+			"cursor": [0, 0],
+			"keys": "3r-",
+			"expectText": "---d\n",
+			"expectCursor": [0, 2]
+		},
+		{
+			"name": "a count past the end of the line clamps",
+			"text": "ab\n",
+			"cursor": [0, 0],
+			"keys": "5r-",
+			"expectText": "--\n"
+		},
+		{
+			"name": "r counts emoji as one character",
+			"text": "a👨‍👩‍👧‍👦b\n",
+			"cursor": [0, 0],
+			"keys": "3r-",
+			"expectText": "---\n"
+		},
+		{
+			"name": "visual r replaces the selection",
+			"text": "abcd\n",
+			"cursor": [0, 1],
+			"keys": "vlr-",
+			"expectText": "a--d\n"
+		},
+		{
+			"name": "visual block r replaces each row",
+			"text": "abc\ndef\n",
+			"cursor": [0, 0],
+			"keys": "<C-v>jlr-",
+			"expectText": "--c\n--f\n"
+		},
+		{
+			"name": "r does not replace a line ending",
+			"text": "ab\ncd\n",
+			"cursor": [0, 0],
+			"keys": "v$jr-",
+			"expectText": "--\n--\n"
 		}
 	]
 }

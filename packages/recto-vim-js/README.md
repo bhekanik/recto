@@ -38,11 +38,11 @@ with no DOM** (`bare-realm.ts`) and drives a real keystroke through it. A
 dependency that reaches for a browser global fails the build, not the app.
 
 `dist/` and `manifest.json` are build output and are **not committed** — same
-policy as `recto-core-js`. `apple/scripts/copy-js-bundles.sh` copies the bundle
-into `RectoCoreJS/Resources` and checks its sha256 against `manifest.json`, so a
-stale copy is a build error rather than a subtly old vim. A clean clone runs
-`bun install && bun run core:build && bun run vim:build` before `swift build` or
-Xcode; Xcode Cloud does it in `ci_scripts/ci_post_clone.sh`.
+policy as `recto-core-js`. `apple/scripts/copy-js-bundles.sh` *builds* both
+bundles, checks each against its manifest, scans it and installs it into the
+Swift package that ships it, so a clean clone is `bun install` followed by that
+one script. Xcode Cloud runs it from `ci_scripts/ci_post_clone.sh` after
+installing a pinned Bun.
 
 The bundle is **minified** (119 kB against 257 kB), unlike `recto-core.js`, which
 is not: the core is unminified because `write-good`'s transitive `adverb-where`
@@ -60,12 +60,13 @@ fails CI rather than shipping.
 4. `bun run vim:test`, then `swift test --package-path apple/Packages/RectoVim`.
    Both run `fixtures/keystroke-suite.json`; the Swift side also replays it
    through a headless `NSTextView`.
-5. Re-check the three upstream behaviours this package leans on, because none of
+5. Re-check the four upstream behaviours this package leans on, because none of
    them is covered by upstream's own tests: `initVim(CM)` still takes the adapter
    class as its only argument; `Vim.defineMotion("moveByCharacters", …)` still
-   overrides the motion the operators use; `updateSelectionForSurrogateCharacters`
-   still only widens by one code unit. The keystroke suite fails loudly if any of
-   them changes.
+   overrides the motion the operators use; `Vim.defineAction("replace", …)` still
+   overrides `r`; and `vim-command-done` still fires when a command completes
+   (the pending-key display is cleared on it). The keystroke and session suites
+   fail loudly if any of them changes.
 
 If upstream ever inlines the adapter into the core, this approach dies and the
 fallback is a native Swift subset (see the spike report).
@@ -136,11 +137,15 @@ ours:
 4. **`RectoCM.keys.Backspace`/`Delete`** and `overWriteSelection`, which step one
    cluster in insert and replace mode.
 
-Twenty-one cases in `fixtures/keystroke-suite.json` cover it, and
-`test/grapheme.test.ts` pins the boundary maths directly. One known divergence is
-recorded in the fixture: after `r` on a multi-codepoint cluster the caret lands
-one character past the replacement, because the core computes it from the range
-it asked for rather than the range clamping actually replaced.
+A fifth point is `Vim.defineAction("replace", …)`: `r` is **replaced** rather
+than adapted, because upstream computes both its range and its resulting caret
+in code units, and a caret one character past the replacement cannot be corrected
+after the fact — "one character before the end" is character arithmetic, not an
+offset mapping. The replacement counts clusters and otherwise behaves as upstream
+does, clamping a too-large count to the end of the line.
+
+Twenty-one cases in `fixtures/keystroke-suite.json` cover clamping, and
+`test/grapheme.bun.test.ts` pins the boundary maths directly.
 
 **Swift does not repeat this.** The JS mirror is the authority; a Swift-side
 clamp that disagreed by one code unit would desynchronise the two buffers.

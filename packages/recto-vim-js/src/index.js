@@ -10,7 +10,7 @@
 import { RectoCM } from "./adapter.js";
 import { installDomShim } from "./dom-shim.js";
 import { initVim } from "./generated/vim-core.js";
-import { nextCluster, previousCluster } from "./grapheme.js";
+import { clusterStart, nextCluster, previousCluster } from "./grapheme.js";
 import { wrapHost } from "./host.js";
 import { Pos } from "./pos.js";
 
@@ -35,10 +35,23 @@ class VimSession {
 		this.subMode = "";
 		this.modeChanged = false;
 
+		/**
+		 * True when the host owns text input — an `NSTextView`/`UITextView` whose
+		 * input system produces `insertText:`. See `insertText` below.
+		 */
+		this.externalInput = false;
+
 		this.cm.on("vim-mode-change", (e) => {
 			this.mode = e.mode;
 			this.subMode = e.subMode || "";
 			this.modeChanged = true;
+			// Upstream's own view plugin clears the pending keys here and on
+			// `vim-command-done`; without both, `pending` accumulates every key of
+			// the session instead of showing a half-typed command.
+			if (this.cm.state.vim) this.cm.state.vim.status = "";
+		});
+		this.cm.on("vim-command-done", () => {
+			if (this.cm.state.vim) this.cm.state.vim.status = "";
 		});
 		Vim.enterVimMode(this.cm);
 	}
@@ -86,9 +99,19 @@ class VimSession {
 	 * In insert mode the core deliberately does not insert typed characters —
 	 * on the web CodeMirror's own input handling does that, and the core only
 	 * watches the resulting change to build dot-repeat. Since JS holds the
-	 * buffer mirror here, JS has to perform the insert too, or the mirror and
-	 * the text view would disagree about what was typed. Routing it through
-	 * `operation()` is what makes the core see the change and keep `.` working.
+	 * buffer mirror here, someone has to perform the insert, and routing it
+	 * through `operation()` is what makes the core see the change and keep `.`
+	 * working.
+	 *
+	 * **Who performs it depends on `externalInput`.** A `keyDown` event carries
+	 * one key name; real text input does not. NFD input arrives as a base letter
+	 * and a combining mark, an emoji as several scalars, a dead key as a
+	 * composition, and an IME as marked text that is rewritten before it commits.
+	 * Synthesising the insert from the key name loses all of that. So a native
+	 * host sets `externalInput` and this declines printable characters, letting
+	 * the text view's own input system produce them and hand them back through
+	 * `RectoVim.insertText` — one transaction, mirror and dot-repeat included.
+	 * The headless suites leave it off and drive the keys directly.
 	 *
 	 * In normal mode nothing falls through: unmapped keys are swallowed, exactly
 	 * as upstream's input handler swallows text input outside insert mode.
@@ -128,6 +151,7 @@ class VimSession {
 		// is a chord vim declined to handle, and inserting its name would be
 		// worse than dropping it.
 		if (
+			!this.externalInput &&
 			event.key &&
 			event.key.length === 1 &&
 			!event.ctrlKey &&
@@ -137,6 +161,39 @@ class VimSession {
 			return true;
 		}
 		return false;
+	}
+
+	/**
+	 * Text the host's input system produced: a typed character, a composed dead
+	 * key, an emoji from the picker, a committed IME string, a paste.
+	 *
+	 * This is one transaction. It goes through `operation()` so the core sees the
+	 * change and dot-repeat replays it, it updates the mirror, and it returns the
+	 * usual result so the host applies the same edit to its storage — the host
+	 * must **not** have inserted the text itself first.
+	 *
+	 * `from`/`to` are optional UTF-16 offsets, for a replacement range: AppKit
+	 * and UIKit both hand one over when replacing marked text.
+	 *
+	 * @param {string} text
+	 * @param {number} [from]
+	 * @param {number} [to]
+	 */
+	insertText(text, from, to) {
+		const cm = this.cm;
+		if (typeof text !== "string" || text === "") return this._result(false);
+		cm.operation(() => {
+			if (typeof from === "number") {
+				const start = cm.posFromIndex(from);
+				const end = cm.posFromIndex(typeof to === "number" ? to : from);
+				cm.replaceRange(text, start, end);
+			} else if (cm.state.overwrite) {
+				cm.overWriteSelection(text);
+			} else {
+				cm.replaceSelection(text);
+			}
+		});
+		return this._result(true);
 	}
 
 	/** Keys typed into an open `:`/`/` line, when the host routes them itself. */
@@ -153,10 +210,40 @@ class VimSession {
 		return this._result(true);
 	}
 
-	/** The host changed the buffer (typing with vim idle, sync, undo). */
+	/**
+	 * The host changed the buffer (typing with vim idle, a sync landing, undo).
+	 *
+	 * Any half-typed command is cancelled first. Swapping the text underneath an
+	 * operator leaves the core holding state that refers to a buffer that no
+	 * longer exists: type `d`, sync in a new document, type `w`, and the old
+	 * operator completes against the new text and deletes a word nobody asked
+	 * for. `<Esc>` is the core's own way back to idle — it clears the operator,
+	 * the count and the register, and leaves visual and insert mode — so this
+	 * uses that rather than reaching into `inputState`.
+	 */
 	setText(text, anchor, head) {
+		this._cancelPendingCommand();
 		this.cm.resetTo(text, anchor, head);
 		return this._result(true);
+	}
+
+	_cancelPendingCommand() {
+		const cm = this.cm;
+		if (cm.$prompt) {
+			cm.$prompt.close();
+			cm.$prompt = null;
+		}
+		const vim = cm.state.vim;
+		if (!vim) return;
+		const idle =
+			!vim.insertMode &&
+			!vim.visualMode &&
+			!vim.status &&
+			!vim.inputState?.operator &&
+			!vim.inputState?.motion &&
+			!vim.inputState?.keyBuffer?.length;
+		if (!idle) Vim.handleKey(cm, "<Esc>", "recto-external-sync");
+		vim.status = "";
 	}
 
 	_result(handled) {
@@ -223,6 +310,106 @@ Vim.defineMotion("moveByCharacters", (cm, head, motionArgs) => {
 	return new Pos(head.line, ch);
 });
 
+/**
+ * `r` — replace each character in the range with the typed one, counting
+ * grapheme clusters rather than code units.
+ *
+ * Overridden rather than clamped after the fact. Upstream computes the range as
+ * `curStart.ch + repeat` and then puts the caret at `curEnd - 1`, both in code
+ * units. Widening the range in `_applyEdit` fixed the *text* — `r-` on an emoji
+ * family produced `a-b` — but left the caret one position past the replacement,
+ * because `curEnd` was still the position upstream asked for rather than the one
+ * that was replaced. There is no way to map that back afterwards: "one character
+ * before the end" is character arithmetic, not an offset mapping. Doing the
+ * whole action in cluster terms is the only version that is right about both.
+ *
+ * Everything else follows upstream: the count clamps to the end of the line
+ * rather than refusing (which is what the web lens does), `r<CR>` deletes the
+ * range and opens a line, visual mode replaces the selection and exits, and
+ * visual block expands tabs first.
+ */
+Vim.defineAction("replace", (cm, actionArgs, vim) => {
+	const replaceWith = actionArgs.selectedCharacter || "";
+	const selections = cm.listSelections();
+	let curStart;
+	let curEnd;
+
+	if (vim.visualMode) {
+		curStart = cm.getCursor("start");
+		curEnd = cm.getCursor("end");
+	} else {
+		curStart = cm.getCursor();
+		const line = cm.getLine(curStart.line);
+		let ch = curStart.ch;
+		for (let n = actionArgs.repeat || 1; n > 0 && ch < line.length; n--) {
+			ch = nextCluster(line, ch);
+		}
+		curEnd = new Pos(curStart.line, Math.min(ch, line.length));
+	}
+
+	if (replaceWith === "\n") {
+		if (!vim.visualMode) cm.replaceRange("", curStart, curEnd);
+		RectoCM.commands.newlineAndIndent(cm);
+		return;
+	}
+
+	if (vim.visualBlock) {
+		const spaces = " ".repeat(cm.getOption("tabSize") || 4);
+		cm.replaceSelections(
+			cm
+				.getSelections()
+				.map((piece) =>
+					replaceClusters(piece.replace(/\t/g, spaces), replaceWith),
+				),
+		);
+		return;
+	}
+
+	const replacement = replaceClusters(
+		cm.getRange(curStart, curEnd),
+		replaceWith,
+	);
+	cm.replaceRange(replacement, curStart, curEnd);
+
+	if (vim.visualMode) {
+		const first = selections[0];
+		const before =
+			first.anchor.line < first.head.line ||
+			(first.anchor.line === first.head.line &&
+				first.anchor.ch <= first.head.ch);
+		cm.setCursor(before ? first.anchor : first.head);
+		Vim.exitVisualMode(cm, false);
+	} else {
+		// Vim leaves the caret on the last character it replaced, not after it.
+		const start = cm.indexFromPos(curStart);
+		cm.setCursor(
+			cm.posFromIndex(
+				replacement.length > 0
+					? clusterStart(cm.getValue(), start + replacement.length - 1)
+					: start,
+			),
+		);
+	}
+});
+
+/**
+ * One `replaceWith` per grapheme cluster, line endings left alone — `r` never
+ * replaces a newline (`r<CR>` is the separate case above).
+ *
+ * @param {string} text @param {string} replaceWith
+ */
+function replaceClusters(text, replaceWith) {
+	let out = "";
+	let at = 0;
+	while (at < text.length) {
+		const end = nextCluster(text, at);
+		const cluster = text.slice(at, end);
+		out += /^(\r\n|\n|\r)$/.test(cluster) ? cluster : replaceWith;
+		at = end;
+	}
+	return out;
+}
+
 /** @type {VimSession | null} */
 let session = null;
 
@@ -236,6 +423,17 @@ const RectoVim = {
 	},
 
 	handleKey: (key, mods) => session.handleKey(key, mods),
+
+	/**
+	 * Hand text input to the host's own input system rather than synthesising it
+	 * from key names. Native adapters turn this on; the headless suites do not.
+	 * @param {boolean} enabled
+	 */
+	setExternalInput: (enabled) => {
+		session.externalInput = !!enabled;
+		return session._result(true);
+	},
+	insertText: (text, from, to) => session.insertText(text, from, to),
 	promptKey: (key, mods) => session.promptKey(key, mods),
 	setText: (text, anchor, head) => session.setText(text, anchor, head),
 
