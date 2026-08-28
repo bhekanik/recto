@@ -121,8 +121,16 @@ public final class RectoTextStorage {
     }
 
     /// Bring the attached editor to `markdown` by patching the one changed run.
+    ///
+    /// Bracketed by `isApplyingExternalEdit` for the same reason `apply(_:)` is:
+    /// the patch runs the engine's edit path, which publishes through
+    /// `onTextMutation`, and this change did not come from the reader. Without
+    /// the guard a sync or history assignment came back out of `onEdit` as
+    /// local input — a duplicate undo entry, or a sync echo.
     private func reconcileEditor() {
         guard !isReconciling, controller.isAttached else { return }
+        isApplyingExternalEdit = true
+        defer { isApplyingExternalEdit = false }
         controller.applyText(markdown)
     }
 }

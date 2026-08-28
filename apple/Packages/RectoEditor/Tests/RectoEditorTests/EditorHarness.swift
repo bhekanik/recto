@@ -10,6 +10,7 @@
 
 import AppKit
 import MarkdownEngine
+import SwiftUI
 @testable import RectoEditor
 
 @MainActor
@@ -22,14 +23,20 @@ struct EditorHarness {
         _ = NSApplication.shared
         let styler = MarkdownStyler(presentation: presentation, theme: .twilight)
         storage = RectoTextStorage(documentId: documentId, markdown: markdown)
+        // Wired exactly as `RectoEditorView` wires it: the binding write-back
+        // and the mutation feed both go through the storage. Without both, a
+        // test that asserts on `onEdit` would pass against nothing.
+        let liveStorage = storage
         let wrapper = NativeTextViewWrapper(
-            text: .constant(markdown),
+            text: Binding(get: { liveStorage.markdown },
+                          set: { liveStorage.editorDidWriteBack($0) }),
             configuration: styler.engineConfiguration(),
             controller: storage.controller,
             fontName: styler.typography.family,
             fontSize: styler.typography.resolvedSize,
             documentId: documentId,
-            isEditable: presentation.isEditable
+            isEditable: presentation.isEditable,
+            onTextMutation: { liveStorage.editorDidMutate($0) }
         )
         coordinator = wrapper.makeCoordinator()
         textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 720, height: 900))

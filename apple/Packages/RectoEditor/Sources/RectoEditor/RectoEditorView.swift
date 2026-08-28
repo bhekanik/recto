@@ -31,6 +31,26 @@ public struct RectoEditorView: View {
     }
 
     public var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if let header { DocumentHeaderView(frontmatter: header, styler: styler) }
+            editor
+        }
+        .background(Color(nsColor: styler.theme.sheet))
+    }
+
+    /// The frontmatter to render above the sheet, or `nil`.
+    ///
+    /// Raw shows the block as source, so there is nothing to lift out of it
+    /// there. Rich and preview hide it from the body, which is exactly why the
+    /// header has to exist: without it the reader's title would disappear.
+    private var header: Frontmatter? {
+        guard styler.presentation != .raw,
+              let frontmatter = storage.frontmatter,
+              DocumentHeaderView.hasVisibleFields(frontmatter) else { return nil }
+        return frontmatter
+    }
+
+    private var editor: some View {
         NativeTextViewWrapper(
             text: Binding(
                 get: { storage.markdown },
@@ -49,7 +69,6 @@ public struct RectoEditorView: View {
             onTextMutation: { storage.editorDidMutate($0) },
             placeholder: placeholderText
         )
-        .background(Color(nsColor: styler.theme.sheet))
     }
 
     private var placeholderText: NSAttributedString? {
