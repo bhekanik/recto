@@ -191,7 +191,7 @@ in-flight workers are producing (§4).
 
 | Worker | Phase | Branch | Status | PR | Reviews (Claude / Codex) | Deployed |
 |---|---|---|---|---|---|---|
-| W1 history-commit | N1a + N0e | 023/history-commit | round 6 fixed (475 tests, verified); Codex r6 running; e2e ×5 proof still blocked on CLERK_SECRET_KEY | #1 | Claude r1+r2 / Codex r1 done | |
+| W1 history-commit | N1a + N0e | 023/history-commit | round 7 (Codex r6: 2 blocking: preview-only reload loses the localStorage draft; pane canonical markdown bypasses the projection; 3 should-fix, 1 nit); e2e ×5 proof still blocked on CLERK_SECRET_KEY | #1 | Claude r1+r2 / Codex r1 done | |
 | W2 light-theme | N1c | 023/light-theme | **merged + deployed** 2026-08-28 (`b9fe11b`, `vercel deploy --prod`) | #3 | Claude r1+r2 / Codex r1 | prod `recto-dusky.vercel.app` |
 | W3 core-js | N1d + N0d | 023/core-js | **merged** 2026-08-28 (`42acd0c`); main CI green (ci, core-js) | #6 | Claude r1+r2 / Codex r1 | n/a (CI) |
 | W4 editor-spike | N0b | spike/editor-engine | **done: GO** (fork @ 08ff3c07) | #2 (draft, not merged) | n/a | n/a |
