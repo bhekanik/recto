@@ -145,9 +145,63 @@ async function respond(
 const OK_SAVE = { updatedAt: 1_500, stale: false, headMoved: false };
 
 /**
+ * Accept the commit at the head of the client's outbox. Commits are sent one
+ * at a time — a descendant cannot go out until its parent has landed, or it
+ * would chain off a node the server never received — so a test that wants a
+ * second commit has to answer the first.
+ */
+async function ackHeadCommit(
+	nodeId: string,
+	markdown: string,
+	updatedAt: number,
+	revision: number,
+	dag: HistoryNode[],
+): Promise<void> {
+	// Answer anything the client sent ahead of the commit; Convex delivers one
+	// client's results in order, so those come back first.
+	while (mutationCalls.find((c) => !c.settled)?.name === NAMES.updateMarkdown) {
+		await respond(NAMES.updateMarkdown, {
+			updatedAt,
+			stale: false,
+			headMoved: false,
+		});
+	}
+	await respond(
+		NAMES.commitEdit,
+		{
+			committed: true,
+			headNodeId: nodeId,
+			updatedAt,
+			pointerRevision: revision,
+		},
+		{
+			server: {
+				currentNodeId: nodeId,
+				markdown,
+				updatedAt,
+				pointerRevision: revision,
+				markdownHeadNodeId: nodeId,
+			},
+			dag,
+		},
+	);
+}
+
+/**
  * Answer whatever is outstanding, in send order, by function name. For tests
  * whose point is the end state rather than the exact sequence of writes.
  */
+/** Answer any autosaves the client sent ahead of the write under test. */
+async function settleSavesAhead(updatedAt = 1_500): Promise<void> {
+	while (mutationCalls.find((c) => !c.settled)?.name === NAMES.updateMarkdown) {
+		await respond(NAMES.updateMarkdown, {
+			updatedAt,
+			stale: false,
+			headMoved: false,
+		});
+	}
+}
+
 /** Fail the oldest unanswered mutation, as a dropped connection would. */
 async function rejectNext(expectedName: string): Promise<void> {
 	const call = mutationCalls.find((c) => !c.settled);
@@ -366,6 +420,7 @@ function mountStudio(handle: ReturnType<typeof fakeHandle>) {
 					syncHook.acceptRemoteProjection(
 						projection.markdown,
 						projection.serverUpdatedAt,
+						projection.resolvedProjectionId,
 					);
 				} else if (projection.source === "recovered-draft") {
 					syncHook.adoptRecoveredDraft(projection.markdown);
@@ -373,6 +428,7 @@ function mountStudio(handle: ReturnType<typeof fakeHandle>) {
 					syncHook.markLocalProjectionPending(
 						projection.markdown,
 						projection.projectionId ?? crypto.randomUUID(),
+						projection.kind ?? "text",
 					);
 				}
 			},
@@ -1203,6 +1259,18 @@ describe("studio sync + history contract", () => {
 			s.history.commitProgrammatic(AI, { origin: "ai:grammar" });
 		});
 
+		// The rescued draft's own node has to land before its descendant is sent.
+		const rescuedHead =
+			s.history.nodes.find((n) => n.nodeId !== ROOT && n.nodeId !== LOCAL_NODE)
+				?.nodeId ?? LOCAL_NODE;
+		await ackHeadCommit(rescuedHead, AHEAD_TEXT, 3_000, 3, [
+			rootNode(),
+			localNode(),
+			...s.history.nodes.filter(
+				(n) => n.nodeId !== ROOT && n.nodeId !== LOCAL_NODE,
+			),
+		]);
+
 		const drafts = callsTo(NAMES.commitEdit).map((c) => c.args);
 		const rescued = drafts.find((a) => a.markdown === AHEAD_TEXT);
 		expect(rescued?.expectedHeadNodeId).toBe(LOCAL_NODE);
@@ -1365,16 +1433,21 @@ describe("studio sync + history contract", () => {
 			s.history.commitProgrammatic(AI, { origin: "ai:grammar" });
 		});
 
-		const commits = callsTo(NAMES.commitEdit).map(
-			(c) => c.args.node as { origin: string },
-		);
+		// Sequential outbox: the typed node lands, then the AI node goes out.
+		const typedHead = s.history.nodes[1]?.nodeId ?? ROOT;
+		await ackHeadCommit(typedHead, TYPED, 2_000, 2, [
+			rootNode(),
+			...s.history.nodes.filter((n) => n.nodeId !== ROOT),
+		]);
+
 		const typedNode = callsTo(NAMES.commitEdit).find(
 			(c) => c.args.markdown === TYPED,
 		);
 		const aiNode = callsTo(NAMES.commitEdit).find(
 			(c) => c.args.markdown === AI,
 		);
-		expect(commits).toHaveLength(2);
+		expect(typedNode).toBeDefined();
+		expect(aiNode).toBeDefined();
 		// Claiming the origin before flushing gave the writer's own text the AI
 		// tag and left the AI's node looking like an ordinary device edit.
 		expect((typedNode?.args.node as { origin: string }).origin).toBe(
@@ -1750,6 +1823,167 @@ describe("studio sync + history contract", () => {
 		s.unmount();
 	});
 
+	it("Q1: an autosave acknowledgement never clears a draft it does not own", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode()];
+		const s = mountStudio(handle);
+		s.render(AT_ROOT);
+		await settle(0);
+
+		// Flush directly, before any grouping boundary, so the write under test
+		// owns the pending id it will later be acknowledged against.
+		s.type("A, saved by this host");
+		s.run(() => {
+			void s.sync.flushMarkdown("A, saved by this host");
+		});
+		const save = mutationCalls.find(
+			(c) => !c.settled && c.name === NAMES.updateMarkdown,
+		);
+		expect(save).toBeDefined();
+
+		// Another host writes a newer draft into the SHARED record while this
+		// write is still out. The stored id is now someone else's work.
+		window.localStorage.setItem(
+			`recto:draft:${DOC_ID}`,
+			JSON.stringify({
+				markdown: "B, from another host",
+				updatedAt: 9_999,
+				origin: "other",
+				projectionId: "someone-elses-work",
+			}),
+		);
+
+		if (save) {
+			save.settled = true;
+			await act(async () => {
+				save.resolve({ updatedAt: 2_000, stale: false, headMoved: false });
+			});
+		}
+
+		// Matched on this host's in-memory id alone, the acknowledgement deleted
+		// a draft it had never seen.
+		expect(loadDraft(DOC_ID)?.markdown).toBe("B, from another host");
+		s.unmount();
+	});
+
+	it("Q2: a projection that resolves a refused move clears its pending state", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode(), remoteNode()];
+		const s = mountStudio(handle);
+		s.render(AT_ROOT);
+
+		s.run(() => s.history.navigateTo(REMOTE));
+		expect(s.syncStatus).toBe("unsynced");
+
+		// The server refuses the move and keeps the root.
+		await respond(NAMES.updatePointer, {
+			applied: false,
+			currentNodeId: ROOT,
+			pointerRevision: 9,
+		});
+		await settle();
+
+		// Reconciliation projects the head the server kept. That RESOLVES the
+		// refused move: the pane used to show the server's head while the document
+		// stayed unsynced and storage kept the target it had refused.
+		expect(s.history.currentNodeId).toBe(ROOT);
+		expect(s.syncStatus).toBe("saved");
+		expect(loadDraft(DOC_ID)).toBeNull();
+		s.unmount();
+	});
+
+	it("Q3: a rejected commit is retried and holds its descendants back", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode()];
+		const s = mountStudio(handle);
+		s.render(AT_ROOT);
+
+		s.type(TYPED);
+		await settle(600);
+		const firstAttempt = mutationCalls.filter(
+			(c) => c.name === NAMES.commitEdit,
+		);
+		expect(firstAttempt).toHaveLength(1);
+		const clientMutationId = firstAttempt[0]?.args.clientMutationId;
+		await settleSavesAhead();
+
+		// The commit is REJECTED — the transaction rolled back, so the node never
+		// landed. A descendant sent now would chain off a node the server has
+		// never seen.
+		await rejectNext(NAMES.commitEdit);
+		s.run(() => {
+			s.history.commitProgrammatic(AI, { origin: "ai:grammar" });
+		});
+		expect(callsTo(NAMES.commitEdit)).toHaveLength(1);
+		expect(s.history.hasUnresolvedWrites).toBe(true);
+
+		// The retry reuses the original identity, which the server answers
+		// idempotently — a rejection is not a refusal.
+		await settle(2_000);
+		const retried = callsTo(NAMES.commitEdit);
+		expect(retried.length).toBeGreaterThan(1);
+		expect(retried[1]?.args.clientMutationId).toBe(clientMutationId);
+		// The server rejects a commit whose node does not descend from the head
+		// it names, so a retry must carry the SAME pairing, not a re-derived one.
+		for (const attempt of retried) {
+			const node = attempt.args.node as { parentNodeId: string | null };
+			expect(attempt.args.expectedHeadNodeId).toBe(node.parentNodeId);
+		}
+		s.unmount();
+	});
+
+	it("Q4: reverting text never retires a pointer move", async () => {
+		const handle = fakeHandle();
+		// Two nodes carrying identical markdown: the root and a child of it.
+		const twin: HistoryNode = {
+			nodeId: "01TWINNODEIDENTICALTEXT00",
+			parentNodeId: ROOT,
+			patch: JSON.stringify({ from: 0, to: 0, insert: "" }),
+			snapshot: "",
+			selection: null,
+			origin: "other-device",
+			createdAt: 2,
+		};
+		dagRows = [rootNode(), twin];
+		const s = mountStudio(handle);
+		s.render(AT_ROOT);
+
+		// Navigate to the twin. The text does not change, because both nodes hold
+		// the same markdown — but the pointer move is still unacknowledged.
+		s.run(() => s.history.navigateTo(twin.nodeId));
+		expect(s.syncStatus).toBe("unsynced");
+
+		// A flush now finds the text already matching what the server holds. That
+		// proves a text draft was reverted; it proves nothing about the pointer,
+		// and retiring it here lost an undo the server never took.
+		s.run(() => {
+			void s.sync.flushSync();
+		});
+		await settle(600);
+		expect(s.syncStatus).not.toBe("saved");
+		s.unmount();
+	});
+
+	it("Q6: an unanswered commit is unresolved, not refused", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode()];
+		const s = mountStudio(handle);
+		s.render(AT_ROOT);
+
+		s.type(TYPED);
+		await settle(600);
+		await settleSavesAhead();
+		await rejectNext(NAMES.commitEdit);
+
+		// A timeout must never look like a refusal: the write may yet have landed,
+		// so the work stays pending, the draft stays recoverable, and the writer is
+		// told the document is unresolved rather than shown a reassuring tick.
+		expect(s.history.hasUnresolvedWrites).toBe(true);
+		expect(s.syncStatus).not.toBe("saved");
+		expect(loadDraft(DOC_ID)?.markdown).toBe(TYPED);
+		s.unmount();
+	});
+
 	it("X4: a newer observation of our own head clears a stale queued pointer", async () => {
 		const handle = fakeHandle();
 		dagRows = [rootNode()];
@@ -1892,7 +2126,13 @@ describe("studio sync + history contract", () => {
 		s.type(TYPED);
 		await settle(600);
 		expect(lastCallTo(NAMES.commitEdit)?.args.expectedHeadNodeId).toBe(ROOT);
-		const typedNodeId = s.history.currentNodeId;
+		const typedNodeId = s.history.currentNodeId ?? ROOT;
+
+		// The AI commit is a descendant, so the typed node has to land first.
+		await ackHeadCommit(typedNodeId, TYPED, 2_000, 2, [
+			rootNode(),
+			...s.history.nodes.filter((n) => n.nodeId !== ROOT),
+		]);
 
 		s.run(() => {
 			s.history.commitProgrammatic(AI, { origin: "ai:grammar" });
