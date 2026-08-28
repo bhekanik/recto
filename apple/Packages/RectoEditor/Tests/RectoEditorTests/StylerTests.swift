@@ -99,6 +99,25 @@ struct StylerTests {
         #expect(lightInk.brightnessComponent < lightInk3.brightnessComponent)
     }
 
+    @Test("the OKLCH conversion agrees with the token pipeline's, byte for byte")
+    func oklchMatchesTheTokenPipeline() throws {
+        // `packages/design-tokens/build.ts` converts the same OKLCH values to
+        // sRGB for Colors.xcassets. Two implementations of the same colour
+        // space is one too many, but this package needs defaults before the
+        // asset catalogue is in the app bundle — so hold them to the same
+        // answer instead. Expected bytes are read off the generated
+        // Colors.xcassets.
+        func bytes(_ color: NSColor) throws -> (Int, Int, Int) {
+            let srgb = try #require(color.usingColorSpace(.sRGB))
+            return (Int((srgb.redComponent * 255).rounded()),
+                    Int((srgb.greenComponent * 255).rounded()),
+                    Int((srgb.blueComponent * 255).rounded()))
+        }
+        // RectoCanvas: dark 0x0F/0x10/0x1E, light 0xF9/0xF6/0xF1.
+        #expect(try bytes(RectoEditorTheme.twilight.canvas) == (0x0F, 0x10, 0x1E))
+        #expect(try bytes(RectoEditorTheme.paper.canvas) == (0xF9, 0xF6, 0xF1))
+    }
+
     @Test("every OKLCH token produces a real colour, not a NaN")
     func noTokenIsNaN() {
         for theme in [RectoEditorTheme.twilight, .paper] {

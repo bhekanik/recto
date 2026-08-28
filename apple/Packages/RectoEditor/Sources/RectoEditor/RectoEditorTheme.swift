@@ -8,11 +8,12 @@ import AppKit
 /// The colour slots the editor draws with, named for their role rather than
 /// their value.
 ///
-/// The defaults below are Twilight (dark) and Paper (light) from the design
-/// plan, converted from their authored OKLCH values. Once
-/// `packages/design-tokens` ships `RectoTokens.swift`, the app maps those into
-/// a `RectoEditorTheme` instead and these defaults become the fallback for
-/// tests and previews.
+/// The defaults below are Twilight (dark) and Paper (light), converted from the
+/// OKLCH values in `packages/design-tokens/tokens.json`. The Mac app maps that
+/// package's `Colors.xcassets` into a `RectoEditorTheme` instead, so the system
+/// resolves light/dark; these defaults are what tests and previews use, and
+/// `StylerTests` holds the conversion to the same bytes the token pipeline
+/// generates.
 public struct RectoEditorTheme: Sendable, Equatable {
     /// Page behind the sheet.
     public var canvas: NSColor
@@ -69,10 +70,10 @@ public struct RectoEditorTheme: Sendable, Equatable {
         canvas: .oklch(0.18, 0.028, 280),
         sheet: .oklch(0.215, 0.03, 281),
         raised: .oklch(0.255, 0.032, 282),
-        ink: .oklch(0.94, 0.012, 280),
-        ink2: .oklch(0.79, 0.014, 280),
-        ink3: .oklch(0.665, 0.016, 280),
-        line: .oklch(0.33, 0.02, 281),
+        ink: .oklch(0.94, 0.012, 285),
+        ink2: .oklch(0.79, 0.016, 284),
+        ink3: .oklch(0.665, 0.018, 283),
+        line: .oklch(0.33, 0.025, 282),
         accent: .oklch(0.74, 0.13, 288),
         accent2: .oklch(0.78, 0.1, 250),
         selection: NSColor.oklch(0.74, 0.13, 288).withAlphaComponent(0.26),
@@ -84,10 +85,10 @@ public struct RectoEditorTheme: Sendable, Equatable {
         canvas: .oklch(0.975, 0.008, 85),
         sheet: .oklch(0.99, 0.006, 85),
         raised: .oklch(0.955, 0.01, 85),
-        ink: .oklch(0.22, 0.012, 85),
-        ink2: .oklch(0.42, 0.012, 85),
-        ink3: .oklch(0.55, 0.012, 85),
-        line: .oklch(0.88, 0.008, 85),
+        ink: .oklch(0.22, 0.02, 285),
+        ink2: .oklch(0.42, 0.02, 285),
+        ink3: .oklch(0.51, 0.02, 285),
+        line: .oklch(0.88, 0.01, 285),
         accent: .oklch(0.52, 0.15, 288),
         accent2: .oklch(0.5, 0.12, 250),
         selection: NSColor.oklch(0.52, 0.15, 288).withAlphaComponent(0.18),
