@@ -16,8 +16,6 @@
 
 export type DailyStat = { date: string; words: number }; // date = "YYYY-MM-DD" local
 
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
-
 function pad2(n: number): string {
 	return String(n).padStart(2, "0");
 }
@@ -27,16 +25,39 @@ export function localDateKey(d: Date = new Date()): string {
 	return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 }
 
-/** Parse a "YYYY-MM-DD" key into a local Date at midnight. */
-function parseDateKey(key: string): Date {
-	const [year, month, day] = key.split("-").map(Number);
-	return new Date(year ?? 1970, (month ?? 1) - 1, day ?? 1);
+function daysInMonth(year: number, month: number): number {
+	if (month === 2) {
+		const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+		return leap ? 29 : 28;
+	}
+	return month === 4 || month === 6 || month === 9 || month === 11 ? 30 : 31;
 }
 
-/** The local date key one calendar day before `key`. */
+/**
+ * The local date key one calendar day before `key`.
+ *
+ * Deliberately pure string/integer arithmetic, with no Date and no clock: `key`
+ * is already a local calendar date, so stepping it must not depend on a
+ * timezone. Going through a Date and subtracting 24h lands on the wrong
+ * calendar day wherever DST makes the local day 23 or 25 hours long — in
+ * America/Sao_Paulo, 2018-11-05 local midnight minus 24h is 2018-11-03 23:00,
+ * which reads back as 2018-11-03 and skips 2018-11-04, silently breaking a
+ * streak.
+ */
 function previousDateKey(key: string): string {
-	const d = parseDateKey(key);
-	return localDateKey(new Date(d.getTime() - MS_PER_DAY));
+	const [rawYear, rawMonth, rawDay] = key.split("-").map(Number);
+	let year = rawYear ?? 1970;
+	let month = rawMonth ?? 1;
+	let day = (rawDay ?? 1) - 1;
+	if (day < 1) {
+		month -= 1;
+		if (month < 1) {
+			month = 12;
+			year -= 1;
+		}
+		day = daysInMonth(year, month);
+	}
+	return `${year}-${pad2(month)}-${pad2(day)}`;
 }
 
 /**

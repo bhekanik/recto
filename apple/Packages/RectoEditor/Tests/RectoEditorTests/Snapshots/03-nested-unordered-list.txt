@@ -1,0 +1,16 @@
+# 03-nested-unordered-list
+
+## rich
+· one⏎    19.0 indent 38
+ · two⏎    19.0 indent 38
+  · three⏎    19.0 indent 38
+
+## raw
+- one⏎    17.5 mono
+ - two⏎    17.5 mono
+  - three⏎    17.5 mono
+
+## preview
+· one⏎    19.0 indent 38
+ · two⏎    19.0 indent 38
+  · three⏎    19.0 indent 38

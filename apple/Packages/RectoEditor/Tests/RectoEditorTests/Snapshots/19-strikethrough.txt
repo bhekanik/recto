@@ -1,0 +1,10 @@
+# 19-strikethrough
+
+## rich
+··deleted·· text⏎    19.0 strike | 19.0
+
+## raw
+~~deleted~~ text⏎    17.5 mono
+
+## preview
+··deleted·· text⏎    19.0 strike | 19.0

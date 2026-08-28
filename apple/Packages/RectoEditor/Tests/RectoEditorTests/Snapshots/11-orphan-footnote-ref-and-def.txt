@@ -1,0 +1,16 @@
+# 11-orphan-footnote-ref-and-def
+
+## rich
+Missing··missing· and orphan··orphan·.⏎    19.0 | 15.2 | 19.0 | 15.2 | 19.0
+⏎    —
+··orphan···Orphan only⏎    15.2 | 19.0
+
+## raw
+Missing[^missing] and orphan[^orphan].⏎    17.5 mono
+⏎    —
+[^orphan]: Orphan only⏎    17.5 mono
+
+## preview
+Missing··missing· and orphan··orphan·.⏎    19.0 | 15.2 | 19.0 | 15.2 | 19.0
+⏎    —
+··orphan···Orphan only⏎    15.2 | 19.0

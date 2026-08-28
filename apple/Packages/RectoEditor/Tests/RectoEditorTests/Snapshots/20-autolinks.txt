@@ -1,0 +1,16 @@
+# 20-autolinks
+
+## rich
+·https://example.com·⏎    19.0 link
+⏎    —
+www.example.org⏎    19.0 link
+
+## raw
+<https://example.com>⏎    17.5 mono
+⏎    —
+www.example.org⏎    17.5 mono
+
+## preview
+·https://example.com·⏎    19.0 link
+⏎    —
+www.example.org⏎    19.0 link

@@ -56,3 +56,10 @@ playwright-report
 # Finder (MacOS) folder config
 .DS_Store
 .vercel
+
+# Swift (apple/)
+.build
+DerivedData
+*.xcuserstate
+xcuserdata
+.swiftpm
