@@ -17,6 +17,12 @@ jobs:
       - run: bun run typecheck
       - run: bun run biome
       - run: bun run test
+      # Bun-side halves of the two JS cores. The macOS job runs the same
+      # fixtures through a real JSContext; a case that passes here and fails
+      # there is a bridge bug, not a vim or markdown bug.
+      - run: bun run core:build
+      - run: bun run vim:build
+      - run: bun run vim:test
       - run: bun run build
         env:
           NEXT_PUBLIC_CONVEX_URL: https://placeholder.convex.cloud
@@ -24,9 +30,17 @@ jobs:
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY_CI }}
           NEXT_PUBLIC_CLERK_SIGN_IN_URL: /login
 
-  # Shared JS core (plan 023 N1d/N0d). macOS because the parity spike loads the
-  # bundle into a real JavaScriptCore JSContext; `macos-26` is the GA arm64
-  # runner and matches the toolchain the Apple apps are built with.
+  # Shared JS cores and their Swift wrappers (plan 023 N1d/N0d, N3).
+  #
+  # macOS because everything here is about a real JavaScriptCore `JSContext`:
+  # the parity runner, the vim keystroke suite in JSC, and the two Swift
+  # packages. `macos-26` is the GA arm64 runner and matches the toolchain the
+  # Apple apps are built with.
+  #
+  # `swift test` needs the bundles installed into the package resources, which
+  # is what the copy script does — and it is the same script the Xcode run-script
+  # phase and `ci_scripts/ci_post_clone.sh` run, so a hash or bundle-scan
+  # regression fails here first.
   core-js:
     runs-on: macos-26
     steps:
@@ -36,7 +50,21 @@ jobs:
           bun-version: latest
       - run: bun install --frozen-lockfile
       - run: bun run core:build
+      - run: bun run vim:build
       - run: bun run core:parity
+      - run: bun run vim:test
+      - run: ./apple/scripts/copy-js-bundles.sh
+      - run: swift test --package-path apple/Packages/RectoCoreJS
+      - run: swift test --package-path apple/Packages/RectoVim
+      # The UIKit adapter is `#if canImport(UIKit)` and never compiles on the
+      # macOS test run, so build it for the simulator to keep it honest.
+      - run: |
+          xcodebuild build \
+            -scheme RectoVim \
+            -destination 'generic/platform=iOS Simulator' \
+            -skipPackagePluginValidation \
+            | tail -20
+        working-directory: apple/Packages/RectoVim
 
   # Design-token cascade check (follow-up F1). Needs a browser: the bug it
   # guards against is only visible once a CSS engine has resolved the cascade,

@@ -23,10 +23,18 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 .env.production.local
 .env.local
 
-# JS core bundle (plan 023) — built by `bun run core:build`, never committed.
-# `dist` above already covers packages/recto-core-js/dist.
+# JS bundles (plan 023) — built by `bun run core:build` / `vim:build`, never
+# committed. `dist` above already covers both packages' dist directories; the
+# manifests carry the sha256 the Xcode copy step checks.
 packages/recto-core-js/manifest.json
+packages/recto-vim-js/manifest.json
+# `apple/scripts/copy-js-bundles.sh` installs the same bundles here. Committing
+# them would put a 1 MB unreadable diff in every `lib/` change and let the copy
+# drift from the source it was built from.
+apple/Packages/RectoCoreJS/Sources/RectoCoreJS/JS/*.js
+apple/Packages/RectoVim/Sources/RectoVim/JS/*.js
 .build
+.swiftpm
 
 # caches
 .eslintcache

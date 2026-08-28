@@ -268,6 +268,68 @@ const RectoVim = {
 		return session._result(true);
 	},
 
+	/**
+	 * Named registers and marks, as JSON, so the host can carry them across a
+	 * relaunch. Not the whole vim state: the current mode, pending keys and the
+	 * search history are session-scoped and restoring them would resume the user
+	 * mid-command.
+	 *
+	 * Registers are flattened to their text. A macro register holds a key string,
+	 * which is exactly what `toString()` gives and what `setText` takes back, so
+	 * `@q` survives a relaunch. Insert-mode change lists and per-register search
+	 * queries do not, and should not — replaying them against a document that has
+	 * moved on is how you corrupt a file.
+	 */
+	saveState() {
+		const registers = {};
+		const all = Vim.getRegisterController().registers;
+		for (const name of Object.keys(all)) {
+			const register = all[name];
+			const text = register?.toString?.() ?? "";
+			if (!text) continue;
+			registers[name] = {
+				text,
+				linewise: !!register.linewise,
+				blockwise: !!register.blockwise,
+			};
+		}
+
+		const marks = {};
+		const vimMarks = session?.cm.state.vim?.marks ?? {};
+		for (const name of Object.keys(vimMarks)) {
+			const found = vimMarks[name]?.find?.();
+			if (found) marks[name] = session.cm.indexFromPos(found);
+		}
+
+		return JSON.stringify({ registers, marks });
+	},
+
+	/**
+	 * @param {string} json output of `saveState`
+	 */
+	restoreState(json) {
+		const state = JSON.parse(json || "{}");
+		const controller = Vim.getRegisterController();
+		for (const name of Object.keys(state.registers || {})) {
+			const saved = state.registers[name];
+			controller
+				.getRegister(name)
+				.setText(saved.text, !!saved.linewise, !!saved.blockwise);
+		}
+		const vim = session?.cm.state.vim;
+		if (vim) {
+			for (const name of Object.keys(state.marks || {})) {
+				const offset = state.marks[name];
+				if (typeof offset !== "number") continue;
+				vim.marks[name]?.clear?.();
+				vim.marks[name] = session.cm.setBookmark(
+					session.cm.posFromIndex(offset),
+				);
+			}
+		}
+		return session ? session._result(true) : "{}";
+	},
+
 	/** Escape hatch for debugging from the Swift side. */
 	_session: () => session,
 	_Vim: Vim,

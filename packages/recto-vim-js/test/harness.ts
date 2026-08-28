@@ -34,6 +34,9 @@ export type RectoVimApi = {
 	setCursor: (line: number, ch: number) => string;
 	getText: () => string;
 	getState: () => string;
+	/** Registers and marks as JSON, for persistence across a relaunch. */
+	saveState: () => string;
+	restoreState: (json: string) => string;
 };
 
 const MOD_CTRL = 1;
