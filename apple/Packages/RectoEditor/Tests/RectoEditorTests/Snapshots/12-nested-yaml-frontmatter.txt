@@ -1,15 +1,7 @@
 # 12-nested-yaml-frontmatter
 
 ## rich
-····    —
-·············    —
-······    —
-········    —
-········    —
-······    —
-···············    —
-·················    —
-····    —
+[frontmatter hidden, 81 chars: title=Hello · tags= · meta= · date=2026-01-15]    —
 ⏎    —
 Body after frontmatter.⏎    19.0
 
@@ -27,14 +19,6 @@ date: 2026-01-15⏎    17.5 mono
 Body after frontmatter.⏎    17.5 mono
 
 ## preview
-····    —
-·············    —
-······    —
-········    —
-········    —
-······    —
-···············    —
-·················    —
-····    —
+[frontmatter hidden, 81 chars: title=Hello · tags= · meta= · date=2026-01-15]    —
 ⏎    —
 Body after frontmatter.⏎    19.0

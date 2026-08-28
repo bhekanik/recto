@@ -11,6 +11,7 @@
 
 import AppKit
 import Foundation
+@testable import RectoEditor
 
 enum ReaderView {
     /// `·` stands in for a character the styler hid, `⏎` for a newline, `→`
@@ -18,18 +19,49 @@ enum ReaderView {
     static let hiddenMark: Character = "·"
 
     /// One line per document line: the reader's view, then the runs behind it.
-    static func dump(_ styled: NSAttributedString) -> String {
+    ///
+    /// A frontmatter block the styler has hidden collapses to a single
+    /// annotation naming its fields. Without it the dump would show a run of
+    /// `·` indistinguishable from lost text, and the point of hiding
+    /// frontmatter is that its content moves to the document header rather
+    /// than disappearing.
+    static func dump(_ styled: NSAttributedString, frontmatter: Frontmatter? = nil) -> String {
         let ns = styled.string as NSString
         var out: [String] = []
         var cursor = 0
         while cursor < ns.length {
             let line = ns.lineRange(for: NSRange(location: cursor, length: 0))
+            if let frontmatter, line.location == frontmatter.range.location,
+               isEntirelyHidden(styled, range: frontmatter.range) {
+                out.append(annotation(for: frontmatter))
+                cursor = NSMaxRange(frontmatter.range)
+                continue
+            }
             out.append(render(styled, line: line))
             guard NSMaxRange(line) > cursor else { break }
             cursor = NSMaxRange(line)
         }
         if ns.length == 0 { out.append("") }
         return out.joined(separator: "\n")
+    }
+
+    /// What the header view will read, spelled out where the block used to be.
+    private static func annotation(for frontmatter: Frontmatter) -> String {
+        let fields = frontmatter.fields
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: " · ")
+        return "[frontmatter hidden, \(frontmatter.range.length) chars: \(fields)]    —"
+    }
+
+    private static func isEntirelyHidden(_ styled: NSAttributedString, range: NSRange) -> Bool {
+        let ns = styled.string as NSString
+        guard NSMaxRange(range) <= ns.length else { return false }
+        for index in range.location..<NSMaxRange(range)
+        where !isHidden(styled, at: index) && !CharacterSet.newlines.contains(
+            UnicodeScalar(ns.character(at: index)) ?? " ") {
+            return false
+        }
+        return true
     }
 
     private static func render(_ styled: NSAttributedString, line: NSRange) -> String {

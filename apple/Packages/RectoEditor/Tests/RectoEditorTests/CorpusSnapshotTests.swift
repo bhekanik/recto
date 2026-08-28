@@ -60,8 +60,11 @@ struct CorpusSnapshotTests {
         // hidden. It is easy to make them diverge by accident — one engine flag
         // that reads as an editing switch also gates the drawn list markers —
         // so hold them together.
-        #expect(ReaderView.dump(render(testCase.markdown, presentation: .preview))
-            == ReaderView.dump(render(testCase.markdown, presentation: .rich)),
+        let frontmatter = Frontmatter.parse(testCase.markdown)
+        #expect(ReaderView.dump(render(testCase.markdown, presentation: .preview),
+                                frontmatter: frontmatter)
+            == ReaderView.dump(render(testCase.markdown, presentation: .rich),
+                               frontmatter: frontmatter),
                 "\(testCase.name): preview diverged from rich")
     }
 
@@ -71,7 +74,8 @@ struct CorpusSnapshotTests {
         var sections: [String] = []
         for presentation in [Presentation.rich, .raw, .preview] {
             let styled = render(testCase.markdown, presentation: presentation)
-            sections.append("## \(presentation.rawValue)\n\(ReaderView.dump(styled))")
+            let dump = ReaderView.dump(styled, frontmatter: Frontmatter.parse(testCase.markdown))
+            sections.append("## \(presentation.rawValue)\n\(dump)")
         }
         let actual = "# \(testCase.name)\n\n" + sections.joined(separator: "\n\n") + "\n"
 

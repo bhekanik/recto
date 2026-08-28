@@ -61,7 +61,7 @@ seam.caretRect()
 | `RectoTextStorage` | One open document: the string, the frontmatter, the edit path, and (through the engine) one `NSTextContentStorage`. One instance per document, not per view — two windows on the same document share it. |
 | `RectoTextView` | The AppKit seam. A facade over the engine's `MarkdownEditorController`, not an `NSTextView` subclass: the engine builds and owns the text view because it needs its own TextKit 2 stack and layout-fragment subclass. |
 | `RectoEditorView` | The SwiftUI view. Composes the engine's `NativeTextViewWrapper` (which is the `NSViewRepresentable`) rather than re-implementing it. |
-| `Frontmatter` | The leading `---` block as data for the document header. Top-level scalar keys only — full YAML is the canonical parser's job. |
+| `Frontmatter` | The leading `---` block as data for the document header: `title`, `subtitle`, `subject`, `preview`, plus every top-level `key: value` in document order. Reached from `storage.frontmatter`. Top-level scalars only — full YAML is the canonical parser's job. |
 | `RectoFonts` | Registers the bundled Source Serif 4 and JetBrains Mono faces with the process at first use. Both SIL OFL 1.1; the licences ship in `Resources/Fonts`. |
 
 ## Presentations
@@ -101,6 +101,16 @@ newline, plus a compact per-run style summary. **That diff is the review of the
 rendering rules** — a change to what is hidden or how something is set shows up
 as readable text rather than an attribute dictionary.
 
+A hidden frontmatter block collapses to one annotation naming its fields:
+
+```
+[frontmatter hidden, 81 chars: title=Hello · tags= · meta= · date=2026-01-15]
+```
+
+Without it a hidden block is a run of `·` indistinguishable from lost text, and
+the point of hiding frontmatter is that its content moves to the header rather
+than disappearing.
+
 The perf suite is opt-in on purpose. Wall-clock thresholds are a property of the
 machine, and a shared runner would make them flaky enough to teach people to
 ignore red. It measures parse → style → apply, not keystroke-to-pixels; the N0b
@@ -134,10 +144,19 @@ assumed, both accepted by plan 023 §0b: tables are cached bitmaps rather than
 overlay views, and focus dimming will need a fragment transparency layer rather
 than `setRenderingAttributes`.
 
-Not yet applied: the design's −0.015 em tracking. The knob exists in the engine
-(`ParagraphStyle.trackingEm`) and `RectoTypography.tracking` carries the value,
-but wiring it changes every measured width — including the table bitmaps — so it
-belongs with stage 2's visual pass rather than in a plumbing change.
+**Tracking stays off.** Design §5 asked for −0.015 em; that is amended. The knob
+exists in the engine (`ParagraphStyle.trackingEm`) and `RectoTypography.tracking`
+still carries the value, but it is not passed through: negative tracking changes
+every measured width, including the cached table bitmaps and the drawn list
+markers positioned from text metrics, and Source Serif 4 at 19 pt does not need
+tightening the way a display face at 40 pt would. Turn it on only with a visual
+pass to check it against, and re-record the perf numbers when you do.
+
+Frontmatter is hidden from the body, and its parsed fields are on the storage —
+`storage.frontmatter?.title` / `.subtitle` / `.subject` / `.preview`, re-read on
+every change, `nil` when the document has no block. The header *view* that
+renders them is stage 2; the data it will read is here now, and
+`StorageFrontmatterTests` holds the contract.
 
 ## Engine behaviour worth knowing
 
