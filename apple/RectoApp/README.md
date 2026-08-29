@@ -1,9 +1,18 @@
-# Recto macOS bootstrap
+# Recto for macOS
 
-This is the early W12 app target. It exists so the current `RectoEditor`
-package can run in a real app window for the Slice A VoiceOver and Full Keyboard
-Access smoke. It is not the N6 app shell. It has no sidebar, persistence, sync,
-menus, settings, import/export or App Store metadata.
+The app opens, creates, edits, and saves `.md` files through SwiftUI's native
+document system and the real `RectoEditor` package. Document windows use native
+titles, dirty-state tracking, autosave, Save, Open, New, and error presentation.
+
+V1 reads and writes UTF-8. It preserves a UTF-8 byte-order mark when the opened
+file has one. Invalid UTF-8 fails through the native document error UI instead
+of becoming an empty or replacement-character document. Existing LF and CRLF
+line endings stay unchanged; Recto writes the line endings in the editor string.
+
+The macOS 26 target uses `FileDocument` and
+`DocumentGroup(newDocument:editor:)`. Apple's replacement `Document` API is a
+macOS 27 beta API. Move this boundary when Recto raises its deployment target
+after macOS 27 ships; do not make V1 depend on the beta API.
 
 `project.yml` is the source of truth. XcodeGen 2.46.0 generated the committed
 `Recto.xcodeproj`; regenerate it after adding or removing project files:
@@ -38,12 +47,6 @@ xcodebuild -project apple/RectoApp/Recto.xcodeproj -scheme Recto \
   -archivePath /tmp/Recto-unsigned.xcarchive \
   CODE_SIGNING_ALLOWED=NO archive
 ```
-
-Open `Recto.xcodeproj`, run the `Recto` scheme, and focus the single editor
-window before the manual accessibility smoke. The sample includes headings, a
-list, a link, a quote and a fenced code block so navigation checks do not need
-test data setup. Full N6 can replace this fixed `Window` with its document
-window model.
 
 The target uses bundle ID `com.bhekani.recto`, team `WAVMJLFY95`, automatic
 signing, hardened runtime and App Sandbox. Unsigned builds override signing on

@@ -7,9 +7,11 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		16894C35A6742F13EF48D5D7 /* RectoDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 688482441E8C255771A630E8 /* RectoDocument.swift */; };
 		50B65633ED8E88066BE2DDC4 /* EditorHostViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3043896BC9224FA46A887898 /* EditorHostViewTests.swift */; };
 		6A5B57E8A148C2E7E5EDB9E4 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 8C12F711F47CBD7B108CC4FE /* Assets.xcassets */; };
 		7576DBE4CEA3C712E79E6C84 /* EditorHostView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BEA2AD7F2D906737F82E9F6 /* EditorHostView.swift */; };
+		763091A8177058FC11D1EE7A /* RectoDocumentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9F5C256848CE3E71B3FBBF0 /* RectoDocumentTests.swift */; };
 		84424EF9E12A3D7DE5AD6CA2 /* RectoEditor in Frameworks */ = {isa = PBXBuildFile; productRef = A060C6A5E130E049277D314E /* RectoEditor */; };
 		B7C17D95A863AF017CBF8C22 /* RectoApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E4F2E4947A1F0496BA12943 /* RectoApp.swift */; };
 /* End PBXBuildFile section */
@@ -32,11 +34,13 @@
 		4BEA2AD7F2D906737F82E9F6 /* EditorHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorHostView.swift; sourceTree = "<group>"; };
 		4CE28505252B3B9A09DBBDA7 /* Recto.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Recto.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		65710FD2CFB1ED4E06D82FE9 /* r-mono.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "r-mono.png"; sourceTree = "<group>"; };
+		688482441E8C255771A630E8 /* RectoDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RectoDocument.swift; sourceTree = "<group>"; };
 		76CCA8C9943CBC9CB2C0C048 /* RectoEditor */ = {isa = PBXFileReference; lastKnownFileType = folder; name = RectoEditor; path = ../Packages/RectoEditor; sourceTree = SOURCE_ROOT; };
 		8A3A4FA9095CC62A6709B391 /* r-light.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "r-light.png"; sourceTree = "<group>"; };
 		8C12F711F47CBD7B108CC4FE /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		93B05EF44F4CD5DAC0FC14AE /* RectoTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RectoTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		9BC4145FD50C0B2E0D076716 /* SHA256SUMS */ = {isa = PBXFileReference; path = SHA256SUMS; sourceTree = "<group>"; };
+		B9F5C256848CE3E71B3FBBF0 /* RectoDocumentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RectoDocumentTests.swift; sourceTree = "<group>"; };
 		FC238A1AE201F838C026FB1E /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -86,6 +90,7 @@
 			children = (
 				4BEA2AD7F2D906737F82E9F6 /* EditorHostView.swift */,
 				2E4F2E4947A1F0496BA12943 /* RectoApp.swift */,
+				688482441E8C255771A630E8 /* RectoDocument.swift */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
@@ -131,6 +136,7 @@
 			isa = PBXGroup;
 			children = (
 				3043896BC9224FA46A887898 /* EditorHostViewTests.swift */,
+				B9F5C256848CE3E71B3FBBF0 /* RectoDocumentTests.swift */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -235,6 +241,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				50B65633ED8E88066BE2DDC4 /* EditorHostViewTests.swift in Sources */,
+				763091A8177058FC11D1EE7A /* RectoDocumentTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -244,6 +251,7 @@
 			files = (
 				7576DBE4CEA3C712E79E6C84 /* EditorHostView.swift in Sources */,
 				B7C17D95A863AF017CBF8C22 /* RectoApp.swift in Sources */,
+				16894C35A6742F13EF48D5D7 /* RectoDocument.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -272,6 +280,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.bhekani.recto;
 				SDKROOT = macosx;
+				SWIFT_TREAT_WARNINGS_AS_ERRORS = YES;
 			};
 			name = Release;
 		};
@@ -288,6 +297,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.bhekani.recto.tests;
 				SDKROOT = macosx;
+				SWIFT_TREAT_WARNINGS_AS_ERRORS = YES;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Recto.app/Contents/MacOS/Recto";
 			};
 			name = Release;
@@ -366,6 +376,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.bhekani.recto.tests;
 				SDKROOT = macosx;
+				SWIFT_TREAT_WARNINGS_AS_ERRORS = YES;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Recto.app/Contents/MacOS/Recto";
 			};
 			name = Debug;
@@ -384,6 +395,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.bhekani.recto;
 				SDKROOT = macosx;
+				SWIFT_TREAT_WARNINGS_AS_ERRORS = YES;
 			};
 			name = Debug;
 		};

@@ -36,6 +36,7 @@ targets:
       path: Support/Recto.entitlements
       properties:
         com.apple.security.app-sandbox: true
+        com.apple.security.files.user-selected.read-write: true
     info:
       path: Support/Info.plist
       properties:
@@ -46,11 +47,28 @@ targets:
         LSApplicationCategoryType: public.app-category.productivity
         LSMinimumSystemVersion: "$(MACOSX_DEPLOYMENT_TARGET)"
         NSHumanReadableCopyright: "Copyright © 2026 Bhekani Khumalo"
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Markdown document
+            CFBundleTypeRole: Editor
+            LSHandlerRank: Alternate
+            LSItemContentTypes:
+              - net.daringfireball.markdown
+        UTImportedTypeDeclarations:
+          - UTTypeConformsTo:
+              - public.utf8-plain-text
+            UTTypeDescription: Markdown document
+            UTTypeIdentifier: net.daringfireball.markdown
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - md
+                - markdown
+              public.mime-type: text/markdown
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.bhekani.recto
         COMBINE_HIDPI_IMAGES: YES
         ENABLE_HARDENED_RUNTIME: YES
+        SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
 
   RectoTests:
     type: bundle.unit-test
@@ -65,6 +83,7 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Recto.app/Contents/MacOS/Recto"
         BUNDLE_LOADER: "$(TEST_HOST)"
+        SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
 
 schemes:
   Recto:

@@ -2,40 +2,45 @@ import RectoEditor
 import SwiftUI
 
 struct EditorHostView: View {
-    static let documentID = "accessibility-smoke"
-
-    static let sampleMarkdown = """
-    # Recto editor smoke
-
-    This window hosts the real `RectoEditor` package. Use it for the Slice A VoiceOver and Full Keyboard Access checks.
-
-    ## Reading structure
-
-    - A bulleted item
-    - A second item with **strong text** and [a link](https://example.com)
-
-    > A block quote for navigation checks.
-
-    ```swift
-    let editor = "RectoEditor"
-    ```
-    """
-
+    @Binding private var document: RectoDocument
     @State private var storage: RectoTextStorage
+    private let isEditable: Bool
 
-    init(markdown: String = sampleMarkdown) {
-        _storage = State(initialValue: RectoTextStorage(
-            documentId: Self.documentID,
-            markdown: markdown
-        ))
+    init(document: Binding<RectoDocument>, isEditable: Bool) {
+        self.init(
+            document: document,
+            isEditable: isEditable,
+            storage: RectoTextStorage(
+                documentId: UUID().uuidString,
+                markdown: document.wrappedValue.markdown
+            )
+        )
+    }
+
+    init(document: Binding<RectoDocument>, isEditable: Bool = true,
+         storage: RectoTextStorage) {
+        _document = document
+        self.isEditable = isEditable
+        _storage = State(initialValue: storage)
     }
 
     var body: some View {
         RectoEditorView(
             storage: storage,
-            styler: MarkdownStyler(presentation: .rich, theme: .twilight),
-            placeholder: "Start writing…"
+            styler: MarkdownStyler(
+                presentation: isEditable ? .rich : .preview,
+                theme: .twilight
+            ),
+            placeholder: "Start writing…",
+            onTextChange: { markdown in
+                guard document.markdown != markdown else { return }
+                document.markdown = markdown
+            }
         )
         .frame(minWidth: 720, minHeight: 540)
+        .onChange(of: document.markdown) { _, markdown in
+            guard storage.markdown != markdown else { return }
+            storage.markdown = markdown
+        }
     }
 }

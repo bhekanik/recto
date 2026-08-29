@@ -25,17 +25,21 @@ public struct RectoEditorView: View {
     private let placeholder: String?
 
     private let onAttach: ((RectoTextView?) -> Void)?
+    private let onTextChange: ((String) -> Void)?
 
     /// - Parameter onAttach: Called with the AppKit seam when the editor
     ///   appears, and `nil` when it goes — the moment to install find, a vim key
     ///   layer or typewriter scrolling, rather than polling `storage.textView`.
+    /// - Parameter onTextChange: Called after storage accepts an editor write.
     public init(storage: RectoTextStorage, styler: MarkdownStyler,
                 placeholder: String? = nil,
-                onAttach: ((RectoTextView?) -> Void)? = nil) {
+                onAttach: ((RectoTextView?) -> Void)? = nil,
+                onTextChange: ((String) -> Void)? = nil) {
         self.storage = storage
         self.styler = styler
         self.placeholder = placeholder
         self.onAttach = onAttach
+        self.onTextChange = onTextChange
     }
 
     public var body: some View {
@@ -63,10 +67,13 @@ public struct RectoEditorView: View {
             text: Binding(
                 get: { storage.markdown },
                 // The engine writes the binding back after each edit; the
-                // storage takes it as already-applied. The edit DESCRIPTORS
+                // storage takes it as already-applied. The edit descriptors
                 // the undo tree and the sync outbox want come separately,
                 // through onTextMutation.
-                set: { storage.editorDidWriteBack($0) }
+                set: { markdown in
+                    storage.editorDidWriteBack(markdown)
+                    onTextChange?(storage.markdown)
+                }
             ),
             configuration: styler.engineConfiguration(),
             controller: storage.controller,
