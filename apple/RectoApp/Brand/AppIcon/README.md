@@ -36,6 +36,8 @@ catalog files. The original run used macOS 26.6.2 (`sips-316`) and ImageMagick
 7.1.2-27.
 
 ```sh
+set -eu
+
 APP_ICON_SOURCE=apple/RectoApp/Brand/AppIcon/Sources/r-dark-paper.png
 APP_ICON_OUTPUT=apple/RectoApp/Resources/Assets.xcassets/AppIcon.appiconset
 APP_ICON_WORK=$(mktemp -d "${TMPDIR:-/tmp}/recto-app-icon.XXXXXX")
