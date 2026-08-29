@@ -237,6 +237,37 @@ describe("OpenRouter credentials", () => {
 		).toHaveLength(0);
 	});
 
+	it.each([
+		{ status: 400, code: "invalid_oauth_code" },
+		{ status: 403, code: "invalid_oauth_code" },
+		{ status: 429, code: "ai_provider_unavailable" },
+		{ status: 500, code: "ai_provider_unavailable" },
+	])("classifies OAuth exchange status $status as $code", async ({
+		status,
+		code,
+	}) => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				Response.json({ error: "not-for-clients" }, { status }),
+			),
+		);
+		const t = convexTest(schema, modules);
+		const owner = t.withIdentity(OWNER);
+		const flow = await owner.action(api.ai.credentials.beginOAuth, {
+			callbackUrl: CALLBACK_URL,
+		});
+
+		await expect(
+			owner.action(api.ai.credentials.exchangeOAuthCode, {
+				code: "one-time-code",
+				state: flow.state,
+			}),
+		).rejects.toMatchObject({
+			data: { code },
+		});
+	});
+
 	it("does not let another tenant consume an OAuth state", async () => {
 		const fetch = vi.fn();
 		vi.stubGlobal("fetch", fetch);

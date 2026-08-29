@@ -347,9 +347,17 @@ export const exchangeOAuthCode = action({
 			);
 		}
 		if (!response.ok) {
+			if (response.status === 400 || response.status === 403) {
+				credentialError(
+					"invalid_oauth_code",
+					"OpenRouter rejected the authorization response. Start again.",
+				);
+			}
 			credentialError(
-				"invalid_oauth_code",
-				"OpenRouter rejected the authorization response. Start again.",
+				"ai_provider_unavailable",
+				response.status === 429
+					? "OpenRouter is rate-limiting authorization. Start again later."
+					: "OpenRouter could not complete authorization. Start again later.",
 			);
 		}
 		let body: unknown;
