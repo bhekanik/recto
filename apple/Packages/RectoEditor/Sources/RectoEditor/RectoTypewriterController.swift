@@ -27,7 +27,7 @@ public final class RectoTypewriterController {
     private weak var textView: NSTextView?
     private weak var scrollView: NSScrollView?
     private var originalTextContainerInset: NSSize?
-    private var originalPostsFrameChangedNotifications = false
+    private var originalPostsFrameChangedNotifications: Bool?
     private var observationTokens: [NSObjectProtocol] = []
     private var eventMonitor: Any?
     private var recenterGeneration = 0
@@ -40,19 +40,14 @@ public final class RectoTypewriterController {
         self.isEnabled = isEnabled
     }
 
-    deinit {
-        for token in observationTokens {
-            NotificationCenter.default.removeObserver(token)
-        }
-        if let eventMonitor {
-            NSEvent.removeMonitor(eventMonitor)
-        }
+    isolated deinit {
+        deactivate(restoreInset: true)
     }
 
     /// Attach the current editor seam, or detach with `nil`.
     public func attach(to seam: RectoTextView?) {
         let incomingTextView = seam?.nsTextView
-        if incomingTextView === textView {
+        if let incomingTextView, incomingTextView === textView {
             self.seam = seam
             return
         }
@@ -110,9 +105,11 @@ public final class RectoTypewriterController {
         if restoreInset, let textView, let originalTextContainerInset {
             textView.textContainerInset = originalTextContainerInset
         }
-        if let clipView = scrollView?.contentView {
+        if let clipView = scrollView?.contentView,
+           let originalPostsFrameChangedNotifications {
             clipView.postsFrameChangedNotifications = originalPostsFrameChangedNotifications
         }
+        originalPostsFrameChangedNotifications = nil
         isDraggingSelection = false
         needsRecenter = false
     }

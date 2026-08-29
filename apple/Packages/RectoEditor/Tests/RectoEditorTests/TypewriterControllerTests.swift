@@ -137,6 +137,37 @@ struct TypewriterControllerTests {
         #expect(mounted.textView.textContainerInset == configuredInset)
     }
 
+    @Test("destruction restores state while the editor stays alive")
+    func destructionRestoresBorrowedState() throws {
+        let storage = RectoTextStorage(documentId: "typewriter-destruction", markdown: document())
+        var controller: RectoTypewriterController? = RectoTypewriterController(isEnabled: false)
+        let harness = WindowHarness(
+            RectoEditorView(
+                storage: storage,
+                styler: MarkdownStyler(presentation: .rich, theme: .twilight),
+                onAttach: { controller?.attach(to: $0) }
+            ),
+            size: CGSize(width: 640, height: 320)
+        )
+        defer { harness.tearDown() }
+        let textView = try #require(harness.editorTextView)
+        let clipView = try #require(textView.enclosingScrollView?.contentView)
+        let originalInset = textView.textContainerInset
+        let originalPostsFrameChangedNotifications = clipView.postsFrameChangedNotifications
+
+        controller?.isEnabled = true
+        #expect(textView.textContainerInset.height > originalInset.height)
+        #expect(clipView.postsFrameChangedNotifications)
+
+        controller = nil
+
+        #expect(textView.textContainerInset == originalInset)
+        #expect(
+            clipView.postsFrameChangedNotifications
+                == originalPostsFrameChangedNotifications
+        )
+    }
+
     @Test("a programmatic change centers once after its guarded operation")
     func programmaticChangeRecentersAfterCompletion() throws {
         let markdown = document(lineCount: 300)
