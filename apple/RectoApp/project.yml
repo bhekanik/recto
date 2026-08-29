@@ -1,0 +1,77 @@
+name: Recto
+options:
+  bundleIdPrefix: com.bhekani
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+packages:
+  RectoEditor:
+    path: ../Packages/RectoEditor
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: WAVMJLFY95
+
+targets:
+  Recto:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources
+    dependencies:
+      - package: RectoEditor
+    entitlements:
+      path: Support/Recto.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+    info:
+      path: Support/Info.plist
+      properties:
+        CFBundleDisplayName: Recto
+        CFBundleName: Recto
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        LSApplicationCategoryType: public.app-category.productivity
+        LSMinimumSystemVersion: "$(MACOSX_DEPLOYMENT_TARGET)"
+        NSHumanReadableCopyright: "Copyright © 2026 Bhekani Khumalo"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.bhekani.recto
+        COMBINE_HIDPI_IMAGES: YES
+        ENABLE_HARDENED_RUNTIME: YES
+
+  RectoTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: Recto
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.bhekani.recto.tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Recto.app/Contents/MacOS/Recto"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+
+schemes:
+  Recto:
+    build:
+      targets:
+        Recto: all
+        RectoTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - RectoTests
+    archive:
+      config: Release
