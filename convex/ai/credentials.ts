@@ -6,6 +6,7 @@ import {
 	action,
 	internalMutation,
 	internalQuery,
+	type MutationCtx,
 	mutation,
 	query,
 } from "../_generated/server";
@@ -23,6 +24,23 @@ const OAUTH_SESSION_TTL_MS = 10 * 60 * 1000;
 
 export type CredentialSource = "byok" | "house";
 export type ResolvedCredential = { apiKey: string; source: CredentialSource };
+type CredentialSaveResult =
+	| {
+			saved: true;
+			provider: "openrouter";
+			last4: string;
+			updatedAt: number;
+	  }
+	| { saved: false; superseded: true };
+type OAuthSessionConsumeResult =
+	| { ok: false; reason: "expired" | "invalid" }
+	| {
+			ok: true;
+			generation: number;
+			verifierCiphertext: ArrayBuffer;
+			verifierIv: ArrayBuffer;
+			keyVersion: 1;
+	  };
 
 type CredentialErrorCode =
 	| "account_deletion_in_progress"
@@ -30,6 +48,7 @@ type CredentialErrorCode =
 	| "ai_credential_unreadable"
 	| "ai_credentials_unavailable"
 	| "ai_provider_unavailable"
+	| "credential_intent_superseded"
 	| "invalid_ai_credential"
 	| "invalid_argument"
 	| "invalid_oauth_code"
@@ -122,10 +141,16 @@ async function validateOpenRouterKey(apiKey: string): Promise<void> {
 		);
 	}
 	if (!response.ok) {
+		if (response.status === 401 || response.status === 403) {
+			credentialError(
+				"invalid_ai_credential",
+				"OpenRouter rejected this API key.",
+			);
+		}
 		credentialError(
-			"invalid_ai_credential",
-			response.status === 401 || response.status === 403
-				? "OpenRouter rejected this API key."
+			"ai_provider_unavailable",
+			response.status === 429
+				? "OpenRouter is rate-limiting key validation. Try again later."
 				: "OpenRouter could not validate this API key. Try again.",
 		);
 	}
@@ -150,12 +175,14 @@ async function storeCredential(
 	ctx: ActionCtx,
 	userId: string,
 	apiKey: string,
-): Promise<{ provider: "openrouter"; last4: string; updatedAt: number }> {
+	generation: number,
+): Promise<CredentialSaveResult> {
 	const encryptionKey = requireEncryptionKey();
 	await validateOpenRouterKey(apiKey);
 	const encrypted = await encryptCredential(apiKey, encryptionKey);
-	return await ctx.runMutation(internal.ai.credentials.upsertEncrypted, {
+	return await ctx.runMutation(internal.ai.credentials.commitEncrypted, {
 		userId,
+		generation,
 		provider: "openrouter",
 		ciphertext: encrypted.ciphertext,
 		iv: encrypted.iv,
@@ -188,9 +215,18 @@ export const status = query({
 
 export const saveKey = action({
 	args: { apiKey: v.string() },
-	handler: async (ctx, args) => {
+	handler: async (ctx, args): Promise<CredentialSaveResult> => {
 		const userId = await requireActionUserId(ctx);
-		return await storeCredential(ctx, userId, normalizeApiKey(args.apiKey));
+		const generation: number = await ctx.runMutation(
+			internal.ai.credentials.claimCredentialIntent,
+			{ userId },
+		);
+		return await storeCredential(
+			ctx,
+			userId,
+			normalizeApiKey(args.apiKey),
+			generation,
+		);
 	},
 });
 
@@ -209,6 +245,10 @@ export const beginOAuth = action({
 		const userId = await requireActionUserId(ctx);
 		const callbackUrl = requireAllowedCallback(args.callbackUrl);
 		const encryptionKey = requireEncryptionKey();
+		const generation: number = await ctx.runMutation(
+			internal.ai.credentials.claimCredentialIntent,
+			{ userId },
+		);
 		const state = randomToken();
 		const verifier = randomToken();
 		const [stateHash, codeChallenge, encryptedVerifier] = await Promise.all([
@@ -217,14 +257,24 @@ export const beginOAuth = action({
 			encryptCredential(verifier, encryptionKey),
 		]);
 		const expiresAt = Date.now() + OAUTH_SESSION_TTL_MS;
-		await ctx.runMutation(internal.ai.credentials.startOAuthSession, {
-			userId,
-			stateHash,
-			verifierCiphertext: encryptedVerifier.ciphertext,
-			verifierIv: encryptedVerifier.iv,
-			keyVersion: CREDENTIAL_KEY_VERSION,
-			expiresAt,
-		});
+		const started: boolean = await ctx.runMutation(
+			internal.ai.credentials.startOAuthSession,
+			{
+				userId,
+				generation,
+				stateHash,
+				verifierCiphertext: encryptedVerifier.ciphertext,
+				verifierIv: encryptedVerifier.iv,
+				keyVersion: CREDENTIAL_KEY_VERSION,
+				expiresAt,
+			},
+		);
+		if (!started) {
+			credentialError(
+				"credential_intent_superseded",
+				"A newer credential change superseded this OpenRouter authorization.",
+			);
+		}
 		const authorizeUrl = new URL(OPENROUTER_AUTHORIZE_URL);
 		authorizeUrl.searchParams.set("callback_url", callbackUrl);
 		authorizeUrl.searchParams.set("code_challenge", codeChallenge);
@@ -235,7 +285,7 @@ export const beginOAuth = action({
 
 export const exchangeOAuthCode = action({
 	args: { code: v.string(), state: v.string() },
-	handler: async (ctx, args) => {
+	handler: async (ctx, args): Promise<CredentialSaveResult> => {
 		const userId = await requireActionUserId(ctx);
 		if (
 			args.code.trim().length === 0 ||
@@ -245,17 +295,18 @@ export const exchangeOAuthCode = action({
 		) {
 			credentialError("invalid_argument", "Invalid OpenRouter OAuth response.");
 		}
-		const session = await ctx.runMutation(
+		const session: OAuthSessionConsumeResult = await ctx.runMutation(
 			internal.ai.credentials.consumeOAuthSession,
 			{ userId, stateHash: await sha256(args.state) },
 		);
 		if (!session.ok) {
-			credentialError(
-				"invalid_oauth_session",
-				session.reason === "expired"
-					? "The OpenRouter authorization expired. Start again."
-					: "The OpenRouter authorization is invalid or was already used.",
-			);
+			if (session.reason === "expired") {
+				credentialError(
+					"invalid_oauth_session",
+					"The OpenRouter authorization expired. Start again.",
+				);
+			}
+			return { saved: false as const, superseded: true as const };
 		}
 		if (session.keyVersion !== CREDENTIAL_KEY_VERSION) {
 			credentialError(
@@ -323,7 +374,12 @@ export const exchangeOAuthCode = action({
 				"OpenRouter returned an invalid authorization response.",
 			);
 		}
-		return await storeCredential(ctx, userId, normalizeApiKey(key));
+		return await storeCredential(
+			ctx,
+			userId,
+			normalizeApiKey(key),
+			session.generation,
+		);
 	},
 });
 
@@ -331,6 +387,7 @@ export const remove = mutation({
 	args: {},
 	handler: async (ctx) => {
 		const userId = await requireUserId(ctx);
+		await advanceIntent(ctx, userId);
 		const credential = await ctx.db
 			.query("aiCredentials")
 			.withIndex("by_user_provider", (q) =>
@@ -338,6 +395,7 @@ export const remove = mutation({
 			)
 			.unique();
 		if (credential) await ctx.db.delete(credential._id);
+		await deleteOAuthSessions(ctx, userId);
 	},
 });
 
@@ -358,9 +416,10 @@ export const readForResolution = internalQuery({
 			.unique(),
 });
 
-export const upsertEncrypted = internalMutation({
+export const commitEncrypted = internalMutation({
 	args: {
 		userId: v.string(),
+		generation: v.number(),
 		provider: v.literal("openrouter"),
 		ciphertext: v.bytes(),
 		iv: v.bytes(),
@@ -369,6 +428,13 @@ export const upsertEncrypted = internalMutation({
 	},
 	handler: async (ctx, args) => {
 		await assertNotDeleting(ctx, args.userId);
+		const intent = await ctx.db
+			.query("aiCredentialIntents")
+			.withIndex("by_user", (q) => q.eq("userId", args.userId))
+			.unique();
+		if (intent?.generation !== args.generation) {
+			return { saved: false as const, superseded: true as const };
+		}
 		const existing = await ctx.db
 			.query("aiCredentials")
 			.withIndex("by_user_provider", (q) =>
@@ -385,23 +451,80 @@ export const upsertEncrypted = internalMutation({
 				updatedAt,
 			});
 			return {
+				saved: true as const,
 				provider: args.provider,
 				last4: args.last4,
 				updatedAt,
 			};
 		}
 		await ctx.db.insert("aiCredentials", {
-			...args,
+			userId: args.userId,
+			provider: args.provider,
+			ciphertext: args.ciphertext,
+			iv: args.iv,
+			keyVersion: args.keyVersion,
+			last4: args.last4,
 			createdAt: updatedAt,
 			updatedAt,
 		});
-		return { provider: args.provider, last4: args.last4, updatedAt };
+		return {
+			saved: true as const,
+			provider: args.provider,
+			last4: args.last4,
+			updatedAt,
+		};
+	},
+});
+
+async function advanceIntent(
+	ctx: MutationCtx,
+	userId: string,
+): Promise<number> {
+	// Provider calls run outside Convex transactions. This durable generation lets
+	// the last user-started credential change reject an older completion.
+	const intent = await ctx.db
+		.query("aiCredentialIntents")
+		.withIndex("by_user", (q) => q.eq("userId", userId))
+		.unique();
+	const generation = (intent?.generation ?? 0) + 1;
+	const updatedAt = Math.max(Date.now(), (intent?.updatedAt ?? 0) + 1);
+	if (intent) {
+		await ctx.db.patch(intent._id, { generation, updatedAt });
+	} else {
+		await ctx.db.insert("aiCredentialIntents", {
+			userId,
+			generation,
+			updatedAt,
+		});
+	}
+	return generation;
+}
+
+async function deleteOAuthSessions(
+	ctx: MutationCtx,
+	userId: string,
+): Promise<void> {
+	const sessions = await ctx.db
+		.query("aiOAuthSessions")
+		.withIndex("by_user", (q) => q.eq("userId", userId))
+		.collect();
+	for (const session of sessions) await ctx.db.delete(session._id);
+}
+
+export const claimCredentialIntent = internalMutation({
+	args: { userId: v.string() },
+	handler: async (ctx, args) => {
+		await assertNotDeleting(ctx, args.userId);
+		const generation = await advanceIntent(ctx, args.userId);
+		await deleteOAuthSessions(ctx, args.userId);
+		return generation;
 	},
 });
 
 export const startOAuthSession = internalMutation({
 	args: {
 		userId: v.string(),
+		generation: v.number(),
 		stateHash: v.string(),
 		verifierCiphertext: v.bytes(),
 		verifierIv: v.bytes(),
@@ -410,15 +533,16 @@ export const startOAuthSession = internalMutation({
 	},
 	handler: async (ctx, args) => {
 		await assertNotDeleting(ctx, args.userId);
-		const existing = await ctx.db
-			.query("aiOAuthSessions")
+		const intent = await ctx.db
+			.query("aiCredentialIntents")
 			.withIndex("by_user", (q) => q.eq("userId", args.userId))
-			.collect();
-		for (const session of existing) await ctx.db.delete(session._id);
+			.unique();
+		if (intent?.generation !== args.generation) return false;
 		await ctx.db.insert("aiOAuthSessions", {
 			...args,
 			createdAt: Date.now(),
 		});
+		return true;
 	},
 });
 
@@ -441,6 +565,7 @@ export const consumeOAuthSession = internalMutation({
 		await ctx.db.delete(session._id);
 		return {
 			ok: true as const,
+			generation: session.generation,
 			verifierCiphertext: session.verifierCiphertext,
 			verifierIv: session.verifierIv,
 			keyVersion: session.keyVersion,

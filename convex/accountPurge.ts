@@ -503,6 +503,11 @@ export const purgeData = internalMutation({
 						.take(n),
 				(n) =>
 					ctx.db
+						.query("aiCredentialIntents")
+						.withIndex("by_user", (q) => q.eq("userId", args.userId))
+						.take(n),
+				(n) =>
+					ctx.db
 						.query("aiOAuthSessions")
 						.withIndex("by_user", (q) => q.eq("userId", args.userId))
 						.take(n),

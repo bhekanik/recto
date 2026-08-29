@@ -263,12 +263,18 @@ async function seed(t: ReturnType<typeof convexTest>): Promise<Seeded> {
 		});
 		await ctx.db.insert("aiOAuthSessions", {
 			userId: OWNER.subject,
+			generation: 1,
 			stateHash: "state-hash",
 			verifierCiphertext: new Uint8Array([1, 2, 3]).buffer,
 			verifierIv: new Uint8Array(12).buffer,
 			keyVersion: 1,
 			createdAt: now,
 			expiresAt: now + 60_000,
+		});
+		await ctx.db.insert("aiCredentialIntents", {
+			userId: OWNER.subject,
+			generation: 1,
+			updatedAt: now,
 		});
 
 		return { documentId, otherDocumentId, acceptedDocumentId };
@@ -342,6 +348,8 @@ async function countAll(t: ReturnType<typeof convexTest>) {
 		workspaces: (await ctx.db.query("workspaces").collect()).length,
 		settings: (await ctx.db.query("settings").collect()).length,
 		aiCredentials: (await ctx.db.query("aiCredentials").collect()).length,
+		aiCredentialIntents: (await ctx.db.query("aiCredentialIntents").collect())
+			.length,
 		aiOAuthSessions: (await ctx.db.query("aiOAuthSessions").collect()).length,
 		blobs: (await ctx.db.query("blobs").collect()).length,
 		blobRefs: (await ctx.db.query("blobRefs").collect()).length,
@@ -393,6 +401,7 @@ describe("accountPurge.purgeData", () => {
 		expect(counts.docChunks).toBe(0);
 		expect(counts.settings).toBe(0);
 		expect(counts.aiCredentials).toBe(0);
+		expect(counts.aiCredentialIntents).toBe(0);
 		expect(counts.aiOAuthSessions).toBe(0);
 		expect(counts.workspaces).toBe(0);
 		expect(counts.writingStats).toBe(1); // the other user's

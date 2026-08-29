@@ -1,10 +1,11 @@
 import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api } from "../_generated/api";
+import { api, internal } from "../_generated/api";
 import schema from "../schema";
+import { MAX_SETTINGS_BYTES } from "../settings";
 import { AI_CONSENT_VERSION } from "./consent";
 
-const modules: Record<string, () => Promise<unknown>> = {
+const modules = {
 	"./schema.ts": () => import("../schema"),
 	"./ai/consent.ts": () => import("./consent"),
 	"./ai/credentials.ts": () => import("./credentials"),
@@ -13,7 +14,7 @@ const modules: Record<string, () => Promise<unknown>> = {
 	"./documents.ts": () => import("../documents"),
 	"./_generated/api.js": () => import("../_generated/api"),
 	"./_generated/server.js": () => import("../_generated/server"),
-};
+} satisfies Record<string, () => Promise<unknown>>;
 
 const OWNER = { subject: "owner-user", email: "owner@example.com" };
 const OTHER = { subject: "other-user", email: "other@example.com" };
@@ -132,12 +133,12 @@ describe("OpenRouter credentials", () => {
 		vi.stubGlobal("fetch", fetch);
 		const t = convexTest(schema, modules);
 
-		await expect(
-			t.withIdentity(OWNER).action(api.ai.credentials.exchangeOAuthCode, {
+		expect(
+			await t.withIdentity(OWNER).action(api.ai.credentials.exchangeOAuthCode, {
 				code: "one-time-code",
 				state: "unknown-state",
 			}),
-		).rejects.toThrow("invalid or was already used");
+		).toEqual({ saved: false, superseded: true });
 		expect(fetch).not.toHaveBeenCalled();
 	});
 
@@ -171,7 +172,9 @@ describe("OpenRouter credentials", () => {
 			state: flow.state,
 		});
 
+		// SAFETY: this call is made by the tested action with a RequestInit body.
 		const exchangeInit = fetch.mock.calls[0]?.[1] as RequestInit;
+		// SAFETY: the action serializes this fixed OpenRouter request contract.
 		const exchangeBody = JSON.parse(String(exchangeInit.body)) as {
 			code: string;
 			code_verifier: string;
@@ -222,12 +225,12 @@ describe("OpenRouter credentials", () => {
 			state: flow.state,
 		});
 
-		await expect(
-			owner.action(api.ai.credentials.exchangeOAuthCode, {
+		expect(
+			await owner.action(api.ai.credentials.exchangeOAuthCode, {
 				code: "one-time-code",
 				state: flow.state,
 			}),
-		).rejects.toThrow("invalid or was already used");
+		).toEqual({ saved: false, superseded: true });
 		expect(fetch).toHaveBeenCalledTimes(2);
 		expect(
 			await t.run((ctx) => ctx.db.query("aiOAuthSessions").collect()),
@@ -243,12 +246,12 @@ describe("OpenRouter credentials", () => {
 			callbackUrl: CALLBACK_URL,
 		});
 
-		await expect(
-			t.withIdentity(OTHER).action(api.ai.credentials.exchangeOAuthCode, {
+		expect(
+			await t.withIdentity(OTHER).action(api.ai.credentials.exchangeOAuthCode, {
 				code: "one-time-code",
 				state: flow.state,
 			}),
-		).rejects.toThrow("invalid or was already used");
+		).toEqual({ saved: false, superseded: true });
 		expect(fetch).not.toHaveBeenCalled();
 		const session = await t.run((ctx) =>
 			ctx.db.query("aiOAuthSessions").unique(),
@@ -307,6 +310,171 @@ describe("OpenRouter credentials", () => {
 		expect(await owner.query(api.ai.credentials.status, {})).toMatchObject({
 			configured: true,
 			last4: "-key",
+		});
+	});
+
+	it.each([
+		429, 503,
+	])("classifies provider status %i as retryable", async (status) => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => Response.json({}, { status })),
+		);
+		const t = convexTest(schema, modules);
+
+		await expect(
+			t.withIdentity(OWNER).action(api.ai.credentials.saveKey, {
+				apiKey: "otherwise-valid-secret",
+			}),
+		).rejects.toMatchObject({
+			data: { code: "ai_provider_unavailable" },
+		});
+	});
+
+	it("does not let delayed OAuth preparation recreate a removed session", async () => {
+		const t = convexTest(schema, modules);
+		const user = t.withIdentity(OWNER);
+		const generation = await t.mutation(
+			internal.ai.credentials.claimCredentialIntent,
+			{ userId: OWNER.subject },
+		);
+
+		await user.mutation(api.ai.credentials.remove, {});
+		expect(
+			await t.mutation(internal.ai.credentials.startOAuthSession, {
+				userId: OWNER.subject,
+				generation,
+				stateHash: "delayed-state",
+				verifierCiphertext: new Uint8Array([1]).buffer,
+				verifierIv: new Uint8Array(12).buffer,
+				keyVersion: 1,
+				expiresAt: Date.now() + 60_000,
+			}),
+		).toBe(false);
+		expect(
+			await t.run((ctx) => ctx.db.query("aiOAuthSessions").collect()),
+		).toHaveLength(0);
+	});
+
+	it("does not let in-flight pasted-key validation undo removal", async () => {
+		const validation = Promise.withResolvers<Response>();
+		const fetch = vi
+			.fn()
+			.mockResolvedValueOnce(Response.json({}))
+			.mockImplementationOnce(() => validation.promise);
+		vi.stubGlobal("fetch", fetch);
+		const t = convexTest(schema, modules);
+		const owner = t.withIdentity(OWNER);
+		await owner.action(api.ai.credentials.saveKey, { apiKey: "first-secret" });
+
+		const replacement = owner.action(api.ai.credentials.saveKey, {
+			apiKey: "replacement-secret",
+		});
+		await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+		await owner.mutation(api.ai.credentials.remove, {});
+		validation.resolve(Response.json({}));
+		expect(await replacement).toEqual({ saved: false, superseded: true });
+		expect(await owner.query(api.ai.credentials.status, {})).toEqual({
+			configured: false,
+		});
+	});
+
+	it("does not let an in-flight OAuth exchange undo removal", async () => {
+		const exchangeResponse = Promise.withResolvers<Response>();
+		const fetch = vi
+			.fn()
+			.mockImplementationOnce(() => exchangeResponse.promise)
+			.mockResolvedValueOnce(Response.json({}));
+		vi.stubGlobal("fetch", fetch);
+		const t = convexTest(schema, modules);
+		const owner = t.withIdentity(OWNER);
+		const flow = await owner.action(api.ai.credentials.beginOAuth, {
+			callbackUrl: CALLBACK_URL,
+		});
+
+		const exchange = owner.action(api.ai.credentials.exchangeOAuthCode, {
+			code: "in-flight-code",
+			state: flow.state,
+		});
+		await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+		await owner.mutation(api.ai.credentials.remove, {});
+		exchangeResponse.resolve(Response.json({ key: "oauth-secret" }));
+		expect(await exchange).toEqual({ saved: false, superseded: true });
+		expect(await owner.query(api.ai.credentials.status, {})).toEqual({
+			configured: false,
+		});
+	});
+
+	it("does not let an older OAuth flow resurrect a removed credential", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => Response.json({})),
+		);
+		const t = convexTest(schema, modules);
+		const owner = t.withIdentity(OWNER);
+		await owner.action(api.ai.credentials.saveKey, { apiKey: "pasted-secret" });
+		const flow = await owner.action(api.ai.credentials.beginOAuth, {
+			callbackUrl: CALLBACK_URL,
+		});
+		await owner.mutation(api.ai.credentials.remove, {});
+
+		expect(
+			await owner.action(api.ai.credentials.exchangeOAuthCode, {
+				code: "stale-code",
+				state: flow.state,
+			}),
+		).toEqual({ saved: false, superseded: true });
+		expect(await owner.query(api.ai.credentials.status, {})).toEqual({
+			configured: false,
+		});
+	});
+
+	it("does not let an older OAuth flow overwrite a newer pasted key", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => Response.json({})),
+		);
+		const t = convexTest(schema, modules);
+		const owner = t.withIdentity(OWNER);
+		const flow = await owner.action(api.ai.credentials.beginOAuth, {
+			callbackUrl: CALLBACK_URL,
+		});
+		await owner.action(api.ai.credentials.saveKey, { apiKey: "pasted-newer" });
+
+		expect(
+			await owner.action(api.ai.credentials.exchangeOAuthCode, {
+				code: "stale-code",
+				state: flow.state,
+			}),
+		).toEqual({ saved: false, superseded: true });
+		expect(await owner.query(api.ai.credentials.status, {})).toMatchObject({
+			configured: true,
+			last4: "ewer",
+		});
+	});
+
+	it("makes the last-started pasted-key intent win across concurrent callers", async () => {
+		const firstValidation = Promise.withResolvers<Response>();
+		const fetch = vi
+			.fn()
+			.mockImplementationOnce(() => firstValidation.promise)
+			.mockResolvedValueOnce(Response.json({}));
+		vi.stubGlobal("fetch", fetch);
+		const t = convexTest(schema, modules);
+		const owner = t.withIdentity(OWNER);
+		const first = owner.action(api.ai.credentials.saveKey, {
+			apiKey: "first-started",
+		});
+		await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+		await owner.action(api.ai.credentials.saveKey, {
+			apiKey: "second-started",
+		});
+		firstValidation.resolve(Response.json({}));
+
+		expect(await first).toEqual({ saved: false, superseded: true });
+		expect(await owner.query(api.ai.credentials.status, {})).toMatchObject({
+			configured: true,
+			last4: "rted",
 		});
 	});
 
@@ -385,10 +553,31 @@ describe("AI consent", () => {
 		await owner.mutation(api.ai.consent.revoke, {});
 
 		const row = await t.run((ctx) => ctx.db.query("settings").unique());
-		expect(JSON.parse(row?.json ?? "{}")).toEqual({ aiEnabled: false });
+		expect(JSON.parse(row?.json ?? "{}")).toEqual({});
 		expect(await owner.query(api.ai.consent.get, {})).toEqual({
 			version: AI_CONSENT_VERSION,
 			acceptedAt: null,
 		});
+	});
+
+	it("does not grow settings beyond the 64 KiB ceiling on revoke", async () => {
+		const t = convexTest(schema, modules);
+		const json = JSON.stringify({
+			filler: "x".repeat(MAX_SETTINGS_BYTES - 13),
+		});
+		expect(new TextEncoder().encode(json)).toHaveLength(MAX_SETTINGS_BYTES);
+		await t.run(async (ctx) => {
+			await ctx.db.insert("settings", {
+				userId: OWNER.subject,
+				json,
+				updatedAt: 1,
+			});
+		});
+
+		await t.withIdentity(OWNER).mutation(api.ai.consent.revoke, {});
+		const row = await t.run((ctx) => ctx.db.query("settings").unique());
+		expect(new TextEncoder().encode(row?.json ?? "")).toHaveLength(
+			MAX_SETTINGS_BYTES,
+		);
 	});
 });

@@ -108,9 +108,14 @@ export const revoke = mutation({
 		if (!row) return;
 		const settings = parseSettings(row.json);
 		delete settings.aiConsent;
-		settings.aiEnabled = false;
+		delete settings.aiEnabled;
+		const json = JSON.stringify(settings);
+		if (json === row.json) return;
+		if (utf8Length(json) > MAX_SETTINGS_BYTES) {
+			throw new Error(SETTINGS_TOO_LARGE_MESSAGE);
+		}
 		await ctx.db.patch(row._id, {
-			json: JSON.stringify(settings),
+			json,
 			updatedAt: Math.max(Date.now(), row.updatedAt + 1),
 		});
 	},

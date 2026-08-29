@@ -120,8 +120,16 @@ export default defineSchema({
 		.index("by_user", ["userId"])
 		.index("by_user_provider", ["userId", "provider"]),
 
+	aiCredentialIntents: defineTable({
+		// Keep this row after removal so an in-flight provider call cannot restore a key.
+		userId: v.string(),
+		generation: v.number(),
+		updatedAt: v.number(),
+	}).index("by_user", ["userId"]),
+
 	aiOAuthSessions: defineTable({
 		userId: v.string(),
+		generation: v.number(),
 		stateHash: v.string(),
 		verifierCiphertext: v.bytes(),
 		verifierIv: v.bytes(),
