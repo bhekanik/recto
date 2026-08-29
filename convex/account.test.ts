@@ -251,6 +251,66 @@ async function seed(t: ReturnType<typeof convexTest>): Promise<Seeded> {
 			json: '{"theme":"aurora"}',
 			updatedAt: now,
 		});
+		await ctx.db.insert("aiCredentials", {
+			userId: OWNER.subject,
+			provider: "openrouter",
+			ciphertext: new Uint8Array([1, 2, 3]).buffer,
+			iv: new Uint8Array(12).buffer,
+			keyVersion: 1,
+			last4: "test",
+			createdAt: now,
+			updatedAt: now,
+		});
+		await ctx.db.insert("aiOAuthSessions", {
+			userId: OWNER.subject,
+			generation: 1,
+			stateHash: "state-hash",
+			verifierCiphertext: new Uint8Array([1, 2, 3]).buffer,
+			verifierIv: new Uint8Array(12).buffer,
+			keyVersion: 1,
+			createdAt: now,
+			expiresAt: now + 60_000,
+		});
+		await ctx.db.insert("aiCredentialIntents", {
+			userId: OWNER.subject,
+			generation: 1,
+			updatedAt: now,
+		});
+		await ctx.db.insert("aiConsents", {
+			userId: OWNER.subject,
+			version: 1,
+			acceptedAt: now,
+		});
+		await ctx.db.insert("aiCredentials", {
+			userId: OTHER.subject,
+			provider: "openrouter",
+			ciphertext: new Uint8Array([4, 5, 6]).buffer,
+			iv: new Uint8Array(12).buffer,
+			keyVersion: 1,
+			last4: "safe",
+			createdAt: now,
+			updatedAt: now,
+		});
+		await ctx.db.insert("aiOAuthSessions", {
+			userId: OTHER.subject,
+			generation: 1,
+			stateHash: "other-state-hash",
+			verifierCiphertext: new Uint8Array([4, 5, 6]).buffer,
+			verifierIv: new Uint8Array(12).buffer,
+			keyVersion: 1,
+			createdAt: now,
+			expiresAt: now + 60_000,
+		});
+		await ctx.db.insert("aiCredentialIntents", {
+			userId: OTHER.subject,
+			generation: 1,
+			updatedAt: now,
+		});
+		await ctx.db.insert("aiConsents", {
+			userId: OTHER.subject,
+			version: 1,
+			acceptedAt: now,
+		});
 
 		return { documentId, otherDocumentId, acceptedDocumentId };
 	});
@@ -322,6 +382,11 @@ async function countAll(t: ReturnType<typeof convexTest>) {
 		writingStats: (await ctx.db.query("writingStats").collect()).length,
 		workspaces: (await ctx.db.query("workspaces").collect()).length,
 		settings: (await ctx.db.query("settings").collect()).length,
+		aiConsents: (await ctx.db.query("aiConsents").collect()).length,
+		aiCredentials: (await ctx.db.query("aiCredentials").collect()).length,
+		aiCredentialIntents: (await ctx.db.query("aiCredentialIntents").collect())
+			.length,
+		aiOAuthSessions: (await ctx.db.query("aiOAuthSessions").collect()).length,
 		blobs: (await ctx.db.query("blobs").collect()).length,
 		blobRefs: (await ctx.db.query("blobRefs").collect()).length,
 		blobRefSources: (await ctx.db.query("blobRefSources").collect()).length,
@@ -371,11 +436,24 @@ describe("accountPurge.purgeData", () => {
 		expect(counts.documentShares).toBe(0);
 		expect(counts.docChunks).toBe(0);
 		expect(counts.settings).toBe(0);
+		expect(counts.aiConsents).toBe(1);
+		expect(counts.aiCredentials).toBe(1);
+		expect(counts.aiCredentialIntents).toBe(1);
+		expect(counts.aiOAuthSessions).toBe(1);
 		expect(counts.workspaces).toBe(0);
 		expect(counts.writingStats).toBe(1); // the other user's
 
 		const survivor = await t.run((ctx) => ctx.db.get(otherDocumentId));
 		expect(survivor?.markdown).toBe("not yours");
+		const aiSurvivors = await t.run(async (ctx) => ({
+			consents: await ctx.db.query("aiConsents").collect(),
+			credentials: await ctx.db.query("aiCredentials").collect(),
+			intents: await ctx.db.query("aiCredentialIntents").collect(),
+			oauthSessions: await ctx.db.query("aiOAuthSessions").collect(),
+		}));
+		for (const rows of Object.values(aiSurvivors)) {
+			expect(rows.map((row) => row.userId)).toEqual([OTHER.subject]);
+		}
 	});
 
 	it("removes the user's comments and branches on other people's documents", async () => {

@@ -496,6 +496,26 @@ export const purgeData = internalMutation({
 						.query("settings")
 						.withIndex("by_user", (q) => q.eq("userId", args.userId))
 						.take(n),
+				(n) =>
+					ctx.db
+						.query("aiConsents")
+						.withIndex("by_user", (q) => q.eq("userId", args.userId))
+						.take(n),
+				(n) =>
+					ctx.db
+						.query("aiCredentials")
+						.withIndex("by_user", (q) => q.eq("userId", args.userId))
+						.take(n),
+				(n) =>
+					ctx.db
+						.query("aiCredentialIntents")
+						.withIndex("by_user", (q) => q.eq("userId", args.userId))
+						.take(n),
+				(n) =>
+					ctx.db
+						.query("aiOAuthSessions")
+						.withIndex("by_user", (q) => q.eq("userId", args.userId))
+						.take(n),
 				// Chunks whose document is already gone (a partial earlier pass can
 				// leave these behind).
 				(n) =>

@@ -107,6 +107,46 @@ export default defineSchema({
 		updatedAt: v.number(),
 	}).index("by_user", ["userId"]),
 
+	// Consent is server-owned. Synced settings are opaque and client-writable.
+	aiConsents: defineTable({
+		userId: v.string(),
+		version: v.number(),
+		acceptedAt: v.number(),
+	}).index("by_user", ["userId"]),
+
+	aiCredentials: defineTable({
+		userId: v.string(),
+		provider: v.literal("openrouter"),
+		ciphertext: v.bytes(),
+		iv: v.bytes(),
+		keyVersion: v.literal(1),
+		last4: v.string(),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+	})
+		.index("by_user", ["userId"])
+		.index("by_user_provider", ["userId", "provider"]),
+
+	aiCredentialIntents: defineTable({
+		// Keep this row after removal so an in-flight provider call cannot restore a key.
+		userId: v.string(),
+		generation: v.number(),
+		updatedAt: v.number(),
+	}).index("by_user", ["userId"]),
+
+	aiOAuthSessions: defineTable({
+		userId: v.string(),
+		generation: v.number(),
+		stateHash: v.string(),
+		verifierCiphertext: v.bytes(),
+		verifierIv: v.bytes(),
+		keyVersion: v.literal(1),
+		createdAt: v.number(),
+		expiresAt: v.number(),
+	})
+		.index("by_user", ["userId"])
+		.index("by_state_hash", ["stateHash"]),
+
 	// Append-only branching undo-tree DAG; nodes are immutable (blueprint 03 §2, 07).
 	docNodes: defineTable({
 		documentId: v.id("documents"),
