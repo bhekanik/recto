@@ -26,6 +26,8 @@ public final class RectoTypewriterController {
     private var seam: RectoTextView?
     private weak var textView: NSTextView?
     private weak var scrollView: NSScrollView?
+    private weak var clipView: NSClipView?
+    private weak var borrowedClipView: NSClipView?
     private var originalTextContainerInset: NSSize?
     private var originalPostsFrameChangedNotifications: Bool?
     private var observationTokens: [NSObjectProtocol] = []
@@ -47,7 +49,10 @@ public final class RectoTypewriterController {
     /// Attach the current editor seam, or detach with `nil`.
     public func attach(to seam: RectoTextView?) {
         let incomingTextView = seam?.nsTextView
-        if let incomingTextView, incomingTextView === textView {
+        let incomingScrollView = seam?.scrollView
+        let incomingClipView = incomingScrollView?.contentView
+        if let incomingTextView, incomingTextView === textView,
+           incomingScrollView === scrollView, incomingClipView === clipView {
             self.seam = seam
             return
         }
@@ -55,7 +60,8 @@ public final class RectoTypewriterController {
         deactivate(restoreInset: true)
         self.seam = seam
         textView = incomingTextView
-        scrollView = seam?.scrollView
+        scrollView = incomingScrollView
+        clipView = incomingClipView
         originalTextContainerInset = incomingTextView?.textContainerInset
         refreshActivation()
     }
@@ -105,17 +111,18 @@ public final class RectoTypewriterController {
         if restoreInset, let textView, let originalTextContainerInset {
             textView.textContainerInset = originalTextContainerInset
         }
-        if let clipView = scrollView?.contentView,
+        if let borrowedClipView,
            let originalPostsFrameChangedNotifications {
-            clipView.postsFrameChangedNotifications = originalPostsFrameChangedNotifications
+            borrowedClipView.postsFrameChangedNotifications = originalPostsFrameChangedNotifications
         }
+        borrowedClipView = nil
         originalPostsFrameChangedNotifications = nil
         isDraggingSelection = false
         needsRecenter = false
     }
 
     private func installObservers() {
-        guard let textView, let clipView = scrollView?.contentView else { return }
+        guard let textView, let clipView else { return }
         let center = NotificationCenter.default
         observationTokens.append(center.addObserver(
             forName: NSTextView.didChangeSelectionNotification,
@@ -132,6 +139,7 @@ public final class RectoTypewriterController {
             MainActor.assumeIsolated { self?.selectionOrTextDidChange() }
         })
 
+        borrowedClipView = clipView
         originalPostsFrameChangedNotifications = clipView.postsFrameChangedNotifications
         clipView.postsFrameChangedNotifications = true
         observationTokens.append(center.addObserver(
@@ -207,11 +215,11 @@ public final class RectoTypewriterController {
     }
 
     private func updateTextContainerInset() {
-        guard isEnabled, let textView, let scrollView,
+        guard isEnabled, let textView, let scrollView, let clipView,
               let originalTextContainerInset else { return }
         let visibleHeight = max(
             0,
-            scrollView.contentView.bounds.height
+            clipView.bounds.height
                 - scrollView.contentInsets.top
                 - scrollView.contentInsets.bottom
         )

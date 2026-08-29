@@ -168,6 +168,49 @@ struct TypewriterControllerTests {
         )
     }
 
+    @Test("disable restores the exact clip view whose state was borrowed")
+    func replacementClipKeepsItsOwnState() throws {
+        let mounted = try mount(markdown: document(lineCount: 100), enabled: false)
+        defer { mounted.harness.tearDown() }
+        let borrowedClipView = mounted.scrollView.contentView
+        borrowedClipView.postsFrameChangedNotifications = false
+        let borrowedBaseline = borrowedClipView.postsFrameChangedNotifications
+        mounted.controller.isEnabled = true
+        #expect(borrowedClipView.postsFrameChangedNotifications)
+        let replacementClipView = NSClipView()
+        replacementClipView.postsFrameChangedNotifications = true
+
+        mounted.scrollView.contentView = replacementClipView
+        mounted.controller.isEnabled = false
+
+        #expect(borrowedClipView.postsFrameChangedNotifications == borrowedBaseline)
+        #expect(replacementClipView.postsFrameChangedNotifications)
+    }
+
+    @Test("reattach refreshes geometry after the same text view is reparented")
+    func reattachAfterReparentUsesNewScrollView() throws {
+        let mounted = try mount(markdown: document(lineCount: 100), enabled: false)
+        defer { mounted.harness.tearDown() }
+        let originalClipView = mounted.scrollView.contentView
+        originalClipView.postsFrameChangedNotifications = false
+        mounted.controller.isEnabled = true
+        let originalInset = mounted.textView.textContainerInset.height
+        let documentView = try #require(mounted.scrollView.documentView)
+        let replacementScrollView = NSScrollView(
+            frame: NSRect(x: 0, y: 0, width: 640, height: 640)
+        )
+
+        mounted.scrollView.documentView = nil
+        replacementScrollView.documentView = documentView
+        replacementScrollView.layoutSubtreeIfNeeded()
+        mounted.controller.attach(to: mounted.storage.textView)
+
+        #expect(mounted.textView.enclosingScrollView === replacementScrollView)
+        #expect(mounted.textView.textContainerInset.height > originalInset)
+        #expect(!originalClipView.postsFrameChangedNotifications)
+        #expect(replacementScrollView.contentView.postsFrameChangedNotifications)
+    }
+
     @Test("a programmatic change centers once after its guarded operation")
     func programmaticChangeRecentersAfterCompletion() throws {
         let markdown = document(lineCount: 300)
