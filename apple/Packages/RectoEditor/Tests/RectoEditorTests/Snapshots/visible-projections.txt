@@ -1,0 +1,73 @@
+# Visible text projection
+
+## 01-headings-h1-h6-atx
+"One\nTwo\nThree\nFour\nFive\nSix\n"
+
+## 02-setext-to-atx
+"Title\n\nSubtitle\n"
+
+## 03-nested-unordered-list
+"one\n two\n  three\n"
+
+## 04-nested-ordered-list-with-start
+"first\nsecond\n   nested\n"
+
+## 05-mixed-ordered-and-unordered-nesting
+"ordered\n   bullet\n     inner ordered\ntop bullet\n  inner\n"
+
+## 06-task-list
+"todo\ndone\n  nested\n"
+
+## 07-table-alignments
+"left\tcenter\tright\tdefault\na\tb\tc\td\n"
+
+## 08-table-escaped-pipes
+"col\na | b\n"
+
+## 09-table-cell-br
+"col\nline1\nline2\n"
+
+## 10-multiple-footnotes-out-of-order
+"Secondb and firsta.\n\nbNote B\naNote A\n"
+
+## 11-orphan-footnote-ref-and-def
+"Missingmissing and orphanorphan.\n\norphanOrphan only\n"
+
+## 12-nested-yaml-frontmatter
+"\nBody after frontmatter.\n"
+
+## 13-hard-break-backslash-and-trailing-spaces
+"Line one\nLine two\nLine three\n"
+
+## 14-soft-break-in-paragraph
+"Line one\nLine two still same paragraph\n"
+
+## 15-fenced-code-with-lang-and-inner-backticks
+"const x = `hello`;\n"
+
+## 16-nested-blockquote
+"outer\n\ninner\n"
+
+## 17-links-and-images-with-titles
+"link\n\nalt\n"
+
+## 18-reference-style-link
+"ref link\n\n"
+
+## 19-strikethrough
+"deleted text\n"
+
+## 20-autolinks
+"https://example.com\n\nwww.example.org\n"
+
+## 21-inline-mix
+"bold italic code strike link and footnoten.\n\nnNote\n"
+
+## 22-delimiter-normalization
+"foo and bar\n"
+
+## 23-thematic-break-variants
+"Before\n\n\n\nBetween\n\n\n\nAfter\n\n\n\nEnd\n"
+
+## 24-inline-raw-html
+"<span>safe</span>\n\n<script>alert(1)</script>\n"

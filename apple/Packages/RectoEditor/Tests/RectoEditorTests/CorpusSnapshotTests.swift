@@ -92,6 +92,85 @@ struct CorpusSnapshotTests {
         #expect(actual == expected, "\(testCase.name): rendering changed")
     }
 
+    @Test("visible text and source mappings match the 24-case snapshot")
+    func visibleProjectionMatchesSnapshot() throws {
+        var sections: [String] = []
+        for testCase in Self.cases {
+            let rich = projection(testCase.markdown, presentation: .rich)
+            let raw = projection(testCase.markdown, presentation: .raw)
+            let preview = projection(testCase.markdown, presentation: .preview)
+
+            #expect(raw.string == testCase.markdown, "\(testCase.name): raw is not identity")
+            #expect(preview == rich, "\(testCase.name): preview projection diverged from rich")
+            for span in rich.spans {
+                #expect(rich.sourceRange(for: span.visibleRange) == span.sourceRange,
+                        "\(testCase.name): visible to source mapping failed for \(span)")
+                #expect(rich.visibleRange(for: span.sourceRange) == span.visibleRange,
+                        "\(testCase.name): source to visible mapping failed for \(span)")
+            }
+
+            sections.append("## \(testCase.name)\n\(String(reflecting: rich.string))")
+        }
+        let actual = "# Visible text projection\n\n" + sections.joined(separator: "\n\n") + "\n"
+        let file = "visible-projections.txt"
+        if ProcessInfo.processInfo.environment["RECTO_UPDATE_SNAPSHOTS"] == "1" {
+            try write(actual, to: file)
+            return
+        }
+        let expected = try #require(
+            Bundle.module.url(forResource: "Snapshots/visible-projections", withExtension: "txt")
+                .flatMap { try? String(contentsOf: $0, encoding: .utf8) },
+            "no visible projection snapshot; run with RECTO_UPDATE_SNAPSHOTS=1"
+        )
+        #expect(actual == expected, "visible text projection changed")
+    }
+
+    @Test("VoiceOver text and structure match the 24-case snapshot")
+    func accessibilityProjectionMatchesSnapshot() throws {
+        var sections: [String] = []
+        for testCase in Self.cases {
+            let rich = accessibilityProjection(testCase.markdown, presentation: .rich)
+            let raw = accessibilityProjection(testCase.markdown, presentation: .raw)
+            let preview = accessibilityProjection(testCase.markdown, presentation: .preview)
+
+            #expect(raw.text.string == testCase.markdown,
+                    "\(testCase.name): raw accessibility text is not identity")
+            #expect(raw.spans.isEmpty,
+                    "\(testCase.name): raw source exposed rendered structure")
+            #expect(preview == rich,
+                    "\(testCase.name): preview accessibility diverged from rich")
+            for span in rich.spans {
+                #expect(rich.text.sourceRange(for: span.visibleRange) != nil,
+                        "\(testCase.name): accessibility span does not map to source: \(span)")
+            }
+
+            let roles = rich.spans.map { span in
+                let text = (rich.text.string as NSString).substring(with: span.visibleRange)
+                return "\(roleDump(span.role)) \(String(reflecting: text))"
+            }
+            let roleSection = roles.isEmpty ? "(none)" : roles.joined(separator: "\n")
+            sections.append("""
+                ## \(testCase.name)
+                text \(String(reflecting: rich.text.string))
+                \(roleSection)
+                """)
+        }
+        let actual = "# VoiceOver projection\n\n" + sections.joined(separator: "\n\n") + "\n"
+        let file = "accessibility-projections.txt"
+        if ProcessInfo.processInfo.environment["RECTO_UPDATE_SNAPSHOTS"] == "1" {
+            try write(actual, to: file)
+            return
+        }
+        let expected = try #require(
+            Bundle.module.url(
+                forResource: "Snapshots/accessibility-projections",
+                withExtension: "txt"
+            ).flatMap { try? String(contentsOf: $0, encoding: .utf8) },
+            "no VoiceOver projection snapshot; run with RECTO_UPDATE_SNAPSHOTS=1"
+        )
+        #expect(actual == expected, "VoiceOver projection changed")
+    }
+
     // MARK: - Helpers
 
     /// The document as the styler renders it with no caret anywhere, which is
@@ -108,6 +187,39 @@ struct CorpusSnapshotTests {
             fontSize: styler.typography.resolvedSize,
             configuration: styler.engineConfiguration()
         )
+    }
+
+    private func projection(
+        _ markdown: String,
+        presentation: Presentation
+    ) -> MarkdownTextProjection {
+        let styler = MarkdownStyler(presentation: presentation, theme: .twilight)
+        return .make(markdown: markdown, configuration: styler.engineConfiguration())
+    }
+
+    private func accessibilityProjection(
+        _ markdown: String,
+        presentation: Presentation
+    ) -> MarkdownAccessibilityProjection {
+        let styler = MarkdownStyler(presentation: presentation, theme: .twilight)
+        return .make(markdown: markdown, configuration: styler.engineConfiguration())
+    }
+
+    private func roleDump(_ role: MarkdownAccessibilityRole) -> String {
+        switch role {
+        case .heading(let level):
+            "heading(level:\(level))"
+        case .listItem(let level, let index, let prefix, let isChecked):
+            "list(level:\(level),index:\(index),prefix:\(String(reflecting: prefix)),checked:\(String(describing: isChecked)))"
+        case .link(let destination):
+            "link(\(String(reflecting: destination)))"
+        case .image(let label, let destination):
+            "image(label:\(String(reflecting: label)),destination:\(String(reflecting: destination)))"
+        case .footnoteReference(let label):
+            "footnote-reference(\(String(reflecting: label)))"
+        case .footnoteDefinition(let label):
+            "footnote-definition(\(String(reflecting: label)))"
+        }
     }
 
     /// Snapshots are written back into the source tree, not the test bundle —

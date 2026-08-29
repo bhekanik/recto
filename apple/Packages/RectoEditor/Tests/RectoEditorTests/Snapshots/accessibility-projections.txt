@@ -1,0 +1,120 @@
+# VoiceOver projection
+
+## 01-headings-h1-h6-atx
+text "One\nTwo\nThree\nFour\nFive\nSix\n"
+heading(level:1) "One\n"
+heading(level:2) "Two\n"
+heading(level:3) "Three\n"
+heading(level:4) "Four\n"
+heading(level:5) "Five\n"
+heading(level:6) "Six\n"
+
+## 02-setext-to-atx
+text "Title\n\nSubtitle\n"
+heading(level:1) "Title\n"
+heading(level:2) "Subtitle\n"
+
+## 03-nested-unordered-list
+text "one\n two\n  three\n"
+list(level:0,index:0,prefix:"•",checked:nil) "one"
+list(level:0,index:1,prefix:"•",checked:nil) "two"
+list(level:0,index:2,prefix:"•",checked:nil) "three"
+
+## 04-nested-ordered-list-with-start
+text "first\nsecond\n   nested\n"
+list(level:0,index:0,prefix:"3.",checked:nil) "first"
+list(level:0,index:1,prefix:"4.",checked:nil) "second"
+list(level:1,index:2,prefix:"1.",checked:nil) "nested"
+
+## 05-mixed-ordered-and-unordered-nesting
+text "ordered\n   bullet\n     inner ordered\ntop bullet\n  inner\n"
+list(level:0,index:0,prefix:"1.",checked:nil) "ordered"
+list(level:1,index:1,prefix:"•",checked:nil) "bullet"
+list(level:2,index:2,prefix:"1.",checked:nil) "inner ordered"
+list(level:0,index:3,prefix:"•",checked:nil) "top bullet"
+list(level:1,index:4,prefix:"1.",checked:nil) "inner"
+
+## 06-task-list
+text "todo\ndone\n  nested\n"
+list(level:0,index:0,prefix:"•",checked:Optional(false)) "todo"
+list(level:0,index:1,prefix:"•",checked:Optional(true)) "done"
+list(level:1,index:2,prefix:"•",checked:Optional(false)) "nested"
+
+## 07-table-alignments
+text "left\tcenter\tright\tdefault\na\tb\tc\td\n"
+(none)
+
+## 08-table-escaped-pipes
+text "col\na | b\n"
+(none)
+
+## 09-table-cell-br
+text "col\nline1\nline2\n"
+(none)
+
+## 10-multiple-footnotes-out-of-order
+text "Secondb and firsta.\n\nbNote B\naNote A\n"
+footnote-reference("b") "b"
+footnote-reference("a") "a"
+footnote-definition("b") "bNote B\n"
+footnote-definition("a") "aNote A\n"
+
+## 11-orphan-footnote-ref-and-def
+text "Missingmissing and orphanorphan.\n\norphanOrphan only\n"
+footnote-reference("orphan") "orphan"
+footnote-definition("orphan") "orphanOrphan only\n"
+
+## 12-nested-yaml-frontmatter
+text "\nBody after frontmatter.\n"
+(none)
+
+## 13-hard-break-backslash-and-trailing-spaces
+text "Line one\nLine two\nLine three\n"
+(none)
+
+## 14-soft-break-in-paragraph
+text "Line one\nLine two still same paragraph\n"
+(none)
+
+## 15-fenced-code-with-lang-and-inner-backticks
+text "const x = `hello`;\n"
+(none)
+
+## 16-nested-blockquote
+text "outer\n\ninner\n"
+(none)
+
+## 17-links-and-images-with-titles
+text "link\n\nalt\n"
+link("https://example.com") "link"
+image(label:"alt",destination:"https://example.com/img.png") "alt"
+
+## 18-reference-style-link
+text "ref link\n\n"
+link("https://example.com") "ref link"
+
+## 19-strikethrough
+text "deleted text\n"
+(none)
+
+## 20-autolinks
+text "https://example.com\n\nwww.example.org\n"
+link("https://example.com") "https://example.com"
+
+## 21-inline-mix
+text "bold italic code strike link and footnoten.\n\nnNote\n"
+link("https://x.com") "link"
+footnote-reference("n") "n"
+footnote-definition("n") "nNote\n"
+
+## 22-delimiter-normalization
+text "foo and bar\n"
+(none)
+
+## 23-thematic-break-variants
+text "Before\n\n\n\nBetween\n\n\n\nAfter\n\n\n\nEnd\n"
+(none)
+
+## 24-inline-raw-html
+text "<span>safe</span>\n\n<script>alert(1)</script>\n"
+(none)
