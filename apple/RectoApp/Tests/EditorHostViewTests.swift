@@ -74,6 +74,187 @@ struct EditorHostViewTests {
         #expect(document.value.markdown == "a\r\n\r\nb")
     }
 
+    @Test("CRLF Return is one exact undo and redo action")
+    func crlfReturnUndoRedo() async throws {
+        _ = NSApplication.shared
+        let original = "a\r\nb"
+        let edited = "a\r\n\r\nb"
+        let (document, storage, host, window) = mount(original, id: "crlf-return-undo")
+        defer { window.close() }
+        host.layoutSubtreeIfNeeded()
+        await drainMainQueue()
+        let textView = try #require(storage.textView.nsTextView)
+        #expect(window.makeFirstResponder(textView))
+        textView.setSelectedRange(NSRange(location: 1, length: 0))
+
+        textView.insertNewline(nil)
+        await drainMainQueue()
+
+        let undoManager = try #require(storage.controller.undoManager)
+        #expect(!textView.allowsUndo)
+        #expect(textView.delegate?.undoManager?(for: textView) === undoManager)
+        #expect(undoManager.canUndo)
+        #expect(undoManager.undoActionName == "Edit")
+        #expect(textView.string == edited)
+        #expect(document.value.markdown == edited)
+
+        undoManager.undo()
+
+        #expect(textView.string == original)
+        #expect(document.value.markdown == original)
+        #expect(!undoManager.canUndo)
+        #expect(undoManager.canRedo)
+        #expect(undoManager.redoActionName == "Edit")
+
+        undoManager.redo()
+
+        #expect(textView.string == edited)
+        #expect(document.value.markdown == edited)
+        #expect(!undoManager.canRedo)
+    }
+
+    @Test("typing undo and redo update the document binding synchronously")
+    func typingUndoRedoUpdatesDocumentSynchronously() async throws {
+        _ = NSApplication.shared
+        let original = "body"
+        let edited = "body!"
+        let (document, storage, host, window) = mount(original, id: "typing-undo")
+        defer { window.close() }
+        host.layoutSubtreeIfNeeded()
+        await drainMainQueue()
+        let textView = try #require(storage.textView.nsTextView)
+        #expect(window.makeFirstResponder(textView))
+
+        textView.insertText("!", replacementRange: NSRange(location: 4, length: 0))
+        await drainMainQueue()
+
+        let undoManager = try #require(storage.controller.undoManager)
+        #expect(undoManager.canUndo)
+        #expect(document.value.markdown == edited)
+
+        undoManager.undo()
+
+        #expect(textView.string == original)
+        #expect(storage.markdown == original)
+        #expect(document.value.markdown == original)
+        #expect(undoManager.canRedo)
+
+        undoManager.redo()
+
+        #expect(textView.string == edited)
+        #expect(storage.markdown == edited)
+        #expect(document.value.markdown == edited)
+    }
+
+    @Test("an external document replacement clears stale edit history")
+    func externalReplacementClearsHistory() async throws {
+        _ = NSApplication.shared
+        let (document, storage, host, window) = mount("body", id: "external-history")
+        defer { window.close() }
+        host.layoutSubtreeIfNeeded()
+        await drainMainQueue()
+        let textView = try #require(storage.textView.nsTextView)
+        #expect(window.makeFirstResponder(textView))
+
+        textView.insertText("!", replacementRange: NSRange(location: 4, length: 0))
+        await drainMainQueue()
+
+        let undoManager = try #require(storage.controller.undoManager)
+        #expect(undoManager.canUndo)
+
+        document.value.markdown = "external\r\n"
+        host.rootView = EditorHostView(
+            document: Binding(
+                get: { document.value },
+                set: { document.value = $0 }
+            ),
+            storage: storage
+        )
+        host.layoutSubtreeIfNeeded()
+        await drainMainQueue()
+
+        #expect(textView.string == "external\r\n")
+        #expect(storage.markdown == "external\r\n")
+        #expect(document.value.markdown == "external\r\n")
+        #expect(!undoManager.canUndo)
+        #expect(!undoManager.canRedo)
+    }
+
+    @Test("normalized mixed-ending paste has exact undo and redo")
+    func normalizedPasteUndoRedo() async throws {
+        _ = NSApplication.shared
+        let original = "start\r\n"
+        let edited = "start\r\none\r\ntwo\r\nthree"
+        let (document, storage, host, window) = mount(original, id: "paste-undo")
+        defer { window.close() }
+        host.layoutSubtreeIfNeeded()
+        await drainMainQueue()
+        let textView = try #require(storage.textView.nsTextView)
+        #expect(window.makeFirstResponder(textView))
+        textView.setSelectedRange(NSRange(location: 7, length: 0))
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString("one\ntwo\r\nthree", forType: .string)
+
+        textView.paste(nil)
+        await drainMainQueue()
+
+        let undoManager = try #require(storage.controller.undoManager)
+        #expect(textView.string == edited)
+        #expect(document.value.markdown == edited)
+        #expect(undoManager.canUndo)
+
+        undoManager.undo()
+
+        #expect(textView.string == original)
+        #expect(document.value.markdown == original)
+        #expect(undoManager.canRedo)
+
+        undoManager.redo()
+
+        #expect(textView.string == edited)
+        #expect(document.value.markdown == edited)
+    }
+
+    @Test("BOM bytes and an adjacent emoji range survive undo and redo")
+    func bomEmojiUndoRedo() async throws {
+        _ = NSApplication.shared
+        let bom = Data([0xEF, 0xBB, 0xBF])
+        let original = "A🧑🏽‍💻B\r\n"
+        let edited = "A🧑🏽‍💻✅\r\n"
+        var document = try RectoDocument(fileContents: bom + Data(original.utf8))
+        let storage = RectoTextStorage(documentId: "bom-emoji-undo", markdown: document.markdown)
+        let host = NSHostingView(rootView: EditorHostView(
+            document: Binding(get: { document }, set: { document = $0 }),
+            storage: storage
+        ))
+        let window = NSWindow(contentViewController: NSViewController())
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        defer { window.close() }
+        host.layoutSubtreeIfNeeded()
+        await drainMainQueue()
+        let textView = try #require(storage.textView.nsTextView)
+        #expect(window.makeFirstResponder(textView))
+        let replacementRange = (original as NSString).range(of: "B")
+
+        textView.insertText("✅", replacementRange: replacementRange)
+        await drainMainQueue()
+
+        let undoManager = try #require(storage.controller.undoManager)
+        #expect(textView.string == edited)
+        #expect(document.encodedData == bom + Data(edited.utf8))
+
+        undoManager.undo()
+
+        #expect(textView.string == original)
+        #expect(document.encodedData == bom + Data(original.utf8))
+
+        undoManager.redo()
+
+        #expect(textView.string == edited)
+        #expect(document.encodedData == bom + Data(edited.utf8))
+    }
+
     @Test("accepted typing dirties the document before immediate teardown")
     func typingSurvivesImmediateTeardown() async throws {
         _ = NSApplication.shared
