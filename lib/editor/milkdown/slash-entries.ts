@@ -16,36 +16,36 @@ import {
 import { insertTableCommand } from "@milkdown/preset-gfm";
 
 export type SlashInsertion =
-	| { kind: "heading"; level: 1 | 2 | 3 }
-	| { kind: "text"; text: string }
+	| { readonly kind: "heading"; readonly level: 1 | 2 | 3 }
+	| { readonly kind: "text"; readonly text: string }
 	| {
-			kind: "wrap";
-			block: "bullet-list" | "ordered-list";
-			inner: "list-item";
+			readonly kind: "wrap";
+			readonly block: "bullet-list" | "ordered-list";
+			readonly inner: "list-item";
 	  }
 	| {
-			kind: "wrap";
-			block: "blockquote";
-			inner: "paragraph";
+			readonly kind: "wrap";
+			readonly block: "blockquote";
+			readonly inner: "paragraph";
 	  }
-	| { kind: "code-block"; language: string }
-	| { kind: "divider" }
-	| { kind: "table"; rows: number; columns: number };
+	| { readonly kind: "code-block"; readonly language: string }
+	| { readonly kind: "divider" }
+	| { readonly kind: "table"; readonly rows: number; readonly columns: number };
 
 export type SlashEntryDefinition = {
-	id: string;
-	label: string;
-	aliases: string[];
-	insertion: SlashInsertion;
+	readonly id: string;
+	readonly label: string;
+	readonly aliases: readonly string[];
+	readonly insertion: SlashInsertion;
 };
 
 export type SlashContract = {
-	clearCurrentBlock: true;
-	entries: SlashEntryDefinition[];
+	readonly clearCurrentBlock: true;
+	readonly entries: readonly SlashEntryDefinition[];
 };
 
 export type SlashEntry = Omit<SlashEntryDefinition, "insertion"> & {
-	run: (ctx: Ctx) => void;
+	readonly run: (ctx: Ctx) => void;
 };
 
 function runSlashInsertion(ctx: Ctx, insertion: SlashInsertion): void {
@@ -108,7 +108,7 @@ function runSlashInsertion(ctx: Ctx, insertion: SlashInsertion): void {
 }
 
 /** 17 authoritative slash entries — blueprint 13-keyboard-commands §5.1. */
-export const SLASH_CONTRACT: SlashContract = {
+const slashContract = {
 	clearCurrentBlock: true,
 	entries: [
 		{
@@ -226,17 +226,28 @@ export const SLASH_CONTRACT: SlashContract = {
 			insertion: { kind: "text", text: "[^1]\n\n[^1]: Footnote text" },
 		},
 	],
-};
+} as const satisfies SlashContract;
 
-export const SLASH_ENTRIES: SlashEntry[] = SLASH_CONTRACT.entries.map(
-	({ insertion, ...entry }) => ({
-		...entry,
-		run: (ctx) => runSlashInsertion(ctx, insertion),
-	}),
+for (const entry of slashContract.entries) {
+	Object.freeze(entry.aliases);
+	Object.freeze(entry.insertion);
+	Object.freeze(entry);
+}
+Object.freeze(slashContract.entries);
+
+export const SLASH_CONTRACT = Object.freeze(slashContract);
+
+export const SLASH_ENTRIES: readonly SlashEntry[] = Object.freeze(
+	SLASH_CONTRACT.entries.map(({ insertion, ...entry }) =>
+		Object.freeze({
+			...entry,
+			run: (ctx: Ctx) => runSlashInsertion(ctx, insertion),
+		}),
+	),
 );
 
 /** Fuzzy filter over label + aliases. */
-export function filterSlashEntries(query: string): SlashEntry[] {
+export function filterSlashEntries(query: string): readonly SlashEntry[] {
 	const q = query.trim().toLowerCase();
 	if (!q) return SLASH_ENTRIES;
 	return SLASH_ENTRIES.filter(
