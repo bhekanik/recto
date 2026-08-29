@@ -351,6 +351,22 @@ async function groupingFixtures() {
 		kind: "flush",
 	});
 
+	// Adjacent input with no idle pause still closes a node after five seconds.
+	// Each gap stays below GROUP_DELAY_MS, so only MAX_GROUP_MS can split it.
+	const continuousBase = "continuous";
+	type(continuousBase, 30, true);
+	for (let index = 1; index <= 12; index++) {
+		type(`${continuousBase}${"x".repeat(index)}`, 499);
+	}
+	now += 10;
+	steps.push({
+		markdown: "",
+		selection: null,
+		structural: false,
+		now,
+		kind: "flush",
+	});
+
 	const commits: GroupingCommit[] = [];
 	let seq = 0;
 	const controller = new GroupingController({
