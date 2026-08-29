@@ -12,7 +12,11 @@ import {
 } from "../_generated/server";
 import { assertNotDeleting, findTombstone } from "../accountGuard";
 import { requireUserId } from "../documents";
-import { decryptCredential, encryptCredential } from "./crypto";
+import {
+	decryptCredential,
+	encryptCredential,
+	importCredentialKey,
+} from "./crypto";
 
 const OPENROUTER_KEY_URL = "https://openrouter.ai/api/v1/key";
 const OPENROUTER_EXCHANGE_URL = "https://openrouter.ai/api/v1/auth/keys";
@@ -60,15 +64,22 @@ function credentialError(code: CredentialErrorCode, message: string): never {
 	throw new ConvexError({ code, message });
 }
 
-function requireEncryptionKey(): string {
-	const key = process.env.AI_CREDENTIAL_KEY;
-	if (!key) {
+async function requireEncryptionKey(): Promise<CryptoKey> {
+	const encodedKey = process.env.AI_CREDENTIAL_KEY;
+	if (!encodedKey) {
 		credentialError(
 			"ai_credentials_unavailable",
 			"AI credential storage is not configured.",
 		);
 	}
-	return key;
+	try {
+		return await importCredentialKey(encodedKey);
+	} catch {
+		credentialError(
+			"ai_credentials_unavailable",
+			"AI credential storage is not configured correctly.",
+		);
+	}
 }
 
 function normalizeApiKey(value: string): string {
@@ -176,8 +187,8 @@ async function commitCredential(
 	userId: string,
 	apiKey: string,
 	generation: number,
+	encryptionKey: CryptoKey,
 ): Promise<CredentialSaveResult> {
-	const encryptionKey = requireEncryptionKey();
 	const encrypted = await encryptCredential(apiKey, encryptionKey);
 	return await ctx.runMutation(internal.ai.credentials.commitEncrypted, {
 		userId,
@@ -216,13 +227,20 @@ export const saveKey = action({
 	args: { apiKey: v.string() },
 	handler: async (ctx, args): Promise<CredentialSaveResult> => {
 		const userId = await requireActionUserId(ctx);
+		const encryptionKey = await requireEncryptionKey();
 		const generation: number = await ctx.runMutation(
 			internal.ai.credentials.claimCredentialIntent,
 			{ userId },
 		);
 		const apiKey = normalizeApiKey(args.apiKey);
 		await validateOpenRouterKey(apiKey);
-		return await commitCredential(ctx, userId, apiKey, generation);
+		return await commitCredential(
+			ctx,
+			userId,
+			apiKey,
+			generation,
+			encryptionKey,
+		);
 	},
 });
 
@@ -240,7 +258,7 @@ export const beginOAuth = action({
 	handler: async (ctx, args) => {
 		const userId = await requireActionUserId(ctx);
 		const callbackUrl = requireAllowedCallback(args.callbackUrl);
-		const encryptionKey = requireEncryptionKey();
+		const encryptionKey = await requireEncryptionKey();
 		const generation: number = await ctx.runMutation(
 			internal.ai.credentials.claimCredentialIntent,
 			{ userId },
@@ -291,6 +309,7 @@ export const exchangeOAuthCode = action({
 		) {
 			credentialError("invalid_argument", "Invalid OpenRouter OAuth response.");
 		}
+		const encryptionKey = await requireEncryptionKey();
 		const session: OAuthSessionConsumeResult = await ctx.runMutation(
 			internal.ai.credentials.consumeOAuthSession,
 			{ userId, stateHash: await sha256(args.state) },
@@ -315,7 +334,7 @@ export const exchangeOAuthCode = action({
 			codeVerifier = await decryptCredential(
 				session.verifierCiphertext,
 				session.verifierIv,
-				requireEncryptionKey(),
+				encryptionKey,
 			);
 		} catch {
 			credentialError(
@@ -383,6 +402,7 @@ export const exchangeOAuthCode = action({
 			userId,
 			normalizeApiKey(key),
 			session.generation,
+			encryptionKey,
 		);
 	},
 });
@@ -592,12 +612,13 @@ export async function resolveCredential(
 				"The saved AI credential uses an unsupported encryption key version.",
 			);
 		}
+		const encryptionKey = await requireEncryptionKey();
 		try {
 			return {
 				apiKey: await decryptCredential(
 					credential.ciphertext,
 					credential.iv,
-					requireEncryptionKey(),
+					encryptionKey,
 				),
 				source: "byok",
 			};

@@ -15,7 +15,9 @@ function decodeBase64(value: string): ArrayBuffer {
 		.buffer;
 }
 
-async function importKey(encodedKey: string): Promise<CryptoKey> {
+export async function importCredentialKey(
+	encodedKey: string,
+): Promise<CryptoKey> {
 	const bytes = decodeBase64(encodedKey);
 	if (bytes.byteLength !== AES_256_BYTES) {
 		throw new Error(INVALID_CREDENTIAL_KEY_MESSAGE);
@@ -31,9 +33,8 @@ async function importKey(encodedKey: string): Promise<CryptoKey> {
 
 export async function encryptCredential(
 	plaintext: string,
-	encodedKey: string,
+	key: CryptoKey,
 ): Promise<{ ciphertext: ArrayBuffer; iv: ArrayBuffer }> {
-	const key = await importKey(encodedKey);
 	const iv = crypto.getRandomValues(new Uint8Array(AES_GCM_IV_BYTES));
 	const ciphertext = await crypto.subtle.encrypt(
 		{ name: "AES-GCM", iv },
@@ -46,12 +47,11 @@ export async function encryptCredential(
 export async function decryptCredential(
 	ciphertext: ArrayBuffer,
 	iv: ArrayBuffer,
-	encodedKey: string,
+	key: CryptoKey,
 ): Promise<string> {
 	if (iv.byteLength !== AES_GCM_IV_BYTES) {
 		throw new Error("Stored AI credential has an invalid IV.");
 	}
-	const key = await importKey(encodedKey);
 	const plaintext = await crypto.subtle.decrypt(
 		{ name: "AES-GCM", iv: new Uint8Array(iv) },
 		key,

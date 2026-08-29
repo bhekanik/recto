@@ -281,6 +281,36 @@ async function seed(t: ReturnType<typeof convexTest>): Promise<Seeded> {
 			version: 1,
 			acceptedAt: now,
 		});
+		await ctx.db.insert("aiCredentials", {
+			userId: OTHER.subject,
+			provider: "openrouter",
+			ciphertext: new Uint8Array([4, 5, 6]).buffer,
+			iv: new Uint8Array(12).buffer,
+			keyVersion: 1,
+			last4: "safe",
+			createdAt: now,
+			updatedAt: now,
+		});
+		await ctx.db.insert("aiOAuthSessions", {
+			userId: OTHER.subject,
+			generation: 1,
+			stateHash: "other-state-hash",
+			verifierCiphertext: new Uint8Array([4, 5, 6]).buffer,
+			verifierIv: new Uint8Array(12).buffer,
+			keyVersion: 1,
+			createdAt: now,
+			expiresAt: now + 60_000,
+		});
+		await ctx.db.insert("aiCredentialIntents", {
+			userId: OTHER.subject,
+			generation: 1,
+			updatedAt: now,
+		});
+		await ctx.db.insert("aiConsents", {
+			userId: OTHER.subject,
+			version: 1,
+			acceptedAt: now,
+		});
 
 		return { documentId, otherDocumentId, acceptedDocumentId };
 	});
@@ -406,15 +436,24 @@ describe("accountPurge.purgeData", () => {
 		expect(counts.documentShares).toBe(0);
 		expect(counts.docChunks).toBe(0);
 		expect(counts.settings).toBe(0);
-		expect(counts.aiConsents).toBe(0);
-		expect(counts.aiCredentials).toBe(0);
-		expect(counts.aiCredentialIntents).toBe(0);
-		expect(counts.aiOAuthSessions).toBe(0);
+		expect(counts.aiConsents).toBe(1);
+		expect(counts.aiCredentials).toBe(1);
+		expect(counts.aiCredentialIntents).toBe(1);
+		expect(counts.aiOAuthSessions).toBe(1);
 		expect(counts.workspaces).toBe(0);
 		expect(counts.writingStats).toBe(1); // the other user's
 
 		const survivor = await t.run((ctx) => ctx.db.get(otherDocumentId));
 		expect(survivor?.markdown).toBe("not yours");
+		const aiSurvivors = await t.run(async (ctx) => ({
+			consents: await ctx.db.query("aiConsents").collect(),
+			credentials: await ctx.db.query("aiCredentials").collect(),
+			intents: await ctx.db.query("aiCredentialIntents").collect(),
+			oauthSessions: await ctx.db.query("aiOAuthSessions").collect(),
+		}));
+		for (const rows of Object.values(aiSurvivors)) {
+			expect(rows.map((row) => row.userId)).toEqual([OTHER.subject]);
+		}
 	});
 
 	it("removes the user's comments and branches on other people's documents", async () => {

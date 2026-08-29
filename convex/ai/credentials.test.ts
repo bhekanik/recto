@@ -360,6 +360,50 @@ describe("OpenRouter credentials", () => {
 		});
 	});
 
+	it.each([
+		{ label: "missing", encodedKey: null },
+		{ label: "malformed", encodedKey: btoa("short") },
+	])("reports ai_credentials_unavailable and retains OAuth state for a $label key", async ({
+		encodedKey,
+	}) => {
+		const fetch = vi.fn(async () => Response.json({}));
+		vi.stubGlobal("fetch", fetch);
+		const t = convexTest(schema, modules);
+		const owner = t.withIdentity(OWNER);
+		await owner.action(api.ai.credentials.saveKey, { apiKey: "saved-secret" });
+		const flow = await owner.action(api.ai.credentials.beginOAuth, {
+			callbackUrl: CALLBACK_URL,
+		});
+		if (encodedKey === null) delete process.env.AI_CREDENTIAL_KEY;
+		else process.env.AI_CREDENTIAL_KEY = encodedKey;
+		const unavailable = {
+			data: { code: "ai_credentials_unavailable" },
+		};
+
+		await expect(
+			owner.action(api.ai.credentials.source, {}),
+		).rejects.toMatchObject(unavailable);
+		await expect(
+			owner.action(api.ai.credentials.saveKey, { apiKey: "new-secret" }),
+		).rejects.toMatchObject(unavailable);
+		await expect(
+			owner.action(api.ai.credentials.beginOAuth, {
+				callbackUrl: CALLBACK_URL,
+			}),
+		).rejects.toMatchObject(unavailable);
+		await expect(
+			owner.action(api.ai.credentials.exchangeOAuthCode, {
+				code: "one-time-code",
+				state: flow.state,
+			}),
+		).rejects.toMatchObject(unavailable);
+
+		expect(fetch).toHaveBeenCalledTimes(1);
+		expect(
+			await t.run((ctx) => ctx.db.query("aiOAuthSessions").collect()),
+		).toHaveLength(1);
+	});
+
 	it("does not let delayed OAuth preparation recreate a removed session", async () => {
 		const t = convexTest(schema, modules);
 		const user = t.withIdentity(OWNER);
