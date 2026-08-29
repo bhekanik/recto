@@ -36,7 +36,7 @@ public final class RectoTextStorage {
     public let documentId: String
 
     /// The newline sequence inserted by native editing and paste operations.
-    public let lineEnding: MarkdownLineEnding
+    public private(set) var lineEnding: MarkdownLineEnding
 
     /// The document, in canonical Markdown.
     ///
@@ -47,6 +47,7 @@ public final class RectoTextStorage {
         didSet {
             guard markdown != oldValue else { return }
             frontmatter = Frontmatter.parse(markdown)
+            lineEnding = MarkdownLineEnding(detecting: markdown)
             reconcileEditor()
         }
     }
