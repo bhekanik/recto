@@ -10,7 +10,10 @@ import {
 	mutation,
 	query,
 } from "../_generated/server";
-import { assertNotDeleting, findTombstone } from "../accountGuard";
+import {
+	ACCOUNT_DELETION_IN_PROGRESS_MESSAGE,
+	findTombstone,
+} from "../accountGuard";
 import { requireUserId } from "../documents";
 import {
 	decryptCredential,
@@ -25,6 +28,7 @@ const MAX_API_KEY_LENGTH = 512;
 const MAX_OAUTH_VALUE_LENGTH = 2048;
 const CREDENTIAL_KEY_VERSION = 1 as const;
 const OAUTH_SESSION_TTL_MS = 10 * 60 * 1000;
+const OPENROUTER_REQUEST_TIMEOUT_MS = 15_000;
 
 export type CredentialSource = "byok" | "house";
 export type ResolvedCredential = { apiKey: string; source: CredentialSource };
@@ -36,7 +40,25 @@ type CredentialSaveResult =
 			updatedAt: number;
 	  }
 	| { saved: false; superseded: true };
+type AccountDeletionOutcome = { ok: false; reason: "account_deletion" };
+type CredentialIntentClaimResult =
+	| AccountDeletionOutcome
+	| { ok: true; generation: number };
+type CredentialCommitResult =
+	| AccountDeletionOutcome
+	| { ok: false; reason: "superseded" }
+	| {
+			ok: true;
+			provider: "openrouter";
+			last4: string;
+			updatedAt: number;
+	  };
+type OAuthSessionStartResult =
+	| AccountDeletionOutcome
+	| { ok: false; reason: "superseded" }
+	| { ok: true };
 type OAuthSessionConsumeResult =
+	| AccountDeletionOutcome
 	| { ok: false; reason: "expired" | "invalid" }
 	| {
 			ok: true;
@@ -62,6 +84,13 @@ type CredentialErrorCode =
 
 function credentialError(code: CredentialErrorCode, message: string): never {
 	throw new ConvexError({ code, message });
+}
+
+function accountDeletionError(): never {
+	credentialError(
+		"account_deletion_in_progress",
+		ACCOUNT_DELETION_IN_PROGRESS_MESSAGE,
+	);
 }
 
 async function requireEncryptionKey(): Promise<CryptoKey> {
@@ -144,6 +173,7 @@ async function validateOpenRouterKey(apiKey: string): Promise<void> {
 	try {
 		response = await fetch(OPENROUTER_KEY_URL, {
 			headers: { Authorization: `Bearer ${apiKey}` },
+			signal: AbortSignal.timeout(OPENROUTER_REQUEST_TIMEOUT_MS),
 		});
 	} catch {
 		credentialError(
@@ -176,7 +206,7 @@ async function requireActionUserId(ctx: ActionCtx): Promise<string> {
 	if (!active) {
 		credentialError(
 			"account_deletion_in_progress",
-			"This account is being deleted; no further changes can be saved.",
+			ACCOUNT_DELETION_IN_PROGRESS_MESSAGE,
 		);
 	}
 	return identity.subject;
@@ -190,15 +220,28 @@ async function commitCredential(
 	encryptionKey: CryptoKey,
 ): Promise<CredentialSaveResult> {
 	const encrypted = await encryptCredential(apiKey, encryptionKey);
-	return await ctx.runMutation(internal.ai.credentials.commitEncrypted, {
-		userId,
-		generation,
-		provider: "openrouter",
-		ciphertext: encrypted.ciphertext,
-		iv: encrypted.iv,
-		keyVersion: CREDENTIAL_KEY_VERSION,
-		last4: apiKey.slice(-4),
-	});
+	const result: CredentialCommitResult = await ctx.runMutation(
+		internal.ai.credentials.commitEncrypted,
+		{
+			userId,
+			generation,
+			provider: "openrouter",
+			ciphertext: encrypted.ciphertext,
+			iv: encrypted.iv,
+			keyVersion: CREDENTIAL_KEY_VERSION,
+			last4: apiKey.slice(-4),
+		},
+	);
+	if (!result.ok) {
+		if (result.reason === "account_deletion") accountDeletionError();
+		return { saved: false, superseded: true };
+	}
+	return {
+		saved: true,
+		provider: result.provider,
+		last4: result.last4,
+		updatedAt: result.updatedAt,
+	};
 }
 
 export const status = query({
@@ -228,17 +271,18 @@ export const saveKey = action({
 	handler: async (ctx, args): Promise<CredentialSaveResult> => {
 		const userId = await requireActionUserId(ctx);
 		const encryptionKey = await requireEncryptionKey();
-		const generation: number = await ctx.runMutation(
+		const claim: CredentialIntentClaimResult = await ctx.runMutation(
 			internal.ai.credentials.claimCredentialIntent,
 			{ userId },
 		);
+		if (!claim.ok) accountDeletionError();
 		const apiKey = normalizeApiKey(args.apiKey);
 		await validateOpenRouterKey(apiKey);
 		return await commitCredential(
 			ctx,
 			userId,
 			apiKey,
-			generation,
+			claim.generation,
 			encryptionKey,
 		);
 	},
@@ -259,10 +303,11 @@ export const beginOAuth = action({
 		const userId = await requireActionUserId(ctx);
 		const callbackUrl = requireAllowedCallback(args.callbackUrl);
 		const encryptionKey = await requireEncryptionKey();
-		const generation: number = await ctx.runMutation(
+		const claim: CredentialIntentClaimResult = await ctx.runMutation(
 			internal.ai.credentials.claimCredentialIntent,
 			{ userId },
 		);
+		if (!claim.ok) accountDeletionError();
 		const state = randomToken();
 		const verifier = randomToken();
 		const [stateHash, codeChallenge, encryptedVerifier] = await Promise.all([
@@ -271,11 +316,11 @@ export const beginOAuth = action({
 			encryptCredential(verifier, encryptionKey),
 		]);
 		const expiresAt = Date.now() + OAUTH_SESSION_TTL_MS;
-		const started: boolean = await ctx.runMutation(
+		const started: OAuthSessionStartResult = await ctx.runMutation(
 			internal.ai.credentials.startOAuthSession,
 			{
 				userId,
-				generation,
+				generation: claim.generation,
 				stateHash,
 				verifierCiphertext: encryptedVerifier.ciphertext,
 				verifierIv: encryptedVerifier.iv,
@@ -283,7 +328,8 @@ export const beginOAuth = action({
 				expiresAt,
 			},
 		);
-		if (!started) {
+		if (!started.ok) {
+			if (started.reason === "account_deletion") accountDeletionError();
 			credentialError(
 				"credential_intent_superseded",
 				"A newer credential change superseded this OpenRouter authorization.",
@@ -315,6 +361,7 @@ export const exchangeOAuthCode = action({
 			{ userId, stateHash: await sha256(args.state) },
 		);
 		if (!session.ok) {
+			if (session.reason === "account_deletion") accountDeletionError();
 			if (session.reason === "expired") {
 				credentialError(
 					"invalid_oauth_session",
@@ -349,6 +396,7 @@ export const exchangeOAuthCode = action({
 			response = await fetch(OPENROUTER_EXCHANGE_URL, {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
+				signal: AbortSignal.timeout(OPENROUTER_REQUEST_TIMEOUT_MS),
 				body: JSON.stringify({
 					code: args.code,
 					code_verifier: codeVerifier,
@@ -397,6 +445,8 @@ export const exchangeOAuthCode = action({
 				"OpenRouter returned an invalid authorization response.",
 			);
 		}
+		// OpenRouter returns only the generated key, not management-key authority.
+		// If deletion fencing rejects this commit, Recto cannot revoke that key.
 		return await commitCredential(
 			ctx,
 			userId,
@@ -451,13 +501,14 @@ export const commitEncrypted = internalMutation({
 		last4: v.string(),
 	},
 	handler: async (ctx, args) => {
-		await assertNotDeleting(ctx, args.userId);
+		const deletion = await accountDeletionOutcome(ctx, args.userId);
+		if (deletion) return deletion;
 		const intent = await ctx.db
 			.query("aiCredentialIntents")
 			.withIndex("by_user", (q) => q.eq("userId", args.userId))
 			.unique();
 		if (intent?.generation !== args.generation) {
-			return { saved: false as const, superseded: true as const };
+			return { ok: false as const, reason: "superseded" as const };
 		}
 		const existing = await ctx.db
 			.query("aiCredentials")
@@ -475,7 +526,7 @@ export const commitEncrypted = internalMutation({
 				updatedAt,
 			});
 			return {
-				saved: true as const,
+				ok: true as const,
 				provider: args.provider,
 				last4: args.last4,
 				updatedAt,
@@ -492,7 +543,7 @@ export const commitEncrypted = internalMutation({
 			updatedAt,
 		});
 		return {
-			saved: true as const,
+			ok: true as const,
 			provider: args.provider,
 			last4: args.last4,
 			updatedAt,
@@ -535,13 +586,23 @@ async function deleteOAuthSessions(
 	for (const session of sessions) await ctx.db.delete(session._id);
 }
 
+async function accountDeletionOutcome(
+	ctx: MutationCtx,
+	userId: string,
+): Promise<AccountDeletionOutcome | null> {
+	return (await findTombstone(ctx, userId)) === null
+		? null
+		: { ok: false, reason: "account_deletion" };
+}
+
 export const claimCredentialIntent = internalMutation({
 	args: { userId: v.string() },
 	handler: async (ctx, args) => {
-		await assertNotDeleting(ctx, args.userId);
+		const deletion = await accountDeletionOutcome(ctx, args.userId);
+		if (deletion) return deletion;
 		const generation = await advanceIntent(ctx, args.userId);
 		await deleteOAuthSessions(ctx, args.userId);
-		return generation;
+		return { ok: true as const, generation };
 	},
 });
 
@@ -556,24 +617,28 @@ export const startOAuthSession = internalMutation({
 		expiresAt: v.number(),
 	},
 	handler: async (ctx, args) => {
-		await assertNotDeleting(ctx, args.userId);
+		const deletion = await accountDeletionOutcome(ctx, args.userId);
+		if (deletion) return deletion;
 		const intent = await ctx.db
 			.query("aiCredentialIntents")
 			.withIndex("by_user", (q) => q.eq("userId", args.userId))
 			.unique();
-		if (intent?.generation !== args.generation) return false;
+		if (intent?.generation !== args.generation) {
+			return { ok: false as const, reason: "superseded" as const };
+		}
 		await ctx.db.insert("aiOAuthSessions", {
 			...args,
 			createdAt: Date.now(),
 		});
-		return true;
+		return { ok: true as const };
 	},
 });
 
 export const consumeOAuthSession = internalMutation({
 	args: { userId: v.string(), stateHash: v.string() },
 	handler: async (ctx, args) => {
-		await assertNotDeleting(ctx, args.userId);
+		const deletion = await accountDeletionOutcome(ctx, args.userId);
+		if (deletion) return deletion;
 		const session = await ctx.db
 			.query("aiOAuthSessions")
 			.withIndex("by_state_hash", (q) => q.eq("stateHash", args.stateHash))

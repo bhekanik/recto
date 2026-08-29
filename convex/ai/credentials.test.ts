@@ -4,6 +4,7 @@ import { api, internal } from "../_generated/api";
 import schema from "../schema";
 import { MAX_SETTINGS_BYTES } from "../settings";
 import { AI_CONSENT_VERSION } from "./consent";
+import { decryptCredential, importCredentialKey } from "./crypto";
 
 const modules = {
 	"./schema.ts": () => import("../schema"),
@@ -33,6 +34,7 @@ beforeEach(() => {
 
 afterEach(() => {
 	vi.unstubAllGlobals();
+	vi.restoreAllMocks();
 	if (originalEncryptionKey === undefined) delete process.env.AI_CREDENTIAL_KEY;
 	else process.env.AI_CREDENTIAL_KEY = originalEncryptionKey;
 	if (originalCallbacks === undefined)
@@ -44,6 +46,18 @@ afterEach(() => {
 	else process.env.AI_UNMETERED_USER_IDS = originalAllowlist;
 });
 
+function pendingUntilAborted() {
+	return vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+		const signal = init?.signal;
+		if (!signal) return Promise.reject(new Error("Expected an abort signal."));
+		return new Promise<Response>((_resolve, reject) => {
+			const abort = () => reject(signal.reason);
+			if (signal.aborted) abort();
+			else signal.addEventListener("abort", abort, { once: true });
+		});
+	});
+}
+
 describe("OpenRouter credentials", () => {
 	it("validates, encrypts and replaces a pasted key", async () => {
 		const fetch = vi.fn(async () => Response.json({ data: { limit: null } }));
@@ -52,24 +66,28 @@ describe("OpenRouter credentials", () => {
 		const owner = t.withIdentity(OWNER);
 
 		const firstResult = await owner.action(api.ai.credentials.saveKey, {
-			apiKey: "sk-or-v1-first-key",
+			apiKey: "sk-or-v1-first-lose",
 		});
 		expect(firstResult).not.toHaveProperty("apiKey");
 		await owner.action(api.ai.credentials.saveKey, {
-			apiKey: "sk-or-v1-second-key",
+			apiKey: "sk-or-v1-second-wins",
 		});
 
 		expect(fetch).toHaveBeenCalledTimes(2);
 		expect(await owner.query(api.ai.credentials.status, {})).toMatchObject({
 			configured: true,
 			provider: "openrouter",
-			last4: "-key",
+			last4: "wins",
 		});
 		const rows = await t.run((ctx) => ctx.db.query("aiCredentials").collect());
 		expect(rows).toHaveLength(1);
 		expect(rows[0]?.keyVersion).toBe(1);
-		expect(new TextDecoder().decode(rows[0]?.ciphertext)).not.toContain(
-			"second-key",
+		const row = rows[0];
+		expect(row).toBeDefined();
+		if (!row) throw new Error("Expected a saved credential.");
+		const encryptionKey = await importCredentialKey(ENCRYPTION_KEY);
+		expect(await decryptCredential(row.ciphertext, row.iv, encryptionKey)).toBe(
+			"sk-or-v1-second-wins",
 		);
 
 		await owner.mutation(api.ai.credentials.remove, {});
@@ -360,6 +378,54 @@ describe("OpenRouter credentials", () => {
 		});
 	});
 
+	it("bounds pasted-key validation with the provider timeout", async () => {
+		const controller = new AbortController();
+		const timeout = vi
+			.spyOn(AbortSignal, "timeout")
+			.mockReturnValue(controller.signal);
+		const fetch = pendingUntilAborted();
+		vi.stubGlobal("fetch", fetch);
+		const t = convexTest(schema, modules);
+		const pending = t
+			.withIdentity(OWNER)
+			.action(api.ai.credentials.saveKey, { apiKey: "pending-secret" });
+		await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+		expect(timeout).toHaveBeenCalledWith(15_000);
+
+		controller.abort(new DOMException("Timed out", "TimeoutError"));
+		await expect(pending).rejects.toMatchObject({
+			data: { code: "ai_provider_unavailable" },
+		});
+	});
+
+	it("bounds OAuth exchange with the provider timeout", async () => {
+		const controller = new AbortController();
+		const timeout = vi
+			.spyOn(AbortSignal, "timeout")
+			.mockReturnValue(controller.signal);
+		const fetch = pendingUntilAborted();
+		vi.stubGlobal("fetch", fetch);
+		const t = convexTest(schema, modules);
+		const owner = t.withIdentity(OWNER);
+		const flow = await owner.action(api.ai.credentials.beginOAuth, {
+			callbackUrl: CALLBACK_URL,
+		});
+		const pending = owner.action(api.ai.credentials.exchangeOAuthCode, {
+			code: "pending-code",
+			state: flow.state,
+		});
+		await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+		expect(timeout).toHaveBeenCalledWith(15_000);
+
+		controller.abort(new DOMException("Timed out", "TimeoutError"));
+		await expect(pending).rejects.toMatchObject({
+			data: { code: "ai_provider_unavailable" },
+		});
+		expect(
+			await t.run((ctx) => ctx.db.query("aiOAuthSessions").collect()),
+		).toHaveLength(0);
+	});
+
 	it.each([
 		{ label: "missing", encodedKey: null },
 		{ label: "malformed", encodedKey: btoa("short") },
@@ -407,23 +473,25 @@ describe("OpenRouter credentials", () => {
 	it("does not let delayed OAuth preparation recreate a removed session", async () => {
 		const t = convexTest(schema, modules);
 		const user = t.withIdentity(OWNER);
-		const generation = await t.mutation(
+		const claim = await t.mutation(
 			internal.ai.credentials.claimCredentialIntent,
 			{ userId: OWNER.subject },
 		);
+		expect(claim.ok).toBe(true);
+		if (!claim.ok) throw new Error("Expected a credential intent.");
 
 		await user.mutation(api.ai.credentials.remove, {});
 		expect(
 			await t.mutation(internal.ai.credentials.startOAuthSession, {
 				userId: OWNER.subject,
-				generation,
+				generation: claim.generation,
 				stateHash: "delayed-state",
 				verifierCiphertext: new Uint8Array([1]).buffer,
 				verifierIv: new Uint8Array(12).buffer,
 				keyVersion: 1,
 				expiresAt: Date.now() + 60_000,
 			}),
-		).toBe(false);
+		).toEqual({ ok: false, reason: "superseded" });
 		expect(
 			await t.run((ctx) => ctx.db.query("aiOAuthSessions").collect()),
 		).toHaveLength(0);
@@ -476,6 +544,87 @@ describe("OpenRouter credentials", () => {
 		expect(await owner.query(api.ai.credentials.status, {})).toEqual({
 			configured: false,
 		});
+	});
+
+	it("returns structured deletion when deletion starts after OAuth issues a key", async () => {
+		const provider = Promise.withResolvers<Response>();
+		const fetch = vi.fn(() => provider.promise);
+		vi.stubGlobal("fetch", fetch);
+		const t = convexTest(schema, modules);
+		const owner = t.withIdentity(OWNER);
+		const flow = await owner.action(api.ai.credentials.beginOAuth, {
+			callbackUrl: CALLBACK_URL,
+		});
+		const exchange = owner.action(api.ai.credentials.exchangeOAuthCode, {
+			code: "in-flight-code",
+			state: flow.state,
+		});
+		await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+		await t.run(async (ctx) => {
+			const now = Date.now();
+			await ctx.db.insert("accountDeletions", {
+				userId: OWNER.subject,
+				startedAt: now,
+				updatedAt: now,
+				phase: "rows",
+			});
+		});
+		provider.resolve(Response.json({ key: "issued-but-not-stored" }));
+
+		await expect(exchange).rejects.toMatchObject({
+			data: { code: "account_deletion_in_progress" },
+		});
+		expect(
+			await t.run((ctx) => ctx.db.query("aiCredentials").collect()),
+		).toHaveLength(0);
+	});
+
+	it("returns typed deletion outcomes from every credential transition", async () => {
+		const t = convexTest(schema, modules);
+		await t.run(async (ctx) => {
+			const now = Date.now();
+			await ctx.db.insert("accountDeletions", {
+				userId: OWNER.subject,
+				startedAt: now,
+				updatedAt: now,
+				phase: "rows",
+			});
+		});
+		const deleted = { ok: false, reason: "account_deletion" };
+
+		expect(
+			await t.mutation(internal.ai.credentials.claimCredentialIntent, {
+				userId: OWNER.subject,
+			}),
+		).toEqual(deleted);
+		expect(
+			await t.mutation(internal.ai.credentials.startOAuthSession, {
+				userId: OWNER.subject,
+				generation: 1,
+				stateHash: "blocked-state",
+				verifierCiphertext: new Uint8Array([1]).buffer,
+				verifierIv: new Uint8Array(12).buffer,
+				keyVersion: 1,
+				expiresAt: Date.now() + 60_000,
+			}),
+		).toEqual(deleted);
+		expect(
+			await t.mutation(internal.ai.credentials.consumeOAuthSession, {
+				userId: OWNER.subject,
+				stateHash: "blocked-state",
+			}),
+		).toEqual(deleted);
+		expect(
+			await t.mutation(internal.ai.credentials.commitEncrypted, {
+				userId: OWNER.subject,
+				generation: 1,
+				provider: "openrouter",
+				ciphertext: new Uint8Array([1]).buffer,
+				iv: new Uint8Array(12).buffer,
+				keyVersion: 1,
+				last4: "nope",
+			}),
+		).toEqual(deleted);
 	});
 
 	it("does not let an older OAuth flow resurrect a removed credential", async () => {
@@ -536,19 +685,26 @@ describe("OpenRouter credentials", () => {
 		const t = convexTest(schema, modules);
 		const owner = t.withIdentity(OWNER);
 		const first = owner.action(api.ai.credentials.saveKey, {
-			apiKey: "first-started",
+			apiKey: "first-lose",
 		});
 		await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
 		await owner.action(api.ai.credentials.saveKey, {
-			apiKey: "second-started",
+			apiKey: "second-wins",
 		});
 		firstValidation.resolve(Response.json({}));
 
 		expect(await first).toEqual({ saved: false, superseded: true });
 		expect(await owner.query(api.ai.credentials.status, {})).toMatchObject({
 			configured: true,
-			last4: "rted",
+			last4: "wins",
 		});
+		const row = await t.run((ctx) => ctx.db.query("aiCredentials").unique());
+		expect(row).not.toBeNull();
+		if (!row) throw new Error("Expected the winning credential.");
+		const encryptionKey = await importCredentialKey(ENCRYPTION_KEY);
+		expect(await decryptCredential(row.ciphertext, row.iv, encryptionKey)).toBe(
+			"second-wins",
+		);
 	});
 
 	it("refuses writes after account deletion starts", async () => {
@@ -571,7 +727,9 @@ describe("OpenRouter credentials", () => {
 			t
 				.withIdentity(OWNER)
 				.action(api.ai.credentials.saveKey, { apiKey: "sk-or-key" }),
-		).rejects.toThrow("This account is being deleted");
+		).rejects.toMatchObject({
+			data: { code: "account_deletion_in_progress" },
+		});
 	});
 });
 
