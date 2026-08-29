@@ -64,6 +64,7 @@ struct GroupingTests {
     }
 
     #expect(produced.count == fixture.commits.count)
+    guard produced.count == fixture.commits.count else { return }
     for (index, expected) in fixture.commits.enumerated() {
       let actual = produced[index]
       let expectedParent = expected.sequence == 1 ? "root" : "n\(expected.sequence - 1)"

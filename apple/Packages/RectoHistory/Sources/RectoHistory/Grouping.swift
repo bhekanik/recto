@@ -3,6 +3,9 @@ import Foundation
 /// ~500 ms time-gap coalescing, matching the web engines' `newGroupDelay` (07 §4).
 public let groupDelayMS: Double = 500
 
+/// Longest a draft may absorb continuous input before it becomes a node.
+public let maxGroupMS: Double = 5_000
+
 /// One committed undo-tree node, ready to persist and advance the pointer.
 public struct GroupCommit: Equatable, Sendable {
   public var nodeId: String
@@ -36,7 +39,8 @@ public struct GroupCommit: Equatable, Sendable {
 /// committed when any of these fire:
 ///   1. a >~500 ms typing pause (idle),
 ///   2. an adjacency break (the edit jumped to a different region),
-///   3. a structural boundary (paste, block change, mode switch).
+///   3. five seconds of continuous input,
+///   4. a structural boundary (paste, block change, mode switch).
 /// Selection-only moves never commit a node.
 ///
 /// Differences from the web version, both deliberate:
@@ -52,6 +56,7 @@ public struct GroupingController: Sendable {
   private var draftSelection: NodeSelection?
   private var lastChangeAt: Double = 0
   private var lastChangeEnd: Int = -1
+  private var draftStartedAt: Double = -1
   private var depthSinceSnapshot: Int
   private let mintNodeId: @Sendable () -> String
 
@@ -101,6 +106,7 @@ public struct GroupingController: Sendable {
     draftSelection = selection
     lastChangeAt = now
     lastChangeEnd = -1
+    draftStartedAt = now
   }
 
   /// The caret stored with the pending draft, for the editor to restore.
@@ -116,6 +122,7 @@ public struct GroupingController: Sendable {
     draftSelection = nil
     lastChangeAt = 0
     lastChangeEnd = -1
+    draftStartedAt = -1
     self.depthSinceSnapshot = depthSinceSnapshot
   }
 
@@ -141,12 +148,15 @@ public struct GroupingController: Sendable {
     let adjacencyBreak =
       lastChangeEnd >= 0 && draftMarkdown != parentMarkdown
       && abs(incremental.from - lastChangeEnd) > 1
-    let boundaryBefore = gap > groupDelayMS || adjacencyBreak || structural
+    let draftAge = draftStartedAt >= 0 ? now - draftStartedAt : 0
+    let boundaryBefore =
+      gap > groupDelayMS || adjacencyBreak || draftAge > maxGroupMS || structural
 
     if boundaryBefore, draftMarkdown != parentMarkdown, let commit = commitDraft() {
       commits.append(commit)
     }
 
+    if draftMarkdown == parentMarkdown { draftStartedAt = now }
     draftMarkdown = next
     draftSelection = selection
     lastChangeAt = now
@@ -189,6 +199,7 @@ public struct GroupingController: Sendable {
     parentNodeId = commit.nodeId
     parentMarkdown = draftMarkdown
     lastChangeEnd = -1
+    draftStartedAt = -1
     return commit
   }
 }
