@@ -107,6 +107,13 @@ export default defineSchema({
 		updatedAt: v.number(),
 	}).index("by_user", ["userId"]),
 
+	// Consent is server-owned. Synced settings are opaque and client-writable.
+	aiConsents: defineTable({
+		userId: v.string(),
+		version: v.number(),
+		acceptedAt: v.number(),
+	}).index("by_user", ["userId"]),
+
 	aiCredentials: defineTable({
 		userId: v.string(),
 		provider: v.literal("openrouter"),

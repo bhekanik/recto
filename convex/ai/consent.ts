@@ -2,6 +2,7 @@ import type { GenericQueryCtx } from "convex/server";
 import { v } from "convex/values";
 import type { DataModel } from "../_generated/dataModel";
 import { internalQuery, mutation, query } from "../_generated/server";
+import { assertNotDeleting } from "../accountGuard";
 import { requireUserId, utf8Length } from "../documents";
 import { MAX_SETTINGS_BYTES, SETTINGS_TOO_LARGE_MESSAGE } from "../settings";
 
@@ -21,27 +22,17 @@ function parseSettings(json: string | undefined): Record<string, unknown> {
 	}
 }
 
-function readConsent(value: unknown): AiConsent | null {
-	if (value === null || typeof value !== "object") return null;
-	const version = "version" in value ? value.version : undefined;
-	const acceptedAt = "acceptedAt" in value ? value.acceptedAt : undefined;
-	return typeof version === "number" &&
-		Number.isInteger(version) &&
-		typeof acceptedAt === "number" &&
-		Number.isFinite(acceptedAt)
-		? { version, acceptedAt }
-		: null;
-}
-
 async function consentForUser(
 	ctx: GenericQueryCtx<DataModel>,
 	userId: string,
 ): Promise<AiConsent | null> {
+	// Never infer consent from settings.json. Older dev rows can contain an
+	// aiConsent key, but settings are client-writable and therefore untrusted.
 	const row = await ctx.db
-		.query("settings")
+		.query("aiConsents")
 		.withIndex("by_user", (q) => q.eq("userId", userId))
 		.unique();
-	return readConsent(parseSettings(row?.json).aiConsent);
+	return row ? { version: row.version, acceptedAt: row.acceptedAt } : null;
 }
 
 export const get = query({
@@ -66,31 +57,25 @@ export const accept = mutation({
 	args: { version: v.number() },
 	handler: async (ctx, args) => {
 		const userId = await requireUserId(ctx);
+		await assertNotDeleting(ctx, userId);
 		if (args.version !== AI_CONSENT_VERSION) {
 			throw new Error("AI consent version is out of date.");
 		}
-		const row = await ctx.db
-			.query("settings")
+		const existing = await ctx.db
+			.query("aiConsents")
 			.withIndex("by_user", (q) => q.eq("userId", userId))
 			.unique();
-		const settings = parseSettings(row?.json);
-		const acceptedAt = Date.now();
-		settings.aiConsent = { version: args.version, acceptedAt };
-		const json = JSON.stringify(settings);
-		if (utf8Length(json) > MAX_SETTINGS_BYTES) {
-			throw new Error(SETTINGS_TOO_LARGE_MESSAGE);
-		}
-		const updatedAt = Math.max(acceptedAt, (row?.updatedAt ?? 0) + 1);
-		if (row) {
-			await ctx.db.patch(row._id, {
-				json,
-				updatedAt,
+		const acceptedAt = Math.max(Date.now(), (existing?.acceptedAt ?? 0) + 1);
+		if (existing) {
+			await ctx.db.patch(existing._id, {
+				version: args.version,
+				acceptedAt,
 			});
 		} else {
-			await ctx.db.insert("settings", {
+			await ctx.db.insert("aiConsents", {
 				userId,
-				json,
-				updatedAt,
+				version: args.version,
+				acceptedAt,
 			});
 		}
 		return { version: args.version, acceptedAt };
@@ -101,16 +86,27 @@ export const revoke = mutation({
 	args: {},
 	handler: async (ctx) => {
 		const userId = await requireUserId(ctx);
+		await assertNotDeleting(ctx, userId);
+		const consent = await ctx.db
+			.query("aiConsents")
+			.withIndex("by_user", (q) => q.eq("userId", userId))
+			.unique();
+		if (consent) await ctx.db.delete(consent._id);
 		const row = await ctx.db
 			.query("settings")
 			.withIndex("by_user", (q) => q.eq("userId", userId))
 			.unique();
 		if (!row) return;
 		const settings = parseSettings(row.json);
+		if (
+			!Object.hasOwn(settings, "aiConsent") &&
+			!Object.hasOwn(settings, "aiEnabled")
+		) {
+			return;
+		}
 		delete settings.aiConsent;
 		delete settings.aiEnabled;
 		const json = JSON.stringify(settings);
-		if (json === row.json) return;
 		if (utf8Length(json) > MAX_SETTINGS_BYTES) {
 			throw new Error(SETTINGS_TOO_LARGE_MESSAGE);
 		}

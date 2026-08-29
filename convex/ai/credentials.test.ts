@@ -12,6 +12,7 @@ const modules = {
 	"./ai/crypto.ts": () => import("./crypto"),
 	"./accountGuard.ts": () => import("../accountGuard"),
 	"./documents.ts": () => import("../documents"),
+	"./settings.ts": () => import("../settings"),
 	"./_generated/api.js": () => import("../_generated/api"),
 	"./_generated/server.js": () => import("../_generated/server"),
 } satisfies Record<string, () => Promise<unknown>>;
@@ -143,10 +144,10 @@ describe("OpenRouter credentials", () => {
 	});
 
 	it("exchanges an S256 PKCE code and stores only the encrypted key", async () => {
-		const fetch = vi
-			.fn()
-			.mockResolvedValueOnce(Response.json({ key: "sk-or-v1-oauth-key" }))
-			.mockResolvedValueOnce(Response.json({ data: { limit: null } }));
+		const fetch = vi.fn(
+			async (_input: RequestInfo | URL, _init?: RequestInit) =>
+				Response.json({ key: "sk-or-v1-oauth-key" }),
+		);
 		vi.stubGlobal("fetch", fetch);
 		const t = convexTest(schema, modules);
 		const owner = t.withIdentity(OWNER);
@@ -172,10 +173,9 @@ describe("OpenRouter credentials", () => {
 			state: flow.state,
 		});
 
-		// SAFETY: this call is made by the tested action with a RequestInit body.
-		const exchangeInit = fetch.mock.calls[0]?.[1] as RequestInit;
+		const exchangeInit = fetch.mock.calls[0]?.[1];
 		// SAFETY: the action serializes this fixed OpenRouter request contract.
-		const exchangeBody = JSON.parse(String(exchangeInit.body)) as {
+		const exchangeBody = JSON.parse(String(exchangeInit?.body)) as {
 			code: string;
 			code_verifier: string;
 			code_challenge_method: string;
@@ -200,13 +200,11 @@ describe("OpenRouter credentials", () => {
 		expect(encodedChallenge).toBe(
 			authorizeUrl.searchParams.get("code_challenge"),
 		);
-		expect(fetch).toHaveBeenNthCalledWith(
-			2,
-			"https://openrouter.ai/api/v1/key",
-			expect.objectContaining({
-				headers: { Authorization: "Bearer sk-or-v1-oauth-key" },
-			}),
-		);
+		expect(fetch).toHaveBeenCalledTimes(1);
+		expect(await owner.query(api.ai.credentials.status, {})).toMatchObject({
+			configured: true,
+			last4: "-key",
+		});
 	});
 
 	it("consumes an OAuth state before exchange to prevent replay", async () => {
@@ -231,7 +229,7 @@ describe("OpenRouter credentials", () => {
 				state: flow.state,
 			}),
 		).toEqual({ saved: false, superseded: true });
-		expect(fetch).toHaveBeenCalledTimes(2);
+		expect(fetch).toHaveBeenCalledTimes(1);
 		expect(
 			await t.run((ctx) => ctx.db.query("aiOAuthSessions").collect()),
 		).toHaveLength(0);
@@ -534,12 +532,13 @@ describe("OpenRouter credentials", () => {
 });
 
 describe("AI consent", () => {
-	it("merges versioned consent into synced settings", async () => {
+	it("stores consent outside client-writable settings", async () => {
 		const t = convexTest(schema, modules);
+		const json = JSON.stringify({ theme: "twilight", futureSetting: 42 });
 		await t.run(async (ctx) => {
 			await ctx.db.insert("settings", {
 				userId: OWNER.subject,
-				json: JSON.stringify({ theme: "twilight", futureSetting: 42 }),
+				json,
 				updatedAt: 1,
 			});
 		});
@@ -553,10 +552,33 @@ describe("AI consent", () => {
 			acceptedAt: accepted.acceptedAt,
 		});
 		const row = await t.run((ctx) => ctx.db.query("settings").unique());
-		expect(JSON.parse(row?.json ?? "{}")).toEqual({
-			theme: "twilight",
-			futureSetting: 42,
-			aiConsent: accepted,
+		expect(row?.json).toBe(json);
+		expect(
+			await t.run((ctx) => ctx.db.query("aiConsents").unique()),
+		).toMatchObject(accepted);
+	});
+
+	it("ignores forged and replayed consent in synced settings", async () => {
+		const t = convexTest(schema, modules);
+		const owner = t.withIdentity(OWNER);
+		const forged = JSON.stringify({
+			aiEnabled: true,
+			aiConsent: { version: AI_CONSENT_VERSION, acceptedAt: 12_345 },
+		});
+
+		await owner.mutation(api.settings.save, { json: forged });
+		expect(await owner.query(api.ai.consent.get, {})).toEqual({
+			version: AI_CONSENT_VERSION,
+			acceptedAt: null,
+		});
+		await owner.mutation(api.ai.consent.accept, {
+			version: AI_CONSENT_VERSION,
+		});
+		await owner.mutation(api.ai.consent.revoke, {});
+		await owner.mutation(api.settings.save, { json: forged });
+		expect(await owner.query(api.ai.consent.get, {})).toEqual({
+			version: AI_CONSENT_VERSION,
+			acceptedAt: null,
 		});
 	});
 
@@ -578,20 +600,34 @@ describe("AI consent", () => {
 	it("revokes consent and disables AI without dropping other settings", async () => {
 		const t = convexTest(schema, modules);
 		const owner = t.withIdentity(OWNER);
+		await owner.mutation(api.settings.save, {
+			json: JSON.stringify({
+				theme: "twilight",
+				futureSetting: 42,
+				aiEnabled: true,
+				aiConsent: { version: 1, acceptedAt: 1 },
+			}),
+		});
 		await owner.mutation(api.ai.consent.accept, {
 			version: AI_CONSENT_VERSION,
 		});
 		await owner.mutation(api.ai.consent.revoke, {});
 
 		const row = await t.run((ctx) => ctx.db.query("settings").unique());
-		expect(JSON.parse(row?.json ?? "{}")).toEqual({});
+		expect(JSON.parse(row?.json ?? "{}")).toEqual({
+			theme: "twilight",
+			futureSetting: 42,
+		});
+		expect(await t.run((ctx) => ctx.db.query("aiConsents").collect())).toEqual(
+			[],
+		);
 		expect(await owner.query(api.ai.consent.get, {})).toEqual({
 			version: AI_CONSENT_VERSION,
 			acceptedAt: null,
 		});
 	});
 
-	it("does not grow settings beyond the 64 KiB ceiling on revoke", async () => {
+	it("accepts and revokes consent with a 64 KiB settings blob", async () => {
 		const t = convexTest(schema, modules);
 		const json = JSON.stringify({
 			filler: "x".repeat(MAX_SETTINGS_BYTES - 13),
@@ -605,10 +641,19 @@ describe("AI consent", () => {
 			});
 		});
 
-		await t.withIdentity(OWNER).mutation(api.ai.consent.revoke, {});
+		const owner = t.withIdentity(OWNER);
+		const accepted = await owner.mutation(api.ai.consent.accept, {
+			version: AI_CONSENT_VERSION,
+		});
+		expect(accepted.version).toBe(AI_CONSENT_VERSION);
+		await owner.mutation(api.ai.consent.revoke, {});
 		const row = await t.run((ctx) => ctx.db.query("settings").unique());
 		expect(new TextEncoder().encode(row?.json ?? "")).toHaveLength(
 			MAX_SETTINGS_BYTES,
 		);
+		expect(await owner.query(api.ai.consent.get, {})).toEqual({
+			version: AI_CONSENT_VERSION,
+			acceptedAt: null,
+		});
 	});
 });

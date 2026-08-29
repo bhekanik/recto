@@ -276,6 +276,11 @@ async function seed(t: ReturnType<typeof convexTest>): Promise<Seeded> {
 			generation: 1,
 			updatedAt: now,
 		});
+		await ctx.db.insert("aiConsents", {
+			userId: OWNER.subject,
+			version: 1,
+			acceptedAt: now,
+		});
 
 		return { documentId, otherDocumentId, acceptedDocumentId };
 	});
@@ -347,6 +352,7 @@ async function countAll(t: ReturnType<typeof convexTest>) {
 		writingStats: (await ctx.db.query("writingStats").collect()).length,
 		workspaces: (await ctx.db.query("workspaces").collect()).length,
 		settings: (await ctx.db.query("settings").collect()).length,
+		aiConsents: (await ctx.db.query("aiConsents").collect()).length,
 		aiCredentials: (await ctx.db.query("aiCredentials").collect()).length,
 		aiCredentialIntents: (await ctx.db.query("aiCredentialIntents").collect())
 			.length,
@@ -400,6 +406,7 @@ describe("accountPurge.purgeData", () => {
 		expect(counts.documentShares).toBe(0);
 		expect(counts.docChunks).toBe(0);
 		expect(counts.settings).toBe(0);
+		expect(counts.aiConsents).toBe(0);
 		expect(counts.aiCredentials).toBe(0);
 		expect(counts.aiCredentialIntents).toBe(0);
 		expect(counts.aiOAuthSessions).toBe(0);

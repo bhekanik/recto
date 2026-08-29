@@ -171,14 +171,13 @@ async function requireActionUserId(ctx: ActionCtx): Promise<string> {
 	return identity.subject;
 }
 
-async function storeCredential(
+async function commitCredential(
 	ctx: ActionCtx,
 	userId: string,
 	apiKey: string,
 	generation: number,
 ): Promise<CredentialSaveResult> {
 	const encryptionKey = requireEncryptionKey();
-	await validateOpenRouterKey(apiKey);
 	const encrypted = await encryptCredential(apiKey, encryptionKey);
 	return await ctx.runMutation(internal.ai.credentials.commitEncrypted, {
 		userId,
@@ -221,12 +220,9 @@ export const saveKey = action({
 			internal.ai.credentials.claimCredentialIntent,
 			{ userId },
 		);
-		return await storeCredential(
-			ctx,
-			userId,
-			normalizeApiKey(args.apiKey),
-			generation,
-		);
+		const apiKey = normalizeApiKey(args.apiKey);
+		await validateOpenRouterKey(apiKey);
+		return await commitCredential(ctx, userId, apiKey, generation);
 	},
 });
 
@@ -382,7 +378,7 @@ export const exchangeOAuthCode = action({
 				"OpenRouter returned an invalid authorization response.",
 			);
 		}
-		return await storeCredential(
+		return await commitCredential(
 			ctx,
 			userId,
 			normalizeApiKey(key),
