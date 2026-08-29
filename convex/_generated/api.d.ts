@@ -11,6 +11,9 @@
 import type * as account from "../account.js";
 import type * as accountGuard from "../accountGuard.js";
 import type * as accountPurge from "../accountPurge.js";
+import type * as ai_consent from "../ai/consent.js";
+import type * as ai_credentials from "../ai/credentials.js";
+import type * as ai_crypto from "../ai/crypto.js";
 import type * as ai_langsmithSmoke from "../ai/langsmithSmoke.js";
 import type * as blobReferences from "../blobReferences.js";
 import type * as crons from "../crons.js";
@@ -40,6 +43,9 @@ declare const fullApi: ApiFromModules<{
   account: typeof account;
   accountGuard: typeof accountGuard;
   accountPurge: typeof accountPurge;
+  "ai/consent": typeof ai_consent;
+  "ai/credentials": typeof ai_credentials;
+  "ai/crypto": typeof ai_crypto;
   "ai/langsmithSmoke": typeof ai_langsmithSmoke;
   blobReferences: typeof blobReferences;
   crons: typeof crons;

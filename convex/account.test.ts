@@ -251,6 +251,25 @@ async function seed(t: ReturnType<typeof convexTest>): Promise<Seeded> {
 			json: '{"theme":"aurora"}',
 			updatedAt: now,
 		});
+		await ctx.db.insert("aiCredentials", {
+			userId: OWNER.subject,
+			provider: "openrouter",
+			ciphertext: new Uint8Array([1, 2, 3]).buffer,
+			iv: new Uint8Array(12).buffer,
+			keyVersion: 1,
+			last4: "test",
+			createdAt: now,
+			updatedAt: now,
+		});
+		await ctx.db.insert("aiOAuthSessions", {
+			userId: OWNER.subject,
+			stateHash: "state-hash",
+			verifierCiphertext: new Uint8Array([1, 2, 3]).buffer,
+			verifierIv: new Uint8Array(12).buffer,
+			keyVersion: 1,
+			createdAt: now,
+			expiresAt: now + 60_000,
+		});
 
 		return { documentId, otherDocumentId, acceptedDocumentId };
 	});
@@ -322,6 +341,8 @@ async function countAll(t: ReturnType<typeof convexTest>) {
 		writingStats: (await ctx.db.query("writingStats").collect()).length,
 		workspaces: (await ctx.db.query("workspaces").collect()).length,
 		settings: (await ctx.db.query("settings").collect()).length,
+		aiCredentials: (await ctx.db.query("aiCredentials").collect()).length,
+		aiOAuthSessions: (await ctx.db.query("aiOAuthSessions").collect()).length,
 		blobs: (await ctx.db.query("blobs").collect()).length,
 		blobRefs: (await ctx.db.query("blobRefs").collect()).length,
 		blobRefSources: (await ctx.db.query("blobRefSources").collect()).length,
@@ -371,6 +392,8 @@ describe("accountPurge.purgeData", () => {
 		expect(counts.documentShares).toBe(0);
 		expect(counts.docChunks).toBe(0);
 		expect(counts.settings).toBe(0);
+		expect(counts.aiCredentials).toBe(0);
+		expect(counts.aiOAuthSessions).toBe(0);
 		expect(counts.workspaces).toBe(0);
 		expect(counts.writingStats).toBe(1); // the other user's
 

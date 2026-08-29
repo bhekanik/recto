@@ -107,6 +107,31 @@ export default defineSchema({
 		updatedAt: v.number(),
 	}).index("by_user", ["userId"]),
 
+	aiCredentials: defineTable({
+		userId: v.string(),
+		provider: v.literal("openrouter"),
+		ciphertext: v.bytes(),
+		iv: v.bytes(),
+		keyVersion: v.literal(1),
+		last4: v.string(),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+	})
+		.index("by_user", ["userId"])
+		.index("by_user_provider", ["userId", "provider"]),
+
+	aiOAuthSessions: defineTable({
+		userId: v.string(),
+		stateHash: v.string(),
+		verifierCiphertext: v.bytes(),
+		verifierIv: v.bytes(),
+		keyVersion: v.literal(1),
+		createdAt: v.number(),
+		expiresAt: v.number(),
+	})
+		.index("by_user", ["userId"])
+		.index("by_state_hash", ["stateHash"]),
+
 	// Append-only branching undo-tree DAG; nodes are immutable (blueprint 03 §2, 07).
 	docNodes: defineTable({
 		documentId: v.id("documents"),
