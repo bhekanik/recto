@@ -11,6 +11,7 @@ import { writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { visit } from "unist-util-visit";
+import { SLASH_CONTRACT } from "@/lib/editor/milkdown/slash-entries";
 import { applyAcceptedHunks, diffRuns, groupHunks } from "@/lib/history/diff";
 import {
 	type DocNode,
@@ -284,6 +285,15 @@ function buildStreak() {
 	};
 }
 
+function buildSlashEntries() {
+	return {
+		$source: "lib/editor/milkdown/slash-entries.ts",
+		$contract:
+			"ordered slash menu entries and the insertion operation each entry runs",
+		...SLASH_CONTRACT,
+	};
+}
+
 /** Every fixture file, keyed by filename — the generator's whole output. */
 export function generateFixtures() {
 	return {
@@ -293,6 +303,7 @@ export function generateFixtures() {
 		"history-patches.json": buildHistoryPatches(),
 		"diff-runs.json": buildDiffRuns(),
 		"streak.json": buildStreak(),
+		"slash-entries.json": buildSlashEntries(),
 	};
 }
 

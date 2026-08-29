@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-
+import { SLASH_CONTRACT } from "@/lib/editor/milkdown/slash-entries";
 import {
 	applyAcceptedHunks,
 	type DiffGranularity,
@@ -33,6 +33,7 @@ import diffFixture from "./diff-runs.json";
 import historyFixture from "./history-patches.json";
 import corpus from "./markdown-corpus.json";
 import outlineFixture from "./outline.json";
+import slashEntriesFixture from "./slash-entries.json";
 import streakFixture from "./streak.json";
 import wordCountFixture from "./word-count.json";
 
@@ -127,6 +128,17 @@ describe("streak.json", () => {
 			);
 		});
 	}
+});
+
+describe("slash-entries.json", () => {
+	it("pins the authoritative ordered definitions", () => {
+		expect(slashEntriesFixture.entries).toHaveLength(17);
+		expect(
+			new Set(slashEntriesFixture.entries.map((entry) => entry.id)).size,
+		).toBe(17);
+		expect(slashEntriesFixture.clearCurrentBlock).toBe(true);
+		expect(slashEntriesFixture.entries).toEqual(SLASH_CONTRACT.entries);
+	});
 });
 
 describe("history-patches.json", () => {
