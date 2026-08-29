@@ -91,6 +91,7 @@ struct EditorHostViewTests {
         await drainMainQueue()
 
         let undoManager = try #require(storage.controller.undoManager)
+        #expect(undoManager.levelsOfUndo == 100)
         #expect(!textView.allowsUndo)
         #expect(textView.delegate?.undoManager?(for: textView) === undoManager)
         #expect(undoManager.canUndo)

@@ -58,6 +58,9 @@ struct EditorHostView: View {
 
 @MainActor
 private final class DocumentUndoHistory: ObservableObject {
+    // Bound V1's full-string snapshots until model history replaces this owner.
+    private static let snapshotLimit = 100
+
     let undoManager = UndoManager()
 
     private let storage: RectoTextStorage
@@ -66,6 +69,7 @@ private final class DocumentUndoHistory: ObservableObject {
 
     init(document: Binding<RectoDocument>, storage: RectoTextStorage) {
         self.storage = storage
+        undoManager.levelsOfUndo = Self.snapshotLimit
         currentMarkdown = document.wrappedValue.markdown
         writeDocument = { markdown in
             guard document.wrappedValue.markdown != markdown else { return }
