@@ -153,4 +153,34 @@ struct FindControllerTests {
 
         #expect(mounted.storage.controller.textFinderActionResponder == nil)
     }
+
+    @Test("a 10k-word document reports only its TextKit 2 viewport")
+    func visibleRangesUseViewport() throws {
+        let markdown = (0..<2_000)
+            .map { "## Line \($0): alpha bravo charlie delta" }
+            .joined(separator: "\n") + "\n"
+        let mounted = try mount(markdown: markdown)
+        defer { mounted.harness.tearDown() }
+        var compatibilitySwitches = 0
+        let observer = NotificationCenter.default.addObserver(
+            forName: NSTextView.willSwitchToNSLayoutManagerNotification,
+            object: mounted.textView,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated { compatibilitySwitches += 1 }
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        let target = (mounted.controller.string as NSString).range(of: "Line 1000:")
+
+        mounted.controller.scrollRangeToVisible(target)
+        mounted.harness.layout(passes: 3)
+
+        let visibleRange = try #require(
+            mounted.controller.visibleCharacterRanges.first?.rangeValue
+        )
+        #expect(visibleRange.location > 0)
+        #expect(NSMaxRange(visibleRange) < mounted.controller.string.utf16.count)
+        #expect(NSLocationInRange(target.location, visibleRange))
+        #expect(compatibilitySwitches == 0)
+    }
 }

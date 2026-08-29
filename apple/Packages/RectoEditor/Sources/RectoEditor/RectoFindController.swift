@@ -166,6 +166,23 @@ extension RectoFindController: NSTextFinderClient {
     }
 
     public var visibleCharacterRanges: [NSValue] {
-        [NSValue(range: NSRange(location: 0, length: projection.visibleUTF16Length))]
+        guard let layoutManager = seam?.textLayoutManager,
+              let viewport = layoutManager.textViewportLayoutController.viewportRange
+        else { return [] }
+        let sourceStart = layoutManager.offset(
+            from: layoutManager.documentRange.location,
+            to: viewport.location
+        )
+        let sourceLength = layoutManager.offset(
+            from: viewport.location,
+            to: viewport.endLocation
+        )
+        guard sourceStart != NSNotFound, sourceLength != NSNotFound,
+              let visibleRange = projection.visibleRange(for: NSRange(
+                  location: sourceStart,
+                  length: sourceLength
+              ))
+        else { return [] }
+        return [NSValue(range: visibleRange)]
     }
 }
