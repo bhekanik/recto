@@ -71,8 +71,9 @@ public struct RectoEditorView: View {
                 // the undo tree and the sync outbox want come separately,
                 // through onTextMutation.
                 set: { markdown in
-                    storage.editorDidWriteBack(markdown)
-                    onTextChange?(storage.markdown)
+                    if storage.editorDidWriteBack(markdown) {
+                        onTextChange?(storage.markdown)
+                    }
                 }
             ),
             configuration: styler.engineConfiguration(),
@@ -82,20 +83,24 @@ public struct RectoEditorView: View {
             documentId: storage.documentId,
             isEditable: styler.presentation.isEditable,
             onAttachmentChange: attachmentObserver,
-            onTextMutation: { storage.editorDidMutate($0) },
+            onTextMutation: { mutation in
+                if storage.editorDidMutate(mutation) {
+                    onTextChange?(storage.markdown)
+                }
+            },
             placeholder: placeholderText
         )
     }
 
-    private var attachmentObserver: ((NSTextView?) -> Void)? {
-        guard let onAttach else { return nil }
+    private var attachmentObserver: (NSTextView?) -> Void {
         let controller = storage.controller
         return { [weak controller] textView in
+            storage.observeAcceptedChanges(in: textView, onTextChange: onTextChange)
             guard let controller, textView != nil else {
-                onAttach(nil)
+                onAttach?(nil)
                 return
             }
-            onAttach(RectoTextView(controller: controller))
+            onAttach?(RectoTextView(controller: controller))
         }
     }
 
