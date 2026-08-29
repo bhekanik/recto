@@ -13,6 +13,10 @@ cd apple/RectoApp
 xcodegen generate
 ```
 
+The `AppIcon` asset catalog packages the folded-leg R. Its default artwork and
+the three reserved appearance variants live under `Brand/AppIcon`; see that
+directory's README for provenance and hashes.
+
 Run the unsigned local gates from the repository root:
 
 ```sh
@@ -45,4 +49,4 @@ The target uses bundle ID `com.bhekani.recto`, team `WAVMJLFY95`, automatic
 signing, hardened runtime and App Sandbox. Unsigned builds override signing on
 the command line. A TestFlight archive still needs an Apple Distribution
 certificate, a Mac App Store provisioning profile, an App Store Connect app
-record, an app icon and the later N6/N7 product work.
+record and the later N6/N7 product work.

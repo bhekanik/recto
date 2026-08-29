@@ -6,6 +6,9 @@ options:
   createIntermediateGroups: true
   groupSortPosition: top
 
+fileGroups:
+  - Brand
+
 packages:
   RectoEditor:
     path: ../Packages/RectoEditor
@@ -25,6 +28,8 @@ targets:
     platform: macOS
     sources:
       - path: Sources
+      - path: Resources/Assets.xcassets
+        buildPhase: resources
     dependencies:
       - package: RectoEditor
     entitlements:

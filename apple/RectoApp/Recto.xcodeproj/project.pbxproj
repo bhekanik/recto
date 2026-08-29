@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		50B65633ED8E88066BE2DDC4 /* EditorHostViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3043896BC9224FA46A887898 /* EditorHostViewTests.swift */; };
+		6A5B57E8A148C2E7E5EDB9E4 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 8C12F711F47CBD7B108CC4FE /* Assets.xcassets */; };
 		7576DBE4CEA3C712E79E6C84 /* EditorHostView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BEA2AD7F2D906737F82E9F6 /* EditorHostView.swift */; };
 		84424EF9E12A3D7DE5AD6CA2 /* RectoEditor in Frameworks */ = {isa = PBXBuildFile; productRef = A060C6A5E130E049277D314E /* RectoEditor */; };
 		B7C17D95A863AF017CBF8C22 /* RectoApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E4F2E4947A1F0496BA12943 /* RectoApp.swift */; };
@@ -24,12 +25,19 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		1624C1F53E5C33BDBF21C699 /* r-dark-accent.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "r-dark-accent.png"; sourceTree = "<group>"; };
 		2E4F2E4947A1F0496BA12943 /* RectoApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RectoApp.swift; sourceTree = "<group>"; };
 		3043896BC9224FA46A887898 /* EditorHostViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorHostViewTests.swift; sourceTree = "<group>"; };
+		341717FE9FB8EA699E110104 /* r-dark-paper.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "r-dark-paper.png"; sourceTree = "<group>"; };
 		4BEA2AD7F2D906737F82E9F6 /* EditorHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorHostView.swift; sourceTree = "<group>"; };
 		4CE28505252B3B9A09DBBDA7 /* Recto.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Recto.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		65710FD2CFB1ED4E06D82FE9 /* r-mono.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "r-mono.png"; sourceTree = "<group>"; };
 		76CCA8C9943CBC9CB2C0C048 /* RectoEditor */ = {isa = PBXFileReference; lastKnownFileType = folder; name = RectoEditor; path = ../Packages/RectoEditor; sourceTree = SOURCE_ROOT; };
+		8A3A4FA9095CC62A6709B391 /* r-light.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "r-light.png"; sourceTree = "<group>"; };
+		8C12F711F47CBD7B108CC4FE /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		93B05EF44F4CD5DAC0FC14AE /* RectoTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RectoTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		9BC4145FD50C0B2E0D076716 /* SHA256SUMS */ = {isa = PBXFileReference; path = SHA256SUMS; sourceTree = "<group>"; };
+		FC238A1AE201F838C026FB1E /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -52,6 +60,27 @@
 			name = Packages;
 			sourceTree = "<group>";
 		};
+		2709C896A5D8D71B66961D50 /* AppIcon */ = {
+			isa = PBXGroup;
+			children = (
+				30D1CE06319E6FC8849C5D3A /* Sources */,
+				FC238A1AE201F838C026FB1E /* README.md */,
+				9BC4145FD50C0B2E0D076716 /* SHA256SUMS */,
+			);
+			path = AppIcon;
+			sourceTree = "<group>";
+		};
+		30D1CE06319E6FC8849C5D3A /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				1624C1F53E5C33BDBF21C699 /* r-dark-accent.png */,
+				341717FE9FB8EA699E110104 /* r-dark-paper.png */,
+				8A3A4FA9095CC62A6709B391 /* r-light.png */,
+				65710FD2CFB1ED4E06D82FE9 /* r-mono.png */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
 		45AE917B27F8B52ADC2BD98E /* Sources */ = {
 			isa = PBXGroup;
 			children = (
@@ -64,11 +93,21 @@
 		48783E51503B3F1CB5D41FDE = {
 			isa = PBXGroup;
 			children = (
+				514A75096F3F862A429EAB66 /* Brand */,
 				0951068A14CE1B994F030526 /* Packages */,
+				D4D99B1E354283179E5D843D /* Resources */,
 				45AE917B27F8B52ADC2BD98E /* Sources */,
 				F4E0A085C43948CFEEF12462 /* Tests */,
 				6C4C30C53095DAAF3F054079 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		514A75096F3F862A429EAB66 /* Brand */ = {
+			isa = PBXGroup;
+			children = (
+				2709C896A5D8D71B66961D50 /* AppIcon */,
+			);
+			path = Brand;
 			sourceTree = "<group>";
 		};
 		6C4C30C53095DAAF3F054079 /* Products */ = {
@@ -78,6 +117,14 @@
 				93B05EF44F4CD5DAC0FC14AE /* RectoTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		D4D99B1E354283179E5D843D /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				8C12F711F47CBD7B108CC4FE /* Assets.xcassets */,
+			);
+			path = Resources;
 			sourceTree = "<group>";
 		};
 		F4E0A085C43948CFEEF12462 /* Tests */ = {
@@ -96,6 +143,7 @@
 			buildConfigurationList = 6FA85606A850A435008507C3 /* Build configuration list for PBXNativeTarget "Recto" */;
 			buildPhases = (
 				3EB85C5FD9D3BE084D223EF6 /* Sources */,
+				6283C5B7B798B51C5960E048 /* Resources */,
 				D808185887049FDBA18F834B /* Frameworks */,
 			);
 			buildRules = (
@@ -169,6 +217,17 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		6283C5B7B798B51C5960E048 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6A5B57E8A148C2E7E5EDB9E4 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		03E8ADBDF6DD44A095FAC27C /* Sources */ = {
