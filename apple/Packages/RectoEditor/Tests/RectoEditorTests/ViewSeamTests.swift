@@ -48,11 +48,12 @@ struct ViewSeamTests {
 
     @Test("the seam answers for the attached view")
     func seamTargetsTheAttachedView() {
-        let (storage, view) = attachedEditor("alpha bravo charlie\n")
+        let (storage, view) = attachedEditor("# alpha **bravo** charlie\n")
 
         #expect(storage.textView.nsTextView === view)
         #expect(storage.textView.isAttached)
-        #expect(storage.textView.text == "alpha bravo charlie\n")
+        #expect(storage.textView.text == "# alpha **bravo** charlie\n")
+        #expect(storage.textView.textProjection.string == "alpha bravo charlie\n")
     }
 
     @Test("selection through the seam lands in the editor")
@@ -101,6 +102,7 @@ struct ViewSeamTests {
         #expect(seam.scrollView == nil)
         #expect(seam.textLayoutManager == nil)
         #expect(seam.text.isEmpty)
+        #expect(seam.textProjection.string.isEmpty)
         #expect(seam.selectedRange == NSRange(location: 0, length: 0))
         #expect(seam.caretRect() == nil)
         #expect(seam.focus() == false)

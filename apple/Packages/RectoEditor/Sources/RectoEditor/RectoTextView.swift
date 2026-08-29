@@ -64,6 +64,10 @@ public struct RectoTextView {
     /// The document text as the editor currently holds it.
     public var text: String { nsTextView?.string ?? "" }
 
+    /// The text exposed by this presentation and its UTF-16 source mapping.
+    /// Rich and preview omit hidden Markdown syntax; raw is an identity map.
+    public var textProjection: MarkdownTextProjection { controller.textProjection }
+
     /// `true` while an editor is on screen.
     public var isAttached: Bool { nsTextView != nil }
 
@@ -73,6 +77,26 @@ public struct RectoTextView {
     public func applyPatch(_ patch: MarkdownTextPatch, registersUndo: Bool = false) -> Bool {
         controller.applyPatch(range: patch.range, replacement: patch.replacement,
                               registersUndo: registersUndo)
+    }
+
+    /// Apply source-coordinate patches as one editor operation.
+    @discardableResult
+    public func applyPatches(
+        _ patches: [MarkdownTextPatch],
+        registersUndo: Bool = false
+    ) -> Bool {
+        controller.applyPatches(patches, registersUndo: registersUndo)
+    }
+
+    /// Reveal or center a UTF-16 display range through TextKit 2 fragment
+    /// geometry. Returns `false` while the editor is detached or for an invalid
+    /// range.
+    @discardableResult
+    public func scroll(
+        range: NSRange,
+        position: MarkdownScrollPosition = .nearest
+    ) -> Bool {
+        controller.scroll(range: range, position: position)
     }
 
     /// Make the editor first responder.
@@ -98,5 +122,40 @@ public struct RectoTextView {
         rect.origin.x += origin.x
         rect.origin.y += origin.y
         return rect
+    }
+
+    func installTextFinderResponder(_ responder: any MarkdownTextFinderActionResponder) {
+        controller.textFinderActionResponder = responder
+    }
+
+    func removeTextFinderResponder(_ responder: any MarkdownTextFinderActionResponder) {
+        guard controller.textFinderActionResponder === responder else { return }
+        controller.textFinderActionResponder = nil
+    }
+
+    func rects(forSourceRange range: NSRange) -> [CGRect] {
+        guard range.length > 0,
+              let textView = nsTextView,
+              let layoutManager = textView.textLayoutManager,
+              let contentManager = layoutManager.textContentManager,
+              let start = contentManager.location(
+                contentManager.documentRange.location,
+                offsetBy: range.location
+              ),
+              let end = contentManager.location(start, offsetBy: range.length),
+              let textRange = NSTextRange(location: start, end: end)
+        else { return [] }
+
+        let origin = textView.textContainerOrigin
+        var rects: [CGRect] = []
+        layoutManager.enumerateTextSegments(
+            in: textRange,
+            type: .selection,
+            options: []
+        ) { _, rect, _, _ in
+            rects.append(rect.offsetBy(dx: origin.x, dy: origin.y))
+            return true
+        }
+        return rects
     }
 }
