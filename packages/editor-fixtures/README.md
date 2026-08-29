@@ -25,6 +25,7 @@ changed".
 | `streak.json` | `lib/stats/streak.ts` | `{date, words}[]` plus a local `"YYYY-MM-DD"` `today`, and the streak length. `today` is a calendar key, so a port must step back a calendar day rather than subtract 86,400,000 ms from an instant — the month-boundary case catches that. |
 | `history-patches.json` | `lib/history/{patch,materialize}.ts` | `computePatch`/`encodePatch`/`applyPatch` round trips, and `materialize` chains including snapshot boundaries. `snapshotEveryN` is the production cadence. |
 | `diff-runs.json` | `lib/history/diff.ts` (mirrored in `convex/history.ts`) | runs, hunk grouping and the merged markdown for accepted-hunk subsets, at both granularities |
+| `slash-entries.json` | `lib/editor/milkdown/slash-entries.ts` | the 17 stable IDs in menu order, with labels, aliases, and the insertion operation the web runtime executes |
 
 ## Comparing strings
 

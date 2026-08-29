@@ -1,0 +1,222 @@
+{
+	"$source": "lib/editor/milkdown/slash-entries.ts",
+	"$contract": "ordered slash menu entries and the insertion operation each entry runs",
+	"clearCurrentBlock": true,
+	"entries": [
+		{
+			"id": "h1",
+			"label": "Heading 1",
+			"aliases": [
+				"h1",
+				"title"
+			],
+			"insertion": {
+				"kind": "heading",
+				"level": 1
+			}
+		},
+		{
+			"id": "h2",
+			"label": "Heading 2",
+			"aliases": [
+				"h2",
+				"subtitle"
+			],
+			"insertion": {
+				"kind": "heading",
+				"level": 2
+			}
+		},
+		{
+			"id": "h3",
+			"label": "Heading 3",
+			"aliases": [
+				"h3"
+			],
+			"insertion": {
+				"kind": "heading",
+				"level": 3
+			}
+		},
+		{
+			"id": "bold",
+			"label": "Bold",
+			"aliases": [
+				"b",
+				"strong"
+			],
+			"insertion": {
+				"kind": "text",
+				"text": "**text**"
+			}
+		},
+		{
+			"id": "italic",
+			"label": "Italic",
+			"aliases": [
+				"i",
+				"em",
+				"emphasis"
+			],
+			"insertion": {
+				"kind": "text",
+				"text": "_text_"
+			}
+		},
+		{
+			"id": "strike",
+			"label": "Strikethrough",
+			"aliases": [
+				"strike",
+				"del",
+				"s"
+			],
+			"insertion": {
+				"kind": "text",
+				"text": "~~text~~"
+			}
+		},
+		{
+			"id": "code",
+			"label": "Inline code",
+			"aliases": [
+				"code",
+				"mono"
+			],
+			"insertion": {
+				"kind": "text",
+				"text": "`code`"
+			}
+		},
+		{
+			"id": "bullet",
+			"label": "Bullet list",
+			"aliases": [
+				"ul",
+				"unordered",
+				"list"
+			],
+			"insertion": {
+				"kind": "wrap",
+				"block": "bullet-list",
+				"inner": "list-item"
+			}
+		},
+		{
+			"id": "ordered",
+			"label": "Numbered list",
+			"aliases": [
+				"ol",
+				"ordered",
+				"number"
+			],
+			"insertion": {
+				"kind": "wrap",
+				"block": "ordered-list",
+				"inner": "list-item"
+			}
+		},
+		{
+			"id": "task",
+			"label": "Task list",
+			"aliases": [
+				"todo",
+				"checkbox",
+				"check"
+			],
+			"insertion": {
+				"kind": "text",
+				"text": "- [ ] "
+			}
+		},
+		{
+			"id": "quote",
+			"label": "Blockquote",
+			"aliases": [
+				"quote",
+				"bq"
+			],
+			"insertion": {
+				"kind": "wrap",
+				"block": "blockquote",
+				"inner": "paragraph"
+			}
+		},
+		{
+			"id": "fence",
+			"label": "Code block",
+			"aliases": [
+				"pre",
+				"fence",
+				"codeblock"
+			],
+			"insertion": {
+				"kind": "code-block",
+				"language": ""
+			}
+		},
+		{
+			"id": "divider",
+			"label": "Divider",
+			"aliases": [
+				"hr",
+				"rule",
+				"separator"
+			],
+			"insertion": {
+				"kind": "divider"
+			}
+		},
+		{
+			"id": "table",
+			"label": "Table",
+			"aliases": [
+				"tbl",
+				"grid"
+			],
+			"insertion": {
+				"kind": "table",
+				"rows": 2,
+				"columns": 2
+			}
+		},
+		{
+			"id": "link",
+			"label": "Link",
+			"aliases": [
+				"url",
+				"href",
+				"a"
+			],
+			"insertion": {
+				"kind": "text",
+				"text": "[text](https://)"
+			}
+		},
+		{
+			"id": "image",
+			"label": "Image",
+			"aliases": [
+				"img",
+				"picture"
+			],
+			"insertion": {
+				"kind": "text",
+				"text": "![alt](https://)"
+			}
+		},
+		{
+			"id": "footnote",
+			"label": "Footnote",
+			"aliases": [
+				"fn",
+				"note",
+				"ref"
+			],
+			"insertion": {
+				"kind": "text",
+				"text": "[^1]\n\n[^1]: Footnote text"
+			}
+		}
+	]
+}
