@@ -2,6 +2,7 @@ import Testing
 @testable import Recto
 
 @Suite("Editor host")
+@MainActor
 struct EditorHostViewTests {
     @Test("ships structured content for the manual accessibility smoke")
     func accessibilitySample() {
