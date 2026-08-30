@@ -35,6 +35,15 @@ public protocol SyncControlling: Sendable {
   func start() async
 }
 
+/// Ownership of one editor freeze. A later freeze invalidates every older token.
+public struct EditSessionFreezeToken: Sendable, Equatable {
+  private let value: UUID
+
+  public init() {
+    value = UUID()
+  }
+}
+
 /// The open editor sessions, from auth's point of view.
 ///
 /// Sign-out has to stop new text arriving before it can honestly say how much is
@@ -43,9 +52,11 @@ public protocol SyncControlling: Sendable {
 public protocol EditSessionCoordinating: Sendable {
   /// Stop accepting edits and flush what is pending. Returns once no session
   /// will write again.
-  func freezeAndFlushAll() async
+  func freezeAndFlushAll() async -> EditSessionFreezeToken
   /// Let editing continue — a refused sign-out must not leave the app frozen.
-  func resumeAll() async
+  /// Returns false when a later freeze superseded this caller.
+  @discardableResult
+  func resumeAll(after freeze: EditSessionFreezeToken) async -> Bool
   /// Throw away every session's in-memory copy of the mirror.
   ///
   /// Freezing stops new writes; it does not empty what a window has already
@@ -330,6 +341,7 @@ public final class RectoAuth {
   }
 
   private func restoreSession(identity: ClerkIdentity?) async {
+    let freeze = await sessions?.freezeAndFlushAll()
     guard await claimMirror(for: identity?.userID) else { return }
     guard let identity else {
       status = .signedOut
@@ -337,7 +349,7 @@ public final class RectoAuth {
       return
     }
     guard let lease = identityLease(for: identity) else { return }
-    await publishSignedIn(identity, blockingOnFailure: true, lease: lease)
+    await publishSignedIn(identity, blockingOnFailure: true, lease: lease, after: freeze)
   }
 
   func restoreSessionForTesting(userId: String?) async {
@@ -463,7 +475,8 @@ public final class RectoAuth {
   private func publishSignedIn(
     _ identity: ClerkIdentity,
     blockingOnFailure: Bool,
-    lease: IdentityLease
+    lease: IdentityLease,
+    after initialFreeze: EditSessionFreezeToken? = nil
   ) async -> Bool {
     guard isCurrent(lease) else { return false }
     activePublicationLease = lease
@@ -485,11 +498,17 @@ public final class RectoAuth {
       if blockingOnFailure { status = .convexLoginRequired(userId: identity.userID) }
       return false
     }
-    // A stale recovery can freeze after this resume takes effect but before it
-    // returns. Publish only when this lease resumed after the last containment.
+    var freeze = initialFreeze
+    if freeze == nil { freeze = await sessions?.freezeAndFlushAll() }
     while true {
       let resumedAfterGeneration = containmentGeneration
-      await sessions?.resumeAll()
+      if let ownedFreeze = freeze {
+        guard await sessions?.resumeAll(after: ownedFreeze) == true else {
+          guard await containIfSuperseded(lease) else { return false }
+          freeze = await sessions?.freezeAndFlushAll()
+          continue
+        }
+      }
       guard await containIfSuperseded(lease) else { return false }
       await waitForContainment()
       guard isCurrent(lease) else {
@@ -498,7 +517,10 @@ public final class RectoAuth {
       }
       guard activeContainmentCount == 0,
         containmentGeneration == resumedAfterGeneration
-      else { continue }
+      else {
+        freeze = await sessions?.freezeAndFlushAll()
+        continue
+      }
       break
     }
     status = .signedIn(userId: identity.userID)
@@ -521,7 +543,7 @@ public final class RectoAuth {
 
   private func containSupersededPublication() async {
     activeContainmentCount += 1
-    await sessions?.freezeAndFlushAll()
+    _ = await sessions?.freezeAndFlushAll()
     await sync?.stop()
     containmentGeneration += 1
     activeContainmentCount -= 1
@@ -651,7 +673,7 @@ public final class RectoAuth {
     let refusalEpoch = lifecycleEpoch
     let refusalIdentity = expectedIdentity
     defer { transitionCount -= 1 }
-    await sessions?.freezeAndFlushAll()
+    let freeze = await sessions?.freezeAndFlushAll()
     await sync?.stop()
 
     if !discardingUnsynced {
@@ -661,11 +683,13 @@ public final class RectoAuth {
       do {
         pending = try await store.unsyncedWorkCount()
       } catch {
-        await resumeAfterRefusedSignOut(epoch: refusalEpoch, identity: refusalIdentity)
+        await resumeAfterRefusedSignOut(
+          epoch: refusalEpoch, identity: refusalIdentity, after: freeze)
         throw error
       }
       guard pending == 0 else {
-        await resumeAfterRefusedSignOut(epoch: refusalEpoch, identity: refusalIdentity)
+        await resumeAfterRefusedSignOut(
+          epoch: refusalEpoch, identity: refusalIdentity, after: freeze)
         throw RectoAuthError.unsyncedWork(count: pending)
       }
     }
@@ -696,9 +720,13 @@ public final class RectoAuth {
     status = expectedIdentity == nil ? .signedOut : .loading
   }
 
-  private func resumeAfterRefusedSignOut(epoch: Int, identity: ClerkIdentity?) async {
+  private func resumeAfterRefusedSignOut(
+    epoch: Int,
+    identity: ClerkIdentity?,
+    after freeze: EditSessionFreezeToken?
+  ) async {
     guard isCurrent(epoch: epoch, identity: identity) else { return }
-    await sessions?.resumeAll()
+    if let freeze { _ = await sessions?.resumeAll(after: freeze) }
     guard isCurrent(epoch: epoch, identity: identity) else {
       await containStaleRefusedSignOutRecovery(from: identity)
       return
@@ -751,7 +779,7 @@ public final class RectoAuth {
     beginTransition()
     defer { transitionCount -= 1 }
     // Stop everything that could still write BEFORE any decision is taken.
-    await sessions?.freezeAndFlushAll()
+    let freeze = await sessions?.freezeAndFlushAll()
     await sync?.stop()
 
     // Clerk revoked the session out from under us (another device signed out,
@@ -790,20 +818,23 @@ public final class RectoAuth {
     }
 
     guard let nextIdentity else { return }
-    await switchOwner(to: nextIdentity)
+    await switchOwner(to: nextIdentity, after: freeze)
   }
 
   /// A direct A-to-B switch. NOTHING is deleted here: `claimMirror` owns that
   /// decision, and purging first would hand it a clean store and remove its
   /// only chance to object.
-  private func switchOwner(to nextIdentity: ClerkIdentity) async {
+  private func switchOwner(
+    to nextIdentity: ClerkIdentity,
+    after freeze: EditSessionFreezeToken?
+  ) async {
     guard await claimMirror(for: nextIdentity.userID) else { return }
     // Freezing stopped new writes; it did not empty what the open windows had
     // already loaded. This is the only point at which A's text is gone from
     // both SQLite and memory.
     await sessions?.invalidateAll()
     guard let lease = identityLease(for: nextIdentity) else { return }
-    await publishSignedIn(nextIdentity, blockingOnFailure: true, lease: lease)
+    await publishSignedIn(nextIdentity, blockingOnFailure: true, lease: lease, after: freeze)
   }
 
   /// Unsynced work that outlived a revoked session. The UI surfaces it on the
@@ -845,11 +876,13 @@ public final class RectoAuth {
   }
 
   private func completeDiscard(identity: ClerkIdentity) async -> Bool {
+    let freeze = await sessions?.freezeAndFlushAll()
     expectedIdentity = identity
     guard await claimMirror(for: identity.userID, discardingRetainedWork: true) else { return false }
     await sessions?.invalidateAll()
     guard let lease = identityLease(for: identity) else { return false }
-    return await publishSignedIn(identity, blockingOnFailure: true, lease: lease)
+    return await publishSignedIn(
+      identity, blockingOnFailure: true, lease: lease, after: freeze)
   }
 
   /// Test seam: the same completion without a live Clerk session.
@@ -870,7 +903,7 @@ public final class RectoAuth {
   private func handleObservedAccountDeleted() async {
     beginTransition()
     defer { transitionCount -= 1 }
-    await sessions?.freezeAndFlushAll()
+    _ = await sessions?.freezeAndFlushAll()
     await sync?.stop()
     await convexAuthProvider.logoutConvexClient()
     do {

@@ -34,7 +34,11 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
   /// unsynced count and the purge. The flag is set before the first await, so
   /// there is no window to slip through.
   private var isFrozen = false
-  private var localMutationFreezeGeneration: Int?
+  private struct ActiveFreeze {
+    let token: EditSessionFreezeToken
+    let storeGeneration: Int
+  }
+  private var activeFreeze: ActiveFreeze?
   /// A reopen can refreeze a session while `resumeAll()` is suspended on another
   /// session. The generation makes that pass repeat before editors are exposed.
   private var sessionFreezeGeneration = 0
@@ -154,34 +158,55 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
 
   /// Stop accepting edits and flush. Sign-out cannot honestly count unsynced
   /// work while an open document can still write into the gap.
-  public func freezeAndFlushAll() async {
+  public func freezeAndFlushAll() async -> EditSessionFreezeToken {
     // Registry-wide first and synchronously, so sessions opened during the
     // awaits below are born frozen too.
+    let token = EditSessionFreezeToken()
     isFrozen = true
-    localMutationFreezeGeneration = store.freezeLocalMutations()
+    activeFreeze = ActiveFreeze(token: token, storeGeneration: store.freezeLocalMutations())
     for ingress in ingresses.values { await ingress.freezeAndDrain() }
     for session in sessions.values { await session.freeze() }
     for session in sessions.values { try? await session.flush() }
+    return token
   }
 
-  public func resumeAll() async {
-    let mutationGeneration = localMutationFreezeGeneration
+  @discardableResult
+  public func resumeAll(after freeze: EditSessionFreezeToken) async -> Bool {
+    guard owns(freeze) else { return false }
     while true {
       let generation = sessionFreezeGeneration
       let snapshot = Array(sessions.values)
       for session in snapshot {
+        guard owns(freeze) else { return false }
         await beforeSessionResume?(session.documentLocalId)
+        guard owns(freeze) else { return false }
         await session.resume()
+        guard owns(freeze) else { return false }
       }
       let resumed = Set(snapshot.map(ObjectIdentifier.init))
       let current = Set(sessions.values.map(ObjectIdentifier.init))
       if generation == sessionFreezeGeneration, resumed == current { break }
     }
-    isFrozen = false
-    for ingress in Array(ingresses.values) { await ingress.resume() }
-    if let mutationGeneration {
-      store.resumeLocalMutations(frozenAt: mutationGeneration)
+
+    while true {
+      let snapshot = ingresses
+      for ingress in snapshot.values {
+        guard owns(freeze) else { return false }
+        await ingress.resume()
+        guard owns(freeze) else { return false }
+      }
+      if Set(snapshot.keys) == Set(ingresses.keys) { break }
     }
+
+    guard let activeFreeze, activeFreeze.token == freeze else { return false }
+    isFrozen = false
+    self.activeFreeze = nil
+    store.resumeLocalMutations(frozenAt: activeFreeze.storeGeneration)
+    return true
+  }
+
+  private func owns(_ freeze: EditSessionFreezeToken) -> Bool {
+    isFrozen && activeFreeze?.token == freeze
   }
 
   /// Empty and drop every session, after an identity change has purged the
@@ -190,7 +215,7 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
   /// Dropping them from the map is not enough on its own — a window holds its
   /// own reference — so each session also clears its state and finishes its
   /// stream. The registry stays frozen: the new identity is published first,
-  /// and `resumeAll()` is what lets windows open fresh sessions.
+  /// and the owning `resumeAll(after:)` is what lets windows open fresh sessions.
   public func invalidateAll() async {
     isFrozen = true
     let invalidated = Array(sessions.values)

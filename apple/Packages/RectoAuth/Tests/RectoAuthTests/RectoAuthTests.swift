@@ -143,8 +143,14 @@ struct ColdSessionRestorationTests {
     private(set) var events: [String] = []
     func stop() async { events.append("sync.stop") }
     func start() async { events.append("sync.start") }
-    func freezeAndFlushAll() async { events.append("sessions.freeze") }
-    func resumeAll() async { events.append("sessions.resume") }
+    func freezeAndFlushAll() async -> EditSessionFreezeToken {
+      events.append("sessions.freeze")
+      return EditSessionFreezeToken()
+    }
+    func resumeAll(after freeze: EditSessionFreezeToken) async -> Bool {
+      events.append("sessions.resume")
+      return true
+    }
     func invalidateAll() async { events.append("sessions.invalidate") }
   }
 
@@ -166,7 +172,7 @@ struct ColdSessionRestorationTests {
 
     #expect(await logins.value == 1)
     #expect(await auth.status == .signedIn(userId: "user-restored"))
-    #expect(await coordinator.events == ["sessions.resume", "sync.start"])
+    #expect(await coordinator.events == ["sessions.freeze", "sessions.resume", "sync.start"])
   }
 
   @Test("a failed restored login locks the mirror and keeps sync stopped")
@@ -292,6 +298,7 @@ struct AuthPublicationInterleavingTests {
     private let suspensionPoint: SuspensionPoint
     private let pinsSuccessorFreeze: Bool
     private var freezeCount = 0
+    private var activeFreeze = EditSessionFreezeToken()
     private var resumeCount = 0
     private var startCount = 0
     private var gate: CheckedContinuation<Void, Never>?
@@ -315,8 +322,9 @@ struct AuthPublicationInterleavingTests {
       isRunning = true
     }
 
-    func freezeAndFlushAll() async {
+    func freezeAndFlushAll() async -> EditSessionFreezeToken {
       freezeCount += 1
+      activeFreeze = EditSessionFreezeToken()
       if pinsSuccessorFreeze, freezeCount == 4 {
         let waiting = successorFreezeObservers
         successorFreezeObservers.removeAll()
@@ -324,13 +332,17 @@ struct AuthPublicationInterleavingTests {
         await withCheckedContinuation { successorFreezeGate = $0 }
       }
       isEditable = false
+      return activeFreeze
     }
     func invalidateAll() {}
 
-    func resumeAll() async {
+    func resumeAll(after freeze: EditSessionFreezeToken) async -> Bool {
+      guard freeze == activeFreeze else { return false }
       resumeCount += 1
       if suspensionPoint == .resume, resumeCount == 2 { await suspend() }
+      guard freeze == activeFreeze else { return false }
       isEditable = true
+      return true
     }
 
     private func suspend() async {
@@ -467,8 +479,8 @@ struct AccountDeletionOrderingTests {
   private actor Coordinator: SyncControlling, EditSessionCoordinating {
     func stop() {}
     func start() {}
-    func freezeAndFlushAll() {}
-    func resumeAll() {}
+    func freezeAndFlushAll() -> EditSessionFreezeToken { EditSessionFreezeToken() }
+    func resumeAll(after freeze: EditSessionFreezeToken) -> Bool { true }
     func invalidateAll() {}
   }
 
@@ -604,6 +616,7 @@ struct RefusedSignOutLifecycleTests {
   private actor Coordinator: SyncControlling, EditSessionCoordinating {
     private let suspensionPoint: SuspensionPoint?
     private var freezeCount = 0
+    private var activeFreeze = EditSessionFreezeToken()
     private var resumeCount = 0
     private var startCount = 0
     private var isSuspended = false
@@ -623,16 +636,21 @@ struct RefusedSignOutLifecycleTests {
       isRunning = true
     }
 
-    func freezeAndFlushAll() async {
+    func freezeAndFlushAll() async -> EditSessionFreezeToken {
       freezeCount += 1
-      if suspensionPoint == .freeze, freezeCount == 1 { await suspend() }
+      activeFreeze = EditSessionFreezeToken()
+      if suspensionPoint == .freeze, freezeCount == 2 { await suspend() }
       isEditable = false
+      return activeFreeze
     }
 
-    func resumeAll() async {
+    func resumeAll(after freeze: EditSessionFreezeToken) async -> Bool {
+      guard freeze == activeFreeze else { return false }
       resumeCount += 1
       if suspensionPoint == .resume, resumeCount == 2 { await suspend() }
+      guard freeze == activeFreeze else { return false }
       isEditable = true
+      return true
     }
 
     func invalidateAll() { isEditable = false }
@@ -802,6 +820,8 @@ struct RefusedSignOutPublicationContainmentTests {
   }
 
   private actor Coordinator: SyncControlling, EditSessionCoordinating {
+    private var freezeCount = 0
+    private var activeFreeze = EditSessionFreezeToken()
     private var resumeCount = 0
     private var staleResumeGate: CheckedContinuation<Void, Never>?
     private var staleResumeObservers: [CheckedContinuation<Void, Never>] = []
@@ -814,17 +834,24 @@ struct RefusedSignOutPublicationContainmentTests {
 
     func start() { isRunning = true }
 
-    func freezeAndFlushAll() { isEditable = false }
+    func freezeAndFlushAll() -> EditSessionFreezeToken {
+      freezeCount += 1
+      activeFreeze = EditSessionFreezeToken()
+      isEditable = false
+      return activeFreeze
+    }
 
-    func resumeAll() async {
+    func resumeAll(after freeze: EditSessionFreezeToken) async -> Bool {
+      guard freeze == activeFreeze else { return false }
       resumeCount += 1
       if resumeCount == 2 {
         let observers = staleResumeObservers
         staleResumeObservers.removeAll()
         for observer in observers { observer.resume() }
         await withCheckedContinuation { staleResumeGate = $0 }
+        guard freeze == activeFreeze else { return false }
         isEditable = true
-        return
+        return true
       }
       if resumeCount == 3 {
         isEditable = true
@@ -832,9 +859,11 @@ struct RefusedSignOutPublicationContainmentTests {
         successorResumeObservers.removeAll()
         for observer in observers { observer.resume() }
         await withCheckedContinuation { successorResumeGate = $0 }
-        return
+        guard freeze == activeFreeze else { return false }
+        return true
       }
       isEditable = true
+      return true
     }
 
     func invalidateAll() { isEditable = false }
@@ -919,11 +948,15 @@ struct Round3AuthTests {
 
     func stop() async { events.append("sync.stop") }
     func start() async { events.append("sync.start") }
-    func freezeAndFlushAll() async {
+    func freezeAndFlushAll() async -> EditSessionFreezeToken {
       events.append("sessions.freeze")
       await onFreeze?()
+      return EditSessionFreezeToken()
     }
-    func resumeAll() async { events.append("sessions.resume") }
+    func resumeAll(after freeze: EditSessionFreezeToken) async -> Bool {
+      events.append("sessions.resume")
+      return true
+    }
     func invalidateAll() async { events.append("sessions.invalidate") }
   }
 
@@ -1101,8 +1134,14 @@ struct Round5AuthTests {
     private(set) var events: [String] = []
     func stop() async { events.append("sync.stop") }
     func start() async { events.append("sync.start") }
-    func freezeAndFlushAll() async { events.append("sessions.freeze") }
-    func resumeAll() async { events.append("sessions.resume") }
+    func freezeAndFlushAll() async -> EditSessionFreezeToken {
+      events.append("sessions.freeze")
+      return EditSessionFreezeToken()
+    }
+    func resumeAll(after freeze: EditSessionFreezeToken) async -> Bool {
+      events.append("sessions.resume")
+      return true
+    }
     func invalidateAll() async { events.append("sessions.invalidate") }
   }
 
@@ -1221,8 +1260,8 @@ struct Round6AuthTests {
     }
 
     func start() { startCount += 1 }
-    func freezeAndFlushAll() async {}
-    func resumeAll() async {}
+    func freezeAndFlushAll() async -> EditSessionFreezeToken { EditSessionFreezeToken() }
+    func resumeAll(after freeze: EditSessionFreezeToken) async -> Bool { true }
     func invalidateAll() async {}
 
     func waitUntilFirstStop() async {
@@ -1270,8 +1309,14 @@ struct Round6AuthTests {
     }
     func start() async { events.append("sync.start") }
     func clear() { events.removeAll() }
-    func freezeAndFlushAll() async { events.append("sessions.freeze") }
-    func resumeAll() async { events.append("sessions.resume") }
+    func freezeAndFlushAll() async -> EditSessionFreezeToken {
+      events.append("sessions.freeze")
+      return EditSessionFreezeToken()
+    }
+    func resumeAll(after freeze: EditSessionFreezeToken) async -> Bool {
+      events.append("sessions.resume")
+      return true
+    }
     func invalidateAll() async { events.append("sessions.invalidate") }
   }
 
@@ -1501,9 +1546,11 @@ struct Round6AuthTests {
     await coordinator.releaseStop()
     #expect(await retry.value)
 
-    #expect(await coordinator.events == [
-      "sync.stop.begin", "sync.stop.end", "convex.login", "sessions.resume", "sync.start",
-    ])
+    #expect(
+      await coordinator.events == [
+        "sync.stop.begin", "sync.stop.end", "convex.login", "sessions.freeze", "sessions.resume",
+        "sync.start",
+      ])
   }
 
   @Test("a read-only session still hydrates once the login lands")

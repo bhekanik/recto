@@ -80,8 +80,8 @@ struct Round5Tests {
     let ingress = EagerIngress(session: session, store: harness.store, documentLocalId: localId)
     _ = try await harness.registry.registerIngress(for: localId, ingress)
 
-    await harness.registry.freezeAndFlushAll()
-    await harness.registry.resumeAll()
+    let freeze = await harness.registry.freezeAndFlushAll()
+    await harness.registry.resumeAll(after: freeze)
 
     #expect(await ingress.error == nil)
     #expect(try await harness.store.document(localId: localId)?.draftMarkdown == "accepted on resume")
@@ -105,12 +105,12 @@ struct Round5Tests {
       secondId: try await registry.session(for: secondId),
     ]
 
-    await registry.freezeAndFlushAll()
-    let resume = Task { await registry.resumeAll() }
+    let freeze = await registry.freezeAndFlushAll()
+    let resume = Task { await registry.resumeAll(after: freeze) }
     let resumedFirstId = await interleaving.waitUntilSecondResume()
     _ = try await registry.session(for: resumedFirstId)
     await interleaving.releaseSecondResume()
-    await resume.value
+    _ = await resume.value
 
     let resumedFirst = try #require(sessions[resumedFirstId])
     try await resumedFirst.applyLocalChange(markdown: "accepted after resume", selection: nil)
@@ -128,7 +128,7 @@ struct Round5Tests {
     let harness = try Harness(directory: directory, transport: InMemoryTransport())
     let localId = try await harness.createLocalDocument()
 
-    await harness.registry.freezeAndFlushAll()
+    let freeze = await harness.registry.freezeAndFlushAll()
     #expect(await harness.registry.isFrozenForTesting)
 
     // A window that arrives AFTER the freeze: freezing the sessions that
@@ -140,7 +140,7 @@ struct Round5Tests {
     }
     #expect(try await harness.store.document(localId: localId)?.draftMarkdown == nil)
 
-    await harness.registry.resumeAll()
+    await harness.registry.resumeAll(after: freeze)
     try await session.applyLocalChange(markdown: "typed after", selection: nil)
     #expect(try await harness.store.document(localId: localId)?.draftMarkdown == "typed after")
   }

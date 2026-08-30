@@ -365,12 +365,12 @@ struct ApplicationModelTests {
             localId: document.localId, registry: components.registry)
         components.auth.attach(sessions: components.registry)
 
-        await components.registry.freezeAndFlushAll()
+        let freeze = await components.registry.freezeAndFlushAll()
         #expect(!model.isEditable)
         model.storage.markdown = "must not remain visible"
         model.accept(model.storage.markdown)
         #expect(model.storage.markdown == "")
-        await components.registry.resumeAll()
+        await components.registry.resumeAll(after: freeze)
 
         await #expect(throws: RectoAuthError.unsyncedWork(count: 1)) {
             try await components.auth.signOut()
@@ -389,13 +389,13 @@ struct ApplicationModelTests {
     func frozenOpen() async throws {
         let components = try await makeComponents()
         let document = try await components.library.createDocument(title: "Frozen open")
-        await components.registry.freezeAndFlushAll()
+        let freeze = await components.registry.freezeAndFlushAll()
 
         let model = try await CloudDocumentModel.open(
             localId: document.localId, registry: components.registry)
 
         #expect(!model.isEditable)
-        await components.registry.resumeAll()
+        await components.registry.resumeAll(after: freeze)
         #expect(model.isEditable)
         await model.close()
     }
@@ -413,12 +413,12 @@ struct ApplicationModelTests {
         await model.undo()
         #expect(model.storage.markdown == "")
 
-        await components.registry.freezeAndFlushAll()
+        let freeze = await components.registry.freezeAndFlushAll()
         model.storage.markdown = "rejected after undo"
         model.accept(model.storage.markdown)
         #expect(model.storage.markdown == "")
 
-        await components.registry.resumeAll()
+        await components.registry.resumeAll(after: freeze)
         await model.close()
     }
 }
