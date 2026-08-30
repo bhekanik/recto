@@ -290,16 +290,21 @@ struct AuthPublicationInterleavingTests {
 
   private actor Coordinator: SyncControlling, EditSessionCoordinating {
     private let suspensionPoint: SuspensionPoint
+    private let pinsSuccessorFreeze: Bool
+    private var freezeCount = 0
     private var resumeCount = 0
     private var startCount = 0
     private var gate: CheckedContinuation<Void, Never>?
     private var observers: [CheckedContinuation<Void, Never>] = []
+    private var successorFreezeGate: CheckedContinuation<Void, Never>?
+    private var successorFreezeObservers: [CheckedContinuation<Void, Never>] = []
     private(set) var isEditable = false
     private(set) var isRunning = false
     var isContained: Bool { !isEditable && !isRunning }
 
-    init(suspensionPoint: SuspensionPoint) {
+    init(suspensionPoint: SuspensionPoint, pinsSuccessorFreeze: Bool = false) {
       self.suspensionPoint = suspensionPoint
+      self.pinsSuccessorFreeze = pinsSuccessorFreeze
     }
 
     func stop() { isRunning = false }
@@ -310,7 +315,16 @@ struct AuthPublicationInterleavingTests {
       isRunning = true
     }
 
-    func freezeAndFlushAll() { isEditable = false }
+    func freezeAndFlushAll() async {
+      freezeCount += 1
+      if pinsSuccessorFreeze, freezeCount == 4 {
+        let waiting = successorFreezeObservers
+        successorFreezeObservers.removeAll()
+        waiting.forEach { $0.resume() }
+        await withCheckedContinuation { successorFreezeGate = $0 }
+      }
+      isEditable = false
+    }
     func invalidateAll() {}
 
     func resumeAll() async {
@@ -338,6 +352,20 @@ struct AuthPublicationInterleavingTests {
     func release() {
       gate?.resume()
       gate = nil
+    }
+
+    func waitUntilFirstContainmentFinishes() async {
+      for _ in 0..<10_000 where freezeCount < 2 { await Task.yield() }
+    }
+
+    func waitUntilSuccessorFreeze() async {
+      guard freezeCount < 4 else { return }
+      await withCheckedContinuation { successorFreezeObservers.append($0) }
+    }
+
+    func releaseSuccessorFreeze() {
+      successorFreezeGate?.resume()
+      successorFreezeGate = nil
     }
   }
 
@@ -384,6 +412,46 @@ struct AuthPublicationInterleavingTests {
     #expect(auth.status == .signedIn(userId: "user-C"))
     #expect(await coordinator.isEditable)
     #expect(await coordinator.isRunning)
+  }
+
+  @Test(
+    "an obsolete publisher cannot re-enable capability after eager containment",
+    arguments: [SuspensionPoint.resume, .start])
+  func obsoletePublisherCannotUndoContainment(suspensionPoint: SuspensionPoint) async throws {
+    let store = try RectoStore.inMemory()
+    try await store.setMirrorOwner("user-A")
+    let auth = RectoAuth(store: store)
+    let coordinator = Coordinator(suspensionPoint: suspensionPoint, pinsSuccessorFreeze: true)
+    auth.attach(sync: coordinator)
+    auth.attach(sessions: coordinator)
+    let activeSession = ActiveSession("session-A")
+    auth.convexAuthProvider.activeSessionID = { activeSession.id }
+    auth.convexAuthProvider.cachedLogin = { true }
+    let (events, continuation) = AsyncStream<RectoAuth.LifecycleEvent>.makeStream()
+
+    await auth.startForTesting(
+      restoredUserId: "user-A", restoredSessionID: "session-A", events: events)
+
+    activeSession.id = "session-B"
+    continuation.yield(.sessionChanged(userId: "user-B", sessionID: "session-B"))
+    await coordinator.waitUntilSuspended()
+
+    activeSession.id = "session-C"
+    continuation.yield(.sessionChanged(userId: "user-C", sessionID: "session-C"))
+    await coordinator.waitUntilFirstContainmentFinishes()
+    await coordinator.release()
+    await coordinator.waitUntilSuccessorFreeze()
+
+    switch suspensionPoint {
+    case .resume:
+      #expect(await coordinator.isEditable == false)
+    case .start:
+      #expect(await coordinator.isRunning == false)
+    }
+
+    await coordinator.releaseSuccessorFreeze()
+    continuation.finish()
+    await auth.waitForEventListenerForTesting()
   }
 }
 

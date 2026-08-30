@@ -495,9 +495,10 @@ public final class RectoAuth {
     if let containment = publicationContainment, containment.lease == lease {
       await containment.task.value
       if publicationContainment?.lease == lease { publicationContainment = nil }
-    } else {
-      await containSupersededPublication()
     }
+    // The suspended operation may apply its side effect after eager containment.
+    // This inline pass completes before the serialized consumer can start C.
+    await containSupersededPublication()
     return false
   }
 
