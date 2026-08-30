@@ -31,6 +31,7 @@ public struct Divergence: Sendable, Equatable {
 
 public enum SessionError: Error, Equatable, Sendable {
   case notOpen
+  case editableHolderExists(String)
   /// The session is frozen while sign-out decides what to do with unsent work.
   case frozen
   /// The mirror this session was reading has been purged by an identity change.
@@ -54,9 +55,9 @@ public enum RectoWordCount {
 ///
 /// Owns the grouping controller, writes every commit as one SQLite transaction
 /// (node + head + outbox job), and reflects what the sync engine mirrors back.
-/// One instance per document per process — see `DocumentSessionRegistry`; two
-/// Mac windows on the same document share this actor, which is what makes the
-/// orchestrator's "same document in two windows" decision safe.
+/// One instance per document per process — see `DocumentSessionRegistry`.
+/// Session state can have multiple readers, but the app permits one editable
+/// full-snapshot ingress per document.
 public actor DocumentSession {
   /// The draft row is written on every change, debounced, so a crash between
   /// keystroke and node boundary loses nothing (plan 023 §4.3).

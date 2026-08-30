@@ -395,6 +395,14 @@ public actor RectoStore {
       }
       document.draftRevision += 1
       document.editorIngressRevision = document.draftMarkdown == nil ? nil : document.draftRevision
+      if document.draftMarkdown == nil,
+        document.syncState == .pending,
+        document.queueBlockedReason == nil,
+        document.remoteHeadNodeId == document.localHeadNodeId,
+        try OutboxJob.filter(Column("documentLocalId") == documentLocalId).fetchCount(db) == 0
+      {
+        document.syncState = .synced
+      }
       try document.update(db)
       if var job { try job.insert(db) }
       return document.draftRevision
@@ -431,6 +439,14 @@ public actor RectoStore {
       }
       document.draftRevision += 1
       document.editorIngressRevision = document.draftMarkdown == nil ? nil : document.draftRevision
+      if document.draftMarkdown == nil,
+        document.syncState == .pending,
+        document.queueBlockedReason == nil,
+        document.remoteHeadNodeId == document.localHeadNodeId,
+        try OutboxJob.filter(Column("documentLocalId") == documentLocalId).fetchCount(db) == 0
+      {
+        document.syncState = .synced
+      }
       try document.update(db)
       return document.draftRevision
     }

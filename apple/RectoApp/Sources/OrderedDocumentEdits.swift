@@ -19,6 +19,9 @@ final class OrderedDocumentEdits: ObservableObject, EditorIngressCoordinating {
 
     @Published private(set) var pendingCount = 0
     @Published private(set) var lastError: String?
+    @Published private(set) var isAccepting = true
+    private(set) var lastAcceptedMarkdown: String
+    var onAcceptanceChanged: ((Bool) -> Void)?
 
     private let store: RectoStore
     private let documentLocalId: String
@@ -26,17 +29,18 @@ final class OrderedDocumentEdits: ObservableObject, EditorIngressCoordinating {
     private let continuation: AsyncStream<Change>.Continuation
     private var worker: Task<Void, Never>?
     private var drainWaiters: [CheckedContinuation<Void, Never>] = []
-    private var isAccepting = true
 
     init(
         store: RectoStore,
         documentLocalId: String,
         countWords: @escaping @Sendable (String) -> Int = RectoWordCount.plainText,
+        initialMarkdown: String = "",
         submit: @escaping Submit
     ) {
         self.store = store
         self.documentLocalId = documentLocalId
         self.countWords = countWords
+        lastAcceptedMarkdown = initialMarkdown
         let pair = AsyncStream<Change>.makeStream()
         continuation = pair.continuation
         worker = Task { [weak self] in
@@ -56,8 +60,9 @@ final class OrderedDocumentEdits: ObservableObject, EditorIngressCoordinating {
         worker?.cancel()
     }
 
-    func accept(markdown: String, selection: NodeSelection? = nil, structural: Bool = false) {
-        guard isAccepting else { return }
+    @discardableResult
+    func accept(markdown: String, selection: NodeSelection? = nil, structural: Bool = false) -> Bool {
+        guard isAccepting else { return false }
         do {
             let generation = try store.saveEditorIngressSynchronously(
                 documentLocalId: documentLocalId,
@@ -66,6 +71,7 @@ final class OrderedDocumentEdits: ObservableObject, EditorIngressCoordinating {
                 wordCount: countWords(markdown)
             )
             pendingCount += 1
+            lastAcceptedMarkdown = markdown
             continuation.yield(
                 Change(
                     markdown: markdown,
@@ -74,8 +80,10 @@ final class OrderedDocumentEdits: ObservableObject, EditorIngressCoordinating {
                     generation: generation
                 )
             )
+            return true
         } catch {
             lastError = error.localizedDescription
+            return false
         }
     }
 
@@ -92,15 +100,23 @@ final class OrderedDocumentEdits: ObservableObject, EditorIngressCoordinating {
 
     func freezeAndDrain() async {
         isAccepting = false
+        onAcceptanceChanged?(false)
         await waitUntilDrained()
     }
 
     func resume() {
         isAccepting = true
+        onAcceptanceChanged?(true)
+    }
+
+    func adoptAuthoritativeMarkdown(_ markdown: String) {
+        guard pendingCount == 0 else { return }
+        lastAcceptedMarkdown = markdown
     }
 
     func invalidate() {
         isAccepting = false
+        onAcceptanceChanged?(false)
         continuation.finish()
         worker?.cancel()
         worker = nil

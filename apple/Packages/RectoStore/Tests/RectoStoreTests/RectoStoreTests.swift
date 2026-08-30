@@ -75,6 +75,25 @@ struct RectoStoreTests {
     #expect(try await store.node(documentLocalId: "doc-1", nodeId: commit.nodeId) != nil)
   }
 
+  @Test("reverting editor ingress to the clean head restores synced state")
+  func cleanIngressRevert() async throws {
+    let store = try makeStore()
+    var cleanDocument = try await seedDocument(store, markdown: "clean")
+    cleanDocument.remoteHeadNodeId = "root"
+    try await store.save(cleanDocument)
+
+    _ = try store.saveEditorIngressSynchronously(
+      documentLocalId: "doc-1", markdown: "A", selection: nil, wordCount: 1)
+    _ = try store.saveEditorIngressSynchronously(
+      documentLocalId: "doc-1", markdown: "clean", selection: nil, wordCount: 1)
+
+    let document = try #require(try await store.document(localId: "doc-1"))
+    #expect(document.draftMarkdown == nil)
+    #expect(document.localHeadNodeId == document.remoteHeadNodeId)
+    #expect(document.syncState == .synced)
+    #expect(try await store.pendingJobs(documentLocalId: "doc-1").isEmpty)
+  }
+
   @Test("a commit onto a head that already moved is rejected, leaving nothing behind")
   func commitRejectsStaleHead() async throws {
     let store = try makeStore()

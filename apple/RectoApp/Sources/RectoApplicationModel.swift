@@ -8,6 +8,18 @@ import RectoSync
 @MainActor
 @Observable
 final class RectoApplicationModel {
+    struct Components {
+        let store: RectoStore
+        let auth: RectoAuth
+        let sync: SyncEngine
+        let registry: DocumentSessionRegistry
+        let library: DocumentLibrary
+    }
+    enum ForegroundSyncAction: Equatable {
+        case stayStopped
+        case resume
+        case recoverThenResume
+    }
     enum StartupState: Equatable {
         case idle
         case loading
@@ -29,11 +41,23 @@ final class RectoApplicationModel {
     private var emailChallenge: EmailCodeChallenge?
     private var authTask: Task<Void, Never>?
     private var syncTask: Task<Void, Never>?
+    private let injectedComponents: Components?
+
+    init(components: Components? = nil) {
+        injectedComponents = components
+    }
 
     func start(configuration: AppConfiguration? = nil) async {
         guard startupState == .idle else { return }
         startupState = .loading
         do {
+            if let injectedComponents {
+                await injectedComponents.auth.start()
+                install(injectedComponents)
+                startupState = .ready
+                await receiveAuthStatus(injectedComponents.auth.status)
+                return
+            }
             let configuration = try configuration ?? AppConfiguration()
             RectoAuth.configureClerk(publishableKey: configuration.clerkPublishableKey)
             let store = try RectoStore(url: RectoStore.defaultURL())
@@ -53,12 +77,8 @@ final class RectoApplicationModel {
             auth.attach(sync: sync)
             auth.attach(sessions: registry)
 
-            self.store = store
-            self.auth = auth
-            self.sync = sync
-            self.registry = registry
-            self.library = library
-            observe(auth: auth, sync: sync)
+            install(Components(
+                store: store, auth: auth, sync: sync, registry: registry, library: library))
             startupState = .ready
             await auth.start()
         } catch {
@@ -167,19 +187,55 @@ final class RectoApplicationModel {
 
     func enterForeground() async {
         guard let auth, let sync else { return }
-        guard await auth.recoverConvexLoginIfNeeded() else { return }
-        await sync.resume()
+        switch Self.foregroundSyncAction(for: auth.status) {
+        case .stayStopped:
+            await sync.stop()
+            return
+        case .resume:
+            await sync.resume()
+        case .recoverThenResume:
+            guard await auth.recoverConvexLoginIfNeeded() else { return }
+            await sync.resume()
+        }
         await refreshDocuments()
+    }
+
+    static func foregroundSyncAction(for status: AuthStatus) -> ForegroundSyncAction {
+        switch status {
+        case .signedIn: .resume
+        case .convexLoginRequired: .recoverThenResume
+        case .loading, .signedOut, .blockedByRetainedWork: .stayStopped
+        }
+    }
+
+    func receiveAuthStatus(_ status: AuthStatus) async {
+        authStatus = status
+        if case .signedOut = status { emailChallenge = nil }
+        await refreshDocuments()
+    }
+
+    private func install(_ components: Components) {
+        store = components.store
+        auth = components.auth
+        sync = components.sync
+        registry = components.registry
+        library = components.library
+        authStatus = components.auth.status
+        observe(auth: components.auth, sync: components.sync)
     }
 
     private func observe(auth: RectoAuth, sync: SyncEngine) {
         authTask?.cancel()
         authTask = Task { [weak self] in
+            // install(_:) copies the current value before this stream replays it.
+            var isInitialValue = true
             for await status in auth.statusUpdates {
                 guard let self else { return }
-                authStatus = status
-                if case .signedOut = status { emailChallenge = nil }
-                await refreshDocuments()
+                if isInitialValue {
+                    isInitialValue = false
+                    continue
+                }
+                await receiveAuthStatus(status)
             }
         }
         syncTask?.cancel()

@@ -42,10 +42,11 @@ struct RootLifecycleAttackTests {
         let registry = DocumentSessionRegistry(store: store, sync: nil, origin: "mac")
         let session = try await registry.session(for: document.localId)
         let queue = OrderedDocumentEdits(store: store, documentLocalId: document.localId) { change in
-            try await session.applyLocalChange(
+            try await session.applyPersistedLocalChange(
                 markdown: change.markdown,
                 selection: change.selection,
-                structural: change.structural
+                structural: change.structural,
+                generation: change.generation
             )
         }
 
@@ -68,13 +69,14 @@ struct RootLifecycleAttackTests {
         let latest = "accepted before app became inactive · 中文 · 🚀"
         let queue = OrderedDocumentEdits(store: store, documentLocalId: document.localId) { change in
             await gate.suspendWrite()
-            try await session.applyLocalChange(
+            try await session.applyPersistedLocalChange(
                 markdown: change.markdown,
                 selection: change.selection,
-                structural: change.structural
+                structural: change.structural,
+                generation: change.generation
             )
         }
-        _ = await registry.registerIngress(queue)
+        _ = try await registry.registerIngress(for: document.localId, queue)
 
         queue.accept(markdown: latest)
         await gate.waitUntilStarted()
@@ -138,7 +140,7 @@ struct RootLifecycleAttackTests {
                 generation: change.generation
             )
         }
-        _ = await registry.registerIngress(queue)
+        _ = try await registry.registerIngress(for: document.localId, queue)
         let expected = "accepted while sign-out begins · 🚀"
         queue.accept(markdown: expected)
         await gate.waitUntilStarted()

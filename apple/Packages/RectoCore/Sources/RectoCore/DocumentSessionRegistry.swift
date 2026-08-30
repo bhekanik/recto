@@ -13,12 +13,8 @@ public protocol EditorIngressCoordinating: Sendable {
 
 /// One `DocumentSession` per document per process.
 ///
-/// The orchestrator's decision (§0) allows the same document in two Mac windows.
-/// That is only safe if both windows drive the *same* actor: two sessions would
-/// each hold their own `GroupingController` seeded at the same head and would
-/// commit sibling nodes for the same keystrokes, forking the tree on every
-/// character. The registry is what makes "shared state" true rather than
-/// hopeful.
+/// Readers share one actor. Only one editable full-snapshot ingress may exist
+/// for a document; independent editors cannot merge stale whole-document text.
 public actor DocumentSessionRegistry: EditSessionCoordinating {
   public nonisolated let store: RectoStore
   private let sync: SyncEngine?
@@ -26,6 +22,7 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
   private let countWords: @Sendable (String) -> Int
   private var sessions: [String: DocumentSession] = [:]
   private var ingresses: [UUID: any EditorIngressCoordinating] = [:]
+  private var ingressDocumentIds: [UUID: String] = [:]
   /// Holder counts live here, not behind an await on the session, so
   /// check-and-remove is never split across a suspension.
   private var holders: [String: Int] = [:]
@@ -95,15 +92,22 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
     if isLast, holders[documentLocalId] == nil { sessions[documentLocalId] = nil }
   }
 
-  public func registerIngress(_ ingress: any EditorIngressCoordinating) async -> UUID {
+  public func registerIngress(
+    for documentLocalId: String, _ ingress: any EditorIngressCoordinating
+  ) async throws -> UUID {
+    guard !ingressDocumentIds.values.contains(documentLocalId) else {
+      throw SessionError.editableHolderExists(documentLocalId)
+    }
     let id = UUID()
     ingresses[id] = ingress
+    ingressDocumentIds[id] = documentLocalId
     if isFrozen { await ingress.freezeAndDrain() }
     return id
   }
 
   public func unregisterIngress(_ id: UUID) async {
     guard let ingress = ingresses.removeValue(forKey: id) else { return }
+    ingressDocumentIds[id] = nil
     await ingress.drain()
   }
 
@@ -156,6 +160,7 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
     sessions.removeAll()
     holders.removeAll()
     ingresses.removeAll()
+    ingressDocumentIds.removeAll()
     for ingress in invalidatedIngresses { await ingress.invalidate() }
     for session in invalidated { await session.invalidate() }
   }

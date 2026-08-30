@@ -45,7 +45,7 @@ struct CloudDocumentView: View {
             RectoEditorView(
                 storage: model.storage,
                 styler: MarkdownStyler(
-                    presentation: .rich,
+                    presentation: model.isEditable ? .rich : .preview,
                     theme: .twilight,
                     undo: .external
                 ),

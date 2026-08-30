@@ -10,6 +10,7 @@ final class CloudDocumentModel {
     let storage: RectoTextStorage
     private(set) var state: DocumentState
     private(set) var errorMessage: String?
+    private(set) var isEditable = true
 
     private let session: DocumentSession
     private let registry: DocumentSessionRegistry
@@ -31,7 +32,16 @@ final class CloudDocumentModel {
             session: session,
             registry: registry
         )
-        model.ingressId = await registry.registerIngress(model.edits)
+        model.edits.onAcceptanceChanged = { [weak model] accepting in
+            model?.isEditable = accepting
+        }
+        do {
+            model.ingressId = try await registry.registerIngress(for: localId, model.edits)
+            model.isEditable = model.edits.isAccepting
+        } catch {
+            await registry.release(localId)
+            throw error
+        }
         return model
     }
 
@@ -46,7 +56,9 @@ final class CloudDocumentModel {
         self.session = session
         self.registry = registry
         storage = RectoTextStorage(documentId: localId, markdown: state.markdown)
-        edits = OrderedDocumentEdits(store: registry.store, documentLocalId: localId) { change in
+        edits = OrderedDocumentEdits(
+            store: registry.store, documentLocalId: localId, initialMarkdown: state.markdown
+        ) { change in
             try await session.applyPersistedLocalChange(
                 markdown: change.markdown,
                 selection: change.selection,
@@ -57,10 +69,7 @@ final class CloudDocumentModel {
         stateTask = Task { [weak self] in
             for await updated in await session.states {
                 guard let self else { return }
-                self.state = updated
-                if edits.pendingCount == 0, storage.markdown != updated.markdown {
-                    storage.markdown = updated.markdown
-                }
+                adopt(updated)
             }
         }
     }
@@ -70,7 +79,9 @@ final class CloudDocumentModel {
 
     func accept(_ markdown: String) {
         guard markdown != storage.markdown || markdown != state.markdown else { return }
-        edits.accept(markdown: markdown)
+        if !edits.accept(markdown: markdown) {
+            storage.markdown = edits.lastAcceptedMarkdown
+        }
     }
 
     func undo() async {
@@ -114,6 +125,7 @@ final class CloudDocumentModel {
         await edits.waitUntilDrained()
         do {
             _ = try await action()
+            if let updated = await session.currentState { adopt(updated) }
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -124,9 +136,17 @@ final class CloudDocumentModel {
         await edits.waitUntilDrained()
         do {
             try await action()
+            if let updated = await session.currentState { adopt(updated) }
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    private func adopt(_ updated: DocumentState) {
+        state = updated
+        guard edits.pendingCount == 0 else { return }
+        edits.adoptAuthoritativeMarkdown(updated.markdown)
+        if storage.markdown != updated.markdown { storage.markdown = updated.markdown }
     }
 }

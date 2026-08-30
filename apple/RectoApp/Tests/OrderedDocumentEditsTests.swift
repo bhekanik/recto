@@ -75,4 +75,73 @@ struct OrderedDocumentEditsTests {
         #expect(try await store.document(localId: document.localId)?.displayMarkdown == second)
         #expect(await session.currentState?.markdown == second)
     }
+
+    @MainActor
+    @Test("reverting to the clean head while an older submit is suspended stays synced")
+    func suspendedCleanRevert() async throws {
+        let store = try RectoStore.inMemory()
+        let localId = "clean-revert"
+        try await store.save(DocumentRecord(
+            localId: localId,
+            title: "Clean revert",
+            markdown: "clean",
+            wordCount: 1,
+            localHeadNodeId: "root",
+            remoteHeadNodeId: "root",
+            syncState: .synced,
+            updatedAt: 0,
+            createdAt: 0
+        ))
+        try await store.mergeRemoteNodes(
+            documentLocalId: localId,
+            nodes: [DocNodeRecord(
+                documentLocalId: localId,
+                nodeId: "root",
+                parentNodeId: nil,
+                patch: TextPatch(from: 0, to: 0, insert: "clean").encoded,
+                snapshot: "clean",
+                origin: "server",
+                createdAt: 0
+            )]
+        )
+        let session = DocumentSession(
+            documentLocalId: localId,
+            store: store,
+            sync: nil,
+            origin: "mac",
+            schedulesTimers: false
+        )
+        try await session.open()
+        let gate = EditGate()
+        let queue = OrderedDocumentEdits(
+            store: store,
+            documentLocalId: localId,
+            initialMarkdown: "clean"
+        ) { change in
+            if change.markdown == "A" { await gate.suspendFirstWrite() }
+            try await session.applyPersistedLocalChange(
+                markdown: change.markdown,
+                selection: change.selection,
+                structural: change.structural,
+                generation: change.generation
+            )
+        }
+
+        queue.accept(markdown: "A")
+        await gate.waitUntilStarted()
+        queue.accept(markdown: "clean")
+
+        let reverted = try #require(try await store.document(localId: localId))
+        #expect(reverted.draftMarkdown == nil)
+        #expect(reverted.syncState == .synced)
+
+        await gate.release()
+        await queue.waitUntilDrained()
+
+        let settled = try #require(try await store.document(localId: localId))
+        #expect(settled.displayMarkdown == "clean")
+        #expect(settled.syncState == .synced)
+        #expect(try await store.pendingJobs(documentLocalId: localId).isEmpty)
+        #expect(await session.currentState?.markdown == "clean")
+    }
 }

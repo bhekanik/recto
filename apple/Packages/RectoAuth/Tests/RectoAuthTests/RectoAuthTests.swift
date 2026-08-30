@@ -274,7 +274,7 @@ struct Round3AuthTests {
     // A draft persisted DURING the freeze — the race the old order allowed:
     // count, then two awaits, then purge.
     let coordinator = Coordinator {
-      try? await store.saveDraft(
+      _ = try? await store.saveDraft(
         documentLocalId: "doc-1", markdown: "typed while signing out", selection: nil,
         wordCount: 4, job: nil)
     }

@@ -2,48 +2,64 @@ import RectoAuth
 import SwiftUI
 
 struct RectoCloudRootView: View {
+    enum Route: Equatable {
+        case opening
+        case startupFailure(String)
+        case signedOut
+        case signedIn
+        case blocked(owner: String, count: Int)
+        case convexLoginRequired
+    }
+
     let model: RectoApplicationModel
 
     var body: some View {
         Group {
-            switch model.startupState {
-            case .idle, .loading:
+            switch Self.route(startup: model.startupState, auth: model.authStatus) {
+            case .opening:
                 ProgressView("Opening Recto…")
                     .task { await model.start() }
-            case .failed(let message):
+            case .startupFailure(let message):
                 ContentUnavailableView(
                     "Synced library is not configured",
                     systemImage: "exclamationmark.icloud",
                     description: Text("\(message) You can still use File > New to edit local Markdown files.")
                 )
-            case .ready:
-                authenticatedContent
+            case .signedOut:
+                EmailSignInView(model: model)
+            case .signedIn:
+                CloudLibraryView(model: model)
+            case .blocked(let owner, let count):
+                RetainedWorkView(model: model, owner: owner, count: count)
+            case .convexLoginRequired:
+                VStack(spacing: 16) {
+                    ContentUnavailableView(
+                        "Cannot reach Recto",
+                        systemImage: "icloud.slash",
+                        description: Text("Your local documents are locked until Recto can verify the signed-in account.")
+                    )
+                    Button("Retry") {
+                        Task { await model.retryConnection() }
+                    }
+                }
             }
         }
         .frame(minWidth: 800, minHeight: 560)
     }
 
-    @ViewBuilder
-    private var authenticatedContent: some View {
-        switch model.authStatus {
-        case .loading:
-            ProgressView("Checking your session…")
-        case .signedOut:
-            EmailSignInView(model: model)
-        case .signedIn:
-            CloudLibraryView(model: model)
-        case .blockedByRetainedWork(let owner, let count):
-            RetainedWorkView(model: model, owner: owner, count: count)
-        case .convexLoginRequired:
-            VStack(spacing: 16) {
-                ContentUnavailableView(
-                    "Cannot reach Recto",
-                    systemImage: "icloud.slash",
-                    description: Text("Your local documents are locked until Recto can verify the signed-in account.")
-                )
-                Button("Retry") {
-                    Task { await model.retryConnection() }
-                }
+    static func route(
+        startup: RectoApplicationModel.StartupState, auth: AuthStatus
+    ) -> Route {
+        switch startup {
+        case .idle, .loading: .opening
+        case .failed(let message): .startupFailure(message)
+        case .ready:
+            switch auth {
+            case .loading: .opening
+            case .signedOut: .signedOut
+            case .signedIn: .signedIn
+            case .blockedByRetainedWork(let owner, let count): .blocked(owner: owner, count: count)
+            case .convexLoginRequired: .convexLoginRequired
             }
         }
     }
