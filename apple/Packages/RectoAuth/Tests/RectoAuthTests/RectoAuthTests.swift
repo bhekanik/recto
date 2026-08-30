@@ -455,6 +455,57 @@ struct AuthPublicationInterleavingTests {
   }
 }
 
+@Suite("account-deletion ordering")
+@MainActor
+struct AccountDeletionOrderingTests {
+  private final class ActiveSession {
+    var id: String?
+
+    init(_ id: String?) { self.id = id }
+  }
+
+  private actor Coordinator: SyncControlling, EditSessionCoordinating {
+    func stop() {}
+    func start() {}
+    func freezeAndFlushAll() {}
+    func resumeAll() {}
+    func invalidateAll() {}
+  }
+
+  @Test("deletion purges its account before a buffered successor claims the mirror")
+  func deletionBeforeSuccessorStillPurgesDeletedAccount() async throws {
+    let store = try RectoStore.inMemory()
+    try await store.setMirrorOwner("user-A")
+    try await store.save(DocumentRecord(
+      localId: "doc-A", title: "A only", markdown: "private", wordCount: 1,
+      localHeadNodeId: "root-A", syncState: .pending, updatedAt: 0, createdAt: 0))
+    _ = try await store.enqueue(OutboxJob(
+      documentLocalId: "doc-A", kind: .commitEdit, clientMutationId: "mutation-A",
+      payload: "{}", createdAt: 0))
+    let auth = RectoAuth(store: store)
+    let coordinator = Coordinator()
+    auth.attach(sync: coordinator)
+    auth.attach(sessions: coordinator)
+    let activeSession = ActiveSession("session-A")
+    auth.convexAuthProvider.activeSessionID = { activeSession.id }
+    auth.convexAuthProvider.cachedLogin = { true }
+    let (events, continuation) = AsyncStream<RectoAuth.LifecycleEvent>.makeStream()
+
+    await auth.startForTesting(
+      restoredUserId: "user-A", restoredSessionID: "session-A", events: events)
+
+    activeSession.id = "session-C"
+    continuation.yield(.accountDeleted)
+    continuation.yield(.sessionChanged(userId: "user-C", sessionID: "session-C"))
+    continuation.finish()
+    await auth.waitForEventListenerForTesting()
+
+    #expect(auth.status == .signedIn(userId: "user-C"))
+    #expect(try await store.mirrorOwner() == "user-C")
+    #expect(try await store.pendingJobCount() == 0)
+  }
+}
+
 @Suite("sign-out safety")
 struct SignOutTests {
   /// Records the stop/start calls an identity change makes.

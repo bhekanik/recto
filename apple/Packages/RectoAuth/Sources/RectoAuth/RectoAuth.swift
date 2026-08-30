@@ -801,7 +801,6 @@ public final class RectoAuth {
   }
 
   private func handleObservedAccountDeleted() async {
-    guard expectedIdentity == nil else { return }
     beginTransition()
     defer { transitionCount -= 1 }
     await sessions?.freezeAndFlushAll()
@@ -816,7 +815,9 @@ public final class RectoAuth {
         "purge after account deletion failed: \(error.localizedDescription, privacy: .public)")
     }
     await sessions?.invalidateAll()
-    status = .signedOut
+    // A later session event may already be observed but cannot run its heavy
+    // transition until this ordered deletion returns. Preserve that successor.
+    status = expectedIdentity == nil ? .signedOut : .loading
   }
 
   private static func activeIdentity(of session: Session?) -> ClerkIdentity? {
