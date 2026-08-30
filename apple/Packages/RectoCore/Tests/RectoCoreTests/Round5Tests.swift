@@ -9,6 +9,54 @@ import Testing
 
 @Suite("round-5 repros")
 struct Round5Tests {
+  private actor EagerIngress: EditorIngressCoordinating {
+    private let session: DocumentSession
+    private let store: RectoStore
+    private let documentLocalId: String
+    private(set) var error: SessionError?
+
+    init(session: DocumentSession, store: RectoStore, documentLocalId: String) {
+      self.session = session
+      self.store = store
+      self.documentLocalId = documentLocalId
+    }
+
+    func drain() {}
+    func freezeAndDrain() {}
+    func invalidate() {}
+
+    func resume() async {
+      do {
+        let markdown = "accepted on resume"
+        let generation = try store.saveEditorIngressSynchronously(
+          documentLocalId: documentLocalId, markdown: markdown, selection: nil, wordCount: 3)
+        try await session.applyPersistedLocalChange(
+          markdown: markdown, selection: nil, generation: generation)
+      } catch let error as SessionError {
+        self.error = error
+      } catch {
+        Issue.record("unexpected error: \(error)")
+      }
+    }
+  }
+
+  @Test("sessions resume before editor ingresses accept new edits")
+  func sessionResumesBeforeIngress() async throws {
+    let directory = Harness.makeDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let harness = try Harness(directory: directory, transport: InMemoryTransport())
+    let localId = try await harness.createLocalDocument()
+    let session = try await harness.registry.session(for: localId)
+    let ingress = EagerIngress(session: session, store: harness.store, documentLocalId: localId)
+    _ = try await harness.registry.registerIngress(for: localId, ingress)
+
+    await harness.registry.freezeAndFlushAll()
+    await harness.registry.resumeAll()
+
+    #expect(await ingress.error == nil)
+    #expect(try await harness.store.document(localId: localId)?.draftMarkdown == "accepted on resume")
+  }
+
   // MARK: - 3. A session opened during a freeze is born frozen
 
   @Test("a window opened while signing out cannot write")

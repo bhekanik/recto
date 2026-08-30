@@ -619,7 +619,8 @@ public final class RectoAuth {
   /// new draft into the gap and lose it without consent.
   public func signOut(discardingUnsynced: Bool = false) async throws {
     beginTransition()
-    expectedIdentity = nil
+    let refusalEpoch = lifecycleEpoch
+    let refusalIdentity = expectedIdentity
     defer { transitionCount -= 1 }
     await sessions?.freezeAndFlushAll()
     await sync?.stop()
@@ -631,16 +632,18 @@ public final class RectoAuth {
       do {
         pending = try await store.unsyncedWorkCount()
       } catch {
-        await sessions?.resumeAll()
-        await sync?.start()
+        await resumeAfterRefusedSignOut(epoch: refusalEpoch, identity: refusalIdentity)
         throw error
       }
       guard pending == 0 else {
-        // Refused: put the app back the way it was.
-        await sessions?.resumeAll()
-        await sync?.start()
+        await resumeAfterRefusedSignOut(epoch: refusalEpoch, identity: refusalIdentity)
         throw RectoAuthError.unsyncedWork(count: pending)
       }
+    }
+
+    if isExpected(epoch: refusalEpoch, identity: refusalIdentity) {
+      lifecycleEpoch += 1
+      expectedIdentity = nil
     }
 
     do {
@@ -656,12 +659,36 @@ public final class RectoAuth {
       // never moves without the rows going with it.
       try await store.purgeAndSetMirrorOwner(nil)
       await sessions?.invalidateAll()
-      status = .signedOut
+      status = expectedIdentity == nil ? .signedOut : .loading
       throw error
     }
     try await store.purgeAndSetMirrorOwner(nil)
     await sessions?.invalidateAll()
-    status = .signedOut
+    status = expectedIdentity == nil ? .signedOut : .loading
+  }
+
+  private func resumeAfterRefusedSignOut(epoch: Int, identity: ClerkIdentity?) async {
+    guard isCurrent(epoch: epoch, identity: identity) else { return }
+    await sessions?.resumeAll()
+    guard isCurrent(epoch: epoch, identity: identity) else {
+      await containSupersededPublication()
+      return
+    }
+    await sync?.start()
+    guard isCurrent(epoch: epoch, identity: identity) else {
+      await containSupersededPublication()
+      return
+    }
+  }
+
+  private func isCurrent(epoch: Int, identity: ClerkIdentity?) -> Bool {
+    guard isExpected(epoch: epoch, identity: identity) else { return false }
+    guard let identity else { return true }
+    return convexAuthProvider.activeSessionID() == identity.sessionID
+  }
+
+  private func isExpected(epoch: Int, identity: ClerkIdentity?) -> Bool {
+    lifecycleEpoch == epoch && expectedIdentity == identity
   }
 
   // MARK: - Private

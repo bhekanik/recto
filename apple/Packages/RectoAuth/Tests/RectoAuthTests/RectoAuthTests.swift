@@ -586,6 +586,172 @@ struct SignOutTests {
   }
 }
 
+@Suite("refused sign-out lifecycle")
+@MainActor
+struct RefusedSignOutLifecycleTests {
+  enum SuspensionPoint: Sendable {
+    case freeze
+    case resume
+  }
+
+  private final class ActiveSession {
+    var id: String?
+
+    init(_ id: String?) { self.id = id }
+  }
+
+  private actor Coordinator: SyncControlling, EditSessionCoordinating {
+    private let suspensionPoint: SuspensionPoint?
+    private var freezeCount = 0
+    private var resumeCount = 0
+    private var isSuspended = false
+    private var releaseGate: CheckedContinuation<Void, Never>?
+    private(set) var isEditable = false
+    private(set) var isRunning = false
+
+    init(suspensionPoint: SuspensionPoint? = nil) {
+      self.suspensionPoint = suspensionPoint
+    }
+
+    func stop() { isRunning = false }
+    func start() { isRunning = true }
+
+    func freezeAndFlushAll() async {
+      freezeCount += 1
+      if suspensionPoint == .freeze, freezeCount == 1 { await suspend() }
+      isEditable = false
+    }
+
+    func resumeAll() async {
+      resumeCount += 1
+      if suspensionPoint == .resume, resumeCount == 2 { await suspend() }
+      isEditable = true
+    }
+
+    func invalidateAll() { isEditable = false }
+
+    private func suspend() async {
+      isSuspended = true
+      await withCheckedContinuation { releaseGate = $0 }
+    }
+
+    func waitUntilSuspended() async {
+      for _ in 0..<10_000 {
+        if isSuspended { return }
+        await Task.yield()
+      }
+      Issue.record("coordinator never reached the requested suspension point")
+    }
+
+    func release() {
+      releaseGate?.resume()
+      releaseGate = nil
+    }
+  }
+
+  private func makeDirtySignedInAuth(
+    suspensionPoint: SuspensionPoint? = nil
+  ) async throws -> (
+    auth: RectoAuth,
+    store: RectoStore,
+    coordinator: Coordinator,
+    session: ActiveSession,
+    continuation: AsyncStream<RectoAuth.LifecycleEvent>.Continuation
+  ) {
+    let store = try RectoStore.inMemory()
+    try await store.setMirrorOwner("user-A")
+    try await store.save(DocumentRecord(
+      localId: "doc-A", title: "A", markdown: "unsent", wordCount: 1,
+      localHeadNodeId: "root-A", syncState: .pending, updatedAt: 0, createdAt: 0))
+    _ = try await store.enqueue(OutboxJob(
+      documentLocalId: "doc-A", kind: .commitEdit, clientMutationId: "mutation-A",
+      payload: "{}", createdAt: 0))
+
+    let auth = RectoAuth(store: store)
+    let coordinator = Coordinator(suspensionPoint: suspensionPoint)
+    auth.attach(sync: coordinator)
+    auth.attach(sessions: coordinator)
+    let session = ActiveSession("session-A")
+    auth.convexAuthProvider.activeSessionID = { session.id }
+    auth.convexAuthProvider.cachedLogin = { true }
+    let (events, continuation) = AsyncStream<RectoAuth.LifecycleEvent>.makeStream()
+    await auth.startForTesting(
+      restoredUserId: "user-A", restoredSessionID: "session-A", events: events)
+    #expect(auth.status == .signedIn(userId: "user-A"))
+    return (auth, store, coordinator, session, continuation)
+  }
+
+  private func expectRefusal(_ task: Task<Void, any Error>) async {
+    do {
+      try await task.value
+      Issue.record("sign-out unexpectedly discarded unsynced work")
+    } catch {
+      #expect(error as? RectoAuthError == .unsyncedWork(count: 1))
+    }
+  }
+
+  @Test("a real revocation after a refused sign-out is still observed")
+  func revocationAfterRefusal() async throws {
+    let context = try await makeDirtySignedInAuth()
+
+    await expectRefusal(Task { try await context.auth.signOut() })
+    context.session.id = nil
+    context.continuation.yield(.sessionChanged(userId: nil, sessionID: nil))
+    context.continuation.finish()
+    await context.auth.waitForEventListenerForTesting()
+
+    #expect(context.auth.status == .signedOut)
+    #expect(try await context.store.mirrorOwner() == "user-A")
+    #expect(try await context.store.pendingJobCount() == 1)
+    #expect(await context.coordinator.isEditable == false)
+    #expect(await context.coordinator.isRunning == false)
+  }
+
+  @Test(
+    "revocation during a refused sign-out cannot be overwritten by its recovery",
+    arguments: [SuspensionPoint.freeze, .resume])
+  func revocationDuringRefusal(_ suspensionPoint: SuspensionPoint) async throws {
+    let context = try await makeDirtySignedInAuth(suspensionPoint: suspensionPoint)
+    let signOut = Task { try await context.auth.signOut() }
+    await context.coordinator.waitUntilSuspended()
+
+    context.session.id = nil
+    context.continuation.yield(.sessionChanged(userId: nil, sessionID: nil))
+    for _ in 0..<10_000 where context.auth.status != .loading { await Task.yield() }
+    await context.coordinator.release()
+    await expectRefusal(signOut)
+    context.continuation.finish()
+    await context.auth.waitForEventListenerForTesting()
+
+    #expect(context.auth.status == .signedOut)
+    #expect(await context.coordinator.isEditable == false)
+    #expect(await context.coordinator.isRunning == false)
+  }
+
+  @Test(
+    "account switch during a refused sign-out cannot be overwritten by its recovery",
+    arguments: [SuspensionPoint.freeze, .resume])
+  func switchDuringRefusal(_ suspensionPoint: SuspensionPoint) async throws {
+    let context = try await makeDirtySignedInAuth(suspensionPoint: suspensionPoint)
+    let signOut = Task { try await context.auth.signOut() }
+    await context.coordinator.waitUntilSuspended()
+
+    context.session.id = "session-B"
+    context.continuation.yield(
+      .sessionChanged(userId: "user-B", sessionID: "session-B"))
+    for _ in 0..<10_000 where context.auth.status != .loading { await Task.yield() }
+    await context.coordinator.release()
+    await expectRefusal(signOut)
+    context.continuation.finish()
+    await context.auth.waitForEventListenerForTesting()
+
+    #expect(context.auth.status == .blockedByRetainedWork(owner: "user-A", count: 1))
+    #expect(try await context.store.mirrorOwner() == "user-A")
+    #expect(await context.coordinator.isEditable == false)
+    #expect(await context.coordinator.isRunning == false)
+  }
+}
+
 @Suite("round-3 auth")
 struct Round3AuthTests {
   /// Records the ordering of everything auth drives, and can write into the

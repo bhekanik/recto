@@ -141,9 +141,13 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
   }
 
   public func resumeAll() async {
+    var resumed: Set<ObjectIdentifier> = []
+    while let session = sessions.values.first(where: { !resumed.contains(ObjectIdentifier($0)) }) {
+      resumed.insert(ObjectIdentifier(session))
+      await session.resume()
+    }
     isFrozen = false
-    for ingress in ingresses.values { await ingress.resume() }
-    for session in sessions.values { await session.resume() }
+    for ingress in Array(ingresses.values) { await ingress.resume() }
   }
 
   /// Empty and drop every session, after an identity change has purged the
