@@ -59,6 +59,9 @@ public struct DocumentRecord: Codable, Sendable, FetchableRecord, PersistableRec
   /// timer captures it and the store refuses the write if it has moved, so a
   /// 250 ms task cannot resurrect the text it was scheduled with over a newer one.
   public var draftRevision: Int
+  /// Revision written synchronously by the editor callback and not yet promoted
+  /// into a history node. Server drafts leave this nil.
+  public var editorIngressRevision: Int?
   public var syncState: SyncState
   /// Set when `syncState == .diverged`: the remote head we refused to adopt.
   public var divergedRemoteHeadNodeId: String?
@@ -83,6 +86,7 @@ public struct DocumentRecord: Codable, Sendable, FetchableRecord, PersistableRec
     remoteMarkdownHeadNodeId: String? = nil,
     queueBlockedReason: String? = nil,
     draftRevision: Int = 0,
+    editorIngressRevision: Int? = nil,
     syncState: SyncState = .pending,
     divergedRemoteHeadNodeId: String? = nil,
     updatedAt: Double,
@@ -104,6 +108,7 @@ public struct DocumentRecord: Codable, Sendable, FetchableRecord, PersistableRec
     self.remoteMarkdownHeadNodeId = remoteMarkdownHeadNodeId
     self.queueBlockedReason = queueBlockedReason
     self.draftRevision = draftRevision
+    self.editorIngressRevision = editorIngressRevision
     self.syncState = syncState
     self.divergedRemoteHeadNodeId = divergedRemoteHeadNodeId
     self.updatedAt = updatedAt

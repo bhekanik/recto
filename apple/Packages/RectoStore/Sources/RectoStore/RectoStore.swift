@@ -7,6 +7,7 @@ public enum StoreError: Error, Equatable, Sendable {
   case documentNotFound(String)
   case nodeNotFound(document: String, node: String)
   case headMoved(expected: String, actual: String)
+  case parentMismatch(expected: String, actual: String?)
   case rootSnapshotMismatch(String)
   /// A scheduled write arrived with a draft revision the document has moved past.
   case staleGeneration(expected: Int, actual: Int)
@@ -69,7 +70,7 @@ public actor RectoStore {
   static let materializationCacheSize = 24
 
   private let logger = Logger(subsystem: "com.bhekani.recto", category: "store")
-  private let writer: any DatabaseWriter
+  private nonisolated let writer: any DatabaseWriter
   public nonisolated let path: String
 
   private static var configuration: Configuration {
@@ -254,6 +255,7 @@ public actor RectoStore {
     markdown: String,
     wordCount: Int,
     expectedHeadNodeId: String,
+    expectedDraftRevision: Int? = nil,
     job: OutboxJob?,
     now: Double = Date().timeIntervalSince1970 * 1000
   ) throws -> DocumentRecord {
@@ -264,6 +266,14 @@ public actor RectoStore {
       guard document.localHeadNodeId == expectedHeadNodeId else {
         throw StoreError.headMoved(
           expected: expectedHeadNodeId, actual: document.localHeadNodeId)
+      }
+      guard node.parentNodeId == expectedHeadNodeId else {
+        throw StoreError.parentMismatch(
+          expected: expectedHeadNodeId, actual: node.parentNodeId)
+      }
+      if let expectedDraftRevision, document.draftRevision != expectedDraftRevision {
+        throw StoreError.staleGeneration(
+          expected: expectedDraftRevision, actual: document.draftRevision)
       }
 
       var stored = node
@@ -278,6 +288,7 @@ public actor RectoStore {
       document.draftMarkdown = nil
       document.draftSelectionAnchor = nil
       document.draftSelectionHead = nil
+      document.editorIngressRevision = nil
       document.updatedAt = now
       document.draftRevision += 1
       if document.syncState != .diverged { document.syncState = .pending }
@@ -331,6 +342,7 @@ public actor RectoStore {
       document.draftMarkdown = nil
       document.draftSelectionAnchor = nil
       document.draftSelectionHead = nil
+      document.editorIngressRevision = nil
       document.updatedAt = now
       document.draftRevision += 1
       if clearDivergence {
@@ -347,7 +359,6 @@ public actor RectoStore {
     }
   }
 
-  /// The debounced draft row: text that has no node yet.
   /// The debounced draft row: text that has no node yet.
   ///
   /// `expectedDraftRevision` is how a scheduled task proves it is not stale. A
@@ -377,9 +388,50 @@ public actor RectoStore {
       document.draftSelectionHead = selection?.head
       document.wordCount = wordCount
       document.updatedAt = now
+      if document.draftMarkdown != nil,
+        document.syncState == .synced || document.syncState == .syncing
+      {
+        document.syncState = .pending
+      }
       document.draftRevision += 1
+      document.editorIngressRevision = document.draftMarkdown == nil ? nil : document.draftRevision
       try document.update(db)
       if var job { try job.insert(db) }
+      return document.draftRevision
+    }
+  }
+
+  /// Synchronous write-ahead boundary for AppKit's synchronous text callback.
+  ///
+  /// `DatabasePool` serializes writes internally. Keeping this one operation
+  /// nonisolated lets the callback put the exact visible snapshot on disk
+  /// before it returns, instead of starting an async task that can lose a race
+  /// with process termination.
+  @discardableResult
+  public nonisolated func saveEditorIngressSynchronously(
+    documentLocalId: String,
+    markdown: String,
+    selection: NodeSelection?,
+    wordCount: Int,
+    now: Double = Date().timeIntervalSince1970 * 1000
+  ) throws -> Int {
+    try writer.write { db in
+      guard var document = try DocumentRecord.fetchOne(db, key: documentLocalId) else {
+        throw StoreError.documentNotFound(documentLocalId)
+      }
+      document.draftMarkdown = markdown == document.markdown ? nil : markdown
+      document.draftSelectionAnchor = selection?.anchor
+      document.draftSelectionHead = selection?.head
+      document.wordCount = wordCount
+      document.updatedAt = now
+      if document.draftMarkdown != nil,
+        document.syncState == .synced || document.syncState == .syncing
+      {
+        document.syncState = .pending
+      }
+      document.draftRevision += 1
+      document.editorIngressRevision = document.draftMarkdown == nil ? nil : document.draftRevision
+      try document.update(db)
       return document.draftRevision
     }
   }
@@ -614,6 +666,7 @@ public actor RectoStore {
       document.draftMarkdown = nil
       document.draftSelectionAnchor = nil
       document.draftSelectionHead = nil
+      document.editorIngressRevision = nil
       document.divergedRemoteHeadNodeId = nil
       document.queueBlockedReason = nil
       document.draftRevision += 1
@@ -679,6 +732,7 @@ public actor RectoStore {
       document.draftMarkdown = nil
       document.draftSelectionAnchor = nil
       document.draftSelectionHead = nil
+      document.editorIngressRevision = nil
       document.divergedRemoteHeadNodeId = nil
       document.queueBlockedReason = nil
       document.draftRevision += 1

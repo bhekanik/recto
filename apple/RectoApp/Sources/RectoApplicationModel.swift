@@ -82,11 +82,16 @@ final class RectoApplicationModel {
         guard var challenge = emailChallenge else { return }
         do {
             try await challenge.verify(code: code)
-            emailChallenge = challenge
+            emailChallenge = nil
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    func useAnotherEmail() {
+        emailChallenge = nil
+        errorMessage = nil
     }
 
     func refreshDocuments() async {
@@ -124,10 +129,30 @@ final class RectoApplicationModel {
         guard let auth else { return }
         do {
             try await auth.signOut()
+            emailChallenge = nil
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    func cancelBlockedSignIn() async {
+        do {
+            try await auth?.cancelBlockedSignIn()
+            emailChallenge = nil
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func discardRetainedWork() async {
+        guard let auth else { return }
+        guard await auth.discardRetainedWorkAndClaim() else {
+            errorMessage = "Recto could not discard the retained work."
+            return
+        }
+        errorMessage = nil
     }
 
     func retryConnection() async {
@@ -136,8 +161,15 @@ final class RectoApplicationModel {
         await refreshDocuments()
     }
 
-    func flushOpenDocuments() async {
+    func leaveActive() async {
         await registry?.flushAll()
+    }
+
+    func enterForeground() async {
+        guard let auth, let sync else { return }
+        guard await auth.recoverConvexLoginIfNeeded() else { return }
+        await sync.resume()
+        await refreshDocuments()
     }
 
     private func observe(auth: RectoAuth, sync: SyncEngine) {
@@ -146,6 +178,7 @@ final class RectoApplicationModel {
             for await status in auth.statusUpdates {
                 guard let self else { return }
                 authStatus = status
+                if case .signedOut = status { emailChallenge = nil }
                 await refreshDocuments()
             }
         }

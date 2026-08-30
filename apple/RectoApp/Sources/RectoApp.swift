@@ -6,11 +6,16 @@ struct RectoApp: App {
     @State private var model = RectoApplicationModel()
 
     var body: some Scene {
-        WindowGroup("Recto", id: "cloud-library") {
+        Window("Recto", id: "cloud-library") {
             RectoCloudRootView(model: model)
                 .onChange(of: scenePhase) { _, phase in
-                    guard phase != .active else { return }
-                    Task { await model.flushOpenDocuments() }
+                    Task {
+                        if phase == .active {
+                            await model.enterForeground()
+                        } else {
+                            await model.leaveActive()
+                        }
+                    }
                 }
         }
         .defaultSize(width: 1_100, height: 760)

@@ -527,6 +527,37 @@ struct StoreTransactionTests {
     #expect(!job.payload.contains("local-root"))
   }
 
+  @Test("commit rejects a node whose parent is not the expected head")
+  func commitRejectsParentHeadMismatch() async throws {
+    let store = try RectoStore.inMemory()
+    try await store.save(
+      DocumentRecord(
+        localId: "doc-parent", title: "Parent defense", markdown: "", wordCount: 0,
+        localHeadNodeId: "server-root", updatedAt: 0, createdAt: 0))
+    try await store.mergeRemoteNodes(
+      documentLocalId: "doc-parent",
+      nodes: [
+        DocNodeRecord(
+          documentLocalId: "doc-parent", nodeId: "server-root", parentNodeId: nil,
+          patch: TextPatch(from: 0, to: 0, insert: "").encoded, snapshot: "",
+          origin: "server", createdAt: 0)
+      ])
+    let orphan = DocNodeRecord(
+      documentLocalId: "doc-parent", nodeId: "child", parentNodeId: "deleted-local-root",
+      patch: computePatch("", "safe").encoded, origin: "mac", createdAt: 1)
+
+    await #expect(
+      throws: StoreError.parentMismatch(
+        expected: "server-root", actual: "deleted-local-root")
+    ) {
+      _ = try await store.commit(
+        documentLocalId: "doc-parent", node: orphan, markdown: "safe", wordCount: 1,
+        expectedHeadNodeId: "server-root", job: nil)
+    }
+    #expect(try await store.node(documentLocalId: "doc-parent", nodeId: "child") == nil)
+    #expect(try await store.document(localId: "doc-parent")?.localHeadNodeId == "server-root")
+  }
+
   @Test("finishOfflineCreate is idempotent")
   func finishOfflineCreateIsIdempotent() async throws {
     let store = try RectoStore.inMemory()

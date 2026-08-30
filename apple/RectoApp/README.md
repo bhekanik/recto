@@ -52,19 +52,29 @@ xcodebuild -project apple/RectoApp/Recto.xcodeproj -scheme Recto \
   -configuration Release -destination 'generic/platform=macOS' \
   -derivedDataPath /tmp/recto-derived-data \
   -archivePath /tmp/Recto-unsigned.xcarchive \
-  CODE_SIGNING_ALLOWED=NO archive
+  CODE_SIGNING_ALLOWED=NO archive \
+  RECTO_CONVEX_URL='https://example.convex.cloud' \
+  RECTO_CLERK_PUBLISHABLE_KEY='pk_test_bW9jay5jbGVyay5hY2NvdW50cy5kZXYk'
+
+apple/RectoApp/scripts/validate-archive-config.sh /tmp/Recto-unsigned.xcarchive
 ```
 
 Inject the two public client values at build or archive time; do not put them in
 source control:
 
 ```sh
-RECTO_CONVEX_URL='https://example.convex.cloud' \
-RECTO_CLERK_PUBLISHABLE_KEY='pk_live_…' \
 xcodebuild -project apple/RectoApp/Recto.xcodeproj -scheme Recto \
   -configuration Release -destination 'generic/platform=macOS' \
-  -archivePath /tmp/Recto.xcarchive archive
+  -archivePath /tmp/Recto.xcarchive archive \
+  RECTO_CONVEX_URL='https://example.convex.cloud' \
+  RECTO_CLERK_PUBLISHABLE_KEY='pk_test_bW9jay5jbGVyay5hY2NvdW50cy5kZXYk'
+
+apple/RectoApp/scripts/validate-archive-config.sh /tmp/Recto.xcarchive
 ```
+
+Xcode build settings must trail the `archive` action. Shell environment
+variables with these names are not imported automatically by the generated
+project.
 
 The target uses bundle ID `com.bhekani.recto`, team `WAVMJLFY95`, automatic
 signing, hardened runtime, App Sandbox, outbound network access and

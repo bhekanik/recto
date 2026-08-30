@@ -12,6 +12,36 @@ import Testing
 ///  two-client fast-forward and divergence flows pass."
 @Suite("N4 acceptance")
 struct AcceptanceTests {
+  @Test("an open offline session rebases onto the acknowledged server root")
+  func openSessionRebasesAfterOfflineRootAdoption() async throws {
+    let store = try RectoStore.inMemory()
+    let library = DocumentLibrary(store: store, sync: nil, origin: "mac")
+    let local = try await library.createDocument(title: "Root race")
+    let oldRoot = local.localHeadNodeId
+    let session = DocumentSession(
+      documentLocalId: local.localId, store: store, sync: nil, origin: "mac",
+      schedulesTimers: false)
+    try await session.open()
+    let markdown = "typed while create acknowledgement lands · 中文 · 🚀"
+    let generation = try store.saveEditorIngressSynchronously(
+      documentLocalId: local.localId, markdown: markdown, selection: nil, wordCount: 8)
+
+    try await store.finishOfflineCreate(
+      documentLocalId: local.localId, convexId: "server-document",
+      serverRootNodeId: "server-root", rewritePayloadNodeIds: { raw, _, _ in raw })
+    try await session.applyPersistedLocalChange(
+      markdown: markdown, selection: nil, generation: generation)
+    try await session.flush()
+
+    let restored = try #require(try await store.document(localId: local.localId))
+    #expect(restored.displayMarkdown == markdown)
+    #expect(restored.localHeadNodeId != "server-root")
+    let committed = try #require(
+      try await store.node(documentLocalId: local.localId, nodeId: restored.localHeadNodeId))
+    #expect(committed.parentNodeId == "server-root")
+    #expect(try await store.node(documentLocalId: local.localId, nodeId: oldRoot) == nil)
+  }
+
   @Test("lost offline-create answer replays one server document after relaunch")
   func lostCreateAcknowledgementIsIdempotentAcrossRelaunch() async throws {
     let directory = Harness.makeDirectory()

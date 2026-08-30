@@ -19,6 +19,11 @@ struct EmailSignInView: View {
                 Button("Verify code", action: verify)
                     .buttonStyle(.borderedProminent)
                     .disabled(code.isEmpty || isWorking)
+                Button("Use another email") {
+                    code = ""
+                    model.useAnotherEmail()
+                }
+                .disabled(isWorking)
             } else {
                 TextField("Email address", text: $emailAddress)
                     .textFieldStyle(.roundedBorder)

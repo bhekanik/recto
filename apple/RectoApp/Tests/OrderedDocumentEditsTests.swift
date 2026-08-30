@@ -50,21 +50,22 @@ struct OrderedDocumentEditsTests {
         let gate = EditGate()
         let first = "first"
         let second = "second wins · 中文 · 🚀"
-        let queue = OrderedDocumentEdits { change in
+        let queue = OrderedDocumentEdits(store: store, documentLocalId: document.localId) { change in
             if change.markdown == first {
                 await gate.suspendFirstWrite()
             }
-            try await session.applyLocalChange(
+            try await session.applyPersistedLocalChange(
                 markdown: change.markdown,
                 selection: change.selection,
-                structural: change.structural
+                structural: change.structural,
+                generation: change.generation
             )
         }
 
         queue.accept(markdown: first)
         queue.accept(markdown: second)
         await gate.waitUntilStarted()
-        #expect(try await store.document(localId: document.localId)?.displayMarkdown == "")
+        #expect(try await store.document(localId: document.localId)?.displayMarkdown == second)
 
         await gate.release()
         await queue.waitUntilDrained()

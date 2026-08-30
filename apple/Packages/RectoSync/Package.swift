@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
   name: "RectoSync",
-  platforms: [.macOS(.v26), .iOS(.v26)],
+  platforms: [.macOS("26.2"), .iOS(.v26)],
   products: [
     .library(name: "RectoSync", targets: ["RectoSync"]),
     // A faithful in-memory Convex stand-in, shared by this package's tests and

@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
   name: "RectoAuth",
-  platforms: [.macOS(.v26), .iOS(.v26)],
+  platforms: [.macOS("26.2"), .iOS(.v26)],
   products: [
     .library(name: "RectoAuth", targets: ["RectoAuth"])
   ],

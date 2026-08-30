@@ -1,3 +1,4 @@
+import Foundation
 import Observation
 import RectoCore
 import RectoEditor
@@ -13,6 +14,7 @@ final class CloudDocumentModel {
     private let session: DocumentSession
     private let registry: DocumentSessionRegistry
     private let edits: OrderedDocumentEdits
+    private var ingressId: UUID?
     private var stateTask: Task<Void, Never>?
     private var isClosed = false
 
@@ -23,12 +25,14 @@ final class CloudDocumentModel {
             await registry.release(localId)
             throw SessionError.notOpen
         }
-        return CloudDocumentModel(
+        let model = CloudDocumentModel(
             localId: localId,
             state: state,
             session: session,
             registry: registry
         )
+        model.ingressId = await registry.registerIngress(model.edits)
+        return model
     }
 
     private init(
@@ -42,11 +46,12 @@ final class CloudDocumentModel {
         self.session = session
         self.registry = registry
         storage = RectoTextStorage(documentId: localId, markdown: state.markdown)
-        edits = OrderedDocumentEdits { change in
-            try await session.applyLocalChange(
+        edits = OrderedDocumentEdits(store: registry.store, documentLocalId: localId) { change in
+            try await session.applyPersistedLocalChange(
                 markdown: change.markdown,
                 selection: change.selection,
-                structural: change.structural
+                structural: change.structural,
+                generation: change.generation
             )
         }
         stateTask = Task { [weak self] in
@@ -92,11 +97,15 @@ final class CloudDocumentModel {
         guard !isClosed else { return }
         isClosed = true
         stateTask?.cancel()
-        await edits.waitUntilDrained()
+        await edits.freezeAndDrain()
         do {
             try await session.flush()
         } catch {
             errorMessage = error.localizedDescription
+        }
+        if let ingressId {
+            await registry.unregisterIngress(ingressId)
+            self.ingressId = nil
         }
         await registry.release(localId)
     }

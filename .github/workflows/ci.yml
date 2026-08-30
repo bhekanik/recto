@@ -164,19 +164,27 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/recto-debug" \
             CODE_SIGNING_ALLOWED=NO \
             | tail -40
-      - name: Release build
+      - name: Release archive
         run: |
-          set -o pipefail
-          xcodebuild build \
+          set -euo pipefail
+          xcodebuild archive \
             -project apple/RectoApp/Recto.xcodeproj \
             -scheme Recto \
             -configuration Release \
             -destination 'generic/platform=macOS' \
             -derivedDataPath "$RUNNER_TEMP/recto-release" \
+            -archivePath "$RUNNER_TEMP/Recto.xcarchive" \
             CODE_SIGNING_ALLOWED=NO \
-            | tail -40
+            RECTO_CONVEX_URL='https://example.convex.cloud' \
+            RECTO_CLERK_PUBLISHABLE_KEY='pk_test_bW9jay5jbGVyay5hY2NvdW50cy5kZXYk' \
+            2>&1 | tee "$RUNNER_TEMP/recto-archive.log"
+          if grep -q "built for newer 'macOS' version" "$RUNNER_TEMP/recto-archive.log"; then
+            echo "::error::A linked object requires a newer macOS deployment target."
+            exit 1
+          fi
+          apple/RectoApp/scripts/validate-archive-config.sh "$RUNNER_TEMP/Recto.xcarchive"
           lipo \
-            "$RUNNER_TEMP/recto-release/Build/Products/Release/Recto.app/Contents/MacOS/Recto" \
+            "$RUNNER_TEMP/Recto.xcarchive/Products/Applications/Recto.app/Contents/MacOS/Recto" \
             -verify_arch arm64
 
   # Swift packages under apple/Packages (plan 023 N4). Hermetic: the live Convex
@@ -184,7 +192,7 @@ jobs:
   # RECTO_CLERK_PUBLISHABLE_KEY are set, and CI deliberately does not set them —
   # the shared dev deployment is not isolated per run.
   #
-  # Needs the macOS 26 SDK: the packages declare .macOS(.v26) per D-N9.
+  # Needs the macOS 26 SDK. Convex's binary requires macOS 26.2.
   apple-core:
     runs-on: macos-26
     steps:

@@ -2,7 +2,7 @@ name: Recto
 options:
   bundleIdPrefix: com.bhekani
   deploymentTarget:
-    macOS: "26.0"
+    macOS: "26.2"
   createIntermediateGroups: true
   groupSortPosition: top
 
@@ -87,8 +87,6 @@ targets:
         COMBINE_HIDPI_IMAGES: YES
         ENABLE_HARDENED_RUNTIME: YES
         ARCHS: arm64
-        RECTO_CLERK_PUBLISHABLE_KEY: ""
-        RECTO_CONVEX_URL: ""
         SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
 
   RectoTests:

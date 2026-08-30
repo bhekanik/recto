@@ -4,6 +4,13 @@ import RectoAuth
 import RectoStore
 import RectoSync
 
+public protocol EditorIngressCoordinating: Sendable {
+  func drain() async
+  func freezeAndDrain() async
+  func resume() async
+  func invalidate() async
+}
+
 /// One `DocumentSession` per document per process.
 ///
 /// The orchestrator's decision (§0) allows the same document in two Mac windows.
@@ -13,11 +20,12 @@ import RectoSync
 /// character. The registry is what makes "shared state" true rather than
 /// hopeful.
 public actor DocumentSessionRegistry: EditSessionCoordinating {
-  private let store: RectoStore
+  public nonisolated let store: RectoStore
   private let sync: SyncEngine?
   private let origin: String
   private let countWords: @Sendable (String) -> Int
   private var sessions: [String: DocumentSession] = [:]
+  private var ingresses: [UUID: any EditorIngressCoordinating] = [:]
   /// Holder counts live here, not behind an await on the session, so
   /// check-and-remove is never split across a suspension.
   private var holders: [String: Int] = [:]
@@ -87,6 +95,18 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
     if isLast, holders[documentLocalId] == nil { sessions[documentLocalId] = nil }
   }
 
+  public func registerIngress(_ ingress: any EditorIngressCoordinating) async -> UUID {
+    let id = UUID()
+    ingresses[id] = ingress
+    if isFrozen { await ingress.freezeAndDrain() }
+    return id
+  }
+
+  public func unregisterIngress(_ id: UUID) async {
+    guard let ingress = ingresses.removeValue(forKey: id) else { return }
+    await ingress.drain()
+  }
+
   /// Returns true when that was the last holder.
   @discardableResult
   private func releaseHolder(_ documentLocalId: String) -> Bool {
@@ -101,6 +121,7 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
 
   /// Flush every open document — app termination, background, log out.
   public func flushAll() async {
+    for ingress in ingresses.values { await ingress.drain() }
     for session in sessions.values { try? await session.flush() }
   }
 
@@ -110,12 +131,14 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
     // Registry-wide first and synchronously, so sessions opened during the
     // awaits below are born frozen too.
     isFrozen = true
+    for ingress in ingresses.values { await ingress.freezeAndDrain() }
     for session in sessions.values { await session.freeze() }
     for session in sessions.values { try? await session.flush() }
   }
 
   public func resumeAll() async {
     isFrozen = false
+    for ingress in ingresses.values { await ingress.resume() }
     for session in sessions.values { await session.resume() }
   }
 
@@ -129,8 +152,11 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
   public func invalidateAll() async {
     isFrozen = true
     let invalidated = Array(sessions.values)
+    let invalidatedIngresses = Array(ingresses.values)
     sessions.removeAll()
     holders.removeAll()
+    ingresses.removeAll()
+    for ingress in invalidatedIngresses { await ingress.invalidate() }
     for session in invalidated { await session.invalidate() }
   }
 

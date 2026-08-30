@@ -106,6 +106,58 @@ struct AuthFeatureTests {
   }
 }
 
+@Suite("cold session restoration")
+struct ColdSessionRestorationTests {
+  private actor Coordinator: SyncControlling, EditSessionCoordinating {
+    private(set) var events: [String] = []
+    func stop() async { events.append("sync.stop") }
+    func start() async { events.append("sync.start") }
+    func freezeAndFlushAll() async { events.append("sessions.freeze") }
+    func resumeAll() async { events.append("sessions.resume") }
+    func invalidateAll() async { events.append("sessions.invalidate") }
+  }
+
+  @Test("a restored Clerk session authenticates Convex and starts sync")
+  func restoredSessionStartsSync() async throws {
+    let store = try RectoStore.inMemory()
+    try await store.setMirrorOwner("user-restored")
+    let auth = await RectoAuth(store: store)
+    let coordinator = Coordinator()
+    await auth.attach(sync: coordinator)
+    await auth.attach(sessions: coordinator)
+    let logins = Counter()
+    await MainActor.run {
+      auth.convexAuthProvider.activeSessionID = { "session-restored" }
+      auth.convexAuthProvider.cachedLogin = { await logins.bump(); return true }
+    }
+
+    await auth.restoreSessionForTesting(userId: "user-restored")
+
+    #expect(await logins.value == 1)
+    #expect(await auth.status == .signedIn(userId: "user-restored"))
+    #expect(await coordinator.events == ["sessions.resume", "sync.start"])
+  }
+
+  @Test("a failed restored login locks the mirror and keeps sync stopped")
+  func restoredSessionFailureBlocksSync() async throws {
+    let store = try RectoStore.inMemory()
+    try await store.setMirrorOwner("user-restored")
+    let auth = await RectoAuth(store: store)
+    let coordinator = Coordinator()
+    await auth.attach(sync: coordinator)
+    await auth.attach(sessions: coordinator)
+    await MainActor.run {
+      auth.convexAuthProvider.activeSessionID = { "session-restored" }
+      auth.convexAuthProvider.cachedLogin = { false }
+    }
+
+    await auth.restoreSessionForTesting(userId: "user-restored")
+
+    #expect(await auth.status == .convexLoginRequired(userId: "user-restored"))
+    #expect(await coordinator.events.contains("sync.start") == false)
+  }
+}
+
 @Suite("sign-out safety")
 struct SignOutTests {
   /// Records the stop/start calls an identity change makes.
@@ -433,6 +485,23 @@ struct Round5AuthTests {
     #expect(await auth.status == .signedIn(userId: "user_B"))
     #expect(await coordinator.events.contains("sessions.resume"))
     #expect(await coordinator.events.contains("sync.start"))
+  }
+
+  @Test("cancelling a blocked switch signs out without deleting retained work")
+  func cancelBlockedSwitchPreservesOwner() async throws {
+    let store = try await storeOwnedByA(withWork: true)
+    let auth = await RectoAuth(store: store)
+    let coordinator = Coordinator()
+    await auth.attach(sync: coordinator)
+    #expect(try await auth.claimMirrorForTesting(userId: "user_B") == false)
+
+    try await auth.cancelBlockedSignIn()
+
+    #expect(await auth.status == .signedOut)
+    #expect(try await store.mirrorOwner() == "user_A")
+    #expect(try await store.documents().count == 1)
+    #expect(try await store.pendingJobCount() == 1)
+    #expect(await coordinator.events.contains("sync.stop"))
   }
 
   @Test("a store that cannot be counted blocks rather than authorises a purge")

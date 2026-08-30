@@ -170,8 +170,7 @@ public final class RectoAuth {
     // begins as `.loading`, so there is no "previous user" to compare against
     // and nothing else would ever notice.
     let restored = Self.activeUserId(of: Clerk.shared.session)
-    guard await claimMirror(for: restored) else { return }
-    updateStatus(from: Clerk.shared.session)
+    await restoreSession(userId: restored)
 
     eventListener?.cancel()
     eventListener = Task { [weak self] in
@@ -190,6 +189,20 @@ public final class RectoAuth {
         }
       }
     }
+  }
+
+  private func restoreSession(userId: String?) async {
+    guard await claimMirror(for: userId) else { return }
+    guard let userId else {
+      status = .signedOut
+      await sync?.stop()
+      return
+    }
+    await publishSignedIn(userId, blockingOnFailure: true)
+  }
+
+  func restoreSessionForTesting(userId: String?) async {
+    await restoreSession(userId: userId)
   }
 
   /// The ONE path an owner transition takes.
@@ -536,6 +549,17 @@ public final class RectoAuth {
     return await completeDiscard(userId: userId)
   }
 
+  /// Abandon the attempted account switch without touching the retained mirror.
+  public func cancelBlockedSignIn() async throws {
+    guard case .blockedByRetainedWork = status else { return }
+    await sync?.stop()
+    await convexAuthProvider.logoutConvexClient()
+    if Self.isClerkConfigured {
+      try await convexAuthProvider.logout()
+    }
+    status = .signedOut
+  }
+
   private func completeDiscard(userId: String) async -> Bool {
     guard await claimMirror(for: userId, discardingRetainedWork: true) else { return false }
     await sessions?.invalidateAll()
@@ -561,10 +585,6 @@ public final class RectoAuth {
     }
     await sessions?.invalidateAll()
     status = .signedOut
-  }
-
-  private func updateStatus(from session: Session?) {
-    status = Self.activeUserId(of: session).map { AuthStatus.signedIn(userId: $0) } ?? .signedOut
   }
 
   private static func activeUserId(of session: Session?) -> String? {

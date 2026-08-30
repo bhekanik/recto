@@ -33,11 +33,7 @@ struct RectoCloudRootView: View {
         case .signedIn:
             CloudLibraryView(model: model)
         case .blockedByRetainedWork(let owner, let count):
-            ContentUnavailableView(
-                "Unsynced work is protected",
-                systemImage: "externaldrive.badge.exclamationmark",
-                description: Text("\(count) change(s) belong to \(owner). Sign back into that account to recover them.")
-            )
+            RetainedWorkView(model: model, owner: owner, count: count)
         case .convexLoginRequired:
             VStack(spacing: 16) {
                 ContentUnavailableView(
@@ -48,6 +44,38 @@ struct RectoCloudRootView: View {
                 Button("Retry") {
                     Task { await model.retryConnection() }
                 }
+            }
+        }
+    }
+}
+
+private struct RetainedWorkView: View {
+    let model: RectoApplicationModel
+    let owner: String
+    let count: Int
+    @State private var confirmingDiscard = false
+
+    var body: some View {
+        VStack(spacing: 16) {
+            ContentUnavailableView(
+                "Unsynced work is protected",
+                systemImage: "externaldrive.badge.exclamationmark",
+                description: Text("\(count) change(s) belong to \(owner). Sign back into that account to recover them.")
+            )
+            Button("Use the retained account") {
+                Task { await model.cancelBlockedSignIn() }
+            }
+            Button("Discard retained work", role: .destructive) {
+                confirmingDiscard = true
+            }
+        }
+        .confirmationDialog(
+            "Permanently discard \(count) unsynced change(s)?",
+            isPresented: $confirmingDiscard,
+            titleVisibility: .visible
+        ) {
+            Button("Discard", role: .destructive) {
+                Task { await model.discardRetainedWork() }
             }
         }
     }
