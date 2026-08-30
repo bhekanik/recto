@@ -360,7 +360,6 @@ export function PaneEditor({
 	// sync has already seeded the *previous* active pane. Seed this pane once,
 	// retrying until Milkdown's async ProseMirror view is live. Guarded so it
 	// never re-seeds a pane the writer has since edited or cleared.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: runs once per mount; sync?.markdown only gates content availability
 	useEffect(() => {
 		if (freshSeedDoneRef.current) return;
 		if (!editorReady || !documentId || leaf.mode === "preview") return;
