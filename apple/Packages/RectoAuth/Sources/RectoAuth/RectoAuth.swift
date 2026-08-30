@@ -102,8 +102,13 @@ public struct EmailCodeChallenge {
 @MainActor
 public final class RectoAuth {
   enum LifecycleEvent: Sendable {
-    case sessionChanged(userId: String?)
+    case sessionChanged(userId: String?, sessionID: String?)
     case accountDeleted
+  }
+
+  private struct ClerkIdentity: Sendable, Equatable {
+    let userID: String
+    let sessionID: String
   }
 
   private let logger = Logger(subsystem: "com.bhekani.recto", category: "auth")
@@ -116,11 +121,11 @@ public final class RectoAuth {
   private var clerkEventForwarder: Task<Void, Never>?
   private var transitionCount = 0
   private var lifecycleEpoch = 0
+  private var expectedIdentity: ClerkIdentity?
 
-  private struct RecoveryLease {
+  private struct IdentityLease {
     let lifecycleEpoch: Int
-    let userId: String
-    let sessionID: String
+    let identity: ClerkIdentity
   }
 
   private func beginTransition() {
@@ -194,26 +199,27 @@ public final class RectoAuth {
     eventListener?.cancel()
     clerkEventForwarder?.cancel()
     let events = clerkLifecycleEvents()
-    let restored = Self.activeUserId(of: Clerk.shared.session)
-    await start(restoredUserId: restored, events: events)
+    let restored = Self.activeIdentity(of: Clerk.shared.session)
+    await start(restoredIdentity: restored, events: events)
   }
 
   private func start(
-    restoredUserId: String?,
+    restoredIdentity: ClerkIdentity?,
     events: AsyncStream<LifecycleEvent>
   ) async {
     // Cold start: the database on disk may belong to somebody else. `status`
     // begins as `.loading`, so there is no "previous user" to compare against
     // and nothing else would ever notice.
-    await restoreSession(userId: restoredUserId)
+    await restoreSession(identity: restoredIdentity)
 
     eventListener = Task { [weak self] in
       for await event in events {
         if Task.isCancelled { break }
         guard let self else { break }
         switch event {
-        case .sessionChanged(let userId):
-          await self.performIdentityTransition(to: userId)
+        case .sessionChanged(let userID, let sessionID):
+          await self.performIdentityTransition(
+            to: Self.identity(userID: userID, sessionID: sessionID))
         case .accountDeleted:
           await self.handleAccountDeleted()
         }
@@ -229,9 +235,11 @@ public final class RectoAuth {
         if Task.isCancelled { break }
         switch event {
         case .sessionChanged(_, let newSession):
-          continuation.yield(.sessionChanged(userId: Self.activeUserId(of: newSession)))
+          let identity = Self.activeIdentity(of: newSession)
+          continuation.yield(
+            .sessionChanged(userId: identity?.userID, sessionID: identity?.sessionID))
         case .signedOut:
-          continuation.yield(.sessionChanged(userId: nil))
+          continuation.yield(.sessionChanged(userId: nil, sessionID: nil))
         case .accountDeleted:
           continuation.yield(.accountDeleted)
         default:
@@ -245,29 +253,35 @@ public final class RectoAuth {
 
   func startForTesting(
     restoredUserId: String?,
+    restoredSessionID: String? = nil,
     events: AsyncStream<LifecycleEvent>
   ) async {
     eventListener?.cancel()
     clerkEventForwarder?.cancel()
-    await start(restoredUserId: restoredUserId, events: events)
+    let identity = Self.identity(userID: restoredUserId, sessionID: restoredSessionID)
+    await start(restoredIdentity: identity, events: events)
   }
 
   func waitForEventListenerForTesting() async {
     await eventListener?.value
   }
 
-  private func restoreSession(userId: String?) async {
-    guard await claimMirror(for: userId) else { return }
-    guard let userId else {
+  private func restoreSession(identity: ClerkIdentity?) async {
+    expectedIdentity = identity
+    guard await claimMirror(for: identity?.userID) else { return }
+    guard let identity else {
       status = .signedOut
       await sync?.stop()
       return
     }
-    await publishSignedIn(userId, blockingOnFailure: true)
+    guard let lease = identityLease(for: identity) else { return }
+    await publishSignedIn(identity, blockingOnFailure: true, lease: lease)
   }
 
   func restoreSessionForTesting(userId: String?) async {
-    await restoreSession(userId: userId)
+    let identity = Self.identity(
+      userID: userId, sessionID: convexAuthProvider.activeSessionID())
+    await restoreSession(identity: identity)
   }
 
   /// The ONE path an owner transition takes.
@@ -352,17 +366,23 @@ public final class RectoAuth {
   /// Test seam for a direct active-to-active session change.
   func handleSessionSwitchForTesting(from previousUserId: String, toUserId: String) async {
     status = .signedIn(userId: previousUserId)
-    await performIdentityTransition(to: toUserId)
+    expectedIdentity = ClerkIdentity(userID: previousUserId, sessionID: "previous-test-session")
+    guard let nextSessionID = convexAuthProvider.activeSessionID() else { return }
+    await performIdentityTransition(
+      to: ClerkIdentity(userID: toUserId, sessionID: nextSessionID))
   }
 
   /// Test seam for a session Clerk revoked externally.
   func handleSessionRevokedForTesting(previousUserId: String) async {
     status = .signedIn(userId: previousUserId)
+    expectedIdentity = ClerkIdentity(userID: previousUserId, sessionID: "previous-test-session")
     await performIdentityTransition(to: nil)
   }
 
   func handleSessionChangeForTesting(to userId: String?) async {
-    await performIdentityTransition(to: userId)
+    await performIdentityTransition(
+      to: Self.identity(
+        userID: userId, sessionID: convexAuthProvider.activeSessionID()))
   }
 
   func handleAccountDeletedForTesting() async {
@@ -378,36 +398,44 @@ public final class RectoAuth {
   /// deliver the new account's results into the old account's mirror.
   @discardableResult
   private func publishSignedIn(
-    _ userId: String,
+    _ identity: ClerkIdentity,
     blockingOnFailure: Bool,
-    recoveryLease: RecoveryLease? = nil
+    lease: IdentityLease
   ) async -> Bool {
+    guard isCurrent(lease) else { return false }
     let loginSucceeded = await convexAuthProvider.syncActiveSession()
-    guard isCurrent(recoveryLease) else { return false }
+    guard isCurrent(lease) else { return false }
     guard loginSucceeded else {
       // convex-swift keeps the previous account's `authBridge` and FFI callback
       // when a login fails — it publishes `unauthenticated`, but only `logout()`
       // clears those. Resuming sessions and starting sockets here opens
       // subscriptions that can still authenticate as the PREVIOUS user and copy
       // their documents into a mirror that now belongs to this one.
-      logger.error("Convex refused the login for \(userId, privacy: .public); sync stays stopped")
+      logger.error(
+        "Convex refused the login for \(identity.userID, privacy: .public); sync stays stopped")
       await convexAuthProvider.dropConvexBridge()
-      guard isCurrent(recoveryLease) else { return false }
-      if blockingOnFailure { status = .convexLoginRequired(userId: userId) }
+      guard isCurrent(lease) else { return false }
+      if blockingOnFailure { status = .convexLoginRequired(userId: identity.userID) }
       return false
     }
-    status = .signedIn(userId: userId)
+    status = .signedIn(userId: identity.userID)
     await sessions?.resumeAll()
-    guard isCurrent(recoveryLease) else { return false }
+    guard isCurrent(lease) else { return false }
     await sync?.start()
     return true
   }
 
-  private func isCurrent(_ lease: RecoveryLease?) -> Bool {
-    guard let lease else { return true }
-    return lifecycleEpoch == lease.lifecycleEpoch
-      && status.userId == lease.userId
-      && convexAuthProvider.activeSessionID() == lease.sessionID
+  private func identityLease(for identity: ClerkIdentity) -> IdentityLease? {
+    guard expectedIdentity == identity,
+      convexAuthProvider.activeSessionID() == identity.sessionID
+    else { return nil }
+    return IdentityLease(lifecycleEpoch: lifecycleEpoch, identity: identity)
+  }
+
+  private func isCurrent(_ lease: IdentityLease) -> Bool {
+    lifecycleEpoch == lease.lifecycleEpoch
+      && expectedIdentity == lease.identity
+      && convexAuthProvider.activeSessionID() == lease.identity.sessionID
   }
 
   /// Retry a cached Convex login that failed, with the sockets down.
@@ -434,13 +462,12 @@ public final class RectoAuth {
       return false
     }
     guard let sessionID = convexAuthProvider.activeSessionID() else { return false }
-    let lease = RecoveryLease(
-      lifecycleEpoch: lifecycleEpoch, userId: userId, sessionID: sessionID)
+    let identity = ClerkIdentity(userID: userId, sessionID: sessionID)
+    guard let lease = identityLease(for: identity) else { return false }
     logger.info("retrying the cached Convex login with the sockets stopped")
     await sync?.stop()
     guard isCurrent(lease) else { return false }
-    return await publishSignedIn(
-      userId, blockingOnFailure: blocking, recoveryLease: lease)
+    return await publishSignedIn(identity, blockingOnFailure: blocking, lease: lease)
   }
 
   /// Status changes, for the UI and for `RectoSync` (which must re-subscribe on
@@ -510,6 +537,7 @@ public final class RectoAuth {
   /// new draft into the gap and lose it without consent.
   public func signOut(discardingUnsynced: Bool = false) async throws {
     beginTransition()
+    expectedIdentity = nil
     defer { transitionCount -= 1 }
     await sessions?.freezeAndFlushAll()
     await sync?.stop()
@@ -559,11 +587,11 @@ public final class RectoAuth {
   /// The ONE ordering an identity change takes: freeze editing, stop and await
   /// every socket, settle mirror ownership, change the Convex identity, publish,
   /// and only then bring the sockets back.
-  private func performIdentityTransition(to nextUserId: String?) async {
-    let previousUserId = status.userId
-    guard previousUserId != nextUserId else { return }
+  private func performIdentityTransition(to nextIdentity: ClerkIdentity?) async {
+    guard expectedIdentity != nextIdentity else { return }
 
     beginTransition()
+    expectedIdentity = nextIdentity
     defer { transitionCount -= 1 }
     // Stop everything that could still write BEFORE any decision is taken.
     await sessions?.freezeAndFlushAll()
@@ -572,7 +600,7 @@ public final class RectoAuth {
     // Clerk revoked the session out from under us (another device signed out,
     // an admin ended it, the token was refused). We cannot ask for consent, and
     // deleting offline work without it is not ours to do.
-    if nextUserId == nil {
+    if nextIdentity == nil {
       let pending: Int
       do {
         pending = try await store.unsyncedWorkCount()
@@ -604,20 +632,21 @@ public final class RectoAuth {
       return
     }
 
-    guard let nextUserId else { return }
-    await switchOwner(to: nextUserId)
+    guard let nextIdentity else { return }
+    await switchOwner(to: nextIdentity)
   }
 
   /// A direct A-to-B switch. NOTHING is deleted here: `claimMirror` owns that
   /// decision, and purging first would hand it a clean store and remove its
   /// only chance to object.
-  private func switchOwner(to nextUserId: String) async {
-    guard await claimMirror(for: nextUserId) else { return }
+  private func switchOwner(to nextIdentity: ClerkIdentity) async {
+    guard await claimMirror(for: nextIdentity.userID) else { return }
     // Freezing stopped new writes; it did not empty what the open windows had
     // already loaded. This is the only point at which A's text is gone from
     // both SQLite and memory.
     await sessions?.invalidateAll()
-    await publishSignedIn(nextUserId, blockingOnFailure: true)
+    guard let lease = identityLease(for: nextIdentity) else { return }
+    await publishSignedIn(nextIdentity, blockingOnFailure: true, lease: lease)
   }
 
   /// Unsynced work that outlived a revoked session. The UI surfaces it on the
@@ -637,16 +666,19 @@ public final class RectoAuth {
   /// blocked over a store that has already been emptied.
   @discardableResult
   public func discardRetainedWorkAndClaim() async -> Bool {
-    guard Self.isClerkConfigured, let userId = Self.activeUserId(of: Clerk.shared.session) else {
+    guard Self.isClerkConfigured, let identity = Self.activeIdentity(of: Clerk.shared.session) else {
       logger.error("refusing to discard retained work: no active Clerk session to claim it for")
       return false
     }
-    return await completeDiscard(userId: userId)
+    return await completeDiscard(identity: identity)
   }
 
   /// Abandon the attempted account switch without touching the retained mirror.
   public func cancelBlockedSignIn() async throws {
     guard case .blockedByRetainedWork = status else { return }
+    beginTransition()
+    expectedIdentity = nil
+    defer { transitionCount -= 1 }
     await sync?.stop()
     await convexAuthProvider.logoutConvexClient()
     if Self.isClerkConfigured {
@@ -655,19 +687,25 @@ public final class RectoAuth {
     status = .signedOut
   }
 
-  private func completeDiscard(userId: String) async -> Bool {
-    guard await claimMirror(for: userId, discardingRetainedWork: true) else { return false }
+  private func completeDiscard(identity: ClerkIdentity) async -> Bool {
+    expectedIdentity = identity
+    guard await claimMirror(for: identity.userID, discardingRetainedWork: true) else { return false }
     await sessions?.invalidateAll()
-    return await publishSignedIn(userId, blockingOnFailure: true)
+    guard let lease = identityLease(for: identity) else { return false }
+    return await publishSignedIn(identity, blockingOnFailure: true, lease: lease)
   }
 
   /// Test seam: the same completion without a live Clerk session.
   func discardRetainedWorkAndClaimForTesting(userId: String) async -> Bool {
-    await completeDiscard(userId: userId)
+    guard let identity = Self.identity(
+      userID: userId, sessionID: convexAuthProvider.activeSessionID())
+    else { return false }
+    return await completeDiscard(identity: identity)
   }
 
   private func handleAccountDeleted() async {
     beginTransition()
+    expectedIdentity = nil
     defer { transitionCount -= 1 }
     await sessions?.freezeAndFlushAll()
     await sync?.stop()
@@ -684,8 +722,13 @@ public final class RectoAuth {
     status = .signedOut
   }
 
-  private static func activeUserId(of session: Session?) -> String? {
+  private static func activeIdentity(of session: Session?) -> ClerkIdentity? {
     guard let session, session.status == .active else { return nil }
-    return session.user?.id
+    return identity(userID: session.user?.id, sessionID: session.id)
+  }
+
+  private static func identity(userID: String?, sessionID: String?) -> ClerkIdentity? {
+    guard let userID, let sessionID else { return nil }
+    return ClerkIdentity(userID: userID, sessionID: sessionID)
   }
 }

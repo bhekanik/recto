@@ -108,6 +108,13 @@ struct AuthFeatureTests {
 
 @Suite("cold session restoration")
 struct ColdSessionRestorationTests {
+  @MainActor
+  private final class ActiveSession {
+    var id: String?
+
+    init(_ id: String?) { self.id = id }
+  }
+
   private actor RestoreGate {
     private var entered = false
     private var entryWaiters: [CheckedContinuation<Void, Never>] = []
@@ -200,10 +207,11 @@ struct ColdSessionRestorationTests {
     let (events, continuation) = AsyncStream<RectoAuth.LifecycleEvent>.makeStream()
 
     let start = Task {
-      await auth.startForTesting(restoredUserId: "user-restored", events: events)
+      await auth.startForTesting(
+        restoredUserId: "user-restored", restoredSessionID: "session-restored", events: events)
     }
     await gate.waitUntilEntered()
-    continuation.yield(.sessionChanged(userId: nil))
+    continuation.yield(.sessionChanged(userId: nil, sessionID: nil))
     continuation.finish()
     await gate.release()
     await start.value
@@ -211,6 +219,58 @@ struct ColdSessionRestorationTests {
 
     #expect(await auth.status == .signedOut)
     #expect(await coordinator.events.contains("sync.stop"))
+  }
+
+  @MainActor
+  @Test("a restored user snapshot without its session cannot publish")
+  func restoredSnapshotMustMatchCurrentSession() async throws {
+    let store = try RectoStore.inMemory()
+    try await store.setMirrorOwner("user-A")
+    let auth = RectoAuth(store: store)
+    let coordinator = Coordinator()
+    auth.attach(sync: coordinator)
+    auth.attach(sessions: coordinator)
+    auth.convexAuthProvider.activeSessionID = { "session-B" }
+    auth.convexAuthProvider.cachedLogin = { true }
+    let (events, _) = AsyncStream<RectoAuth.LifecycleEvent>.makeStream()
+
+    await auth.startForTesting(restoredUserId: "user-A", events: events)
+
+    #expect(auth.status != .signedIn(userId: "user-A"))
+    #expect(await coordinator.events.contains("sync.start") == false)
+  }
+
+  @MainActor
+  @Test("a session event superseded during login never publishes the stale user")
+  func eventSupersededDuringLogin() async throws {
+    let store = try RectoStore.inMemory()
+    try await store.setMirrorOwner("user-A")
+    let auth = RectoAuth(store: store)
+    let coordinator = Coordinator()
+    auth.attach(sync: coordinator)
+    auth.attach(sessions: coordinator)
+    let session = ActiveSession("session-A")
+    let loginGate = RestoreGate()
+    auth.convexAuthProvider.activeSessionID = { session.id }
+    auth.convexAuthProvider.cachedLogin = {
+      if session.id == "session-B" { await loginGate.suspend() }
+      return true
+    }
+    let (events, continuation) = AsyncStream<RectoAuth.LifecycleEvent>.makeStream()
+    await auth.startForTesting(
+      restoredUserId: "user-A", restoredSessionID: "session-A", events: events)
+
+    session.id = "session-B"
+    continuation.yield(.sessionChanged(userId: "user-B", sessionID: "session-B"))
+    await loginGate.waitUntilEntered()
+    session.id = "session-C"
+    continuation.yield(.sessionChanged(userId: "user-C", sessionID: "session-C"))
+    await loginGate.release()
+    continuation.finish()
+    await auth.waitForEventListenerForTesting()
+
+    #expect(auth.status == .signedIn(userId: "user-C"))
+    #expect(await coordinator.events.filter { $0 == "sync.start" }.count == 2)
   }
 }
 
@@ -457,6 +517,10 @@ struct Round4AuthTests {
         createdAt: 0))
 
     let auth = await RectoAuth(store: store)
+    await MainActor.run {
+      auth.convexAuthProvider.activeSessionID = { "session-B" }
+      auth.convexAuthProvider.cachedLogin = { true }
+    }
     #expect(await auth.discardRetainedWorkAndClaimForTesting(userId: "user_B"))
     #expect(try await store.documents().isEmpty)
     #expect(try await store.mirrorOwner() == "user_B")
@@ -512,6 +576,9 @@ struct Round5AuthTests {
     let coordinator = Coordinator()
     await auth.attach(sync: coordinator)
     await auth.attach(sessions: coordinator)
+    await MainActor.run {
+      auth.convexAuthProvider.activeSessionID = { "session-B" }
+    }
 
     // Clerk hands us an active B while A is the published user. Purging here
     // would give `claimMirror` a clean store and remove its chance to object.
@@ -530,6 +597,10 @@ struct Round5AuthTests {
     let coordinator = Coordinator()
     await auth.attach(sync: coordinator)
     await auth.attach(sessions: coordinator)
+    await MainActor.run {
+      auth.convexAuthProvider.activeSessionID = { "session-B" }
+      auth.convexAuthProvider.cachedLogin = { true }
+    }
     #expect(try await auth.claimMirrorForTesting(userId: "user_B") == false)
 
     #expect(await auth.discardRetainedWorkAndClaimForTesting(userId: "user_B"))
@@ -780,6 +851,10 @@ struct Round6AuthTests {
         createdAt: 0))
 
     let auth = await RectoAuth(store: store)
+    await MainActor.run {
+      auth.convexAuthProvider.activeSessionID = { "session-B" }
+      auth.convexAuthProvider.cachedLogin = { true }
+    }
     #expect(try await auth.claimMirrorForTesting(userId: "user_B") == false)
     #expect(try await store.pendingJobCount() == 1)
     #expect(await auth.status == .blockedByRetainedWork(owner: "an earlier session", count: 1))
