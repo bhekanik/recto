@@ -574,6 +574,44 @@ struct Round5AuthTests {
 
 @Suite("round-6 auth")
 struct Round6AuthTests {
+  @MainActor
+  private final class ActiveSession {
+    var id: String?
+
+    init(_ id: String?) { self.id = id }
+  }
+
+  private actor OvertakingCoordinator: SyncControlling, EditSessionCoordinating {
+    private var firstStopGate: CheckedContinuation<Void, Never>?
+    private var firstStopObservers: [CheckedContinuation<Void, Never>] = []
+    private(set) var stopCount = 0
+    private(set) var startCount = 0
+
+    func stop() async {
+      stopCount += 1
+      guard stopCount == 1 else { return }
+      let observers = firstStopObservers
+      firstStopObservers.removeAll()
+      observers.forEach { $0.resume() }
+      await withCheckedContinuation { firstStopGate = $0 }
+    }
+
+    func start() { startCount += 1 }
+    func freezeAndFlushAll() async {}
+    func resumeAll() async {}
+    func invalidateAll() async {}
+
+    func waitUntilFirstStop() async {
+      guard stopCount == 0 else { return }
+      await withCheckedContinuation { firstStopObservers.append($0) }
+    }
+
+    func releaseFirstStop() {
+      firstStopGate?.resume()
+      firstStopGate = nil
+    }
+  }
+
   /// Records the order of everything an identity change drives, and holds
   /// `stop()` open the way a subscription that has not torn down yet would.
   private actor Coordinator: SyncControlling, EditSessionCoordinating {
@@ -621,6 +659,27 @@ struct Round6AuthTests {
         localId: "doc-1", title: "A's work", markdown: "synced", wordCount: 1,
         localHeadNodeId: "root", syncState: .synced, updatedAt: 0, createdAt: 0))
     return store
+  }
+
+  @MainActor
+  private func makeBlockedRecovery() async throws -> (
+    auth: RectoAuth,
+    coordinator: OvertakingCoordinator,
+    session: ActiveSession
+  ) {
+    let store = try RectoStore.inMemory()
+    try await store.setMirrorOwner("user_A")
+    let auth = RectoAuth(store: store)
+    let coordinator = OvertakingCoordinator()
+    auth.attach(sync: coordinator)
+    auth.attach(sessions: coordinator)
+    let session = ActiveSession("sess_A")
+    auth.convexAuthProvider.activeSessionID = { session.id }
+    auth.convexAuthProvider.cachedLogin = { false }
+    await auth.restoreSessionForTesting(userId: "user_A")
+    #expect(auth.status == .convexLoginRequired(userId: "user_A"))
+    auth.convexAuthProvider.cachedLogin = { true }
+    return (auth, coordinator, session)
   }
 
   // MARK: - 1. Only RectoAuth may change the Convex identity, and only quiesced
@@ -848,6 +907,74 @@ struct Round6AuthTests {
     #expect(await auth.convexAuthProvider.needsCachedLogin == false)
     // Started exactly once, by the recovery that succeeded.
     #expect(await coordinator.events.filter { $0 == "sync.start" }.count == 1)
+  }
+
+  @MainActor
+  @Test("a revoked session leaves a failed-login user signed out")
+  func revokedSessionCannotRetryFailedIdentity() async throws {
+    let (auth, coordinator, session) = try await makeBlockedRecovery()
+
+    session.id = nil
+    let revocation = Task { await auth.handleSessionChangeForTesting(to: nil) }
+    await coordinator.waitUntilFirstStop()
+    await coordinator.releaseFirstStop()
+    await revocation.value
+
+    #expect(auth.status == .signedOut)
+    #expect(await auth.recoverConvexLoginIfNeeded() == false)
+    #expect(await coordinator.startCount == 0)
+  }
+
+  @MainActor
+  @Test("an account switch invalidates a suspended cached-login recovery")
+  func accountSwitchOvertakesRecovery() async throws {
+    let (auth, coordinator, session) = try await makeBlockedRecovery()
+
+    let recovery = Task { await auth.recoverConvexLoginIfNeeded() }
+    await coordinator.waitUntilFirstStop()
+    session.id = "sess_B"
+    await auth.handleSessionChangeForTesting(to: "user_B")
+    #expect(auth.status == .signedIn(userId: "user_B"))
+    #expect(await coordinator.startCount == 1)
+
+    await coordinator.releaseFirstStop()
+    #expect(await recovery.value == false)
+    #expect(auth.status == .signedIn(userId: "user_B"))
+    #expect(await coordinator.startCount == 1)
+  }
+
+  @MainActor
+  @Test("sign-out invalidates a suspended cached-login recovery")
+  func signOutOvertakesRecovery() async throws {
+    let (auth, coordinator, session) = try await makeBlockedRecovery()
+
+    let recovery = Task { await auth.recoverConvexLoginIfNeeded() }
+    await coordinator.waitUntilFirstStop()
+    session.id = nil
+    try await auth.signOut(discardingUnsynced: true)
+    #expect(auth.status == .signedOut)
+
+    await coordinator.releaseFirstStop()
+    #expect(await recovery.value == false)
+    #expect(auth.status == .signedOut)
+    #expect(await coordinator.startCount == 0)
+  }
+
+  @MainActor
+  @Test("account deletion invalidates a suspended cached-login recovery")
+  func accountDeletionOvertakesRecovery() async throws {
+    let (auth, coordinator, session) = try await makeBlockedRecovery()
+
+    let recovery = Task { await auth.recoverConvexLoginIfNeeded() }
+    await coordinator.waitUntilFirstStop()
+    session.id = nil
+    await auth.handleAccountDeletedForTesting()
+    #expect(auth.status == .signedOut)
+
+    await coordinator.releaseFirstStop()
+    #expect(await recovery.value == false)
+    #expect(auth.status == .signedOut)
+    #expect(await coordinator.startCount == 0)
   }
 }
 

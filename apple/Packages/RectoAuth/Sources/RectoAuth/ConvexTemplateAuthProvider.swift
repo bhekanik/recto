@@ -236,6 +236,10 @@ public final class ConvexTemplateAuthProvider: AuthProvider {
       syncedSessionID = nil
       return false
     }
+    guard activeSessionID() == activeID else {
+      syncedSessionID = nil
+      return false
+    }
     syncedSessionID = activeID
     return true
   }

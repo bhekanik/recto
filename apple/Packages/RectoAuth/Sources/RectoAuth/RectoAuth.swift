@@ -72,8 +72,10 @@ public enum AuthStatus: Sendable, Equatable {
   case convexLoginRequired(userId: String)
 
   public var userId: String? {
-    if case .signedIn(let userId) = self { return userId }
-    return nil
+    switch self {
+    case .signedIn(let userId), .convexLoginRequired(let userId): userId
+    case .loading, .signedOut, .blockedByRetainedWork: nil
+    }
   }
 }
 
@@ -113,6 +115,18 @@ public final class RectoAuth {
   private var eventListener: Task<Void, Never>?
   private var clerkEventForwarder: Task<Void, Never>?
   private var transitionCount = 0
+  private var lifecycleEpoch = 0
+
+  private struct RecoveryLease {
+    let lifecycleEpoch: Int
+    let userId: String
+    let sessionID: String
+  }
+
+  private func beginTransition() {
+    transitionCount += 1
+    lifecycleEpoch += 1
+  }
 
   /// Hand this to `ConvexClientWithAuth(deploymentUrl:authProvider:)`.
   public let convexAuthProvider: ConvexTemplateAuthProvider
@@ -347,6 +361,14 @@ public final class RectoAuth {
     await performIdentityTransition(to: nil)
   }
 
+  func handleSessionChangeForTesting(to userId: String?) async {
+    await performIdentityTransition(to: userId)
+  }
+
+  func handleAccountDeletedForTesting() async {
+    await handleAccountDeleted()
+  }
+
   /// Bring the app up for `userId` once the mirror is known to be theirs.
   ///
   /// Convex's identity changes HERE, after `sync.stop()` has returned and the
@@ -355,8 +377,14 @@ public final class RectoAuth {
   /// the previous account's subscriptions are still running lets one of them
   /// deliver the new account's results into the old account's mirror.
   @discardableResult
-  private func publishSignedIn(_ userId: String, blockingOnFailure: Bool) async -> Bool {
-    guard await convexAuthProvider.syncActiveSession() else {
+  private func publishSignedIn(
+    _ userId: String,
+    blockingOnFailure: Bool,
+    recoveryLease: RecoveryLease? = nil
+  ) async -> Bool {
+    let loginSucceeded = await convexAuthProvider.syncActiveSession()
+    guard isCurrent(recoveryLease) else { return false }
+    guard loginSucceeded else {
       // convex-swift keeps the previous account's `authBridge` and FFI callback
       // when a login fails — it publishes `unauthenticated`, but only `logout()`
       // clears those. Resuming sessions and starting sockets here opens
@@ -364,13 +392,22 @@ public final class RectoAuth {
       // their documents into a mirror that now belongs to this one.
       logger.error("Convex refused the login for \(userId, privacy: .public); sync stays stopped")
       await convexAuthProvider.dropConvexBridge()
+      guard isCurrent(recoveryLease) else { return false }
       if blockingOnFailure { status = .convexLoginRequired(userId: userId) }
       return false
     }
     status = .signedIn(userId: userId)
     await sessions?.resumeAll()
+    guard isCurrent(recoveryLease) else { return false }
     await sync?.start()
     return true
+  }
+
+  private func isCurrent(_ lease: RecoveryLease?) -> Bool {
+    guard let lease else { return true }
+    return lifecycleEpoch == lease.lifecycleEpoch
+      && status.userId == lease.userId
+      && convexAuthProvider.activeSessionID() == lease.sessionID
   }
 
   /// Retry a cached Convex login that failed, with the sockets down.
@@ -384,7 +421,9 @@ public final class RectoAuth {
     let blocking: Bool
     switch status {
     case .signedIn(let id):
-      guard convexAuthProvider.needsCachedLogin else { return true }
+      guard convexAuthProvider.needsCachedLogin else {
+        return convexAuthProvider.activeSessionID() != nil
+      }
       // The mirror is already this user's, so a failure is only an outage: the
       // status stays `.signedIn` and offline editing continues into the outbox.
       (userId, blocking) = (id, false)
@@ -392,11 +431,16 @@ public final class RectoAuth {
       // The transition never completed. Until it does, nothing may run.
       (userId, blocking) = (id, true)
     default:
-      return true
+      return false
     }
+    guard let sessionID = convexAuthProvider.activeSessionID() else { return false }
+    let lease = RecoveryLease(
+      lifecycleEpoch: lifecycleEpoch, userId: userId, sessionID: sessionID)
     logger.info("retrying the cached Convex login with the sockets stopped")
     await sync?.stop()
-    return await publishSignedIn(userId, blockingOnFailure: blocking)
+    guard isCurrent(lease) else { return false }
+    return await publishSignedIn(
+      userId, blockingOnFailure: blocking, recoveryLease: lease)
   }
 
   /// Status changes, for the UI and for `RectoSync` (which must re-subscribe on
@@ -465,7 +509,7 @@ public final class RectoAuth {
   /// same breath. Checking before those awaits let an open document persist a
   /// new draft into the gap and lose it without consent.
   public func signOut(discardingUnsynced: Bool = false) async throws {
-    transitionCount += 1
+    beginTransition()
     defer { transitionCount -= 1 }
     await sessions?.freezeAndFlushAll()
     await sync?.stop()
@@ -519,7 +563,7 @@ public final class RectoAuth {
     let previousUserId = status.userId
     guard previousUserId != nextUserId else { return }
 
-    transitionCount += 1
+    beginTransition()
     defer { transitionCount -= 1 }
     // Stop everything that could still write BEFORE any decision is taken.
     await sessions?.freezeAndFlushAll()
@@ -623,6 +667,8 @@ public final class RectoAuth {
   }
 
   private func handleAccountDeleted() async {
+    beginTransition()
+    defer { transitionCount -= 1 }
     await sessions?.freezeAndFlushAll()
     await sync?.stop()
     await convexAuthProvider.logoutConvexClient()

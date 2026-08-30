@@ -174,6 +174,7 @@ struct RootForegroundInterleavingTests {
         auth.convexAuthProvider.activeSessionID = { "session-B" }
         await auth.handleSessionSwitchForTesting(from: "user-A", toUserId: "user-B")
         #expect(auth.status == .signedIn(userId: "user-B"))
+        for _ in 0..<100 where await transport.documentStreamStarts < 2 { await Task.yield() }
         #expect(await transport.documentStreamStarts == 2)
 
         await transport.bodyGate.release()
@@ -182,5 +183,23 @@ struct RootForegroundInterleavingTests {
         #expect(
             await transport.documentStreamStarts == 2,
             "foreground restarted a third socket after the new account started")
+    }
+
+    @MainActor
+    @Test("account deletion fences foreground before its first suspended stop")
+    func accountDeletionFencesForeground() async throws {
+        let (model, auth, transport) = try await makeForegroundRaceSystem()
+
+        let deletion = Task { await auth.handleAccountDeletedForTesting() }
+        await transport.bodyGate.waitUntilCancelled()
+        #expect(auth.isTransitioning)
+        await model.enterForeground()
+        #expect(await transport.documentStreamStarts == 1)
+
+        await transport.bodyGate.release()
+        await deletion.value
+
+        #expect(auth.status == .signedOut)
+        #expect(await transport.documentStreamStarts == 1)
     }
 }
