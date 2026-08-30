@@ -108,6 +108,30 @@ struct AuthFeatureTests {
 
 @Suite("cold session restoration")
 struct ColdSessionRestorationTests {
+  private actor RestoreGate {
+    private var entered = false
+    private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiter: CheckedContinuation<Void, Never>?
+
+    func suspend() async {
+      entered = true
+      let waiters = entryWaiters
+      entryWaiters.removeAll()
+      waiters.forEach { $0.resume() }
+      await withCheckedContinuation { releaseWaiter = $0 }
+    }
+
+    func waitUntilEntered() async {
+      guard !entered else { return }
+      await withCheckedContinuation { entryWaiters.append($0) }
+    }
+
+    func release() {
+      releaseWaiter?.resume()
+      releaseWaiter = nil
+    }
+  }
+
   private actor Coordinator: SyncControlling, EditSessionCoordinating {
     private(set) var events: [String] = []
     func stop() async { events.append("sync.stop") }
@@ -155,6 +179,38 @@ struct ColdSessionRestorationTests {
 
     #expect(await auth.status == .convexLoginRequired(userId: "user-restored"))
     #expect(await coordinator.events.contains("sync.start") == false)
+  }
+
+  @Test("an auth event emitted during session restoration is not lost")
+  func eventDuringRestoreIsBuffered() async throws {
+    let store = try RectoStore.inMemory()
+    try await store.setMirrorOwner("user-restored")
+    let auth = await RectoAuth(store: store)
+    let coordinator = Coordinator()
+    await auth.attach(sync: coordinator)
+    await auth.attach(sessions: coordinator)
+    let gate = RestoreGate()
+    await MainActor.run {
+      auth.convexAuthProvider.activeSessionID = { "session-restored" }
+      auth.convexAuthProvider.cachedLogin = {
+        await gate.suspend()
+        return true
+      }
+    }
+    let (events, continuation) = AsyncStream<RectoAuth.LifecycleEvent>.makeStream()
+
+    let start = Task {
+      await auth.startForTesting(restoredUserId: "user-restored", events: events)
+    }
+    await gate.waitUntilEntered()
+    continuation.yield(.sessionChanged(userId: nil))
+    continuation.finish()
+    await gate.release()
+    await start.value
+    await auth.waitForEventListenerForTesting()
+
+    #expect(await auth.status == .signedOut)
+    #expect(await coordinator.events.contains("sync.stop"))
   }
 }
 

@@ -41,7 +41,11 @@ describe("documents.create with a client documentUuid", () => {
 		expect(replay.documentId).toBe(first.documentId);
 		expect(replay.rootNodeId).toBe(first.rootNodeId);
 		expect(replay.created).toBe(false);
-		expect(await owner.query(api.documents.list, {})).toHaveLength(1);
+		const [listed] = await owner.query(api.documents.list, {});
+		expect(listed).toMatchObject({
+			_id: first.documentId,
+			documentUuid: "01JCLIENTULID",
+		});
 	});
 
 	it("does not adopt the title of a replay — the first call's document is returned as-is", async () => {

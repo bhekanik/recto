@@ -199,10 +199,24 @@ public actor SyncEngine: SyncControlling {
     let byConvexId = Dictionary(
       known.compactMap { doc in doc.convexId.map { ($0, doc) } },
       uniquingKeysWith: { first, _ in first })
+    let byLocalId = Dictionary(
+      known.map { ($0.localId, $0) },
+      uniquingKeysWith: { first, _ in first })
 
     for summary in summaries {
       guard isCurrent(generation) else { return }
-      guard let local = byConvexId[summary.id] else {
+      let local: DocumentRecord
+      if let matched = byConvexId[summary.id] {
+        local = matched
+      } else if let documentUuid = summary.documentUuid,
+        let pendingCreate = byLocalId[documentUuid],
+        pendingCreate.convexId == nil,
+        let serverRootNodeId = try await serverRootNodeId(for: summary)
+      {
+        try await finishCreate(
+          document: pendingCreate, convexId: summary.id, serverRootNodeId: serverRootNodeId)
+        local = try await store.document(localId: pendingCreate.localId) ?? pendingCreate
+      } else {
         try await hydrate(convexId: summary.id, generation: generation)
         continue
       }
@@ -241,6 +255,11 @@ public actor SyncEngine: SyncControlling {
         emit(.unsyncedWorkOnRemovedDocument(localId: local.localId))
       }
     }
+  }
+
+  private func serverRootNodeId(for summary: RemoteDocumentSummary) async throws -> String? {
+    return try await transport.listNodes(documentId: summary.id, sinceCreatedAt: nil)
+      .first { $0.parentNodeId == nil }?.nodeId
   }
 
   /// Pull the body and adopt it as a pending draft — but only when the server

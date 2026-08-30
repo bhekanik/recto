@@ -15,6 +15,7 @@ import RectoSync
 public actor InMemoryTransport: RectoTransport {
   public struct Document: Sendable {
     public var id: String
+    public var documentUuid: String?
     public var title: String
     public var markdown: String
     public var wordCount: Double
@@ -141,13 +142,18 @@ public actor InMemoryTransport: RectoTransport {
   // MARK: - Seeding
 
   @discardableResult
-  public func seedDocument(id: String = UUID().uuidString, title: String = "native-spike-seed")
+  public func seedDocument(
+    id: String = UUID().uuidString,
+    title: String = "native-spike-seed",
+    documentUuid: String? = nil
+  )
     -> CreateDocumentResponse
   {
     let rootNodeId = UUID().uuidString
     let now = tick()
     documents[id] = Document(
-      id: id, title: title, markdown: "", wordCount: 0, currentNodeId: rootNodeId,
+      id: id, documentUuid: documentUuid, title: title, markdown: "", wordCount: 0,
+      currentNodeId: rootNodeId,
       // `documents.create` writes no `markdownHeadNodeId`: the body is empty and
       // its provenance is genuinely unknown until something stamps it.
       markdownHeadNodeId: nil, pointerRevision: 0, createdAt: now, updatedAt: now,
@@ -232,7 +238,7 @@ public actor InMemoryTransport: RectoTransport {
     {
       return CreateDocumentResponse(documentId: documentId, rootNodeId: rootNodeId)
     }
-    let response = seedDocument(title: title)
+    let response = seedDocument(title: title, documentUuid: documentUuid)
     documentIdsByUuid[documentUuid] = response.documentId
     if faults.first == .dropAcknowledgement {
       _ = takeFault()
@@ -535,7 +541,9 @@ public actor InMemoryTransport: RectoTransport {
   public func summaries() -> [RemoteDocumentSummary] {
     documents.values
       .map {
-        RemoteDocumentSummary(id: $0.id, title: $0.title, wordCount: $0.wordCount, updatedAt: $0.updatedAt)
+        RemoteDocumentSummary(
+          id: $0.id, title: $0.title, wordCount: $0.wordCount, updatedAt: $0.updatedAt,
+          documentUuid: $0.documentUuid)
       }
       .sorted { $0.updatedAt > $1.updatedAt }
   }

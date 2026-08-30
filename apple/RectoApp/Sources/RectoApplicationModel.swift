@@ -187,15 +187,30 @@ final class RectoApplicationModel {
 
     func enterForeground() async {
         guard let auth, let sync else { return }
+        guard !auth.isTransitioning else {
+            await sync.stop()
+            return
+        }
         switch Self.foregroundSyncAction(for: auth.status) {
         case .stayStopped:
             await sync.stop()
             return
         case .resume:
-            await sync.resume()
+            break
         case .recoverThenResume:
-            guard await auth.recoverConvexLoginIfNeeded() else { return }
-            await sync.resume()
+            guard await auth.recoverConvexLoginIfNeeded() else {
+                await sync.stop()
+                return
+            }
+        }
+        guard !auth.isTransitioning, case .signedIn = auth.status else {
+            await sync.stop()
+            return
+        }
+        await sync.resume()
+        guard !auth.isTransitioning, case .signedIn = auth.status else {
+            await sync.stop()
+            return
         }
         await refreshDocuments()
     }

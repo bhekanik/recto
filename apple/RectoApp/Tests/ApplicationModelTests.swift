@@ -1,13 +1,14 @@
-import RectoAuth
 import RectoCore
 import RectoStore
 import RectoSync
 import Testing
 
 @testable import Recto
+@testable import RectoAuth
 
 private actor TestTransport: RectoTransport {
     enum Failure: Error { case unexpectedCall }
+    private(set) var documentStreamStarts = 0
 
     func createDocument(title: String, documentUuid: String) async throws
         -> CreateDocumentResponse { throw Failure.unexpectedCall }
@@ -30,13 +31,43 @@ private actor TestTransport: RectoTransport {
     func listNodes(documentId: String, sinceCreatedAt: Double?) async throws -> [RemoteNode] { [] }
     func getDocument(documentId: String) async throws -> RemoteDocument? { nil }
     func documentsStream() -> AsyncThrowingStream<[RemoteDocumentSummary], any Error> {
-        AsyncThrowingStream { $0.finish() }
+        documentStreamStarts += 1
+        return AsyncThrowingStream<[RemoteDocumentSummary], any Error> { $0.finish() }
     }
     func nodesStream(documentId: String, sinceCreatedAt: Double?)
         -> AsyncThrowingStream<[RemoteNode], any Error> {
         AsyncThrowingStream { $0.finish() }
     }
     func loginFromCache() async -> Bool { false }
+
+    func resetDocumentStreamStarts() { documentStreamStarts = 0 }
+}
+
+private actor SuspendedTransition: SyncControlling {
+    private var stopWaiter: CheckedContinuation<Void, Never>?
+    private var stopObservers: [CheckedContinuation<Void, Never>] = []
+    private(set) var startCount = 0
+    private var stopStarted = false
+
+    func stop() async {
+        stopStarted = true
+        let observers = stopObservers
+        stopObservers.removeAll()
+        observers.forEach { $0.resume() }
+        await withCheckedContinuation { stopWaiter = $0 }
+    }
+
+    func start() { startCount += 1 }
+
+    func waitUntilStopStarts() async {
+        guard !stopStarted else { return }
+        await withCheckedContinuation { stopObservers.append($0) }
+    }
+
+    func releaseStop() {
+        stopWaiter?.resume()
+        stopWaiter = nil
+    }
 }
 
 private actor AuthConsumerGate {
@@ -58,10 +89,10 @@ private actor AuthConsumerGate {
 
 @MainActor
 private func makeComponents(
+    transport: TestTransport = TestTransport(),
     beforeAuthConsumption: (@MainActor @Sendable () async -> Void)? = nil
 ) async throws -> RectoApplicationModel.Components {
     let store = try RectoStore.inMemory()
-    let transport = TestTransport()
     let origin = try await SyncEngine.resolveOrigin(store: store)
     let sync = SyncEngine(store: store, transport: transport, origin: origin)
     let registry = DocumentSessionRegistry(store: store, sync: sync, origin: origin)
@@ -89,6 +120,21 @@ private func waitForAuthStatus(
 
 @Suite("application composition")
 struct ApplicationModelTests {
+    @MainActor
+    private func signedInModel(
+        transport: TestTransport
+    ) async throws -> (RectoApplicationModel, RectoApplicationModel.Components) {
+        let components = try await makeComponents(transport: transport)
+        let model = RectoApplicationModel(components: components)
+        await model.start()
+        components.auth.convexAuthProvider.activeSessionID = { "session-A" }
+        components.auth.convexAuthProvider.cachedLogin = { true }
+        await components.auth.restoreSessionForTesting(userId: "user-A")
+        await components.sync.stop()
+        await transport.resetDocumentStreamStarts()
+        return (model, components)
+    }
+
     @MainActor
     @Test("startup publishes auth state and signed-in library creation")
     func startupAndLibraryRouting() async throws {
@@ -138,6 +184,59 @@ struct ApplicationModelTests {
         #expect(
             RectoApplicationModel.foregroundSyncAction(
                 for: .convexLoginRequired(userId: "A")) == .recoverThenResume)
+    }
+
+    @MainActor
+    @Test("foreground cannot restart sockets inside a suspended sign-out")
+    func foregroundStaysStoppedDuringSignOut() async throws {
+        let transport = TestTransport()
+        let (model, components) = try await signedInModel(transport: transport)
+        let transition = SuspendedTransition()
+        components.auth.attach(sync: transition)
+
+        let signOut = Task { try await components.auth.signOut() }
+        await transition.waitUntilStopStarts()
+        #expect(components.auth.isTransitioning)
+        await model.enterForeground()
+
+        #expect(await transport.documentStreamStarts == 0)
+        #expect(await transition.startCount == 0)
+        await transition.releaseStop()
+        try await signOut.value
+        #expect(!components.auth.isTransitioning)
+        #expect(await transport.documentStreamStarts == 0)
+    }
+
+    @MainActor
+    @Test("foreground waits for an account switch before starting the new sockets")
+    func foregroundStaysStoppedDuringAccountSwitch() async throws {
+        let transport = TestTransport()
+        let (model, components) = try await signedInModel(transport: transport)
+        let transition = SuspendedTransition()
+        components.auth.attach(sync: transition)
+        components.auth.convexAuthProvider.activeSessionID = { "session-B" }
+
+        let accountSwitch = Task {
+            await components.auth.handleSessionSwitchForTesting(
+                from: "user-A", toUserId: "user-B")
+        }
+        await transition.waitUntilStopStarts()
+        #expect(components.auth.isTransitioning)
+        await model.enterForeground()
+
+        #expect(await transport.documentStreamStarts == 0)
+        #expect(await transition.startCount == 0)
+        await transition.releaseStop()
+        await accountSwitch.value
+        #expect(!components.auth.isTransitioning)
+        #expect(await transition.startCount == 1)
+        #expect(await transport.documentStreamStarts == 0)
+
+        await model.enterForeground()
+        for _ in 0..<100 where await transport.documentStreamStarts == 0 {
+            await Task.yield()
+        }
+        #expect(await transport.documentStreamStarts == 1)
     }
 
     @MainActor

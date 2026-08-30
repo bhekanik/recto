@@ -99,6 +99,11 @@ public struct EmailCodeChallenge {
 /// Clerk session lifecycle for the native apps (plan 023 §1.6, D-N12).
 @MainActor
 public final class RectoAuth {
+  enum LifecycleEvent: Sendable {
+    case sessionChanged(userId: String?)
+    case accountDeleted
+  }
+
   private let logger = Logger(subsystem: "com.bhekani.recto", category: "auth")
   private let store: RectoStore
   private let features: AuthFeatures
@@ -106,6 +111,8 @@ public final class RectoAuth {
   private var sessions: (any EditSessionCoordinating)?
   private var statusContinuations: [UUID: AsyncStream<AuthStatus>.Continuation] = [:]
   private var eventListener: Task<Void, Never>?
+  private var clerkEventForwarder: Task<Void, Never>?
+  private var transitionCount = 0
 
   /// Hand this to `ConvexClientWithAuth(deploymentUrl:authProvider:)`.
   public let convexAuthProvider: ConvexTemplateAuthProvider
@@ -116,6 +123,9 @@ public final class RectoAuth {
       for continuation in statusContinuations.values { continuation.yield(status) }
     }
   }
+
+  /// Set before an identity change can suspend, and cleared only after its final socket action.
+  public var isTransitioning: Bool { transitionCount > 0 }
 
   public init(store: RectoStore, features: AuthFeatures = .current) {
     self.store = store
@@ -136,6 +146,7 @@ public final class RectoAuth {
 
   deinit {
     eventListener?.cancel()
+    clerkEventForwarder?.cancel()
   }
 
   /// Whether `configureClerk` has run in this process.
@@ -166,29 +177,69 @@ public final class RectoAuth {
       try? await Task.sleep(for: .milliseconds(50))
     }
 
+    eventListener?.cancel()
+    clerkEventForwarder?.cancel()
+    let events = clerkLifecycleEvents()
+    let restored = Self.activeUserId(of: Clerk.shared.session)
+    await start(restoredUserId: restored, events: events)
+  }
+
+  private func start(
+    restoredUserId: String?,
+    events: AsyncStream<LifecycleEvent>
+  ) async {
     // Cold start: the database on disk may belong to somebody else. `status`
     // begins as `.loading`, so there is no "previous user" to compare against
     // and nothing else would ever notice.
-    let restored = Self.activeUserId(of: Clerk.shared.session)
-    await restoreSession(userId: restored)
+    await restoreSession(userId: restoredUserId)
 
-    eventListener?.cancel()
     eventListener = Task { [weak self] in
-      for await event in Clerk.shared.auth.events {
+      for await event in events {
         if Task.isCancelled { break }
         guard let self else { break }
         switch event {
-        case .sessionChanged(_, let newSession):
-          await self.handleSessionChanged(newSession)
-        case .signedOut:
-          await self.handleSessionChanged(nil)
+        case .sessionChanged(let userId):
+          await self.performIdentityTransition(to: userId)
         case .accountDeleted:
           await self.handleAccountDeleted()
+        }
+      }
+    }
+  }
+
+  private func clerkLifecycleEvents() -> AsyncStream<LifecycleEvent> {
+    let clerkEvents = Clerk.shared.auth.events
+    let (events, continuation) = AsyncStream<LifecycleEvent>.makeStream()
+    clerkEventForwarder = Task {
+      for await event in clerkEvents {
+        if Task.isCancelled { break }
+        switch event {
+        case .sessionChanged(_, let newSession):
+          continuation.yield(.sessionChanged(userId: Self.activeUserId(of: newSession)))
+        case .signedOut:
+          continuation.yield(.sessionChanged(userId: nil))
+        case .accountDeleted:
+          continuation.yield(.accountDeleted)
         default:
           continue
         }
       }
+      continuation.finish()
     }
+    return events
+  }
+
+  func startForTesting(
+    restoredUserId: String?,
+    events: AsyncStream<LifecycleEvent>
+  ) async {
+    eventListener?.cancel()
+    clerkEventForwarder?.cancel()
+    await start(restoredUserId: restoredUserId, events: events)
+  }
+
+  func waitForEventListenerForTesting() async {
+    await eventListener?.value
   }
 
   private func restoreSession(userId: String?) async {
@@ -414,6 +465,8 @@ public final class RectoAuth {
   /// same breath. Checking before those awaits let an open document persist a
   /// new draft into the gap and lose it without consent.
   public func signOut(discardingUnsynced: Bool = false) async throws {
+    transitionCount += 1
+    defer { transitionCount -= 1 }
     await sessions?.freezeAndFlushAll()
     await sync?.stop()
 
@@ -459,10 +512,6 @@ public final class RectoAuth {
 
   // MARK: - Private
 
-  private func handleSessionChanged(_ session: Session?) async {
-    await performIdentityTransition(to: Self.activeUserId(of: session))
-  }
-
   /// The ONE ordering an identity change takes: freeze editing, stop and await
   /// every socket, settle mirror ownership, change the Convex identity, publish,
   /// and only then bring the sockets back.
@@ -470,6 +519,8 @@ public final class RectoAuth {
     let previousUserId = status.userId
     guard previousUserId != nextUserId else { return }
 
+    transitionCount += 1
+    defer { transitionCount -= 1 }
     // Stop everything that could still write BEFORE any decision is taken.
     await sessions?.freezeAndFlushAll()
     await sync?.stop()
