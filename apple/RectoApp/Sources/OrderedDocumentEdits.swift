@@ -2,6 +2,7 @@ import Combine
 import RectoCore
 import RectoHistory
 import RectoStore
+import RectoSync
 
 /// Bridges RectoEditor's synchronous callback to one async document session.
 /// One consumer processes full Markdown snapshots in acceptance order. The UI
@@ -64,11 +65,14 @@ final class OrderedDocumentEdits: ObservableObject, EditorIngressCoordinating {
     func accept(markdown: String, selection: NodeSelection? = nil, structural: Bool = false) -> Bool {
         guard isAccepting else { return false }
         do {
+            let wordCount = countWords(markdown)
             let generation = try store.saveEditorIngressSynchronously(
                 documentLocalId: documentLocalId,
                 markdown: markdown,
                 selection: selection,
-                wordCount: countWords(markdown)
+                wordCount: wordCount,
+                clientMutationId: ulid(),
+                draftPayload: OutboxPayload(markdown: markdown, wordCount: wordCount).encoded
             )
             pendingCount += 1
             lastAcceptedMarkdown = markdown

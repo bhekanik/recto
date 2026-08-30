@@ -87,6 +87,30 @@ private actor AuthConsumerGate {
     }
 }
 
+private actor DocumentOpenGate {
+    private var isReached = false
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+    private var observers: [CheckedContinuation<Void, Never>] = []
+
+    func pauseIgnoringCancellation() async {
+        isReached = true
+        let waiting = observers
+        observers.removeAll()
+        for observer in waiting { observer.resume() }
+        await withCheckedContinuation { releaseContinuation = $0 }
+    }
+
+    func waitUntilReached() async {
+        guard !isReached else { return }
+        await withCheckedContinuation { observers.append($0) }
+    }
+
+    func release() {
+        releaseContinuation?.resume()
+        releaseContinuation = nil
+    }
+}
+
 @MainActor
 private func makeComponents(
     transport: TestTransport = TestTransport(),
@@ -273,6 +297,63 @@ struct ApplicationModelTests {
             localId: document.localId, registry: components.registry)
         #expect(reopened.isEditable)
         await reopened.close()
+    }
+
+    @MainActor
+    @Test("a cancelled open releases its acquired session and ingress")
+    func cancelledDocumentOpen() async throws {
+        let components = try await makeComponents()
+        let document = try await components.library.createDocument(title: "Cancelled open")
+        let gate = DocumentOpenGate()
+        let opening = Task {
+            try await CloudDocumentModel.open(
+                localId: document.localId,
+                registry: components.registry,
+                afterIngressRegistered: { await gate.pauseIgnoringCancellation() }
+            )
+        }
+
+        await gate.waitUntilReached()
+        opening.cancel()
+        await gate.release()
+        await #expect(throws: CancellationError.self) {
+            _ = try await opening.value
+        }
+
+        #expect(await components.registry.openDocumentIds.isEmpty)
+        let reopened = try await CloudDocumentModel.open(
+            localId: document.localId, registry: components.registry)
+        await reopened.close()
+    }
+
+    @MainActor
+    @Test("a replacement open waits for the outgoing editable owner")
+    func replacementDocumentOpen() async throws {
+        let components = try await makeComponents()
+        let document = try await components.library.createDocument(title: "Replacement open")
+        let first = try await CloudDocumentModel.open(
+            localId: document.localId, registry: components.registry)
+        let retryGate = DocumentOpenGate()
+        let replacement = Task {
+            try await CloudDocumentModel.open(
+                localId: document.localId,
+                registry: components.registry,
+                waitForEditableHolder: true,
+                retryDelay: {
+                    await retryGate.pauseIgnoringCancellation()
+                    try Task.checkCancellation()
+                }
+            )
+        }
+
+        await retryGate.waitUntilReached()
+        await first.close()
+        await retryGate.release()
+        let opened = try await replacement.value
+
+        #expect(opened.isEditable)
+        await opened.close()
+        #expect(await components.registry.openDocumentIds.isEmpty)
     }
 
     @MainActor

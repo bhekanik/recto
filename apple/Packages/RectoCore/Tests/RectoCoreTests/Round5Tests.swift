@@ -57,7 +57,9 @@ struct Round5Tests {
       do {
         let markdown = "accepted on resume"
         let generation = try store.saveEditorIngressSynchronously(
-          documentLocalId: documentLocalId, markdown: markdown, selection: nil, wordCount: 3)
+          documentLocalId: documentLocalId, markdown: markdown, selection: nil, wordCount: 3,
+          clientMutationId: ulid(),
+          draftPayload: OutboxPayload(markdown: markdown, wordCount: 3).encoded)
         try await session.applyPersistedLocalChange(
           markdown: markdown, selection: nil, generation: generation)
       } catch let error as SessionError {

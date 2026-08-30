@@ -19,30 +19,67 @@ final class CloudDocumentModel {
     private var stateTask: Task<Void, Never>?
     private var isClosed = false
 
-    static func open(localId: String, registry: DocumentSessionRegistry) async throws
-        -> CloudDocumentModel {
+    static func open(
+        localId: String,
+        registry: DocumentSessionRegistry,
+        waitForEditableHolder: Bool = false,
+        afterIngressRegistered: (@MainActor @Sendable () async -> Void)? = nil,
+        retryDelay: (@MainActor @Sendable () async throws -> Void)? = nil
+    ) async throws -> CloudDocumentModel {
+        while true {
+            do {
+                return try await openOnce(
+                    localId: localId,
+                    registry: registry,
+                    afterIngressRegistered: afterIngressRegistered
+                )
+            } catch SessionError.editableHolderExists where waitForEditableHolder {
+                try Task.checkCancellation()
+                if let retryDelay {
+                    try await retryDelay()
+                } else {
+                    try await Task.sleep(for: .milliseconds(10))
+                }
+            }
+        }
+    }
+
+    private static func openOnce(
+        localId: String,
+        registry: DocumentSessionRegistry,
+        afterIngressRegistered: (@MainActor @Sendable () async -> Void)?
+    ) async throws -> CloudDocumentModel {
         let session = try await registry.session(for: localId)
-        guard let state = await session.currentState else {
-            await registry.release(localId)
-            throw SessionError.notOpen
-        }
-        let model = CloudDocumentModel(
-            localId: localId,
-            state: state,
-            session: session,
-            registry: registry
-        )
-        model.edits.onAcceptanceChanged = { [weak model] accepting in
-            model?.isEditable = accepting
-        }
+        var model: CloudDocumentModel?
         do {
-            model.ingressId = try await registry.registerIngress(for: localId, model.edits)
-            model.isEditable = model.edits.isAccepting
+            try Task.checkCancellation()
+            let state = await session.currentState
+            try Task.checkCancellation()
+            guard let state else { throw SessionError.notOpen }
+            let opened = CloudDocumentModel(
+                localId: localId,
+                state: state,
+                session: session,
+                registry: registry
+            )
+            model = opened
+            opened.edits.onAcceptanceChanged = { [weak opened] accepting in
+                opened?.isEditable = accepting
+            }
+            opened.ingressId = try await registry.registerIngress(
+                for: localId, opened.edits)
+            await afterIngressRegistered?()
+            try Task.checkCancellation()
+            opened.isEditable = opened.edits.isAccepting
+            return opened
         } catch {
-            await registry.release(localId)
+            if let model {
+                await model.close()
+            } else {
+                await registry.release(localId)
+            }
             throw error
         }
-        return model
     }
 
     private init(

@@ -12,6 +12,63 @@ import Testing
 ///  two-client fast-forward and divergence flows pass."
 @Suite("N4 acceptance")
 struct AcceptanceTests {
+  @Test("a clean revert survives relaunch and supersedes an older remote draft")
+  func cleanRevertIsDurableRemoteIntent() async throws {
+    let directory = Harness.makeDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let server = InMemoryTransport()
+    let remote = try await server.createDocument(
+      title: "Clean revert", documentUuid: "clean-revert")
+    let localId: String
+
+    do {
+      let first = try Harness(directory: directory, transport: server)
+      localId = try await first.adoptRemoteDocument(remote, localId: "clean-revert")
+      let session = DocumentSession(
+        documentLocalId: localId, store: first.store, sync: first.sync, origin: "mac",
+        schedulesTimers: false)
+      try await session.open()
+
+      let older = "older draft already sent"
+      let olderGeneration = try first.store.saveEditorIngressSynchronously(
+        documentLocalId: localId, markdown: older, selection: nil, wordCount: 4,
+        clientMutationId: ulid(),
+        draftPayload: OutboxPayload(markdown: older, wordCount: 4).encoded)
+      try await session.applyPersistedLocalChange(
+        markdown: older, selection: nil, generation: olderGeneration)
+      await first.sync.drainNow()
+      #expect(try await server.getDocument(documentId: remote.documentId)?.markdown == older)
+
+      let clean = ""
+      _ = try first.store.saveEditorIngressSynchronously(
+        documentLocalId: localId, markdown: clean, selection: nil, wordCount: 0,
+        clientMutationId: ulid(),
+        draftPayload: OutboxPayload(markdown: clean, wordCount: 0).encoded)
+      let pending = try #require(try await first.store.document(localId: localId))
+      #expect(pending.displayMarkdown == clean)
+      #expect(pending.editorIngressRevision != nil)
+      #expect(pending.syncState == .pending)
+      try await first.store.closeForTesting()
+    }
+
+    let relaunched = try Harness(directory: directory, transport: server)
+    let reopened = DocumentSession(
+      documentLocalId: localId, store: relaunched.store, sync: relaunched.sync, origin: "mac",
+      schedulesTimers: false)
+    try await reopened.open()
+    #expect(await reopened.currentState?.markdown == "")
+
+    await relaunched.sync.drainNow()
+
+    #expect(try await server.getDocument(documentId: remote.documentId)?.markdown == "")
+    let settled = try #require(try await relaunched.store.document(localId: localId))
+    #expect(settled.displayMarkdown == "")
+    #expect(settled.draftMarkdown == nil)
+    #expect(settled.editorIngressRevision == nil)
+    #expect(settled.syncState == .synced)
+    #expect(try await relaunched.store.pendingJobs(documentLocalId: localId).isEmpty)
+  }
+
   @Test("an open offline session rebases onto the acknowledged server root")
   func openSessionRebasesAfterOfflineRootAdoption() async throws {
     let store = try RectoStore.inMemory()
@@ -24,7 +81,9 @@ struct AcceptanceTests {
     try await session.open()
     let markdown = "typed while create acknowledgement lands · 中文 · 🚀"
     let generation = try store.saveEditorIngressSynchronously(
-      documentLocalId: local.localId, markdown: markdown, selection: nil, wordCount: 8)
+      documentLocalId: local.localId, markdown: markdown, selection: nil, wordCount: 8,
+      clientMutationId: ulid(),
+      draftPayload: OutboxPayload(markdown: markdown, wordCount: 8).encoded)
 
     try await store.finishOfflineCreate(
       documentLocalId: local.localId, convexId: "server-document",

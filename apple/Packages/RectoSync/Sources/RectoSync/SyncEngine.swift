@@ -1043,6 +1043,9 @@ public actor SyncEngine: SyncControlling {
         // settle to `synced` with the final draft existing only in SQLite.
         return .retryAfterBackoff(reason: "draft CAS lost; baseline refreshed")
       }
+      try await store.acknowledgeEditorIngress(
+        documentLocalId: document.localId,
+        markdown: payload.markdown ?? document.displayMarkdown)
       return .completed
 
     case .rename:

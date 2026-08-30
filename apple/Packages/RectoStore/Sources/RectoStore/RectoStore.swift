@@ -294,7 +294,15 @@ public actor RectoStore {
       if document.syncState != .diverged { document.syncState = .pending }
       try document.update(db)
 
-      if var job { try job.insert(db) }
+      if var job {
+        // The immutable commit carries this exact body, so any mutable draft
+        // save it promoted is now redundant.
+        _ = try OutboxJob
+          .filter(Column("documentLocalId") == documentLocalId)
+          .filter(Column("kind") == OutboxKind.draftSave.rawValue)
+          .deleteAll(db)
+        try job.insert(db)
+      }
       try Self.trimMaterializationCache(db, documentLocalId: documentLocalId)
       return document
     }
@@ -421,34 +429,61 @@ public actor RectoStore {
     markdown: String,
     selection: NodeSelection?,
     wordCount: Int,
+    clientMutationId: String,
+    draftPayload: String,
     now: Double = Date().timeIntervalSince1970 * 1000
   ) throws -> Int {
     try writer.write { db in
       guard var document = try DocumentRecord.fetchOne(db, key: documentLocalId) else {
         throw StoreError.documentNotFound(documentLocalId)
       }
-      document.draftMarkdown = markdown == document.markdown ? nil : markdown
+      document.draftMarkdown = markdown
       document.draftSelectionAnchor = selection?.anchor
       document.draftSelectionHead = selection?.head
       document.wordCount = wordCount
       document.updatedAt = now
-      if document.draftMarkdown != nil,
-        document.syncState == .synced || document.syncState == .syncing
-      {
-        document.syncState = .pending
-      }
+      if document.syncState != .diverged { document.syncState = .pending }
       document.draftRevision += 1
-      document.editorIngressRevision = document.draftMarkdown == nil ? nil : document.draftRevision
-      if document.draftMarkdown == nil,
-        document.syncState == .pending,
-        document.queueBlockedReason == nil,
-        document.remoteHeadNodeId == document.localHeadNodeId,
-        try OutboxJob.filter(Column("documentLocalId") == documentLocalId).fetchCount(db) == 0
-      {
-        document.syncState = .synced
-      }
+      document.editorIngressRevision = document.draftRevision
       try document.update(db)
+
+      // Draft bodies are mutable full snapshots. The newest accepted snapshot
+      // supersedes every older unsent one, while keeping its place after any
+      // immutable node jobs already queued for this document.
+      _ = try OutboxJob
+        .filter(Column("documentLocalId") == documentLocalId)
+        .filter(Column("kind") == OutboxKind.draftSave.rawValue)
+        .deleteAll(db)
+      var job = OutboxJob(
+        documentLocalId: documentLocalId,
+        kind: .draftSave,
+        clientMutationId: clientMutationId,
+        baseHeadNodeId: document.localHeadNodeId,
+        payload: draftPayload,
+        createdAt: now)
+      try job.insert(db)
       return document.draftRevision
+    }
+  }
+
+  /// Clear a clean-head ingress only after the server accepted that exact body.
+  /// A non-clean draft still needs its local row until history commits it.
+  public func acknowledgeEditorIngress(
+    documentLocalId: String,
+    markdown: String
+  ) throws {
+    try writer.write { db in
+      guard var document = try DocumentRecord.fetchOne(db, key: documentLocalId),
+        document.editorIngressRevision != nil,
+        document.draftMarkdown == markdown,
+        document.markdown == markdown
+      else { return }
+      document.draftMarkdown = nil
+      document.draftSelectionAnchor = nil
+      document.draftSelectionHead = nil
+      document.editorIngressRevision = nil
+      document.draftRevision += 1
+      try document.update(db)
     }
   }
 

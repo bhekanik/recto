@@ -77,7 +77,7 @@ struct OrderedDocumentEditsTests {
     }
 
     @MainActor
-    @Test("reverting to the clean head while an older submit is suspended stays synced")
+    @Test("a clean revert stays durable while an older submit is suspended")
     func suspendedCleanRevert() async throws {
         let store = try RectoStore.inMemory()
         let localId = "clean-revert"
@@ -132,16 +132,19 @@ struct OrderedDocumentEditsTests {
         queue.accept(markdown: "clean")
 
         let reverted = try #require(try await store.document(localId: localId))
-        #expect(reverted.draftMarkdown == nil)
-        #expect(reverted.syncState == .synced)
+        #expect(reverted.draftMarkdown == "clean")
+        #expect(reverted.editorIngressRevision != nil)
+        #expect(reverted.syncState == .pending)
+        #expect(try await store.pendingJobs(documentLocalId: localId).count == 1)
 
         await gate.release()
         await queue.waitUntilDrained()
 
         let settled = try #require(try await store.document(localId: localId))
         #expect(settled.displayMarkdown == "clean")
-        #expect(settled.syncState == .synced)
-        #expect(try await store.pendingJobs(documentLocalId: localId).isEmpty)
+        #expect(settled.editorIngressRevision != nil)
+        #expect(settled.syncState == .pending)
+        #expect(try await store.pendingJobs(documentLocalId: localId).count == 1)
         #expect(await session.currentState?.markdown == "clean")
     }
 }

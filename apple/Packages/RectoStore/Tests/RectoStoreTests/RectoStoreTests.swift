@@ -63,6 +63,9 @@ struct RectoStoreTests {
       markdown: "hello", selection: NodeSelection(anchor: 5, head: 5), structural: true, now: 0)
     let commit = try #require(commits.first)
     let (node, job) = nodeAndJob(documentLocalId: "doc-1", commit: commit, now: 1)
+    _ = try store.saveEditorIngressSynchronously(
+      documentLocalId: "doc-1", markdown: commit.markdown, selection: nil, wordCount: 1,
+      clientMutationId: "draft", draftPayload: #"{"markdown":"hello","wordCount":1}"#)
 
     let updated = try await store.commit(
       documentLocalId: "doc-1", node: node, markdown: commit.markdown, wordCount: 1,
@@ -72,10 +75,11 @@ struct RectoStoreTests {
     #expect(updated.markdown == "hello")
     #expect(updated.syncState == .pending)
     #expect(try await store.pendingJobCount() == 1)
+    #expect(try await store.pendingJobs().first?.kind == .commitEdit)
     #expect(try await store.node(documentLocalId: "doc-1", nodeId: commit.nodeId) != nil)
   }
 
-  @Test("reverting editor ingress to the clean head restores synced state")
+  @Test("reverting editor ingress to the clean head stays durable and pending")
   func cleanIngressRevert() async throws {
     let store = try makeStore()
     var cleanDocument = try await seedDocument(store, markdown: "clean")
@@ -83,15 +87,22 @@ struct RectoStoreTests {
     try await store.save(cleanDocument)
 
     _ = try store.saveEditorIngressSynchronously(
-      documentLocalId: "doc-1", markdown: "A", selection: nil, wordCount: 1)
+      documentLocalId: "doc-1", markdown: "A", selection: nil, wordCount: 1,
+      clientMutationId: "A", draftPayload: #"{"markdown":"A","wordCount":1}"#)
     _ = try store.saveEditorIngressSynchronously(
-      documentLocalId: "doc-1", markdown: "clean", selection: nil, wordCount: 1)
+      documentLocalId: "doc-1", markdown: "clean", selection: nil, wordCount: 1,
+      clientMutationId: "clean",
+      draftPayload: #"{"markdown":"clean","wordCount":1}"#)
 
     let document = try #require(try await store.document(localId: "doc-1"))
-    #expect(document.draftMarkdown == nil)
+    #expect(document.draftMarkdown == "clean")
+    #expect(document.editorIngressRevision != nil)
     #expect(document.localHeadNodeId == document.remoteHeadNodeId)
-    #expect(document.syncState == .synced)
-    #expect(try await store.pendingJobs(documentLocalId: "doc-1").isEmpty)
+    #expect(document.syncState == .pending)
+    let pendingJobs = try await store.pendingJobs(documentLocalId: "doc-1")
+    #expect(pendingJobs.count == 1)
+    #expect(pendingJobs.first?.clientMutationId == "clean")
+    #expect(pendingJobs.first?.baseHeadNodeId == "root")
   }
 
   @Test("a commit onto a head that already moved is rejected, leaving nothing behind")

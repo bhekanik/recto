@@ -435,8 +435,10 @@ public actor DocumentSession {
     // The revision the write-ahead save produced, or whatever the commits left
     // behind — either way it is the token a later timer must still match.
     scheduleIdleCommit(generation: expectedGeneration)
-    scheduleDraftSave(
-      markdown: markdown, selection: selection, generation: expectedGeneration)
+    if persistedGeneration == nil {
+      scheduleDraftSave(
+        markdown: markdown, selection: selection, generation: expectedGeneration)
+    }
     publish()
     if !commits.isEmpty { await sync?.requestDrain() }
   }

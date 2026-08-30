@@ -29,8 +29,8 @@ public struct DocumentRecord: Codable, Sendable, FetchableRecord, PersistableRec
   public var title: String
   /// Materialized Markdown at `localHead`.
   public var markdown: String
-  /// Text ahead of `localHead` that no node exists for yet: the debounced draft
-  /// row, so a crash between keystroke and node boundary loses nothing.
+  /// Latest accepted editor text awaiting history promotion or exact remote
+  /// acknowledgement, including a clean revert equal to `localHead`.
   public var draftMarkdown: String?
   public var draftSelectionAnchor: Int?
   public var draftSelectionHead: Int?
@@ -60,7 +60,7 @@ public struct DocumentRecord: Codable, Sendable, FetchableRecord, PersistableRec
   /// 250 ms task cannot resurrect the text it was scheduled with over a newer one.
   public var draftRevision: Int
   /// Revision written synchronously by the editor callback and not yet promoted
-  /// into a history node. Server drafts leave this nil.
+  /// into history or acknowledged remotely. Server drafts leave this nil.
   public var editorIngressRevision: Int?
   public var syncState: SyncState
   /// Set when `syncState == .diverged`: the remote head we refused to adopt.

@@ -100,7 +100,17 @@ struct CloudDocumentView: View {
         model = nil
         openingError = nil
         do {
-            model = try await CloudDocumentModel.open(localId: localId, registry: registry)
+            let opened = try await CloudDocumentModel.open(
+                localId: localId,
+                registry: registry,
+                waitForEditableHolder: true
+            )
+            if Task.isCancelled {
+                await opened.close()
+                return
+            }
+            model = opened
+        } catch is CancellationError {
         } catch {
             openingError = error.localizedDescription
         }
