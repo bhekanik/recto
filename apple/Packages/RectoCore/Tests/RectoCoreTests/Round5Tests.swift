@@ -9,6 +9,34 @@ import Testing
 
 @Suite("round-5 repros")
 struct Round5Tests {
+  private actor ResumeInterleaving {
+    private var firstDocumentId: String?
+    private var resumeCount = 0
+    private var secondResumeGate: CheckedContinuation<Void, Never>?
+    private var secondResumeObservers: [CheckedContinuation<String, Never>] = []
+
+    func beforeResume(documentId: String) async {
+      resumeCount += 1
+      if firstDocumentId == nil { firstDocumentId = documentId }
+      guard resumeCount == 2 else { return }
+      let firstDocumentId = firstDocumentId ?? documentId
+      let observers = secondResumeObservers
+      secondResumeObservers.removeAll()
+      observers.forEach { $0.resume(returning: firstDocumentId) }
+      await withCheckedContinuation { secondResumeGate = $0 }
+    }
+
+    func waitUntilSecondResume() async -> String {
+      if resumeCount >= 2 { return firstDocumentId! }
+      return await withCheckedContinuation { secondResumeObservers.append($0) }
+    }
+
+    func releaseSecondResume() {
+      secondResumeGate?.resume()
+      secondResumeGate = nil
+    }
+  }
+
   private actor EagerIngress: EditorIngressCoordinating {
     private let session: DocumentSession
     private let store: RectoStore
@@ -55,6 +83,38 @@ struct Round5Tests {
 
     #expect(await ingress.error == nil)
     #expect(try await harness.store.document(localId: localId)?.draftMarkdown == "accepted on resume")
+  }
+
+  @Test("resume converges when an existing session is reopened between session resumes")
+  func reentrantOpenDuringResume() async throws {
+    let directory = Harness.makeDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let harness = try Harness(directory: directory, transport: InMemoryTransport())
+    let firstId = try await harness.createLocalDocument(title: "first")
+    let secondId = try await harness.createLocalDocument(title: "second")
+    let interleaving = ResumeInterleaving()
+    let registry = DocumentSessionRegistry(
+      store: harness.store,
+      sync: harness.sync,
+      origin: "test-device",
+      beforeSessionResume: { await interleaving.beforeResume(documentId: $0) })
+    let sessions = [
+      firstId: try await registry.session(for: firstId),
+      secondId: try await registry.session(for: secondId),
+    ]
+
+    await registry.freezeAndFlushAll()
+    let resume = Task { await registry.resumeAll() }
+    let resumedFirstId = await interleaving.waitUntilSecondResume()
+    _ = try await registry.session(for: resumedFirstId)
+    await interleaving.releaseSecondResume()
+    await resume.value
+
+    let resumedFirst = try #require(sessions[resumedFirstId])
+    try await resumedFirst.applyLocalChange(markdown: "accepted after resume", selection: nil)
+    #expect(
+      try await harness.store.document(localId: resumedFirstId)?.draftMarkdown
+        == "accepted after resume")
   }
 
   // MARK: - 3. A session opened during a freeze is born frozen

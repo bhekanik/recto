@@ -20,6 +20,7 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
   private let sync: SyncEngine?
   private let origin: String
   private let countWords: @Sendable (String) -> Int
+  private let beforeSessionResume: (@Sendable (String) async -> Void)?
   private var sessions: [String: DocumentSession] = [:]
   private var ingresses: [UUID: any EditorIngressCoordinating] = [:]
   private var ingressDocumentIds: [UUID: String] = [:]
@@ -33,6 +34,9 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
   /// unsynced count and the purge. The flag is set before the first await, so
   /// there is no window to slip through.
   private var isFrozen = false
+  /// A reopen can refreeze a session while `resumeAll()` is suspended on another
+  /// session. The generation makes that pass repeat before editors are exposed.
+  private var sessionFreezeGeneration = 0
 
   public init(
     store: RectoStore,
@@ -44,6 +48,21 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
     self.sync = sync
     self.origin = origin
     self.countWords = countWords
+    self.beforeSessionResume = nil
+  }
+
+  init(
+    store: RectoStore,
+    sync: SyncEngine?,
+    origin: String,
+    countWords: @escaping @Sendable (String) -> Int = RectoWordCount.plainText,
+    beforeSessionResume: @escaping @Sendable (String) async -> Void
+  ) {
+    self.store = store
+    self.sync = sync
+    self.origin = origin
+    self.countWords = countWords
+    self.beforeSessionResume = beforeSessionResume
   }
 
   /// The session for a document, opening it if this is the first holder.
@@ -66,7 +85,10 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
     // cannot accept an edit that the final unsynced count has already missed.
     let freezeNewSession = isFrozen
     do {
-      if freezeNewSession { await session.freeze() }
+      if freezeNewSession {
+        sessionFreezeGeneration += 1
+        await session.freeze()
+      }
       try await session.open()
     } catch {
       // A failed open must not leave a holder or a half-built session behind: a
@@ -141,10 +163,16 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
   }
 
   public func resumeAll() async {
-    var resumed: Set<ObjectIdentifier> = []
-    while let session = sessions.values.first(where: { !resumed.contains(ObjectIdentifier($0)) }) {
-      resumed.insert(ObjectIdentifier(session))
-      await session.resume()
+    while true {
+      let generation = sessionFreezeGeneration
+      let snapshot = Array(sessions.values)
+      for session in snapshot {
+        await beforeSessionResume?(session.documentLocalId)
+        await session.resume()
+      }
+      let resumed = Set(snapshot.map(ObjectIdentifier.init))
+      let current = Set(sessions.values.map(ObjectIdentifier.init))
+      if generation == sessionFreezeGeneration, resumed == current { break }
     }
     isFrozen = false
     for ingress in Array(ingresses.values) { await ingress.resume() }

@@ -671,14 +671,25 @@ public final class RectoAuth {
     guard isCurrent(epoch: epoch, identity: identity) else { return }
     await sessions?.resumeAll()
     guard isCurrent(epoch: epoch, identity: identity) else {
-      await containSupersededPublication()
+      await containStaleRefusedSignOutRecovery(from: identity)
       return
     }
     await sync?.start()
     guard isCurrent(epoch: epoch, identity: identity) else {
-      await containSupersededPublication()
+      await containStaleRefusedSignOutRecovery(from: identity)
       return
     }
+  }
+
+  private func containStaleRefusedSignOutRecovery(from identity: ClerkIdentity?) async {
+    if let successor = expectedIdentity,
+      successor != identity,
+      convexAuthProvider.activeSessionID() == successor.sessionID,
+      status == .signedIn(userId: successor.userID)
+    {
+      return
+    }
+    await containSupersededPublication()
   }
 
   private func isCurrent(epoch: Int, identity: ClerkIdentity?) -> Bool {

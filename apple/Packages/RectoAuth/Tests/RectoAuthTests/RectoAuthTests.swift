@@ -592,6 +592,7 @@ struct RefusedSignOutLifecycleTests {
   enum SuspensionPoint: Sendable {
     case freeze
     case resume
+    case start
   }
 
   private final class ActiveSession {
@@ -604,6 +605,7 @@ struct RefusedSignOutLifecycleTests {
     private let suspensionPoint: SuspensionPoint?
     private var freezeCount = 0
     private var resumeCount = 0
+    private var startCount = 0
     private var isSuspended = false
     private var releaseGate: CheckedContinuation<Void, Never>?
     private(set) var isEditable = false
@@ -614,7 +616,12 @@ struct RefusedSignOutLifecycleTests {
     }
 
     func stop() { isRunning = false }
-    func start() { isRunning = true }
+
+    func start() async {
+      startCount += 1
+      if suspensionPoint == .start, startCount == 2 { await suspend() }
+      isRunning = true
+    }
 
     func freezeAndFlushAll() async {
       freezeCount += 1
@@ -641,6 +648,14 @@ struct RefusedSignOutLifecycleTests {
         await Task.yield()
       }
       Issue.record("coordinator never reached the requested suspension point")
+    }
+
+    func waitUntilStartCount(_ expected: Int) async {
+      for _ in 0..<10_000 {
+        if startCount >= expected { return }
+        await Task.yield()
+      }
+      Issue.record("coordinator never reached \(expected) sync starts")
     }
 
     func release() {
@@ -749,6 +764,31 @@ struct RefusedSignOutLifecycleTests {
     #expect(try await context.store.mirrorOwner() == "user-A")
     #expect(await context.coordinator.isEditable == false)
     #expect(await context.coordinator.isRunning == false)
+  }
+
+  @Test(
+    "a same-user session replacement survives stale refused-sign-out recovery",
+    arguments: [SuspensionPoint.resume, .start])
+  func sameUserSessionReplacementDuringRefusal(_ suspensionPoint: SuspensionPoint) async throws {
+    let context = try await makeDirtySignedInAuth(suspensionPoint: suspensionPoint)
+    let signOut = Task { try await context.auth.signOut() }
+    await context.coordinator.waitUntilSuspended()
+
+    context.session.id = "session-B"
+    context.continuation.yield(
+      .sessionChanged(userId: "user-A", sessionID: "session-B"))
+    await context.coordinator.waitUntilStartCount(suspensionPoint == .resume ? 2 : 3)
+
+    await context.coordinator.release()
+    await expectRefusal(signOut)
+    context.continuation.finish()
+    await context.auth.waitForEventListenerForTesting()
+
+    #expect(context.auth.status == .signedIn(userId: "user-A"))
+    #expect(try await context.store.mirrorOwner() == "user-A")
+    #expect(try await context.store.pendingJobCount() == 1)
+    #expect(await context.coordinator.isEditable)
+    #expect(await context.coordinator.isRunning)
   }
 }
 
