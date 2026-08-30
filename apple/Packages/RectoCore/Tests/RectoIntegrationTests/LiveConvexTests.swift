@@ -45,41 +45,44 @@ enum LiveConvexEnvironment {
   static var isConfigured: Bool { LiveConfig.fromEnvironment() != nil }
 }
 
-/// One signed-in client, shared by every test in the suite: Clerk refuses to be
-/// configured twice in a process.
+/// One signed-in transport, shared by every test in the suite: Clerk refuses to
+/// be configured twice in a process. Each call still gets its own local mirror.
 actor LiveClient {
   static let shared = LiveClient()
 
-  private var prepared: (store: RectoStore, sync: SyncEngine, transport: ConvexTransport)?
+  private var sharedClient: (auth: RectoAuth, transport: ConvexTransport)?
 
   func connect(_ config: LiveConfig, directory: URL) async throws -> (
     store: RectoStore, sync: SyncEngine, transport: ConvexTransport
   ) {
-    if let prepared { return prepared }
+    let transport: ConvexTransport
+    if let sharedClient {
+      transport = sharedClient.transport
+    } else {
+      await MainActor.run { RectoAuth.configureClerk(publishableKey: config.publishableKey) }
+      let auth = await RectoAuth(store: try RectoStore.inMemory(), features: .current)
+      await auth.start()
 
-    await MainActor.run { RectoAuth.configureClerk(publishableKey: config.publishableKey) }
-    let store = try RectoStore(url: directory.appending(path: "recto.sqlite"))
-    let auth = await RectoAuth(store: store, features: .current)
-    await auth.start()
-
-    if await auth.status.userId == nil {
-      var challenge = try await auth.signInWithEmailCode(emailAddress: config.email)
-      try await challenge.verify(code: config.code)
-      // The session takes a moment to become active after verification.
-      for _ in 0..<50 where await auth.status.userId == nil {
-        try await Task.sleep(for: .milliseconds(100))
+      if await auth.status.userId == nil {
+        var challenge = try await auth.signInWithEmailCode(emailAddress: config.email)
+        try await challenge.verify(code: config.code)
+        // The session takes a moment to become active after verification.
+        for _ in 0..<50 where await auth.status.userId == nil {
+          try await Task.sleep(for: .milliseconds(100))
+        }
       }
+
+      transport = await ConvexTransport(
+        deploymentURL: config.convexURL, authProvider: await auth.convexAuthProvider)
+      guard await transport.loginFromCache() else {
+        throw LiveError.convexLoginFailed
+      }
+      sharedClient = (auth, transport)
     }
 
-    let transport = await ConvexTransport(
-      deploymentURL: config.convexURL, authProvider: await auth.convexAuthProvider)
-    guard await transport.loginFromCache() else {
-      throw LiveError.convexLoginFailed
-    }
+    let store = try RectoStore(url: directory.appending(path: "recto.sqlite"))
     let sync = SyncEngine(store: store, transport: transport, origin: "integration-test")
-    let result = (store, sync, transport)
-    prepared = result
-    return result
+    return (store, sync, transport)
   }
 
   enum LiveError: Error { case convexLoginFailed }
