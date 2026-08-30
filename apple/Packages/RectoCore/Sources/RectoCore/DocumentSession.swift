@@ -348,7 +348,7 @@ public actor DocumentSession {
     // between here and the commit loses nothing, and a store failure below
     // leaves a draft row that `open()` restores rather than a controller
     // advanced past a node SQLite rejected.
-    let generation = try await store.saveDraft(
+    var generation = try await store.saveDraft(
       documentLocalId: documentLocalId, markdown: markdown, selection: selection,
       wordCount: countWords(markdown), job: nil, now: timestamp)
 
@@ -362,6 +362,14 @@ public actor DocumentSession {
       var head = document.localHeadNodeId
       for commit in commits {
         head = try await persist(commit, base: head, at: timestamp)
+      }
+      if !commits.isEmpty {
+        // Persisting a node clears the draft. Restore the newest editor snapshot
+        // before returning so a termination between this call and the debounce
+        // cannot recover the older committed boundary instead.
+        generation = try await store.saveDraft(
+          documentLocalId: documentLocalId, markdown: markdown, selection: selection,
+          wordCount: countWords(markdown), job: nil, now: timestamp)
       }
       controller = staged
     } catch {

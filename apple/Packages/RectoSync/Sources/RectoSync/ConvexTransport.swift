@@ -10,7 +10,7 @@ import RectoStore
 /// A protocol so the sync engine can be driven by a fake in tests; the live
 /// implementation is `ConvexTransport`.
 public protocol RectoTransport: Actor {
-  func createDocument(title: String) async throws -> CreateDocumentResponse
+  func createDocument(title: String, documentUuid: String) async throws -> CreateDocumentResponse
   func commitEdit(_ request: CommitEditRequest) async throws -> CommitEditResponse
   /// Move the server's pointer. `expectedPointerRevision` is a compare-and-set
   /// on `documents.pointerRevision`; omitting it selects the server's legacy
@@ -256,9 +256,13 @@ public actor ConvexTransport: RectoTransport {
     try await firstValue(nodesStream(documentId: documentId, sinceCreatedAt: sinceCreatedAt)) ?? []
   }
 
-  public func createDocument(title: String) async throws -> CreateDocumentResponse {
+  public func createDocument(title: String, documentUuid: String) async throws
+    -> CreateDocumentResponse
+  {
     do {
-      return try await client.mutation(ConvexFunction.documentsCreate, with: ["title": title])
+      return try await client.mutation(
+        ConvexFunction.documentsCreate,
+        with: ["title": title, "documentUuid": documentUuid])
     } catch {
       throw Self.mapped(error)
     }

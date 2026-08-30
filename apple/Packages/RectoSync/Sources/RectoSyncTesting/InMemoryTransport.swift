@@ -49,9 +49,11 @@ public actor InMemoryTransport: RectoTransport {
   /// Every `clientMutationId` the transport has been asked to commit, in order —
   /// including replays, so a test can assert a retry reused the key.
   public private(set) var commitAttempts: [String] = []
+  public private(set) var createAttempts: [String] = []
   public private(set) var loginCount = 0
 
   private var faults: [Fault] = []
+  private var documentIdsByUuid: [String: String] = [:]
   /// Held open until `releaseDelayedCalls()`. Lets a test park a mutation
   /// mid-flight and then run a sign-out or account switch underneath it.
   ///
@@ -220,9 +222,23 @@ public actor InMemoryTransport: RectoTransport {
 
   // MARK: - RectoTransport
 
-  public func createDocument(title: String) async throws -> CreateDocumentResponse {
+  public func createDocument(title: String, documentUuid: String) async throws
+    -> CreateDocumentResponse
+  {
     try applyPreFault()
-    return seedDocument(title: title)
+    createAttempts.append(documentUuid)
+    if let documentId = documentIdsByUuid[documentUuid],
+      let rootNodeId = nodes[documentId]?.first(where: { $0.parentNodeId == nil })?.nodeId
+    {
+      return CreateDocumentResponse(documentId: documentId, rootNodeId: rootNodeId)
+    }
+    let response = seedDocument(title: title)
+    documentIdsByUuid[documentUuid] = response.documentId
+    if faults.first == .dropAcknowledgement {
+      _ = takeFault()
+      throw TransportFault.offline
+    }
+    return response
   }
 
   public func commitEdit(_ request: CommitEditRequest) async throws -> CommitEditResponse {
@@ -404,8 +420,15 @@ public actor InMemoryTransport: RectoTransport {
 
   public func remove(documentId: String) async throws {
     try applyPreFault()
+    guard documents[documentId] != nil else {
+      throw ServerRefusal(code: .notFound, message: "Document not found")
+    }
     documents[documentId] = nil
     nodes[documentId] = nil
+    if faults.first == .dropAcknowledgement {
+      _ = takeFault()
+      throw TransportFault.offline
+    }
     notifyDocumentSubscribers()
     notifyNodeSubscribers(documentId: documentId)
   }

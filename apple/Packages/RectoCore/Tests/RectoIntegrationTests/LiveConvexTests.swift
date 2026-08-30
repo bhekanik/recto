@@ -91,6 +91,35 @@ actor LiveClient {
     if: LiveConvexEnvironment.isConfigured,
     "set RECTO_CONVEX_URL and RECTO_CLERK_PUBLISHABLE_KEY to run the live Convex tests"))
 struct LiveConvexTests {
+  @Test("an offline library document reaches Convex with exact Markdown")
+  func offlineLibraryJourney() async throws {
+    let config = try #require(LiveConfig.fromEnvironment())
+    let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appending(path: "recto-live-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let (store, sync, transport) = try await LiveClient.shared.connect(
+      config, directory: directory)
+
+    let library = DocumentLibrary(store: store, sync: nil, origin: "integration-test")
+    let title = "native-spike-\(UUID().uuidString.prefix(8))"
+    let local = try await library.createDocument(title: title)
+    let session = DocumentSession(
+      documentLocalId: local.localId, store: store, sync: nil, origin: "integration-test",
+      schedulesTimers: false)
+    try await session.open()
+    let markdown = "# Offline → online\n\nUnicode: café · 中文 · 🚀\n"
+    try await session.applyLocalChange(markdown: markdown, selection: nil, structural: true)
+    await session.close()
+
+    await sync.drainNow()
+    let mirrored = try #require(try await store.document(localId: local.localId))
+    let convexId = try #require(mirrored.convexId)
+    defer { Task { try? await transport.remove(documentId: convexId) } }
+    let remote = try #require(try await transport.getDocument(documentId: convexId))
+    #expect(remote.markdown == markdown)
+    #expect(try await store.pendingJobs(documentLocalId: local.localId).isEmpty)
+  }
+
   @Test("create, commit, undo and delete a document against the dev deployment")
   func roundTrip() async throws {
     let config = try #require(LiveConfig.fromEnvironment())
@@ -103,7 +132,8 @@ struct LiveConvexTests {
       config, directory: directory)
 
     let title = "native-spike-\(UUID().uuidString.prefix(8))"
-    let created = try await transport.createDocument(title: title)
+    let created = try await transport.createDocument(
+      title: title, documentUuid: UUID().uuidString)
     defer {
       Task { try? await transport.remove(documentId: created.documentId) }
     }
@@ -155,7 +185,8 @@ struct LiveConvexTests {
     let (_, _, transport) = try await LiveClient.shared.connect(config, directory: directory)
 
     let title = "native-spike-\(UUID().uuidString.prefix(8))"
-    let created = try await transport.createDocument(title: title)
+    let created = try await transport.createDocument(
+      title: title, documentUuid: UUID().uuidString)
     defer { Task { try? await transport.remove(documentId: created.documentId) } }
 
     let first = CommitEditRequest(
@@ -210,7 +241,8 @@ struct LiveConvexTests {
     let (_, _, transport) = try await LiveClient.shared.connect(config, directory: directory)
 
     let title = "native-spike-\(UUID().uuidString.prefix(8))"
-    let created = try await transport.createDocument(title: title)
+    let created = try await transport.createDocument(
+      title: title, documentUuid: UUID().uuidString)
     defer { Task { try? await transport.remove(documentId: created.documentId) } }
 
     let first = CommitEditRequest(
@@ -250,7 +282,8 @@ struct LiveConvexTests {
     let (_, _, transport) = try await LiveClient.shared.connect(config, directory: directory)
 
     let title = "native-spike-\(UUID().uuidString.prefix(8))"
-    let created = try await transport.createDocument(title: title)
+    let created = try await transport.createDocument(
+      title: title, documentUuid: UUID().uuidString)
     defer { Task { try? await transport.remove(documentId: created.documentId) } }
 
     let commit = CommitEditRequest(

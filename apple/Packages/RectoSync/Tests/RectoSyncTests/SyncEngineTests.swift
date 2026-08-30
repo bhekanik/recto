@@ -13,6 +13,37 @@ private func makeEngine(_ transport: InMemoryTransport) throws -> (RectoStore, S
 
 @Suite("SyncEngine")
 struct SyncEngineTests {
+  @Test("lost delete answer followed by not_found acknowledges the delete")
+  func deleteReplayTreatsNotFoundAsAcknowledged() async throws {
+    let transport = InMemoryTransport()
+    let seeded = await transport.seedDocument(title: "delete replay")
+    let (store, engine) = try makeEngine(transport)
+    try await engine.mirrorLibrary(await transport.summaries())
+    let local = try #require(try await store.documents().first)
+    _ = try await store.enqueue(
+      OutboxJob(
+        documentLocalId: local.localId,
+        kind: .remove,
+        clientMutationId: ulid(),
+        payload: OutboxPayload().encoded,
+        createdAt: 1))
+
+    await transport.inject([.dropAcknowledgement])
+    await engine.drainNow()
+
+    #expect(try await transport.getDocument(documentId: seeded.documentId) == nil)
+    #expect(try await store.document(localId: local.localId) != nil)
+    let failed = try #require(try await store.pendingJobs(documentLocalId: local.localId).first)
+    #expect(failed.attempts == 1)
+    try await store.failJob(
+      id: try #require(failed.id), error: "", retryAfter: 0, now: 0)
+
+    await engine.drainNow()
+
+    #expect(try await store.document(localId: local.localId) == nil)
+    #expect(try await store.pendingJobs(documentLocalId: local.localId).isEmpty)
+  }
+
   @Test("a document seen for the first time is hydrated with its whole DAG")
   func hydratesNewDocument() async throws {
     let transport = InMemoryTransport()

@@ -556,6 +556,7 @@ public actor SyncEngine: SyncControlling {
       "releasing the \(raw, privacy: .public) barrier on \(localId, privacy: .public) after reconciling"
     )
     try await store.setQueueBlocked(documentLocalId: localId, reason: nil)
+    requestDrain()
   }
 
   /// Reconcile documents left holding a provisional barrier.
@@ -893,17 +894,17 @@ public actor SyncEngine: SyncControlling {
     switch job.kind {
     case .createDocument:
       // A retry that already has a Convex id finishes the adoption rather than
-      // creating a second remote document. `documents.create` takes no
-      // idempotency key yet (W7), so the window between the server insert and
-      // this transaction is closed by recording the id first and making the
-      // adoption resumable.
+      // asking the server again. If the first answer was lost before this id was
+      // stored, `document.localId` is the stable server idempotency key.
       if let convexId = document.convexId {
         try await finishCreate(
           document: document, convexId: convexId,
           serverRootNodeId: document.remoteHeadNodeId ?? document.localHeadNodeId)
         return .completed
       }
-      let response = try await transport.createDocument(title: payload.title ?? document.title)
+      let response = try await transport.createDocument(
+        title: payload.title ?? document.title,
+        documentUuid: document.localId)
       try await finishCreate(
         document: document, convexId: response.documentId,
         serverRootNodeId: response.rootNodeId)
@@ -1027,7 +1028,12 @@ public actor SyncEngine: SyncControlling {
 
     case .remove:
       guard let convexId = document.convexId else { return .completed }
-      try await transport.remove(documentId: convexId)
+      do {
+        try await transport.remove(documentId: convexId)
+      } catch let refusal as ServerRefusal where refusal.code == .notFound {
+        // A delete response can be lost after the server commits. Replaying it
+        // then returns not_found, which proves the requested final state.
+      }
       try await store.deleteDocumentRow(localId: document.localId)
       return .completedAndBlock(reason: .removed)
 

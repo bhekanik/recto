@@ -195,6 +195,23 @@ public actor RectoStore {
     try writer.write { try document.save($0) }
   }
 
+  /// Insert an offline document, its local root, and its create mutation as one
+  /// transaction. A crash can therefore expose either the whole new document
+  /// or none of it, never a library row that cannot open or cannot sync.
+  public func createLocalDocument(
+    _ document: DocumentRecord,
+    rootNode: DocNodeRecord,
+    createJob: OutboxJob
+  ) throws -> DocumentRecord {
+    try writer.write { db in
+      try document.insert(db)
+      try rootNode.insert(db)
+      var job = createJob
+      try job.insert(db)
+      return document
+    }
+  }
+
   public func nodes(documentLocalId: String) throws -> [DocNodeRecord] {
     try writer.read {
       try DocNodeRecord
