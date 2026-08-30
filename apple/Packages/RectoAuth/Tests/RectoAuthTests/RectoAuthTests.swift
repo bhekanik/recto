@@ -792,6 +792,121 @@ struct RefusedSignOutLifecycleTests {
   }
 }
 
+@Suite("refused sign-out publication containment")
+@MainActor
+struct RefusedSignOutPublicationContainmentTests {
+  private final class ActiveSession {
+    var id: String?
+
+    init(_ id: String?) { self.id = id }
+  }
+
+  private actor Coordinator: SyncControlling, EditSessionCoordinating {
+    private var resumeCount = 0
+    private var staleResumeGate: CheckedContinuation<Void, Never>?
+    private var staleResumeObservers: [CheckedContinuation<Void, Never>] = []
+    private var successorResumeGate: CheckedContinuation<Void, Never>?
+    private var successorResumeObservers: [CheckedContinuation<Void, Never>] = []
+    private(set) var isEditable = false
+    private(set) var isRunning = false
+
+    func stop() { isRunning = false }
+
+    func start() { isRunning = true }
+
+    func freezeAndFlushAll() { isEditable = false }
+
+    func resumeAll() async {
+      resumeCount += 1
+      if resumeCount == 2 {
+        let observers = staleResumeObservers
+        staleResumeObservers.removeAll()
+        for observer in observers { observer.resume() }
+        await withCheckedContinuation { staleResumeGate = $0 }
+        isEditable = true
+        return
+      }
+      if resumeCount == 3 {
+        isEditable = true
+        let observers = successorResumeObservers
+        successorResumeObservers.removeAll()
+        for observer in observers { observer.resume() }
+        await withCheckedContinuation { successorResumeGate = $0 }
+        return
+      }
+      isEditable = true
+    }
+
+    func invalidateAll() { isEditable = false }
+
+    func waitForStaleResume() async {
+      if resumeCount >= 2 { return }
+      await withCheckedContinuation { staleResumeObservers.append($0) }
+    }
+
+    func waitForSuccessorResumeSideEffect() async {
+      if resumeCount >= 3 { return }
+      await withCheckedContinuation { successorResumeObservers.append($0) }
+    }
+
+    func releaseStaleResume() {
+      staleResumeGate?.resume()
+      staleResumeGate = nil
+    }
+
+    func releaseSuccessorResume() {
+      successorResumeGate?.resume()
+      successorResumeGate = nil
+    }
+  }
+
+  @Test("a loading same-user successor resumes after stale containment")
+  func loadingSameUserSuccessor() async throws {
+    let store = try RectoStore.inMemory()
+    try await store.setMirrorOwner("user-A")
+    try await store.save(DocumentRecord(
+      localId: "doc-A", title: "A", markdown: "unsent", wordCount: 1,
+      localHeadNodeId: "root-A", syncState: .pending, updatedAt: 0, createdAt: 0))
+    _ = try await store.enqueue(OutboxJob(
+      documentLocalId: "doc-A", kind: .commitEdit, clientMutationId: "mutation-A",
+      payload: "{}", createdAt: 0))
+
+    let auth = RectoAuth(store: store)
+    let coordinator = Coordinator()
+    auth.attach(sync: coordinator)
+    auth.attach(sessions: coordinator)
+    let activeSession = ActiveSession("session-A")
+    auth.convexAuthProvider.activeSessionID = { activeSession.id }
+    auth.convexAuthProvider.cachedLogin = { true }
+    let (events, continuation) = AsyncStream<RectoAuth.LifecycleEvent>.makeStream()
+    await auth.startForTesting(
+      restoredUserId: "user-A", restoredSessionID: "session-A", events: events)
+
+    let signOut = Task { try await auth.signOut() }
+    await coordinator.waitForStaleResume()
+
+    activeSession.id = "session-B"
+    continuation.yield(.sessionChanged(userId: "user-A", sessionID: "session-B"))
+    await coordinator.waitForSuccessorResumeSideEffect()
+    #expect(auth.status == .loading)
+    #expect(await coordinator.isEditable)
+
+    await coordinator.releaseStaleResume()
+    await #expect(throws: RectoAuthError.unsyncedWork(count: 1)) {
+      try await signOut.value
+    }
+    #expect(await coordinator.isEditable == false)
+
+    await coordinator.releaseSuccessorResume()
+    continuation.finish()
+    await auth.waitForEventListenerForTesting()
+
+    #expect(auth.status == .signedIn(userId: "user-A"))
+    #expect(await coordinator.isEditable)
+    #expect(await coordinator.isRunning)
+  }
+}
+
 @Suite("round-3 auth")
 struct Round3AuthTests {
   /// Records the ordering of everything auth drives, and can write into the

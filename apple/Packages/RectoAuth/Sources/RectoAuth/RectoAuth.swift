@@ -139,6 +139,9 @@ public final class RectoAuth {
 
   private var activePublicationLease: IdentityLease?
   private var publicationContainment: PublicationContainment?
+  private var containmentGeneration = 0
+  private var activeContainmentCount = 0
+  private var containmentWaiters: [CheckedContinuation<Void, Never>] = []
 
   private func beginTransition() {
     transitionCount += 1
@@ -482,8 +485,22 @@ public final class RectoAuth {
       if blockingOnFailure { status = .convexLoginRequired(userId: identity.userID) }
       return false
     }
-    await sessions?.resumeAll()
-    guard await containIfSuperseded(lease) else { return false }
+    // A stale recovery can freeze after this resume takes effect but before it
+    // returns. Publish only when this lease resumed after the last containment.
+    while true {
+      let resumedAfterGeneration = containmentGeneration
+      await sessions?.resumeAll()
+      guard await containIfSuperseded(lease) else { return false }
+      await waitForContainment()
+      guard isCurrent(lease) else {
+        _ = await containIfSuperseded(lease)
+        return false
+      }
+      guard activeContainmentCount == 0,
+        containmentGeneration == resumedAfterGeneration
+      else { continue }
+      break
+    }
     status = .signedIn(userId: identity.userID)
     await sync?.start()
     guard await containIfSuperseded(lease) else { return false }
@@ -503,8 +520,20 @@ public final class RectoAuth {
   }
 
   private func containSupersededPublication() async {
+    activeContainmentCount += 1
     await sessions?.freezeAndFlushAll()
     await sync?.stop()
+    containmentGeneration += 1
+    activeContainmentCount -= 1
+    guard activeContainmentCount == 0 else { return }
+    let waiters = containmentWaiters
+    containmentWaiters.removeAll()
+    for waiter in waiters { waiter.resume() }
+  }
+
+  private func waitForContainment() async {
+    guard activeContainmentCount > 0 else { return }
+    await withCheckedContinuation { containmentWaiters.append($0) }
   }
 
   private func identityLease(for identity: ClerkIdentity) -> IdentityLease? {
