@@ -151,7 +151,12 @@ public actor SyncEngine: SyncControlling {
   public func resume() async {
     // `stop()` keeps `openDocumentIds`, so `start()` brings the same documents
     // back up on the new socket.
+    let resumeGeneration = lifecycle + 1
     await stop()
+    // Another stop can overtake us while the cancelled transport call winds
+    // down. That newer lifecycle owns the stopped state; this stale resume must
+    // not bring sockets back after sign-out or an account switch.
+    guard lifecycle == resumeGeneration else { return }
     start()
   }
 

@@ -64,6 +64,11 @@ public actor InMemoryTransport: RectoTransport {
   private var gateWaiters: [CheckedContinuation<Void, Never>] = []
   private var gateIsOpen = false
   public private(set) var delayedCallsStarted = 0
+  private var bodyReadWaiters: [CheckedContinuation<Void, Never>] = []
+  private var bodyReadsAreDelayed = false
+  public private(set) var delayedBodyReadsStarted = 0
+  public private(set) var cancelledBodyReads = 0
+  public private(set) var documentStreamStarts = 0
   private var clock: Double
 
   /// Epoch milliseconds by default. `updateCurrentNodeId` is last-write-wins on
@@ -108,6 +113,29 @@ public actor InMemoryTransport: RectoTransport {
       gateWaiters.append(continuation)
     }
   }
+
+  public func delayBodyReads() { bodyReadsAreDelayed = true }
+
+  public func releaseBodyReads() {
+    bodyReadsAreDelayed = false
+    let waiters = bodyReadWaiters
+    bodyReadWaiters.removeAll()
+    for waiter in waiters { waiter.resume() }
+  }
+
+  private func awaitBodyReadGate() async {
+    guard bodyReadsAreDelayed else { return }
+    delayedBodyReadsStarted += 1
+    await withTaskCancellationHandler {
+      await withCheckedContinuation { continuation in
+        bodyReadWaiters.append(continuation)
+      }
+    } onCancel: {
+      Task { await self.recordCancelledBodyRead() }
+    }
+  }
+
+  private func recordCancelledBodyRead() { cancelledBodyReads += 1 }
 
   private func applyPreFault() throws {
     switch faults.first {
@@ -451,6 +479,7 @@ public actor InMemoryTransport: RectoTransport {
   }
 
   public func getDocument(documentId: String) async throws -> RemoteDocument? {
+    await awaitBodyReadGate()
     guard let document = documents[documentId] else { return nil }
     return RemoteDocument(
       id: document.id, title: document.title, markdown: document.markdown,
@@ -469,6 +498,7 @@ public actor InMemoryTransport: RectoTransport {
   private var nodeSubscribers: [UUID: (documentId: String, continuation: AsyncThrowingStream<[RemoteNode], any Error>.Continuation)] = [:]
 
   public func documentsStream() -> AsyncThrowingStream<[RemoteDocumentSummary], any Error> {
+    documentStreamStarts += 1
     let (stream, continuation) = AsyncThrowingStream<[RemoteDocumentSummary], any Error>
       .makeStream()
     let id = UUID()

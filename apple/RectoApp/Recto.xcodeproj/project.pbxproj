@@ -22,6 +22,7 @@
 		840F1328B957A05D45E90150 /* OrderedDocumentEdits.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1016C956B2129F9E615F092 /* OrderedDocumentEdits.swift */; };
 		84424EF9E12A3D7DE5AD6CA2 /* RectoAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 4DC894E55209EEC836FC3509 /* RectoAuth */; };
 		8C67170EE9A465BCAA518CC2 /* CloudDocumentModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8589138DCF2864A8EC5C41C9 /* CloudDocumentModel.swift */; };
+		94CE851A6BF9F407B0C2ED90 /* RootForegroundInterleavingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCEBFE1A5165F1BE37FD346D /* RootForegroundInterleavingTests.swift */; };
 		AF3C02D0F992E368A1F8B5BA /* EmailSignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06F1089147A9513D2B76ABDE /* EmailSignInView.swift */; };
 		B24A3B1FC7CA46D45EF1C453 /* OrderedDocumentEditsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA24465686AB4748FE498A70 /* OrderedDocumentEditsTests.swift */; };
 		B4B334E2049526BC4B8A1CE3 /* RectoApplicationModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A3042458E2A75EB3A2D7391 /* RectoApplicationModel.swift */; };
@@ -71,6 +72,7 @@
 		B8DA1AB1DBA751F64421DC99 /* RootLifecycleAttackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootLifecycleAttackTests.swift; sourceTree = "<group>"; };
 		B9F5C256848CE3E71B3FBBF0 /* RectoDocumentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RectoDocumentTests.swift; sourceTree = "<group>"; };
 		BA24465686AB4748FE498A70 /* OrderedDocumentEditsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrderedDocumentEditsTests.swift; sourceTree = "<group>"; };
+		BCEBFE1A5165F1BE37FD346D /* RootForegroundInterleavingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootForegroundInterleavingTests.swift; sourceTree = "<group>"; };
 		C392C824BA3377AB65598207 /* ApplicationModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplicationModelTests.swift; sourceTree = "<group>"; };
 		C81BEB51E9CAED45132B82D2 /* RectoStore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = RectoStore; path = ../Packages/RectoStore; sourceTree = SOURCE_ROOT; };
 		DA53218E8DA7B61CDFDC0AE8 /* RectoSync */ = {isa = PBXFileReference; lastKnownFileType = folder; name = RectoSync; path = ../Packages/RectoSync; sourceTree = SOURCE_ROOT; };
@@ -192,6 +194,7 @@
 				3043896BC9224FA46A887898 /* EditorHostViewTests.swift */,
 				BA24465686AB4748FE498A70 /* OrderedDocumentEditsTests.swift */,
 				B9F5C256848CE3E71B3FBBF0 /* RectoDocumentTests.swift */,
+				BCEBFE1A5165F1BE37FD346D /* RootForegroundInterleavingTests.swift */,
 				B8DA1AB1DBA751F64421DC99 /* RootLifecycleAttackTests.swift */,
 			);
 			path = Tests;
@@ -311,6 +314,7 @@
 				50B65633ED8E88066BE2DDC4 /* EditorHostViewTests.swift in Sources */,
 				B24A3B1FC7CA46D45EF1C453 /* OrderedDocumentEditsTests.swift in Sources */,
 				763091A8177058FC11D1EE7A /* RectoDocumentTests.swift in Sources */,
+				94CE851A6BF9F407B0C2ED90 /* RootForegroundInterleavingTests.swift in Sources */,
 				043EADA0F1ADE471289A688B /* RootLifecycleAttackTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
