@@ -39,8 +39,27 @@ private actor TestTransport: RectoTransport {
     func loginFromCache() async -> Bool { false }
 }
 
+private actor AuthConsumerGate {
+    private var isReleased = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        guard !isReleased else { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func release() {
+        isReleased = true
+        let suspended = waiters
+        waiters.removeAll()
+        suspended.forEach { $0.resume() }
+    }
+}
+
 @MainActor
-private func makeComponents() async throws -> RectoApplicationModel.Components {
+private func makeComponents(
+    beforeAuthConsumption: (@MainActor @Sendable () async -> Void)? = nil
+) async throws -> RectoApplicationModel.Components {
     let store = try RectoStore.inMemory()
     let transport = TestTransport()
     let origin = try await SyncEngine.resolveOrigin(store: store)
@@ -50,7 +69,22 @@ private func makeComponents() async throws -> RectoApplicationModel.Components {
     let auth = RectoAuth(store: store)
     auth.attach(sync: sync)
     auth.attach(sessions: registry)
-    return .init(store: store, auth: auth, sync: sync, registry: registry, library: library)
+    return .init(
+        store: store,
+        auth: auth,
+        sync: sync,
+        registry: registry,
+        library: library,
+        beforeAuthConsumption: beforeAuthConsumption
+    )
+}
+
+@MainActor
+private func waitForAuthStatus(
+    _ expected: AuthStatus,
+    in model: RectoApplicationModel
+) async {
+    for _ in 0..<100 where model.authStatus != expected { await Task.yield() }
 }
 
 @Suite("application composition")
@@ -62,6 +96,7 @@ struct ApplicationModelTests {
         let model = RectoApplicationModel(components: components)
 
         await model.start()
+        await waitForAuthStatus(.signedOut, in: model)
         await model.receiveAuthStatus(.signedIn(userId: "test-user"))
         await model.createDocument()
 
@@ -69,6 +104,25 @@ struct ApplicationModelTests {
         #expect(model.authStatus == .signedIn(userId: "test-user"))
         #expect(model.documents.count == 1)
         #expect(model.selectedDocumentId == model.documents.first?.localId)
+    }
+
+    @MainActor
+    @Test("the first auth transition is buffered before its consumer runs")
+    func bufferedInitialAuthTransition() async throws {
+        let gate = AuthConsumerGate()
+        let components = try await makeComponents { await gate.wait() }
+        let model = RectoApplicationModel(components: components)
+
+        await model.start()
+
+        #expect(components.auth.status == .signedOut)
+        #expect(model.authStatus == .loading)
+        await gate.release()
+        await waitForAuthStatus(.signedOut, in: model)
+        #expect(model.authStatus == .signedOut)
+        #expect(
+            RectoCloudRootView.route(startup: model.startupState, auth: model.authStatus)
+                == .signedOut)
     }
 
     @MainActor

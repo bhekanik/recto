@@ -14,6 +14,7 @@ final class RectoApplicationModel {
         let sync: SyncEngine
         let registry: DocumentSessionRegistry
         let library: DocumentLibrary
+        var beforeAuthConsumption: (@MainActor @Sendable () async -> Void)? = nil
     }
     enum ForegroundSyncAction: Equatable {
         case stayStopped
@@ -52,10 +53,9 @@ final class RectoApplicationModel {
         startupState = .loading
         do {
             if let injectedComponents {
-                await injectedComponents.auth.start()
                 install(injectedComponents)
                 startupState = .ready
-                await receiveAuthStatus(injectedComponents.auth.status)
+                await injectedComponents.auth.start()
                 return
             }
             let configuration = try configuration ?? AppConfiguration()
@@ -221,20 +221,24 @@ final class RectoApplicationModel {
         registry = components.registry
         library = components.library
         authStatus = components.auth.status
-        observe(auth: components.auth, sync: components.sync)
+        observe(
+            auth: components.auth,
+            sync: components.sync,
+            beforeAuthConsumption: components.beforeAuthConsumption
+        )
     }
 
-    private func observe(auth: RectoAuth, sync: SyncEngine) {
+    private func observe(
+        auth: RectoAuth,
+        sync: SyncEngine,
+        beforeAuthConsumption: (@MainActor @Sendable () async -> Void)?
+    ) {
         authTask?.cancel()
+        let statuses = auth.statusUpdates
         authTask = Task { [weak self] in
-            // install(_:) copies the current value before this stream replays it.
-            var isInitialValue = true
-            for await status in auth.statusUpdates {
+            await beforeAuthConsumption?()
+            for await status in statuses {
                 guard let self else { return }
-                if isInitialValue {
-                    isInitialValue = false
-                    continue
-                }
                 await receiveAuthStatus(status)
             }
         }
