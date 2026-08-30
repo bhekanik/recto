@@ -35,6 +35,9 @@ public final class RectoTextStorage {
     /// Stable identity. The engine keys per-document state on it.
     public let documentId: String
 
+    /// The newline sequence inserted by native editing and paste operations.
+    public private(set) var lineEnding: MarkdownLineEnding
+
     /// The document, in canonical Markdown.
     ///
     /// Assigning reconciles the attached editor by patch, so a whole-document
@@ -44,6 +47,7 @@ public final class RectoTextStorage {
         didSet {
             guard markdown != oldValue else { return }
             frontmatter = Frontmatter.parse(markdown)
+            lineEnding = MarkdownLineEnding(detecting: markdown)
             reconcileEditor()
         }
     }
@@ -70,14 +74,22 @@ public final class RectoTextStorage {
     @ObservationIgnored
     public var onEdit: ((MarkdownTextMutation) -> Void)?
 
+    @ObservationIgnored
+    private var acceptedChangeObserver: NSObjectProtocol?
+
     /// `true` while the storage is applying an external change, so a listener
     /// can tell the reader's typing from a patch it caused itself.
     @ObservationIgnored
     public private(set) var isApplyingExternalEdit = false
 
-    public init(documentId: String, markdown: String = "") {
+    public init(
+        documentId: String,
+        markdown: String = "",
+        lineEnding: MarkdownLineEnding? = nil
+    ) {
         self.documentId = documentId
         self.markdown = markdown
+        self.lineEnding = lineEnding ?? MarkdownLineEnding(detecting: markdown)
         self.frontmatter = Frontmatter.parse(markdown)
     }
 
@@ -108,17 +120,65 @@ public final class RectoTextStorage {
     /// The editor writing its text back after an edit. The editor is already
     /// in this state, so `didSet`'s reconciliation is suppressed — patching it
     /// back would be a no-op at best.
-    func editorDidWriteBack(_ text: String) {
-        guard markdown != text else { return }
-        withoutReconciling { markdown = text }
+    @discardableResult
+    func editorDidWriteBack(_ text: String) -> Bool {
+        guard markdown != text else { return false }
+        let patch = MarkdownTextPatch.diff(from: markdown, to: text)
+        return editorDidMutate(MarkdownTextMutation(
+            range: patch.range,
+            replacement: patch.replacement
+        ))
     }
 
     /// One accepted edit, in UTF-16 display coordinates. Suppressed while the
     /// storage is applying a patch of its own, so a listener never sees its
     /// own change come back.
-    func editorDidMutate(_ mutation: MarkdownTextMutation) {
-        guard !isApplyingExternalEdit else { return }
-        onEdit?(mutation)
+    @discardableResult
+    func editorDidMutate(_ mutation: MarkdownTextMutation) -> Bool {
+        guard !isApplyingExternalEdit else { return false }
+        if controller.textView?.string == markdown { return false }
+        guard let normalized = lineEnding.applying(mutation, to: markdown)
+        else { return false }
+
+        isApplyingExternalEdit = true
+        withoutReconciling { markdown = normalized.markdown }
+        if controller.textView?.string != normalized.markdown {
+            controller.applyText(normalized.markdown)
+        }
+        isApplyingExternalEdit = false
+        onEdit?(normalized.mutation)
+        return true
+    }
+
+    func observeAcceptedChanges(
+        in textView: NSTextView?,
+        onTextChange: ((String) -> Void)?
+    ) {
+        if let acceptedChangeObserver {
+            NotificationCenter.default.removeObserver(acceptedChangeObserver)
+            self.acceptedChangeObserver = nil
+        }
+        guard let textView else { return }
+        acceptedChangeObserver = NotificationCenter.default.addObserver(
+            forName: NSText.didChangeNotification,
+            object: textView,
+            queue: .main
+        ) { [weak self, weak textView] _ in
+            MainActor.assumeIsolated {
+                guard let self, let textView,
+                      self.controller.textView === textView,
+                      !textView.hasMarkedText(),
+                      textView.string != self.markdown else { return }
+                let patch = MarkdownTextPatch.diff(from: self.markdown, to: textView.string)
+                let mutation = MarkdownTextMutation(
+                    range: patch.range,
+                    replacement: patch.replacement
+                )
+                if self.editorDidMutate(mutation) {
+                    onTextChange?(self.markdown)
+                }
+            }
+        }
     }
 
     private var isReconciling = false
