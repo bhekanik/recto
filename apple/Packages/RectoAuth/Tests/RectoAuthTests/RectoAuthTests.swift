@@ -274,6 +274,119 @@ struct ColdSessionRestorationTests {
   }
 }
 
+@Suite("auth publication interleaving")
+@MainActor
+struct AuthPublicationInterleavingTests {
+  enum SuspensionPoint: Sendable {
+    case resume
+    case start
+  }
+
+  private final class ActiveSession {
+    var id: String?
+
+    init(_ id: String?) { self.id = id }
+  }
+
+  private actor Coordinator: SyncControlling, EditSessionCoordinating {
+    private let suspensionPoint: SuspensionPoint
+    private var resumeCount = 0
+    private var startCount = 0
+    private var gate: CheckedContinuation<Void, Never>?
+    private var observers: [CheckedContinuation<Void, Never>] = []
+    private(set) var isEditable = false
+    private(set) var isRunning = false
+    var isContained: Bool { !isEditable && !isRunning }
+
+    init(suspensionPoint: SuspensionPoint) {
+      self.suspensionPoint = suspensionPoint
+    }
+
+    func stop() { isRunning = false }
+
+    func start() async {
+      startCount += 1
+      if suspensionPoint == .start, startCount == 2 { await suspend() }
+      isRunning = true
+    }
+
+    func freezeAndFlushAll() { isEditable = false }
+    func invalidateAll() {}
+
+    func resumeAll() async {
+      resumeCount += 1
+      if suspensionPoint == .resume, resumeCount == 2 { await suspend() }
+      isEditable = true
+    }
+
+    private func suspend() async {
+      let waiting = observers
+      observers.removeAll()
+      waiting.forEach { $0.resume() }
+      await withCheckedContinuation { gate = $0 }
+    }
+
+    func waitUntilSuspended() async {
+      let hasReachedPoint = switch suspensionPoint {
+      case .resume: resumeCount >= 2
+      case .start: startCount >= 2
+      }
+      guard !hasReachedPoint else { return }
+      await withCheckedContinuation { observers.append($0) }
+    }
+
+    func release() {
+      gate?.resume()
+      gate = nil
+    }
+  }
+
+  @Test(
+    "a superseded identity is hidden and contained across publication awaits",
+    arguments: [SuspensionPoint.resume, .start])
+  func supersededPublicationIsContained(suspensionPoint: SuspensionPoint) async throws {
+    let store = try RectoStore.inMemory()
+    try await store.setMirrorOwner("user-A")
+    let auth = RectoAuth(store: store)
+    let coordinator = Coordinator(suspensionPoint: suspensionPoint)
+    auth.attach(sync: coordinator)
+    auth.attach(sessions: coordinator)
+    let activeSession = ActiveSession("session-A")
+    auth.convexAuthProvider.activeSessionID = { activeSession.id }
+    auth.convexAuthProvider.cachedLogin = { true }
+    let (events, continuation) = AsyncStream<RectoAuth.LifecycleEvent>.makeStream()
+
+    await auth.startForTesting(
+      restoredUserId: "user-A", restoredSessionID: "session-A", events: events)
+    #expect(auth.status == .signedIn(userId: "user-A"))
+
+    activeSession.id = "session-B"
+    continuation.yield(.sessionChanged(userId: "user-B", sessionID: "session-B"))
+    await coordinator.waitUntilSuspended()
+
+    activeSession.id = "session-C"
+    continuation.yield(.sessionChanged(userId: "user-C", sessionID: "session-C"))
+    for _ in 0..<100 where auth.status == .signedIn(userId: "user-B") {
+      await Task.yield()
+    }
+    for _ in 0..<100 where await !coordinator.isContained {
+      await Task.yield()
+    }
+
+    #expect(auth.status != .signedIn(userId: "user-B"))
+    #expect(await coordinator.isEditable == false)
+    #expect(await coordinator.isRunning == false)
+
+    await coordinator.release()
+    continuation.finish()
+    await auth.waitForEventListenerForTesting()
+
+    #expect(auth.status == .signedIn(userId: "user-C"))
+    #expect(await coordinator.isEditable)
+    #expect(await coordinator.isRunning)
+  }
+}
+
 @Suite("sign-out safety")
 struct SignOutTests {
   /// Records the stop/start calls an identity change makes.
