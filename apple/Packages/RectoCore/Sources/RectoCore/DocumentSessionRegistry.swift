@@ -34,6 +34,7 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
   /// unsynced count and the purge. The flag is set before the first await, so
   /// there is no window to slip through.
   private var isFrozen = false
+  private var localMutationFreezeGeneration: Int?
   /// A reopen can refreeze a session while `resumeAll()` is suspended on another
   /// session. The generation makes that pass repeat before editors are exposed.
   private var sessionFreezeGeneration = 0
@@ -157,12 +158,14 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
     // Registry-wide first and synchronously, so sessions opened during the
     // awaits below are born frozen too.
     isFrozen = true
+    localMutationFreezeGeneration = store.freezeLocalMutations()
     for ingress in ingresses.values { await ingress.freezeAndDrain() }
     for session in sessions.values { await session.freeze() }
     for session in sessions.values { try? await session.flush() }
   }
 
   public func resumeAll() async {
+    let mutationGeneration = localMutationFreezeGeneration
     while true {
       let generation = sessionFreezeGeneration
       let snapshot = Array(sessions.values)
@@ -176,6 +179,9 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
     }
     isFrozen = false
     for ingress in Array(ingresses.values) { await ingress.resume() }
+    if let mutationGeneration {
+      store.resumeLocalMutations(frozenAt: mutationGeneration)
+    }
   }
 
   /// Empty and drop every session, after an identity change has purged the

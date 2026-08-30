@@ -2,6 +2,7 @@ import Foundation
 import GRDB
 import OSLog
 import RectoHistory
+import Synchronization
 
 public enum StoreError: Error, Equatable, Sendable {
   case documentNotFound(String)
@@ -15,6 +16,42 @@ public enum StoreError: Error, Equatable, Sendable {
   case resolutionRaced(String)
   /// The row still holds work that exists nowhere else.
   case hasLocalWork(String)
+  /// An auth transition has exclusive ownership of the local mirror.
+  case localMutationsFrozen
+}
+
+/// A synchronous boundary around Store mutations that originate in product UI.
+/// Holding the lock through the SQLite transaction makes freeze-versus-create
+/// an order, rather than a check followed by a write that can race the purge.
+private final class LocalMutationFence: Sendable {
+  private struct State {
+    var generation = 0
+    var isFrozen = false
+  }
+
+  private let state = Mutex(State())
+
+  func freeze() -> Int {
+    state.withLock {
+      $0.generation += 1
+      $0.isFrozen = true
+      return $0.generation
+    }
+  }
+
+  func resume(frozenAt expectedGeneration: Int) {
+    state.withLock {
+      guard $0.generation == expectedGeneration else { return }
+      $0.isFrozen = false
+    }
+  }
+
+  func perform<T>(_ body: () throws -> T) throws -> T {
+    try state.withLock {
+      guard !$0.isFrozen else { throw StoreError.localMutationsFrozen }
+      return try body()
+    }
+  }
 }
 
 /// Why a document's outbox queue is held (`documents.queueBlockedReason`).
@@ -71,6 +108,7 @@ public actor RectoStore {
 
   private let logger = Logger(subsystem: "com.bhekani.recto", category: "store")
   private nonisolated let writer: any DatabaseWriter
+  private nonisolated let localMutationFence = LocalMutationFence()
   public nonisolated let path: String
 
   private static var configuration: Configuration {
@@ -122,6 +160,16 @@ public actor RectoStore {
   }
 
   // MARK: - Documents
+
+  /// Exclude product mutations while auth counts or destroys the mirror.
+  /// Returns the generation a later resume must still own.
+  public nonisolated func freezeLocalMutations() -> Int {
+    localMutationFence.freeze()
+  }
+
+  public nonisolated func resumeLocalMutations(frozenAt generation: Int) {
+    localMutationFence.resume(frozenAt: generation)
+  }
 
   public func document(localId: String) throws -> DocumentRecord? {
     try writer.read { try DocumentRecord.fetchOne($0, key: localId) }
@@ -204,12 +252,14 @@ public actor RectoStore {
     rootNode: DocNodeRecord,
     createJob: OutboxJob
   ) throws -> DocumentRecord {
-    try writer.write { db in
-      try document.insert(db)
-      try rootNode.insert(db)
-      var job = createJob
-      try job.insert(db)
-      return document
+    try localMutationFence.perform {
+      try writer.write { db in
+        try document.insert(db)
+        try rootNode.insert(db)
+        var job = createJob
+        try job.insert(db)
+        return document
+      }
     }
   }
 

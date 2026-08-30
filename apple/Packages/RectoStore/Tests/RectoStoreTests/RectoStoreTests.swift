@@ -105,6 +105,33 @@ struct RectoStoreTests {
     #expect(pendingJobs.first?.baseHeadNodeId == "root")
   }
 
+  @Test("a stale mutation-fence resume cannot overtake a newer freeze")
+  func localMutationFenceGeneration() async throws {
+    let store = try makeStore()
+    let firstFreeze = store.freezeLocalMutations()
+    let secondFreeze = store.freezeLocalMutations()
+    store.resumeLocalMutations(frozenAt: firstFreeze)
+
+    let document = DocumentRecord(
+      localId: "fenced", title: "fenced", markdown: "", wordCount: 0,
+      localHeadNodeId: "root", syncState: .pending, updatedAt: 0, createdAt: 0)
+    let root = DocNodeRecord(
+      documentLocalId: "fenced", nodeId: "root", parentNodeId: nil,
+      patch: TextPatch(from: 0, to: 0, insert: "").encoded, snapshot: "",
+      origin: "test", createdAt: 0)
+    let job = OutboxJob(
+      documentLocalId: "fenced", kind: .createDocument,
+      clientMutationId: "create", payload: "{}", createdAt: 0)
+
+    await #expect(throws: StoreError.localMutationsFrozen) {
+      _ = try await store.createLocalDocument(document, rootNode: root, createJob: job)
+    }
+
+    store.resumeLocalMutations(frozenAt: secondFreeze)
+    _ = try await store.createLocalDocument(document, rootNode: root, createJob: job)
+    #expect(try await store.document(localId: "fenced") != nil)
+  }
+
   @Test("a commit onto a head that already moved is rejected, leaving nothing behind")
   func commitRejectsStaleHead() async throws {
     let store = try makeStore()

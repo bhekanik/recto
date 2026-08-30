@@ -1,8 +1,9 @@
 import Foundation
-import RectoAuth
 import RectoCore
 import RectoStore
 import Testing
+
+@testable import RectoAuth
 
 @testable import Recto
 
@@ -31,6 +32,29 @@ private actor LifecycleGate {
 
 @Suite("root lifecycle attacks")
 struct RootLifecycleAttackTests {
+    @MainActor
+    @Test("sign-out rejects a document created after its final unsynced count")
+    func createDuringSignOutGap() async throws {
+        let store = try RectoStore.inMemory()
+        let registry = DocumentSessionRegistry(store: store, sync: nil, origin: "mac")
+        let library = DocumentLibrary(store: store, sync: nil, origin: "mac")
+        let auth = RectoAuth(store: store)
+        auth.attach(sessions: registry)
+        let gate = LifecycleGate()
+        auth.convexAuthProvider.convexLogout = { await gate.suspendWrite() }
+
+        let signingOut = Task { try await auth.signOut() }
+        await gate.waitUntilStarted()
+
+        await #expect(throws: StoreError.localMutationsFrozen) {
+            _ = try await library.createDocument(title: "rejected in the gap")
+        }
+
+        await gate.release()
+        try await signingOut.value
+        #expect(try await store.documents().isEmpty)
+    }
+
     @MainActor
     @Test("a locally durable draft is not labelled synced before it reaches Convex")
     func acceptedDraftMovesTheVisibleStateToPending() async throws {
@@ -158,5 +182,7 @@ struct RootLifecycleAttackTests {
             #expect(error as? RectoAuthError == .unsyncedWork(count: 2))
         }
         #expect(try await store.document(localId: document.localId)?.displayMarkdown == expected)
+        let afterRefusal = try await library.createDocument(title: "Accepted after refusal")
+        #expect(try await store.document(localId: afterRefusal.localId) != nil)
     }
 }
