@@ -2,11 +2,13 @@ import Foundation
 import GRDB
 import OSLog
 import RectoHistory
+import Synchronization
 
 public enum StoreError: Error, Equatable, Sendable {
   case documentNotFound(String)
   case nodeNotFound(document: String, node: String)
   case headMoved(expected: String, actual: String)
+  case parentMismatch(expected: String, actual: String?)
   case rootSnapshotMismatch(String)
   /// A scheduled write arrived with a draft revision the document has moved past.
   case staleGeneration(expected: Int, actual: Int)
@@ -14,6 +16,42 @@ public enum StoreError: Error, Equatable, Sendable {
   case resolutionRaced(String)
   /// The row still holds work that exists nowhere else.
   case hasLocalWork(String)
+  /// An auth transition has exclusive ownership of the local mirror.
+  case localMutationsFrozen
+}
+
+/// A synchronous boundary around Store mutations that originate in product UI.
+/// Holding the lock through the SQLite transaction makes freeze-versus-create
+/// an order, rather than a check followed by a write that can race the purge.
+private final class LocalMutationFence: Sendable {
+  private struct State {
+    var generation = 0
+    var isFrozen = false
+  }
+
+  private let state = Mutex(State())
+
+  func freeze() -> Int {
+    state.withLock {
+      $0.generation += 1
+      $0.isFrozen = true
+      return $0.generation
+    }
+  }
+
+  func resume(frozenAt expectedGeneration: Int) {
+    state.withLock {
+      guard $0.generation == expectedGeneration else { return }
+      $0.isFrozen = false
+    }
+  }
+
+  func perform<T>(_ body: () throws -> T) throws -> T {
+    try state.withLock {
+      guard !$0.isFrozen else { throw StoreError.localMutationsFrozen }
+      return try body()
+    }
+  }
 }
 
 /// Why a document's outbox queue is held (`documents.queueBlockedReason`).
@@ -69,7 +107,8 @@ public actor RectoStore {
   static let materializationCacheSize = 24
 
   private let logger = Logger(subsystem: "com.bhekani.recto", category: "store")
-  private let writer: any DatabaseWriter
+  private nonisolated let writer: any DatabaseWriter
+  private nonisolated let localMutationFence = LocalMutationFence()
   public nonisolated let path: String
 
   private static var configuration: Configuration {
@@ -121,6 +160,16 @@ public actor RectoStore {
   }
 
   // MARK: - Documents
+
+  /// Exclude product mutations while auth counts or destroys the mirror.
+  /// Returns the generation a later resume must still own.
+  public nonisolated func freezeLocalMutations() -> Int {
+    localMutationFence.freeze()
+  }
+
+  public nonisolated func resumeLocalMutations(frozenAt generation: Int) {
+    localMutationFence.resume(frozenAt: generation)
+  }
 
   public func document(localId: String) throws -> DocumentRecord? {
     try writer.read { try DocumentRecord.fetchOne($0, key: localId) }
@@ -195,6 +244,25 @@ public actor RectoStore {
     try writer.write { try document.save($0) }
   }
 
+  /// Insert an offline document, its local root, and its create mutation as one
+  /// transaction. A crash can therefore expose either the whole new document
+  /// or none of it, never a library row that cannot open or cannot sync.
+  public func createLocalDocument(
+    _ document: DocumentRecord,
+    rootNode: DocNodeRecord,
+    createJob: OutboxJob
+  ) throws -> DocumentRecord {
+    try localMutationFence.perform {
+      try writer.write { db in
+        try document.insert(db)
+        try rootNode.insert(db)
+        var job = createJob
+        try job.insert(db)
+        return document
+      }
+    }
+  }
+
   public func nodes(documentLocalId: String) throws -> [DocNodeRecord] {
     try writer.read {
       try DocNodeRecord
@@ -237,6 +305,7 @@ public actor RectoStore {
     markdown: String,
     wordCount: Int,
     expectedHeadNodeId: String,
+    expectedDraftRevision: Int? = nil,
     job: OutboxJob?,
     now: Double = Date().timeIntervalSince1970 * 1000
   ) throws -> DocumentRecord {
@@ -248,25 +317,64 @@ public actor RectoStore {
         throw StoreError.headMoved(
           expected: expectedHeadNodeId, actual: document.localHeadNodeId)
       }
+      guard node.parentNodeId == expectedHeadNodeId else {
+        throw StoreError.parentMismatch(
+          expected: expectedHeadNodeId, actual: node.parentNodeId)
+      }
+      if let expectedDraftRevision, document.draftRevision != expectedDraftRevision {
+        throw StoreError.staleGeneration(
+          expected: expectedDraftRevision, actual: document.draftRevision)
+      }
 
       var stored = node
       stored.materialized = markdown
       stored.materializedAt = now
       try stored.save(db)
 
+      // Grouping can commit the previous body while the current callback starts
+      // the next group. That newer ingress must follow the commit, not vanish.
+      let retainedEditorIngress =
+        document.editorIngressRevision != nil && document.draftMarkdown != markdown
+      var retainedDraftJob: OutboxJob?
+      if retainedEditorIngress, job != nil {
+        retainedDraftJob =
+          try OutboxJob
+          .filter(Column("documentLocalId") == documentLocalId)
+          .filter(Column("kind") == OutboxKind.draftSave.rawValue)
+          .fetchOne(db)
+      }
+
       document.localHeadNodeId = node.nodeId
       document.markdown = markdown
-      document.wordCount = wordCount
-      // The node now describes the text, so there is no draft ahead of the head.
-      document.draftMarkdown = nil
-      document.draftSelectionAnchor = nil
-      document.draftSelectionHead = nil
+      if !retainedEditorIngress {
+        document.wordCount = wordCount
+        document.draftMarkdown = nil
+        document.draftSelectionAnchor = nil
+        document.draftSelectionHead = nil
+        document.editorIngressRevision = nil
+      }
       document.updatedAt = now
       document.draftRevision += 1
+      if retainedEditorIngress { document.editorIngressRevision = document.draftRevision }
       if document.syncState != .diverged { document.syncState = .pending }
       try document.update(db)
 
-      if var job { try job.insert(db) }
+      if var job {
+        _ =
+          try OutboxJob
+          .filter(Column("documentLocalId") == documentLocalId)
+          .filter(Column("kind") == OutboxKind.draftSave.rawValue)
+          .deleteAll(db)
+        try job.insert(db)
+        if var retainedDraftJob {
+          retainedDraftJob.id = nil
+          retainedDraftJob.baseHeadNodeId = node.nodeId
+          retainedDraftJob.attempts = 0
+          retainedDraftJob.lastError = nil
+          retainedDraftJob.nextAttemptAt = 0
+          try retainedDraftJob.insert(db)
+        }
+      }
       try Self.trimMaterializationCache(db, documentLocalId: documentLocalId)
       return document
     }
@@ -314,6 +422,7 @@ public actor RectoStore {
       document.draftMarkdown = nil
       document.draftSelectionAnchor = nil
       document.draftSelectionHead = nil
+      document.editorIngressRevision = nil
       document.updatedAt = now
       document.draftRevision += 1
       if clearDivergence {
@@ -330,7 +439,6 @@ public actor RectoStore {
     }
   }
 
-  /// The debounced draft row: text that has no node yet.
   /// The debounced draft row: text that has no node yet.
   ///
   /// `expectedDraftRevision` is how a scheduled task proves it is not stale. A
@@ -360,10 +468,94 @@ public actor RectoStore {
       document.draftSelectionHead = selection?.head
       document.wordCount = wordCount
       document.updatedAt = now
+      if document.draftMarkdown != nil,
+        document.syncState == .synced || document.syncState == .syncing
+      {
+        document.syncState = .pending
+      }
       document.draftRevision += 1
+      document.editorIngressRevision = document.draftMarkdown == nil ? nil : document.draftRevision
+      if document.draftMarkdown == nil,
+        document.syncState == .pending,
+        document.queueBlockedReason == nil,
+        document.remoteHeadNodeId == document.localHeadNodeId,
+        try OutboxJob.filter(Column("documentLocalId") == documentLocalId).fetchCount(db) == 0
+      {
+        document.syncState = .synced
+      }
       try document.update(db)
       if var job { try job.insert(db) }
       return document.draftRevision
+    }
+  }
+
+  /// Synchronous write-ahead boundary for AppKit's synchronous text callback.
+  ///
+  /// `DatabasePool` serializes writes internally. Keeping this one operation
+  /// nonisolated lets the callback put the exact visible snapshot on disk
+  /// before it returns, instead of starting an async task that can lose a race
+  /// with process termination.
+  @discardableResult
+  public nonisolated func saveEditorIngressSynchronously(
+    documentLocalId: String,
+    markdown: String,
+    selection: NodeSelection?,
+    wordCount: Int,
+    clientMutationId: String,
+    draftPayload: String,
+    now: Double = Date().timeIntervalSince1970 * 1000
+  ) throws -> Int {
+    try writer.write { db in
+      guard var document = try DocumentRecord.fetchOne(db, key: documentLocalId) else {
+        throw StoreError.documentNotFound(documentLocalId)
+      }
+      document.draftMarkdown = markdown
+      document.draftSelectionAnchor = selection?.anchor
+      document.draftSelectionHead = selection?.head
+      document.wordCount = wordCount
+      document.updatedAt = now
+      if document.syncState != .diverged { document.syncState = .pending }
+      document.draftRevision += 1
+      document.editorIngressRevision = document.draftRevision
+      try document.update(db)
+
+      // Draft bodies are mutable full snapshots. The newest accepted snapshot
+      // supersedes every older unsent one, while keeping its place after any
+      // immutable node jobs already queued for this document.
+      _ = try OutboxJob
+        .filter(Column("documentLocalId") == documentLocalId)
+        .filter(Column("kind") == OutboxKind.draftSave.rawValue)
+        .deleteAll(db)
+      var job = OutboxJob(
+        documentLocalId: documentLocalId,
+        kind: .draftSave,
+        clientMutationId: clientMutationId,
+        baseHeadNodeId: document.localHeadNodeId,
+        payload: draftPayload,
+        createdAt: now)
+      try job.insert(db)
+      return document.draftRevision
+    }
+  }
+
+  /// Clear a clean-head ingress only after the server accepted that exact body.
+  /// A non-clean draft still needs its local row until history commits it.
+  public func acknowledgeEditorIngress(
+    documentLocalId: String,
+    markdown: String
+  ) throws {
+    try writer.write { db in
+      guard var document = try DocumentRecord.fetchOne(db, key: documentLocalId),
+        document.editorIngressRevision != nil,
+        document.draftMarkdown == markdown,
+        document.markdown == markdown
+      else { return }
+      document.draftMarkdown = nil
+      document.draftSelectionAnchor = nil
+      document.draftSelectionHead = nil
+      document.editorIngressRevision = nil
+      document.draftRevision += 1
+      try document.update(db)
     }
   }
 
@@ -597,6 +789,7 @@ public actor RectoStore {
       document.draftMarkdown = nil
       document.draftSelectionAnchor = nil
       document.draftSelectionHead = nil
+      document.editorIngressRevision = nil
       document.divergedRemoteHeadNodeId = nil
       document.queueBlockedReason = nil
       document.draftRevision += 1
@@ -662,6 +855,7 @@ public actor RectoStore {
       document.draftMarkdown = nil
       document.draftSelectionAnchor = nil
       document.draftSelectionHead = nil
+      document.editorIngressRevision = nil
       document.divergedRemoteHeadNodeId = nil
       document.queueBlockedReason = nil
       document.draftRevision += 1

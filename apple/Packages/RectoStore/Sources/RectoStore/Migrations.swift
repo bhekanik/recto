@@ -8,6 +8,7 @@ enum Migrations {
   static let v2 = "v2-pointer-revision"
   static let v3 = "v3-draft-provenance"
   static let v4 = "v4-queue-barrier"
+  static let v5 = "v5-editor-ingress"
 
   static func migrator() -> DatabaseMigrator {
     // Deliberately NOT `eraseDatabaseOnSchemaChange`, even in DEBUG: BK
@@ -181,6 +182,12 @@ enum Migrations {
       // legacy pointer as newer than itself. Normalise the baseline.
       try db.execute(
         sql: "UPDATE documents SET remotePointerRevision = 0 WHERE remotePointerRevision IS NULL")
+    }
+
+    migrator.registerMigration(v5) { db in
+      try db.alter(table: "documents") { t in
+        t.add(column: "editorIngressRevision", .integer)
+      }
     }
 
     return migrator

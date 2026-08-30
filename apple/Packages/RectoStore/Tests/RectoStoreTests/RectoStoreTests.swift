@@ -63,6 +63,9 @@ struct RectoStoreTests {
       markdown: "hello", selection: NodeSelection(anchor: 5, head: 5), structural: true, now: 0)
     let commit = try #require(commits.first)
     let (node, job) = nodeAndJob(documentLocalId: "doc-1", commit: commit, now: 1)
+    _ = try store.saveEditorIngressSynchronously(
+      documentLocalId: "doc-1", markdown: commit.markdown, selection: nil, wordCount: 1,
+      clientMutationId: "draft", draftPayload: #"{"markdown":"hello","wordCount":1}"#)
 
     let updated = try await store.commit(
       documentLocalId: "doc-1", node: node, markdown: commit.markdown, wordCount: 1,
@@ -72,7 +75,61 @@ struct RectoStoreTests {
     #expect(updated.markdown == "hello")
     #expect(updated.syncState == .pending)
     #expect(try await store.pendingJobCount() == 1)
+    #expect(try await store.pendingJobs().first?.kind == .commitEdit)
     #expect(try await store.node(documentLocalId: "doc-1", nodeId: commit.nodeId) != nil)
+  }
+
+  @Test("reverting editor ingress to the clean head stays durable and pending")
+  func cleanIngressRevert() async throws {
+    let store = try makeStore()
+    var cleanDocument = try await seedDocument(store, markdown: "clean")
+    cleanDocument.remoteHeadNodeId = "root"
+    try await store.save(cleanDocument)
+
+    _ = try store.saveEditorIngressSynchronously(
+      documentLocalId: "doc-1", markdown: "A", selection: nil, wordCount: 1,
+      clientMutationId: "A", draftPayload: #"{"markdown":"A","wordCount":1}"#)
+    _ = try store.saveEditorIngressSynchronously(
+      documentLocalId: "doc-1", markdown: "clean", selection: nil, wordCount: 1,
+      clientMutationId: "clean",
+      draftPayload: #"{"markdown":"clean","wordCount":1}"#)
+
+    let document = try #require(try await store.document(localId: "doc-1"))
+    #expect(document.draftMarkdown == "clean")
+    #expect(document.editorIngressRevision != nil)
+    #expect(document.localHeadNodeId == document.remoteHeadNodeId)
+    #expect(document.syncState == .pending)
+    let pendingJobs = try await store.pendingJobs(documentLocalId: "doc-1")
+    #expect(pendingJobs.count == 1)
+    #expect(pendingJobs.first?.clientMutationId == "clean")
+    #expect(pendingJobs.first?.baseHeadNodeId == "root")
+  }
+
+  @Test("a stale mutation-fence resume cannot overtake a newer freeze")
+  func localMutationFenceGeneration() async throws {
+    let store = try makeStore()
+    let firstFreeze = store.freezeLocalMutations()
+    let secondFreeze = store.freezeLocalMutations()
+    store.resumeLocalMutations(frozenAt: firstFreeze)
+
+    let document = DocumentRecord(
+      localId: "fenced", title: "fenced", markdown: "", wordCount: 0,
+      localHeadNodeId: "root", syncState: .pending, updatedAt: 0, createdAt: 0)
+    let root = DocNodeRecord(
+      documentLocalId: "fenced", nodeId: "root", parentNodeId: nil,
+      patch: TextPatch(from: 0, to: 0, insert: "").encoded, snapshot: "",
+      origin: "test", createdAt: 0)
+    let job = OutboxJob(
+      documentLocalId: "fenced", kind: .createDocument,
+      clientMutationId: "create", payload: "{}", createdAt: 0)
+
+    await #expect(throws: StoreError.localMutationsFrozen) {
+      _ = try await store.createLocalDocument(document, rootNode: root, createJob: job)
+    }
+
+    store.resumeLocalMutations(frozenAt: secondFreeze)
+    _ = try await store.createLocalDocument(document, rootNode: root, createJob: job)
+    #expect(try await store.document(localId: "fenced") != nil)
   }
 
   @Test("a commit onto a head that already moved is rejected, leaving nothing behind")
@@ -525,6 +582,37 @@ struct StoreTransactionTests {
     // node row would still send the deleted root.
     #expect(job.payload.contains("server-root"))
     #expect(!job.payload.contains("local-root"))
+  }
+
+  @Test("commit rejects a node whose parent is not the expected head")
+  func commitRejectsParentHeadMismatch() async throws {
+    let store = try RectoStore.inMemory()
+    try await store.save(
+      DocumentRecord(
+        localId: "doc-parent", title: "Parent defense", markdown: "", wordCount: 0,
+        localHeadNodeId: "server-root", updatedAt: 0, createdAt: 0))
+    try await store.mergeRemoteNodes(
+      documentLocalId: "doc-parent",
+      nodes: [
+        DocNodeRecord(
+          documentLocalId: "doc-parent", nodeId: "server-root", parentNodeId: nil,
+          patch: TextPatch(from: 0, to: 0, insert: "").encoded, snapshot: "",
+          origin: "server", createdAt: 0)
+      ])
+    let orphan = DocNodeRecord(
+      documentLocalId: "doc-parent", nodeId: "child", parentNodeId: "deleted-local-root",
+      patch: computePatch("", "safe").encoded, origin: "mac", createdAt: 1)
+
+    await #expect(
+      throws: StoreError.parentMismatch(
+        expected: "server-root", actual: "deleted-local-root")
+    ) {
+      _ = try await store.commit(
+        documentLocalId: "doc-parent", node: orphan, markdown: "safe", wordCount: 1,
+        expectedHeadNodeId: "server-root", job: nil)
+    }
+    #expect(try await store.node(documentLocalId: "doc-parent", nodeId: "child") == nil)
+    #expect(try await store.document(localId: "doc-parent")?.localHeadNodeId == "server-root")
   }
 
   @Test("finishOfflineCreate is idempotent")

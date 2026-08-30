@@ -9,6 +9,116 @@ import Testing
 
 @Suite("round-5 repros")
 struct Round5Tests {
+  private actor ResumeInterleaving {
+    private var firstDocumentId: String?
+    private var resumeCount = 0
+    private var secondResumeGate: CheckedContinuation<Void, Never>?
+    private var secondResumeObservers: [CheckedContinuation<String, Never>] = []
+
+    func beforeResume(documentId: String) async {
+      resumeCount += 1
+      if firstDocumentId == nil { firstDocumentId = documentId }
+      guard resumeCount == 2 else { return }
+      let firstDocumentId = firstDocumentId ?? documentId
+      let observers = secondResumeObservers
+      secondResumeObservers.removeAll()
+      observers.forEach { $0.resume(returning: firstDocumentId) }
+      await withCheckedContinuation { secondResumeGate = $0 }
+    }
+
+    func waitUntilSecondResume() async -> String {
+      if resumeCount >= 2 { return firstDocumentId! }
+      return await withCheckedContinuation { secondResumeObservers.append($0) }
+    }
+
+    func releaseSecondResume() {
+      secondResumeGate?.resume()
+      secondResumeGate = nil
+    }
+  }
+
+  private actor EagerIngress: EditorIngressCoordinating {
+    private let session: DocumentSession
+    private let store: RectoStore
+    private let documentLocalId: String
+    private(set) var error: SessionError?
+
+    init(session: DocumentSession, store: RectoStore, documentLocalId: String) {
+      self.session = session
+      self.store = store
+      self.documentLocalId = documentLocalId
+    }
+
+    func drain() {}
+    func freezeAndDrain() {}
+    func invalidate() {}
+
+    func resume() async {
+      do {
+        let markdown = "accepted on resume"
+        let generation = try store.saveEditorIngressSynchronously(
+          documentLocalId: documentLocalId, markdown: markdown, selection: nil, wordCount: 3,
+          clientMutationId: ulid(),
+          draftPayload: OutboxPayload(markdown: markdown, wordCount: 3).encoded)
+        try await session.applyPersistedLocalChange(
+          markdown: markdown, selection: nil, generation: generation)
+      } catch let error as SessionError {
+        self.error = error
+      } catch {
+        Issue.record("unexpected error: \(error)")
+      }
+    }
+  }
+
+  @Test("sessions resume before editor ingresses accept new edits")
+  func sessionResumesBeforeIngress() async throws {
+    let directory = Harness.makeDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let harness = try Harness(directory: directory, transport: InMemoryTransport())
+    let localId = try await harness.createLocalDocument()
+    let session = try await harness.registry.session(for: localId)
+    let ingress = EagerIngress(session: session, store: harness.store, documentLocalId: localId)
+    _ = try await harness.registry.registerIngress(for: localId, ingress)
+
+    let freeze = await harness.registry.freezeAndFlushAll()
+    await harness.registry.resumeAll(after: freeze)
+
+    #expect(await ingress.error == nil)
+    #expect(try await harness.store.document(localId: localId)?.draftMarkdown == "accepted on resume")
+  }
+
+  @Test("resume converges when an existing session is reopened between session resumes")
+  func reentrantOpenDuringResume() async throws {
+    let directory = Harness.makeDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let harness = try Harness(directory: directory, transport: InMemoryTransport())
+    let firstId = try await harness.createLocalDocument(title: "first")
+    let secondId = try await harness.createLocalDocument(title: "second")
+    let interleaving = ResumeInterleaving()
+    let registry = DocumentSessionRegistry(
+      store: harness.store,
+      sync: harness.sync,
+      origin: "test-device",
+      beforeSessionResume: { await interleaving.beforeResume(documentId: $0) })
+    let sessions = [
+      firstId: try await registry.session(for: firstId),
+      secondId: try await registry.session(for: secondId),
+    ]
+
+    let freeze = await registry.freezeAndFlushAll()
+    let resume = Task { await registry.resumeAll(after: freeze) }
+    let resumedFirstId = await interleaving.waitUntilSecondResume()
+    _ = try await registry.session(for: resumedFirstId)
+    await interleaving.releaseSecondResume()
+    _ = await resume.value
+
+    let resumedFirst = try #require(sessions[resumedFirstId])
+    try await resumedFirst.applyLocalChange(markdown: "accepted after resume", selection: nil)
+    #expect(
+      try await harness.store.document(localId: resumedFirstId)?.draftMarkdown
+        == "accepted after resume")
+  }
+
   // MARK: - 3. A session opened during a freeze is born frozen
 
   @Test("a window opened while signing out cannot write")
@@ -18,7 +128,7 @@ struct Round5Tests {
     let harness = try Harness(directory: directory, transport: InMemoryTransport())
     let localId = try await harness.createLocalDocument()
 
-    await harness.registry.freezeAndFlushAll()
+    let freeze = await harness.registry.freezeAndFlushAll()
     #expect(await harness.registry.isFrozenForTesting)
 
     // A window that arrives AFTER the freeze: freezing the sessions that
@@ -30,7 +140,7 @@ struct Round5Tests {
     }
     #expect(try await harness.store.document(localId: localId)?.draftMarkdown == nil)
 
-    await harness.registry.resumeAll()
+    await harness.registry.resumeAll(after: freeze)
     try await session.applyLocalChange(markdown: "typed after", selection: nil)
     #expect(try await harness.store.document(localId: localId)?.draftMarkdown == "typed after")
   }

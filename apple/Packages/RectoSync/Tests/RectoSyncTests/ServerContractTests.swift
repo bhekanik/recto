@@ -15,6 +15,20 @@ import Testing
 /// as a mis-decoded field at runtime.
 @Suite("server response contract")
 struct ServerContractTests {
+  @Test("documentUuid makes create replay idempotent")
+  func createReplayUsesStableDocumentUuid() async throws {
+    let transport = InMemoryTransport()
+
+    let first = try await transport.createDocument(
+      title: "offline title", documentUuid: "device-document-uuid")
+    let replay = try await transport.createDocument(
+      title: "ignored replay title", documentUuid: "device-document-uuid")
+
+    #expect(replay == first)
+    #expect(await transport.documents.count == 1)
+    #expect(try await transport.getDocument(documentId: first.documentId)?.title == "offline title")
+  }
+
   private func decode<T: Decodable>(_ json: String, as type: T.Type = T.self) throws -> T {
     try JSONDecoder().decode(T.self, from: Data(json.utf8))
   }
@@ -196,7 +210,8 @@ struct FakeContractTests {
   @Test("documents.create leaves the body's provenance absent")
   func createLeavesProvenanceAbsent() async throws {
     let transport = InMemoryTransport()
-    let created = try await transport.createDocument(title: "native-spike")
+    let created = try await transport.createDocument(
+      title: "native-spike", documentUuid: "server-contract-document")
     let document = try #require(try await transport.getDocument(documentId: created.documentId))
     // The body is empty and nothing has vouched for which node it belongs to.
     #expect(document.markdownHeadNodeId == nil)

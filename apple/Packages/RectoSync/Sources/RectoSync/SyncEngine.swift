@@ -151,7 +151,12 @@ public actor SyncEngine: SyncControlling {
   public func resume() async {
     // `stop()` keeps `openDocumentIds`, so `start()` brings the same documents
     // back up on the new socket.
+    let resumeGeneration = lifecycle + 1
     await stop()
+    // Another stop can overtake us while the cancelled transport call winds
+    // down. That newer lifecycle owns the stopped state; this stale resume must
+    // not bring sockets back after sign-out or an account switch.
+    guard lifecycle == resumeGeneration else { return }
     start()
   }
 
@@ -199,10 +204,24 @@ public actor SyncEngine: SyncControlling {
     let byConvexId = Dictionary(
       known.compactMap { doc in doc.convexId.map { ($0, doc) } },
       uniquingKeysWith: { first, _ in first })
+    let byLocalId = Dictionary(
+      known.map { ($0.localId, $0) },
+      uniquingKeysWith: { first, _ in first })
 
     for summary in summaries {
       guard isCurrent(generation) else { return }
-      guard let local = byConvexId[summary.id] else {
+      let local: DocumentRecord
+      if let matched = byConvexId[summary.id] {
+        local = matched
+      } else if let documentUuid = summary.documentUuid,
+        let pendingCreate = byLocalId[documentUuid],
+        pendingCreate.convexId == nil,
+        let serverRootNodeId = try await serverRootNodeId(for: summary)
+      {
+        try await finishCreate(
+          document: pendingCreate, convexId: summary.id, serverRootNodeId: serverRootNodeId)
+        local = try await store.document(localId: pendingCreate.localId) ?? pendingCreate
+      } else {
         try await hydrate(convexId: summary.id, generation: generation)
         continue
       }
@@ -241,6 +260,11 @@ public actor SyncEngine: SyncControlling {
         emit(.unsyncedWorkOnRemovedDocument(localId: local.localId))
       }
     }
+  }
+
+  private func serverRootNodeId(for summary: RemoteDocumentSummary) async throws -> String? {
+    return try await transport.listNodes(documentId: summary.id, sinceCreatedAt: nil)
+      .first { $0.parentNodeId == nil }?.nodeId
   }
 
   /// Pull the body and adopt it as a pending draft — but only when the server
@@ -556,6 +580,7 @@ public actor SyncEngine: SyncControlling {
       "releasing the \(raw, privacy: .public) barrier on \(localId, privacy: .public) after reconciling"
     )
     try await store.setQueueBlocked(documentLocalId: localId, reason: nil)
+    requestDrain()
   }
 
   /// Reconcile documents left holding a provisional barrier.
@@ -893,17 +918,17 @@ public actor SyncEngine: SyncControlling {
     switch job.kind {
     case .createDocument:
       // A retry that already has a Convex id finishes the adoption rather than
-      // creating a second remote document. `documents.create` takes no
-      // idempotency key yet (W7), so the window between the server insert and
-      // this transaction is closed by recording the id first and making the
-      // adoption resumable.
+      // asking the server again. If the first answer was lost before this id was
+      // stored, `document.localId` is the stable server idempotency key.
       if let convexId = document.convexId {
         try await finishCreate(
           document: document, convexId: convexId,
           serverRootNodeId: document.remoteHeadNodeId ?? document.localHeadNodeId)
         return .completed
       }
-      let response = try await transport.createDocument(title: payload.title ?? document.title)
+      let response = try await transport.createDocument(
+        title: payload.title ?? document.title,
+        documentUuid: document.localId)
       try await finishCreate(
         document: document, convexId: response.documentId,
         serverRootNodeId: response.rootNodeId)
@@ -1018,6 +1043,9 @@ public actor SyncEngine: SyncControlling {
         // settle to `synced` with the final draft existing only in SQLite.
         return .retryAfterBackoff(reason: "draft CAS lost; baseline refreshed")
       }
+      try await store.acknowledgeEditorIngress(
+        documentLocalId: document.localId,
+        markdown: payload.markdown ?? document.displayMarkdown)
       return .completed
 
     case .rename:
@@ -1027,7 +1055,12 @@ public actor SyncEngine: SyncControlling {
 
     case .remove:
       guard let convexId = document.convexId else { return .completed }
-      try await transport.remove(documentId: convexId)
+      do {
+        try await transport.remove(documentId: convexId)
+      } catch let refusal as ServerRefusal where refusal.code == .notFound {
+        // A delete response can be lost after the server commits. Replaying it
+        // then returns not_found, which proves the requested final state.
+      }
       try await store.deleteDocumentRow(localId: document.localId)
       return .completedAndBlock(reason: .removed)
 

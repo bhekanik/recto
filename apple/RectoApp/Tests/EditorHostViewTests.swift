@@ -7,6 +7,10 @@ import Testing
 @Suite("Document editor", .serialized)
 @MainActor
 struct EditorHostViewTests {
+    // Closing this window can deallocate AppKit's transform animation during
+    // the next test's CA commit, crashing the test process before assertions run.
+    private static var retainedEditorInputWindow: NSWindow?
+
     private final class DocumentBox {
         var value: RectoDocument
 
@@ -450,7 +454,7 @@ struct EditorHostViewTests {
         )
         window.contentView = host
         window.makeKeyAndOrderFront(nil)
-        defer { window.close() }
+        defer { Self.retainedEditorInputWindow = window }
 
         host.layoutSubtreeIfNeeded()
         await drainMainQueue()

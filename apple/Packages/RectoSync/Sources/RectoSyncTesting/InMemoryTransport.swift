@@ -15,6 +15,7 @@ import RectoSync
 public actor InMemoryTransport: RectoTransport {
   public struct Document: Sendable {
     public var id: String
+    public var documentUuid: String?
     public var title: String
     public var markdown: String
     public var wordCount: Double
@@ -49,9 +50,11 @@ public actor InMemoryTransport: RectoTransport {
   /// Every `clientMutationId` the transport has been asked to commit, in order —
   /// including replays, so a test can assert a retry reused the key.
   public private(set) var commitAttempts: [String] = []
+  public private(set) var createAttempts: [String] = []
   public private(set) var loginCount = 0
 
   private var faults: [Fault] = []
+  private var documentIdsByUuid: [String: String] = [:]
   /// Held open until `releaseDelayedCalls()`. Lets a test park a mutation
   /// mid-flight and then run a sign-out or account switch underneath it.
   ///
@@ -61,6 +64,11 @@ public actor InMemoryTransport: RectoTransport {
   private var gateWaiters: [CheckedContinuation<Void, Never>] = []
   private var gateIsOpen = false
   public private(set) var delayedCallsStarted = 0
+  private var bodyReadWaiters: [CheckedContinuation<Void, Never>] = []
+  private var bodyReadsAreDelayed = false
+  public private(set) var delayedBodyReadsStarted = 0
+  public private(set) var cancelledBodyReads = 0
+  public private(set) var documentStreamStarts = 0
   private var clock: Double
 
   /// Epoch milliseconds by default. `updateCurrentNodeId` is last-write-wins on
@@ -106,6 +114,29 @@ public actor InMemoryTransport: RectoTransport {
     }
   }
 
+  public func delayBodyReads() { bodyReadsAreDelayed = true }
+
+  public func releaseBodyReads() {
+    bodyReadsAreDelayed = false
+    let waiters = bodyReadWaiters
+    bodyReadWaiters.removeAll()
+    for waiter in waiters { waiter.resume() }
+  }
+
+  private func awaitBodyReadGate() async {
+    guard bodyReadsAreDelayed else { return }
+    delayedBodyReadsStarted += 1
+    await withTaskCancellationHandler {
+      await withCheckedContinuation { continuation in
+        bodyReadWaiters.append(continuation)
+      }
+    } onCancel: {
+      Task { await self.recordCancelledBodyRead() }
+    }
+  }
+
+  private func recordCancelledBodyRead() { cancelledBodyReads += 1 }
+
   private func applyPreFault() throws {
     switch faults.first {
     case .offline:
@@ -139,13 +170,18 @@ public actor InMemoryTransport: RectoTransport {
   // MARK: - Seeding
 
   @discardableResult
-  public func seedDocument(id: String = UUID().uuidString, title: String = "native-spike-seed")
+  public func seedDocument(
+    id: String = UUID().uuidString,
+    title: String = "native-spike-seed",
+    documentUuid: String? = nil
+  )
     -> CreateDocumentResponse
   {
     let rootNodeId = UUID().uuidString
     let now = tick()
     documents[id] = Document(
-      id: id, title: title, markdown: "", wordCount: 0, currentNodeId: rootNodeId,
+      id: id, documentUuid: documentUuid, title: title, markdown: "", wordCount: 0,
+      currentNodeId: rootNodeId,
       // `documents.create` writes no `markdownHeadNodeId`: the body is empty and
       // its provenance is genuinely unknown until something stamps it.
       markdownHeadNodeId: nil, pointerRevision: 0, createdAt: now, updatedAt: now,
@@ -220,9 +256,23 @@ public actor InMemoryTransport: RectoTransport {
 
   // MARK: - RectoTransport
 
-  public func createDocument(title: String) async throws -> CreateDocumentResponse {
+  public func createDocument(title: String, documentUuid: String) async throws
+    -> CreateDocumentResponse
+  {
     try applyPreFault()
-    return seedDocument(title: title)
+    createAttempts.append(documentUuid)
+    if let documentId = documentIdsByUuid[documentUuid],
+      let rootNodeId = nodes[documentId]?.first(where: { $0.parentNodeId == nil })?.nodeId
+    {
+      return CreateDocumentResponse(documentId: documentId, rootNodeId: rootNodeId)
+    }
+    let response = seedDocument(title: title, documentUuid: documentUuid)
+    documentIdsByUuid[documentUuid] = response.documentId
+    if faults.first == .dropAcknowledgement {
+      _ = takeFault()
+      throw TransportFault.offline
+    }
+    return response
   }
 
   public func commitEdit(_ request: CommitEditRequest) async throws -> CommitEditResponse {
@@ -404,8 +454,15 @@ public actor InMemoryTransport: RectoTransport {
 
   public func remove(documentId: String) async throws {
     try applyPreFault()
+    guard documents[documentId] != nil else {
+      throw ServerRefusal(code: .notFound, message: "Document not found")
+    }
     documents[documentId] = nil
     nodes[documentId] = nil
+    if faults.first == .dropAcknowledgement {
+      _ = takeFault()
+      throw TransportFault.offline
+    }
     notifyDocumentSubscribers()
     notifyNodeSubscribers(documentId: documentId)
   }
@@ -422,6 +479,7 @@ public actor InMemoryTransport: RectoTransport {
   }
 
   public func getDocument(documentId: String) async throws -> RemoteDocument? {
+    await awaitBodyReadGate()
     guard let document = documents[documentId] else { return nil }
     return RemoteDocument(
       id: document.id, title: document.title, markdown: document.markdown,
@@ -440,6 +498,7 @@ public actor InMemoryTransport: RectoTransport {
   private var nodeSubscribers: [UUID: (documentId: String, continuation: AsyncThrowingStream<[RemoteNode], any Error>.Continuation)] = [:]
 
   public func documentsStream() -> AsyncThrowingStream<[RemoteDocumentSummary], any Error> {
+    documentStreamStarts += 1
     let (stream, continuation) = AsyncThrowingStream<[RemoteDocumentSummary], any Error>
       .makeStream()
     let id = UUID()
@@ -512,7 +571,9 @@ public actor InMemoryTransport: RectoTransport {
   public func summaries() -> [RemoteDocumentSummary] {
     documents.values
       .map {
-        RemoteDocumentSummary(id: $0.id, title: $0.title, wordCount: $0.wordCount, updatedAt: $0.updatedAt)
+        RemoteDocumentSummary(
+          id: $0.id, title: $0.title, wordCount: $0.wordCount, updatedAt: $0.updatedAt,
+          documentUuid: $0.documentUuid)
       }
       .sorted { $0.updatedAt > $1.updatedAt }
   }

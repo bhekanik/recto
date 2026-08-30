@@ -1,8 +1,10 @@
 # Recto for macOS
 
-The app opens, creates, edits, and saves `.md` files through SwiftUI's native
-document system and the real `RectoEditor` package. Document windows use native
-titles, dirty-state tracking, autosave, Save, Open, New, and error presentation.
+The app's main window is a signed-in, local-first document library backed by
+Recto's SQLite mirror. It also opens, creates, edits, and saves standalone `.md`
+files through SwiftUI's native document system and the real `RectoEditor`
+package. Document windows keep native titles, dirty-state tracking, autosave,
+Save, Open, New, and error presentation.
 
 V1 reads and writes UTF-8. It preserves a UTF-8 byte-order mark when the opened
 file has one. Invalid UTF-8 fails through the native document error UI instead
@@ -41,23 +43,44 @@ xcodebuild -project apple/RectoApp/Recto.xcodeproj -scheme Recto \
 
 xcodebuild -project apple/RectoApp/Recto.xcodeproj -scheme Recto \
   -configuration Release -destination 'generic/platform=macOS' \
-  -derivedDataPath /tmp/recto-derived-data \
-  ARCHS='x86_64 arm64' ONLY_ACTIVE_ARCH=NO CODE_SIGNING_ALLOWED=NO build
+  -derivedDataPath /tmp/recto-derived-data CODE_SIGNING_ALLOWED=NO build
 
 lipo /tmp/recto-derived-data/Build/Products/Release/Recto.app/Contents/MacOS/Recto \
-  -verify_arch x86_64 arm64
+  -verify_arch arm64
 
 xcodebuild -project apple/RectoApp/Recto.xcodeproj -scheme Recto \
   -configuration Release -destination 'generic/platform=macOS' \
   -derivedDataPath /tmp/recto-derived-data \
   -archivePath /tmp/Recto-unsigned.xcarchive \
-  CODE_SIGNING_ALLOWED=NO archive
+  CODE_SIGNING_ALLOWED=NO archive \
+  RECTO_CONVEX_URL='https://example.convex.cloud' \
+  RECTO_CLERK_PUBLISHABLE_KEY='pk_test_bW9jay5jbGVyay5hY2NvdW50cy5kZXYk'
+
+apple/RectoApp/scripts/validate-archive-config.sh /tmp/Recto-unsigned.xcarchive
 ```
 
+Inject the two public client values at build or archive time; do not put them in
+source control:
+
+```sh
+xcodebuild -project apple/RectoApp/Recto.xcodeproj -scheme Recto \
+  -configuration Release -destination 'generic/platform=macOS' \
+  -archivePath /tmp/Recto.xcarchive archive \
+  RECTO_CONVEX_URL='https://example.convex.cloud' \
+  RECTO_CLERK_PUBLISHABLE_KEY='pk_test_bW9jay5jbGVyay5hY2NvdW50cy5kZXYk'
+
+apple/RectoApp/scripts/validate-archive-config.sh /tmp/Recto.xcarchive
+```
+
+Xcode build settings must trail the `archive` action. Shell environment
+variables with these names are not imported automatically by the generated
+project.
+
 The target uses bundle ID `com.bhekani.recto`, team `WAVMJLFY95`, automatic
-signing, hardened runtime and App Sandbox. Unsigned builds override signing on
-the command line. CI runs the full Debug app tests and verifies the Release
-binary contains `x86_64` and `arm64` slices.
+signing, hardened runtime, App Sandbox, outbound network access and
+user-selected file access. Unsigned builds override signing on the command line.
+Convex 0.8.1 ships a macOS arm64 binary only, so the synced app is arm64-only;
+CI verifies that Release slice.
 
 Before a deployment, archive once unsigned and once with Apple Development
 signing. Run `codesign --verify --deep --strict --verbose=2` on the signed app,

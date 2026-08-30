@@ -100,6 +100,31 @@ struct LiveFlowTests {
     await engine.stop()
   }
 
+  @Test("a stop that overtakes resume keeps the newer lifecycle stopped")
+  func stopOvertakesResume() async throws {
+    let transport = InMemoryTransport()
+    _ = await transport.seedDocument(title: "native-spike-resume-race")
+    await transport.delayBodyReads()
+    let store = try RectoStore.inMemory()
+    let engine = SyncEngine(store: store, transport: transport, origin: "mac")
+
+    await engine.start()
+    try await waitFor("the suspended body read") {
+      await transport.delayedBodyReadsStarted == 1
+    }
+    let resuming = Task { await engine.resume() }
+    try await waitFor("resume to cancel the body read") {
+      await transport.cancelledBodyReads == 1
+    }
+
+    await engine.stop()
+    await transport.releaseBodyReads()
+    await resuming.value
+
+    #expect(await transport.documentStreamStarts == 1)
+    #expect(await transport.liveSubscriptionCount == 0)
+  }
+
   @Test("a persisted backoff wakes itself after a restart")
   func backoffWakesAfterRestart() async throws {
     let transport = InMemoryTransport()

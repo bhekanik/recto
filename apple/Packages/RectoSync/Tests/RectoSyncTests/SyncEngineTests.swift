@@ -13,6 +13,69 @@ private func makeEngine(_ transport: InMemoryTransport) throws -> (RectoStore, S
 
 @Suite("SyncEngine")
 struct SyncEngineTests {
+  private func makeOfflineCreate(
+    store: RectoStore,
+    localId: String
+  ) async throws {
+    let localRoot = ulid()
+    try await store.save(
+      DocumentRecord(
+        localId: localId, title: "Offline draft", markdown: "",
+        draftMarkdown: "local draft · 中文 · 🚀", wordCount: 4,
+        localHeadNodeId: localRoot, syncState: .pending, updatedAt: 0, createdAt: 0))
+    try await store.mergeRemoteNodes(
+      documentLocalId: localId,
+      nodes: [
+        DocNodeRecord(
+          documentLocalId: localId, nodeId: localRoot, parentNodeId: nil,
+          patch: TextPatch(from: 0, to: 0, insert: "").encoded, snapshot: "", origin: "local",
+          createdAt: 0)
+      ])
+    _ = try await store.enqueue(
+      OutboxJob(
+        documentLocalId: localId, kind: .createDocument, clientMutationId: ulid(),
+        payload: OutboxPayload(title: "Offline draft").encoded, createdAt: 0))
+  }
+
+  private func makeCreateRetryable(store: RectoStore, localId: String) async throws {
+    let job = try #require(
+      try await store.pendingJobs(documentLocalId: localId)
+        .first { $0.kind == .createDocument })
+    try await store.failJob(
+      id: try #require(job.id), error: "", retryAfter: 0, now: 0)
+  }
+
+  @Test("lost delete answer followed by not_found acknowledges the delete")
+  func deleteReplayTreatsNotFoundAsAcknowledged() async throws {
+    let transport = InMemoryTransport()
+    let seeded = await transport.seedDocument(title: "delete replay")
+    let (store, engine) = try makeEngine(transport)
+    try await engine.mirrorLibrary(await transport.summaries())
+    let local = try #require(try await store.documents().first)
+    _ = try await store.enqueue(
+      OutboxJob(
+        documentLocalId: local.localId,
+        kind: .remove,
+        clientMutationId: ulid(),
+        payload: OutboxPayload().encoded,
+        createdAt: 1))
+
+    await transport.inject([.dropAcknowledgement])
+    await engine.drainNow()
+
+    #expect(try await transport.getDocument(documentId: seeded.documentId) == nil)
+    #expect(try await store.document(localId: local.localId) != nil)
+    let failed = try #require(try await store.pendingJobs(documentLocalId: local.localId).first)
+    #expect(failed.attempts == 1)
+    try await store.failJob(
+      id: try #require(failed.id), error: "", retryAfter: 0, now: 0)
+
+    await engine.drainNow()
+
+    #expect(try await store.document(localId: local.localId) == nil)
+    #expect(try await store.pendingJobs(documentLocalId: local.localId).isEmpty)
+  }
+
   @Test("a document seen for the first time is hydrated with its whole DAG")
   func hydratesNewDocument() async throws {
     let transport = InMemoryTransport()
@@ -158,5 +221,47 @@ struct SyncEngineTests {
     #expect(
       try await store.materializedMarkdown(documentLocalId: localId, nodeId: child)
         == "offline text")
+  }
+
+  @Test("list mirroring adopts a dropped create acknowledgement before retry")
+  func listAdoptsLostCreateBeforeRetry() async throws {
+    let transport = InMemoryTransport()
+    let (store, engine) = try makeEngine(transport)
+    let localId = "list-before-retry-uuid"
+    try await makeOfflineCreate(store: store, localId: localId)
+    await transport.inject([.dropAcknowledgement])
+
+    await engine.drainNow()
+    try await engine.mirrorLibrary(await transport.summaries())
+
+    let adopted = try #require(try await store.document(localId: localId))
+    #expect(try await store.documents().count == 1)
+    #expect(adopted.convexId != nil)
+    #expect(adopted.displayMarkdown == "local draft · 中文 · 🚀")
+    try await makeCreateRetryable(store: store, localId: localId)
+    await engine.drainNow()
+    #expect(try await store.pendingJobs(documentLocalId: localId).isEmpty)
+    #expect(await transport.createAttempts == [localId])
+  }
+
+  @Test("create retry adoption remains singular when list mirroring follows")
+  func retryAdoptsLostCreateBeforeList() async throws {
+    let transport = InMemoryTransport()
+    let (store, engine) = try makeEngine(transport)
+    let localId = "retry-before-list-uuid"
+    try await makeOfflineCreate(store: store, localId: localId)
+    await transport.inject([.dropAcknowledgement])
+
+    await engine.drainNow()
+    try await makeCreateRetryable(store: store, localId: localId)
+    await engine.drainNow()
+    try await engine.mirrorLibrary(await transport.summaries())
+
+    let adopted = try #require(try await store.document(localId: localId))
+    #expect(try await store.documents().count == 1)
+    #expect(adopted.convexId != nil)
+    #expect(adopted.displayMarkdown == "local draft · 中文 · 🚀")
+    #expect(try await store.pendingJobs(documentLocalId: localId).isEmpty)
+    #expect(await transport.createAttempts == [localId, localId])
   }
 }

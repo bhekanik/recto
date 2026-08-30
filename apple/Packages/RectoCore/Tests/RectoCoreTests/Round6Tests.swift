@@ -166,9 +166,19 @@ struct Round6Tests {
     let relaunched = try Harness(directory: directory, transport: server, origin: "mac")
     await relaunched.sync.start()
     var document = try #require(try await relaunched.store.document(localId: context.localId))
-    for _ in 0..<200 where document.queueBlockedReason != nil {
+    for _ in 0..<200 {
+      let queueIsEmpty = try await relaunched.store.pendingJobs(
+        documentLocalId: context.localId
+      ).isEmpty
+      let renameWasSent = await server.renameOrder == ["queued-behind"]
+      if document.queueBlockedReason == nil,
+        queueIsEmpty,
+        document.localHeadNodeId == context.rootNodeId,
+        renameWasSent
+      {
+        break
+      }
       try await Task.sleep(for: .milliseconds(10))
-      await relaunched.sync.drainNow()
       document = try #require(try await relaunched.store.document(localId: context.localId))
     }
     await relaunched.sync.stop()

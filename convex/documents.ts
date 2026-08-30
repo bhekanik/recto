@@ -123,6 +123,7 @@ export const list = query({
 			title: row.title,
 			wordCount: row.wordCount,
 			updatedAt: row.updatedAt,
+			documentUuid: row.documentUuid,
 		}));
 	},
 });

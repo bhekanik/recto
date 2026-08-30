@@ -106,6 +106,418 @@ struct AuthFeatureTests {
   }
 }
 
+@Suite("cold session restoration")
+struct ColdSessionRestorationTests {
+  @MainActor
+  private final class ActiveSession {
+    var id: String?
+
+    init(_ id: String?) { self.id = id }
+  }
+
+  private actor RestoreGate {
+    private var entered = false
+    private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiter: CheckedContinuation<Void, Never>?
+
+    func suspend() async {
+      entered = true
+      let waiters = entryWaiters
+      entryWaiters.removeAll()
+      waiters.forEach { $0.resume() }
+      await withCheckedContinuation { releaseWaiter = $0 }
+    }
+
+    func waitUntilEntered() async {
+      guard !entered else { return }
+      await withCheckedContinuation { entryWaiters.append($0) }
+    }
+
+    func release() {
+      releaseWaiter?.resume()
+      releaseWaiter = nil
+    }
+  }
+
+  private actor Coordinator: SyncControlling, EditSessionCoordinating {
+    private(set) var events: [String] = []
+    func stop() async { events.append("sync.stop") }
+    func start() async { events.append("sync.start") }
+    func freezeAndFlushAll() async -> EditSessionFreezeToken {
+      events.append("sessions.freeze")
+      return EditSessionFreezeToken()
+    }
+    func resumeAll(after freeze: EditSessionFreezeToken) async -> Bool {
+      events.append("sessions.resume")
+      return true
+    }
+    func invalidateAll() async { events.append("sessions.invalidate") }
+  }
+
+  @Test("a restored Clerk session authenticates Convex and starts sync")
+  func restoredSessionStartsSync() async throws {
+    let store = try RectoStore.inMemory()
+    try await store.setMirrorOwner("user-restored")
+    let auth = await RectoAuth(store: store)
+    let coordinator = Coordinator()
+    await auth.attach(sync: coordinator)
+    await auth.attach(sessions: coordinator)
+    let logins = Counter()
+    await MainActor.run {
+      auth.convexAuthProvider.activeSessionID = { "session-restored" }
+      auth.convexAuthProvider.cachedLogin = { await logins.bump(); return true }
+    }
+
+    await auth.restoreSessionForTesting(userId: "user-restored")
+
+    #expect(await logins.value == 1)
+    #expect(await auth.status == .signedIn(userId: "user-restored"))
+    #expect(await coordinator.events == ["sessions.freeze", "sessions.resume", "sync.start"])
+  }
+
+  @Test("a failed restored login locks the mirror and keeps sync stopped")
+  func restoredSessionFailureBlocksSync() async throws {
+    let store = try RectoStore.inMemory()
+    try await store.setMirrorOwner("user-restored")
+    let auth = await RectoAuth(store: store)
+    let coordinator = Coordinator()
+    await auth.attach(sync: coordinator)
+    await auth.attach(sessions: coordinator)
+    await MainActor.run {
+      auth.convexAuthProvider.activeSessionID = { "session-restored" }
+      auth.convexAuthProvider.cachedLogin = { false }
+    }
+
+    await auth.restoreSessionForTesting(userId: "user-restored")
+
+    #expect(await auth.status == .convexLoginRequired(userId: "user-restored"))
+    #expect(await coordinator.events.contains("sync.start") == false)
+  }
+
+  @Test("an auth event emitted during session restoration is not lost")
+  func eventDuringRestoreIsBuffered() async throws {
+    let store = try RectoStore.inMemory()
+    try await store.setMirrorOwner("user-restored")
+    let auth = await RectoAuth(store: store)
+    let coordinator = Coordinator()
+    await auth.attach(sync: coordinator)
+    await auth.attach(sessions: coordinator)
+    let gate = RestoreGate()
+    await MainActor.run {
+      auth.convexAuthProvider.activeSessionID = { "session-restored" }
+      auth.convexAuthProvider.cachedLogin = {
+        await gate.suspend()
+        return true
+      }
+    }
+    let (events, continuation) = AsyncStream<RectoAuth.LifecycleEvent>.makeStream()
+
+    let start = Task {
+      await auth.startForTesting(
+        restoredUserId: "user-restored", restoredSessionID: "session-restored", events: events)
+    }
+    await gate.waitUntilEntered()
+    continuation.yield(.sessionChanged(userId: nil, sessionID: nil))
+    continuation.finish()
+    await gate.release()
+    await start.value
+    await auth.waitForEventListenerForTesting()
+
+    #expect(await auth.status == .signedOut)
+    #expect(await coordinator.events.contains("sync.stop"))
+  }
+
+  @MainActor
+  @Test("a restored user snapshot without its session cannot publish")
+  func restoredSnapshotMustMatchCurrentSession() async throws {
+    let store = try RectoStore.inMemory()
+    try await store.setMirrorOwner("user-A")
+    let auth = RectoAuth(store: store)
+    let coordinator = Coordinator()
+    auth.attach(sync: coordinator)
+    auth.attach(sessions: coordinator)
+    auth.convexAuthProvider.activeSessionID = { "session-B" }
+    auth.convexAuthProvider.cachedLogin = { true }
+    let (events, _) = AsyncStream<RectoAuth.LifecycleEvent>.makeStream()
+
+    await auth.startForTesting(restoredUserId: "user-A", events: events)
+
+    #expect(auth.status != .signedIn(userId: "user-A"))
+    #expect(await coordinator.events.contains("sync.start") == false)
+  }
+
+  @MainActor
+  @Test("a session event superseded during login never publishes the stale user")
+  func eventSupersededDuringLogin() async throws {
+    let store = try RectoStore.inMemory()
+    try await store.setMirrorOwner("user-A")
+    let auth = RectoAuth(store: store)
+    let coordinator = Coordinator()
+    auth.attach(sync: coordinator)
+    auth.attach(sessions: coordinator)
+    let session = ActiveSession("session-A")
+    let loginGate = RestoreGate()
+    auth.convexAuthProvider.activeSessionID = { session.id }
+    auth.convexAuthProvider.cachedLogin = {
+      if session.id == "session-B" { await loginGate.suspend() }
+      return true
+    }
+    let (events, continuation) = AsyncStream<RectoAuth.LifecycleEvent>.makeStream()
+    await auth.startForTesting(
+      restoredUserId: "user-A", restoredSessionID: "session-A", events: events)
+
+    session.id = "session-B"
+    continuation.yield(.sessionChanged(userId: "user-B", sessionID: "session-B"))
+    await loginGate.waitUntilEntered()
+    session.id = "session-C"
+    continuation.yield(.sessionChanged(userId: "user-C", sessionID: "session-C"))
+    await loginGate.release()
+    continuation.finish()
+    await auth.waitForEventListenerForTesting()
+
+    #expect(auth.status == .signedIn(userId: "user-C"))
+    #expect(await coordinator.events.filter { $0 == "sync.start" }.count == 2)
+  }
+}
+
+@Suite("auth publication interleaving")
+@MainActor
+struct AuthPublicationInterleavingTests {
+  enum SuspensionPoint: Sendable {
+    case resume
+    case start
+  }
+
+  private final class ActiveSession {
+    var id: String?
+
+    init(_ id: String?) { self.id = id }
+  }
+
+  private actor Coordinator: SyncControlling, EditSessionCoordinating {
+    private let suspensionPoint: SuspensionPoint
+    private let pinsSuccessorFreeze: Bool
+    private var freezeCount = 0
+    private var activeFreeze = EditSessionFreezeToken()
+    private var resumeCount = 0
+    private var startCount = 0
+    private var gate: CheckedContinuation<Void, Never>?
+    private var observers: [CheckedContinuation<Void, Never>] = []
+    private var successorFreezeGate: CheckedContinuation<Void, Never>?
+    private var successorFreezeObservers: [CheckedContinuation<Void, Never>] = []
+    private(set) var isEditable = false
+    private(set) var isRunning = false
+    var isContained: Bool { !isEditable && !isRunning }
+
+    init(suspensionPoint: SuspensionPoint, pinsSuccessorFreeze: Bool = false) {
+      self.suspensionPoint = suspensionPoint
+      self.pinsSuccessorFreeze = pinsSuccessorFreeze
+    }
+
+    func stop() { isRunning = false }
+
+    func start() async {
+      startCount += 1
+      if suspensionPoint == .start, startCount == 2 { await suspend() }
+      isRunning = true
+    }
+
+    func freezeAndFlushAll() async -> EditSessionFreezeToken {
+      freezeCount += 1
+      activeFreeze = EditSessionFreezeToken()
+      if pinsSuccessorFreeze, freezeCount == 4 {
+        let waiting = successorFreezeObservers
+        successorFreezeObservers.removeAll()
+        waiting.forEach { $0.resume() }
+        await withCheckedContinuation { successorFreezeGate = $0 }
+      }
+      isEditable = false
+      return activeFreeze
+    }
+    func invalidateAll() {}
+
+    func resumeAll(after freeze: EditSessionFreezeToken) async -> Bool {
+      guard freeze == activeFreeze else { return false }
+      resumeCount += 1
+      if suspensionPoint == .resume, resumeCount == 2 { await suspend() }
+      guard freeze == activeFreeze else { return false }
+      isEditable = true
+      return true
+    }
+
+    private func suspend() async {
+      let waiting = observers
+      observers.removeAll()
+      waiting.forEach { $0.resume() }
+      await withCheckedContinuation { gate = $0 }
+    }
+
+    func waitUntilSuspended() async {
+      let hasReachedPoint = switch suspensionPoint {
+      case .resume: resumeCount >= 2
+      case .start: startCount >= 2
+      }
+      guard !hasReachedPoint else { return }
+      await withCheckedContinuation { observers.append($0) }
+    }
+
+    func release() {
+      gate?.resume()
+      gate = nil
+    }
+
+    func waitUntilFirstContainmentFinishes() async {
+      for _ in 0..<10_000 where freezeCount < 2 { await Task.yield() }
+    }
+
+    func waitUntilSuccessorFreeze() async {
+      guard freezeCount < 4 else { return }
+      await withCheckedContinuation { successorFreezeObservers.append($0) }
+    }
+
+    func releaseSuccessorFreeze() {
+      successorFreezeGate?.resume()
+      successorFreezeGate = nil
+    }
+  }
+
+  @Test(
+    "a superseded identity is hidden and contained across publication awaits",
+    arguments: [SuspensionPoint.resume, .start])
+  func supersededPublicationIsContained(suspensionPoint: SuspensionPoint) async throws {
+    let store = try RectoStore.inMemory()
+    try await store.setMirrorOwner("user-A")
+    let auth = RectoAuth(store: store)
+    let coordinator = Coordinator(suspensionPoint: suspensionPoint)
+    auth.attach(sync: coordinator)
+    auth.attach(sessions: coordinator)
+    let activeSession = ActiveSession("session-A")
+    auth.convexAuthProvider.activeSessionID = { activeSession.id }
+    auth.convexAuthProvider.cachedLogin = { true }
+    let (events, continuation) = AsyncStream<RectoAuth.LifecycleEvent>.makeStream()
+
+    await auth.startForTesting(
+      restoredUserId: "user-A", restoredSessionID: "session-A", events: events)
+    #expect(auth.status == .signedIn(userId: "user-A"))
+
+    activeSession.id = "session-B"
+    continuation.yield(.sessionChanged(userId: "user-B", sessionID: "session-B"))
+    await coordinator.waitUntilSuspended()
+
+    activeSession.id = "session-C"
+    continuation.yield(.sessionChanged(userId: "user-C", sessionID: "session-C"))
+    for _ in 0..<100 where auth.status == .signedIn(userId: "user-B") {
+      await Task.yield()
+    }
+    for _ in 0..<100 where await !coordinator.isContained {
+      await Task.yield()
+    }
+
+    #expect(auth.status != .signedIn(userId: "user-B"))
+    #expect(await coordinator.isEditable == false)
+    #expect(await coordinator.isRunning == false)
+
+    await coordinator.release()
+    continuation.finish()
+    await auth.waitForEventListenerForTesting()
+
+    #expect(auth.status == .signedIn(userId: "user-C"))
+    #expect(await coordinator.isEditable)
+    #expect(await coordinator.isRunning)
+  }
+
+  @Test(
+    "an obsolete publisher cannot re-enable capability after eager containment",
+    arguments: [SuspensionPoint.resume, .start])
+  func obsoletePublisherCannotUndoContainment(suspensionPoint: SuspensionPoint) async throws {
+    let store = try RectoStore.inMemory()
+    try await store.setMirrorOwner("user-A")
+    let auth = RectoAuth(store: store)
+    let coordinator = Coordinator(suspensionPoint: suspensionPoint, pinsSuccessorFreeze: true)
+    auth.attach(sync: coordinator)
+    auth.attach(sessions: coordinator)
+    let activeSession = ActiveSession("session-A")
+    auth.convexAuthProvider.activeSessionID = { activeSession.id }
+    auth.convexAuthProvider.cachedLogin = { true }
+    let (events, continuation) = AsyncStream<RectoAuth.LifecycleEvent>.makeStream()
+
+    await auth.startForTesting(
+      restoredUserId: "user-A", restoredSessionID: "session-A", events: events)
+
+    activeSession.id = "session-B"
+    continuation.yield(.sessionChanged(userId: "user-B", sessionID: "session-B"))
+    await coordinator.waitUntilSuspended()
+
+    activeSession.id = "session-C"
+    continuation.yield(.sessionChanged(userId: "user-C", sessionID: "session-C"))
+    await coordinator.waitUntilFirstContainmentFinishes()
+    await coordinator.release()
+    await coordinator.waitUntilSuccessorFreeze()
+
+    switch suspensionPoint {
+    case .resume:
+      #expect(await coordinator.isEditable == false)
+    case .start:
+      #expect(await coordinator.isRunning == false)
+    }
+
+    await coordinator.releaseSuccessorFreeze()
+    continuation.finish()
+    await auth.waitForEventListenerForTesting()
+  }
+}
+
+@Suite("account-deletion ordering")
+@MainActor
+struct AccountDeletionOrderingTests {
+  private final class ActiveSession {
+    var id: String?
+
+    init(_ id: String?) { self.id = id }
+  }
+
+  private actor Coordinator: SyncControlling, EditSessionCoordinating {
+    func stop() {}
+    func start() {}
+    func freezeAndFlushAll() -> EditSessionFreezeToken { EditSessionFreezeToken() }
+    func resumeAll(after freeze: EditSessionFreezeToken) -> Bool { true }
+    func invalidateAll() {}
+  }
+
+  @Test("deletion purges its account before a buffered successor claims the mirror")
+  func deletionBeforeSuccessorStillPurgesDeletedAccount() async throws {
+    let store = try RectoStore.inMemory()
+    try await store.setMirrorOwner("user-A")
+    try await store.save(DocumentRecord(
+      localId: "doc-A", title: "A only", markdown: "private", wordCount: 1,
+      localHeadNodeId: "root-A", syncState: .pending, updatedAt: 0, createdAt: 0))
+    _ = try await store.enqueue(OutboxJob(
+      documentLocalId: "doc-A", kind: .commitEdit, clientMutationId: "mutation-A",
+      payload: "{}", createdAt: 0))
+    let auth = RectoAuth(store: store)
+    let coordinator = Coordinator()
+    auth.attach(sync: coordinator)
+    auth.attach(sessions: coordinator)
+    let activeSession = ActiveSession("session-A")
+    auth.convexAuthProvider.activeSessionID = { activeSession.id }
+    auth.convexAuthProvider.cachedLogin = { true }
+    let (events, continuation) = AsyncStream<RectoAuth.LifecycleEvent>.makeStream()
+
+    await auth.startForTesting(
+      restoredUserId: "user-A", restoredSessionID: "session-A", events: events)
+
+    activeSession.id = "session-C"
+    continuation.yield(.accountDeleted)
+    continuation.yield(.sessionChanged(userId: "user-C", sessionID: "session-C"))
+    continuation.finish()
+    await auth.waitForEventListenerForTesting()
+
+    #expect(auth.status == .signedIn(userId: "user-C"))
+    #expect(try await store.mirrorOwner() == "user-C")
+    #expect(try await store.pendingJobCount() == 0)
+  }
+}
+
 @Suite("sign-out safety")
 struct SignOutTests {
   /// Records the stop/start calls an identity change makes.
@@ -186,6 +598,344 @@ struct SignOutTests {
   }
 }
 
+@Suite("refused sign-out lifecycle")
+@MainActor
+struct RefusedSignOutLifecycleTests {
+  enum SuspensionPoint: Sendable {
+    case freeze
+    case resume
+    case start
+  }
+
+  private final class ActiveSession {
+    var id: String?
+
+    init(_ id: String?) { self.id = id }
+  }
+
+  private actor Coordinator: SyncControlling, EditSessionCoordinating {
+    private let suspensionPoint: SuspensionPoint?
+    private var freezeCount = 0
+    private var activeFreeze = EditSessionFreezeToken()
+    private var resumeCount = 0
+    private var startCount = 0
+    private var isSuspended = false
+    private var releaseGate: CheckedContinuation<Void, Never>?
+    private(set) var isEditable = false
+    private(set) var isRunning = false
+
+    init(suspensionPoint: SuspensionPoint? = nil) {
+      self.suspensionPoint = suspensionPoint
+    }
+
+    func stop() { isRunning = false }
+
+    func start() async {
+      startCount += 1
+      if suspensionPoint == .start, startCount == 2 { await suspend() }
+      isRunning = true
+    }
+
+    func freezeAndFlushAll() async -> EditSessionFreezeToken {
+      freezeCount += 1
+      activeFreeze = EditSessionFreezeToken()
+      if suspensionPoint == .freeze, freezeCount == 2 { await suspend() }
+      isEditable = false
+      return activeFreeze
+    }
+
+    func resumeAll(after freeze: EditSessionFreezeToken) async -> Bool {
+      guard freeze == activeFreeze else { return false }
+      resumeCount += 1
+      if suspensionPoint == .resume, resumeCount == 2 { await suspend() }
+      guard freeze == activeFreeze else { return false }
+      isEditable = true
+      return true
+    }
+
+    func invalidateAll() { isEditable = false }
+
+    private func suspend() async {
+      isSuspended = true
+      await withCheckedContinuation { releaseGate = $0 }
+    }
+
+    func waitUntilSuspended() async {
+      for _ in 0..<10_000 {
+        if isSuspended { return }
+        await Task.yield()
+      }
+      Issue.record("coordinator never reached the requested suspension point")
+    }
+
+    func waitUntilStartCount(_ expected: Int) async {
+      for _ in 0..<10_000 {
+        if startCount >= expected { return }
+        await Task.yield()
+      }
+      Issue.record("coordinator never reached \(expected) sync starts")
+    }
+
+    func release() {
+      releaseGate?.resume()
+      releaseGate = nil
+    }
+  }
+
+  private func makeDirtySignedInAuth(
+    suspensionPoint: SuspensionPoint? = nil
+  ) async throws -> (
+    auth: RectoAuth,
+    store: RectoStore,
+    coordinator: Coordinator,
+    session: ActiveSession,
+    continuation: AsyncStream<RectoAuth.LifecycleEvent>.Continuation
+  ) {
+    let store = try RectoStore.inMemory()
+    try await store.setMirrorOwner("user-A")
+    try await store.save(DocumentRecord(
+      localId: "doc-A", title: "A", markdown: "unsent", wordCount: 1,
+      localHeadNodeId: "root-A", syncState: .pending, updatedAt: 0, createdAt: 0))
+    _ = try await store.enqueue(OutboxJob(
+      documentLocalId: "doc-A", kind: .commitEdit, clientMutationId: "mutation-A",
+      payload: "{}", createdAt: 0))
+
+    let auth = RectoAuth(store: store)
+    let coordinator = Coordinator(suspensionPoint: suspensionPoint)
+    auth.attach(sync: coordinator)
+    auth.attach(sessions: coordinator)
+    let session = ActiveSession("session-A")
+    auth.convexAuthProvider.activeSessionID = { session.id }
+    auth.convexAuthProvider.cachedLogin = { true }
+    let (events, continuation) = AsyncStream<RectoAuth.LifecycleEvent>.makeStream()
+    await auth.startForTesting(
+      restoredUserId: "user-A", restoredSessionID: "session-A", events: events)
+    #expect(auth.status == .signedIn(userId: "user-A"))
+    return (auth, store, coordinator, session, continuation)
+  }
+
+  private func expectRefusal(_ task: Task<Void, any Error>) async {
+    do {
+      try await task.value
+      Issue.record("sign-out unexpectedly discarded unsynced work")
+    } catch {
+      #expect(error as? RectoAuthError == .unsyncedWork(count: 1))
+    }
+  }
+
+  @Test("a real revocation after a refused sign-out is still observed")
+  func revocationAfterRefusal() async throws {
+    let context = try await makeDirtySignedInAuth()
+
+    await expectRefusal(Task { try await context.auth.signOut() })
+    context.session.id = nil
+    context.continuation.yield(.sessionChanged(userId: nil, sessionID: nil))
+    context.continuation.finish()
+    await context.auth.waitForEventListenerForTesting()
+
+    #expect(context.auth.status == .signedOut)
+    #expect(try await context.store.mirrorOwner() == "user-A")
+    #expect(try await context.store.pendingJobCount() == 1)
+    #expect(await context.coordinator.isEditable == false)
+    #expect(await context.coordinator.isRunning == false)
+  }
+
+  @Test(
+    "revocation during a refused sign-out cannot be overwritten by its recovery",
+    arguments: [SuspensionPoint.freeze, .resume])
+  func revocationDuringRefusal(_ suspensionPoint: SuspensionPoint) async throws {
+    let context = try await makeDirtySignedInAuth(suspensionPoint: suspensionPoint)
+    let signOut = Task { try await context.auth.signOut() }
+    await context.coordinator.waitUntilSuspended()
+
+    context.session.id = nil
+    context.continuation.yield(.sessionChanged(userId: nil, sessionID: nil))
+    for _ in 0..<10_000 where context.auth.status != .loading { await Task.yield() }
+    await context.coordinator.release()
+    await expectRefusal(signOut)
+    context.continuation.finish()
+    await context.auth.waitForEventListenerForTesting()
+
+    #expect(context.auth.status == .signedOut)
+    #expect(await context.coordinator.isEditable == false)
+    #expect(await context.coordinator.isRunning == false)
+  }
+
+  @Test(
+    "account switch during a refused sign-out cannot be overwritten by its recovery",
+    arguments: [SuspensionPoint.freeze, .resume])
+  func switchDuringRefusal(_ suspensionPoint: SuspensionPoint) async throws {
+    let context = try await makeDirtySignedInAuth(suspensionPoint: suspensionPoint)
+    let signOut = Task { try await context.auth.signOut() }
+    await context.coordinator.waitUntilSuspended()
+
+    context.session.id = "session-B"
+    context.continuation.yield(
+      .sessionChanged(userId: "user-B", sessionID: "session-B"))
+    for _ in 0..<10_000 where context.auth.status != .loading { await Task.yield() }
+    await context.coordinator.release()
+    await expectRefusal(signOut)
+    context.continuation.finish()
+    await context.auth.waitForEventListenerForTesting()
+
+    #expect(context.auth.status == .blockedByRetainedWork(owner: "user-A", count: 1))
+    #expect(try await context.store.mirrorOwner() == "user-A")
+    #expect(await context.coordinator.isEditable == false)
+    #expect(await context.coordinator.isRunning == false)
+  }
+
+  @Test(
+    "a same-user session replacement survives stale refused-sign-out recovery",
+    arguments: [SuspensionPoint.resume, .start])
+  func sameUserSessionReplacementDuringRefusal(_ suspensionPoint: SuspensionPoint) async throws {
+    let context = try await makeDirtySignedInAuth(suspensionPoint: suspensionPoint)
+    let signOut = Task { try await context.auth.signOut() }
+    await context.coordinator.waitUntilSuspended()
+
+    context.session.id = "session-B"
+    context.continuation.yield(
+      .sessionChanged(userId: "user-A", sessionID: "session-B"))
+    await context.coordinator.waitUntilStartCount(suspensionPoint == .resume ? 2 : 3)
+
+    await context.coordinator.release()
+    await expectRefusal(signOut)
+    context.continuation.finish()
+    await context.auth.waitForEventListenerForTesting()
+
+    #expect(context.auth.status == .signedIn(userId: "user-A"))
+    #expect(try await context.store.mirrorOwner() == "user-A")
+    #expect(try await context.store.pendingJobCount() == 1)
+    #expect(await context.coordinator.isEditable)
+    #expect(await context.coordinator.isRunning)
+  }
+}
+
+@Suite("refused sign-out publication containment")
+@MainActor
+struct RefusedSignOutPublicationContainmentTests {
+  private final class ActiveSession {
+    var id: String?
+
+    init(_ id: String?) { self.id = id }
+  }
+
+  private actor Coordinator: SyncControlling, EditSessionCoordinating {
+    private var freezeCount = 0
+    private var activeFreeze = EditSessionFreezeToken()
+    private var resumeCount = 0
+    private var staleResumeGate: CheckedContinuation<Void, Never>?
+    private var staleResumeObservers: [CheckedContinuation<Void, Never>] = []
+    private var successorResumeGate: CheckedContinuation<Void, Never>?
+    private var successorResumeObservers: [CheckedContinuation<Void, Never>] = []
+    private(set) var isEditable = false
+    private(set) var isRunning = false
+
+    func stop() { isRunning = false }
+
+    func start() { isRunning = true }
+
+    func freezeAndFlushAll() -> EditSessionFreezeToken {
+      freezeCount += 1
+      activeFreeze = EditSessionFreezeToken()
+      isEditable = false
+      return activeFreeze
+    }
+
+    func resumeAll(after freeze: EditSessionFreezeToken) async -> Bool {
+      guard freeze == activeFreeze else { return false }
+      resumeCount += 1
+      if resumeCount == 2 {
+        let observers = staleResumeObservers
+        staleResumeObservers.removeAll()
+        for observer in observers { observer.resume() }
+        await withCheckedContinuation { staleResumeGate = $0 }
+        guard freeze == activeFreeze else { return false }
+        isEditable = true
+        return true
+      }
+      if resumeCount == 3 {
+        isEditable = true
+        let observers = successorResumeObservers
+        successorResumeObservers.removeAll()
+        for observer in observers { observer.resume() }
+        await withCheckedContinuation { successorResumeGate = $0 }
+        guard freeze == activeFreeze else { return false }
+        return true
+      }
+      isEditable = true
+      return true
+    }
+
+    func invalidateAll() { isEditable = false }
+
+    func waitForStaleResume() async {
+      if resumeCount >= 2 { return }
+      await withCheckedContinuation { staleResumeObservers.append($0) }
+    }
+
+    func waitForSuccessorResumeSideEffect() async {
+      if resumeCount >= 3 { return }
+      await withCheckedContinuation { successorResumeObservers.append($0) }
+    }
+
+    func releaseStaleResume() {
+      staleResumeGate?.resume()
+      staleResumeGate = nil
+    }
+
+    func releaseSuccessorResume() {
+      successorResumeGate?.resume()
+      successorResumeGate = nil
+    }
+  }
+
+  @Test("a loading same-user successor resumes after stale containment")
+  func loadingSameUserSuccessor() async throws {
+    let store = try RectoStore.inMemory()
+    try await store.setMirrorOwner("user-A")
+    try await store.save(DocumentRecord(
+      localId: "doc-A", title: "A", markdown: "unsent", wordCount: 1,
+      localHeadNodeId: "root-A", syncState: .pending, updatedAt: 0, createdAt: 0))
+    _ = try await store.enqueue(OutboxJob(
+      documentLocalId: "doc-A", kind: .commitEdit, clientMutationId: "mutation-A",
+      payload: "{}", createdAt: 0))
+
+    let auth = RectoAuth(store: store)
+    let coordinator = Coordinator()
+    auth.attach(sync: coordinator)
+    auth.attach(sessions: coordinator)
+    let activeSession = ActiveSession("session-A")
+    auth.convexAuthProvider.activeSessionID = { activeSession.id }
+    auth.convexAuthProvider.cachedLogin = { true }
+    let (events, continuation) = AsyncStream<RectoAuth.LifecycleEvent>.makeStream()
+    await auth.startForTesting(
+      restoredUserId: "user-A", restoredSessionID: "session-A", events: events)
+
+    let signOut = Task { try await auth.signOut() }
+    await coordinator.waitForStaleResume()
+
+    activeSession.id = "session-B"
+    continuation.yield(.sessionChanged(userId: "user-A", sessionID: "session-B"))
+    await coordinator.waitForSuccessorResumeSideEffect()
+    #expect(auth.status == .loading)
+    #expect(await coordinator.isEditable)
+
+    await coordinator.releaseStaleResume()
+    await #expect(throws: RectoAuthError.unsyncedWork(count: 1)) {
+      try await signOut.value
+    }
+    #expect(await coordinator.isEditable == false)
+
+    await coordinator.releaseSuccessorResume()
+    continuation.finish()
+    await auth.waitForEventListenerForTesting()
+
+    #expect(auth.status == .signedIn(userId: "user-A"))
+    #expect(await coordinator.isEditable)
+    #expect(await coordinator.isRunning)
+  }
+}
+
 @Suite("round-3 auth")
 struct Round3AuthTests {
   /// Records the ordering of everything auth drives, and can write into the
@@ -198,11 +948,15 @@ struct Round3AuthTests {
 
     func stop() async { events.append("sync.stop") }
     func start() async { events.append("sync.start") }
-    func freezeAndFlushAll() async {
+    func freezeAndFlushAll() async -> EditSessionFreezeToken {
       events.append("sessions.freeze")
       await onFreeze?()
+      return EditSessionFreezeToken()
     }
-    func resumeAll() async { events.append("sessions.resume") }
+    func resumeAll(after freeze: EditSessionFreezeToken) async -> Bool {
+      events.append("sessions.resume")
+      return true
+    }
     func invalidateAll() async { events.append("sessions.invalidate") }
   }
 
@@ -222,7 +976,7 @@ struct Round3AuthTests {
     // A draft persisted DURING the freeze — the race the old order allowed:
     // count, then two awaits, then purge.
     let coordinator = Coordinator {
-      try? await store.saveDraft(
+      _ = try? await store.saveDraft(
         documentLocalId: "doc-1", markdown: "typed while signing out", selection: nil,
         wordCount: 4, job: nil)
     }
@@ -349,6 +1103,10 @@ struct Round4AuthTests {
         createdAt: 0))
 
     let auth = await RectoAuth(store: store)
+    await MainActor.run {
+      auth.convexAuthProvider.activeSessionID = { "session-B" }
+      auth.convexAuthProvider.cachedLogin = { true }
+    }
     #expect(await auth.discardRetainedWorkAndClaimForTesting(userId: "user_B"))
     #expect(try await store.documents().isEmpty)
     #expect(try await store.mirrorOwner() == "user_B")
@@ -376,8 +1134,14 @@ struct Round5AuthTests {
     private(set) var events: [String] = []
     func stop() async { events.append("sync.stop") }
     func start() async { events.append("sync.start") }
-    func freezeAndFlushAll() async { events.append("sessions.freeze") }
-    func resumeAll() async { events.append("sessions.resume") }
+    func freezeAndFlushAll() async -> EditSessionFreezeToken {
+      events.append("sessions.freeze")
+      return EditSessionFreezeToken()
+    }
+    func resumeAll(after freeze: EditSessionFreezeToken) async -> Bool {
+      events.append("sessions.resume")
+      return true
+    }
     func invalidateAll() async { events.append("sessions.invalidate") }
   }
 
@@ -404,6 +1168,9 @@ struct Round5AuthTests {
     let coordinator = Coordinator()
     await auth.attach(sync: coordinator)
     await auth.attach(sessions: coordinator)
+    await MainActor.run {
+      auth.convexAuthProvider.activeSessionID = { "session-B" }
+    }
 
     // Clerk hands us an active B while A is the published user. Purging here
     // would give `claimMirror` a clean store and remove its chance to object.
@@ -422,6 +1189,10 @@ struct Round5AuthTests {
     let coordinator = Coordinator()
     await auth.attach(sync: coordinator)
     await auth.attach(sessions: coordinator)
+    await MainActor.run {
+      auth.convexAuthProvider.activeSessionID = { "session-B" }
+      auth.convexAuthProvider.cachedLogin = { true }
+    }
     #expect(try await auth.claimMirrorForTesting(userId: "user_B") == false)
 
     #expect(await auth.discardRetainedWorkAndClaimForTesting(userId: "user_B"))
@@ -433,6 +1204,23 @@ struct Round5AuthTests {
     #expect(await auth.status == .signedIn(userId: "user_B"))
     #expect(await coordinator.events.contains("sessions.resume"))
     #expect(await coordinator.events.contains("sync.start"))
+  }
+
+  @Test("cancelling a blocked switch signs out without deleting retained work")
+  func cancelBlockedSwitchPreservesOwner() async throws {
+    let store = try await storeOwnedByA(withWork: true)
+    let auth = await RectoAuth(store: store)
+    let coordinator = Coordinator()
+    await auth.attach(sync: coordinator)
+    #expect(try await auth.claimMirrorForTesting(userId: "user_B") == false)
+
+    try await auth.cancelBlockedSignIn()
+
+    #expect(await auth.status == .signedOut)
+    #expect(try await store.mirrorOwner() == "user_A")
+    #expect(try await store.documents().count == 1)
+    #expect(try await store.pendingJobCount() == 1)
+    #expect(await coordinator.events.contains("sync.stop"))
   }
 
   @Test("a store that cannot be counted blocks rather than authorises a purge")
@@ -449,6 +1237,44 @@ struct Round5AuthTests {
 
 @Suite("round-6 auth")
 struct Round6AuthTests {
+  @MainActor
+  private final class ActiveSession {
+    var id: String?
+
+    init(_ id: String?) { self.id = id }
+  }
+
+  private actor OvertakingCoordinator: SyncControlling, EditSessionCoordinating {
+    private var firstStopGate: CheckedContinuation<Void, Never>?
+    private var firstStopObservers: [CheckedContinuation<Void, Never>] = []
+    private(set) var stopCount = 0
+    private(set) var startCount = 0
+
+    func stop() async {
+      stopCount += 1
+      guard stopCount == 1 else { return }
+      let observers = firstStopObservers
+      firstStopObservers.removeAll()
+      observers.forEach { $0.resume() }
+      await withCheckedContinuation { firstStopGate = $0 }
+    }
+
+    func start() { startCount += 1 }
+    func freezeAndFlushAll() async -> EditSessionFreezeToken { EditSessionFreezeToken() }
+    func resumeAll(after freeze: EditSessionFreezeToken) async -> Bool { true }
+    func invalidateAll() async {}
+
+    func waitUntilFirstStop() async {
+      guard stopCount == 0 else { return }
+      await withCheckedContinuation { firstStopObservers.append($0) }
+    }
+
+    func releaseFirstStop() {
+      firstStopGate?.resume()
+      firstStopGate = nil
+    }
+  }
+
   /// Records the order of everything an identity change drives, and holds
   /// `stop()` open the way a subscription that has not torn down yet would.
   private actor Coordinator: SyncControlling, EditSessionCoordinating {
@@ -483,8 +1309,14 @@ struct Round6AuthTests {
     }
     func start() async { events.append("sync.start") }
     func clear() { events.removeAll() }
-    func freezeAndFlushAll() async { events.append("sessions.freeze") }
-    func resumeAll() async { events.append("sessions.resume") }
+    func freezeAndFlushAll() async -> EditSessionFreezeToken {
+      events.append("sessions.freeze")
+      return EditSessionFreezeToken()
+    }
+    func resumeAll(after freeze: EditSessionFreezeToken) async -> Bool {
+      events.append("sessions.resume")
+      return true
+    }
     func invalidateAll() async { events.append("sessions.invalidate") }
   }
 
@@ -496,6 +1328,27 @@ struct Round6AuthTests {
         localId: "doc-1", title: "A's work", markdown: "synced", wordCount: 1,
         localHeadNodeId: "root", syncState: .synced, updatedAt: 0, createdAt: 0))
     return store
+  }
+
+  @MainActor
+  private func makeBlockedRecovery() async throws -> (
+    auth: RectoAuth,
+    coordinator: OvertakingCoordinator,
+    session: ActiveSession
+  ) {
+    let store = try RectoStore.inMemory()
+    try await store.setMirrorOwner("user_A")
+    let auth = RectoAuth(store: store)
+    let coordinator = OvertakingCoordinator()
+    auth.attach(sync: coordinator)
+    auth.attach(sessions: coordinator)
+    let session = ActiveSession("sess_A")
+    auth.convexAuthProvider.activeSessionID = { session.id }
+    auth.convexAuthProvider.cachedLogin = { false }
+    await auth.restoreSessionForTesting(userId: "user_A")
+    #expect(auth.status == .convexLoginRequired(userId: "user_A"))
+    auth.convexAuthProvider.cachedLogin = { true }
+    return (auth, coordinator, session)
   }
 
   // MARK: - 1. Only RectoAuth may change the Convex identity, and only quiesced
@@ -596,6 +1449,10 @@ struct Round6AuthTests {
         createdAt: 0))
 
     let auth = await RectoAuth(store: store)
+    await MainActor.run {
+      auth.convexAuthProvider.activeSessionID = { "session-B" }
+      auth.convexAuthProvider.cachedLogin = { true }
+    }
     #expect(try await auth.claimMirrorForTesting(userId: "user_B") == false)
     #expect(try await store.pendingJobCount() == 1)
     #expect(await auth.status == .blockedByRetainedWork(owner: "an earlier session", count: 1))
@@ -689,9 +1546,11 @@ struct Round6AuthTests {
     await coordinator.releaseStop()
     #expect(await retry.value)
 
-    #expect(await coordinator.events == [
-      "sync.stop.begin", "sync.stop.end", "convex.login", "sessions.resume", "sync.start",
-    ])
+    #expect(
+      await coordinator.events == [
+        "sync.stop.begin", "sync.stop.end", "convex.login", "sessions.freeze", "sessions.resume",
+        "sync.start",
+      ])
   }
 
   @Test("a read-only session still hydrates once the login lands")
@@ -723,6 +1582,74 @@ struct Round6AuthTests {
     #expect(await auth.convexAuthProvider.needsCachedLogin == false)
     // Started exactly once, by the recovery that succeeded.
     #expect(await coordinator.events.filter { $0 == "sync.start" }.count == 1)
+  }
+
+  @MainActor
+  @Test("a revoked session leaves a failed-login user signed out")
+  func revokedSessionCannotRetryFailedIdentity() async throws {
+    let (auth, coordinator, session) = try await makeBlockedRecovery()
+
+    session.id = nil
+    let revocation = Task { await auth.handleSessionChangeForTesting(to: nil) }
+    await coordinator.waitUntilFirstStop()
+    await coordinator.releaseFirstStop()
+    await revocation.value
+
+    #expect(auth.status == .signedOut)
+    #expect(await auth.recoverConvexLoginIfNeeded() == false)
+    #expect(await coordinator.startCount == 0)
+  }
+
+  @MainActor
+  @Test("an account switch invalidates a suspended cached-login recovery")
+  func accountSwitchOvertakesRecovery() async throws {
+    let (auth, coordinator, session) = try await makeBlockedRecovery()
+
+    let recovery = Task { await auth.recoverConvexLoginIfNeeded() }
+    await coordinator.waitUntilFirstStop()
+    session.id = "sess_B"
+    await auth.handleSessionChangeForTesting(to: "user_B")
+    #expect(auth.status == .signedIn(userId: "user_B"))
+    #expect(await coordinator.startCount == 1)
+
+    await coordinator.releaseFirstStop()
+    #expect(await recovery.value == false)
+    #expect(auth.status == .signedIn(userId: "user_B"))
+    #expect(await coordinator.startCount == 1)
+  }
+
+  @MainActor
+  @Test("sign-out invalidates a suspended cached-login recovery")
+  func signOutOvertakesRecovery() async throws {
+    let (auth, coordinator, session) = try await makeBlockedRecovery()
+
+    let recovery = Task { await auth.recoverConvexLoginIfNeeded() }
+    await coordinator.waitUntilFirstStop()
+    session.id = nil
+    try await auth.signOut(discardingUnsynced: true)
+    #expect(auth.status == .signedOut)
+
+    await coordinator.releaseFirstStop()
+    #expect(await recovery.value == false)
+    #expect(auth.status == .signedOut)
+    #expect(await coordinator.startCount == 0)
+  }
+
+  @MainActor
+  @Test("account deletion invalidates a suspended cached-login recovery")
+  func accountDeletionOvertakesRecovery() async throws {
+    let (auth, coordinator, session) = try await makeBlockedRecovery()
+
+    let recovery = Task { await auth.recoverConvexLoginIfNeeded() }
+    await coordinator.waitUntilFirstStop()
+    session.id = nil
+    await auth.handleAccountDeletedForTesting()
+    #expect(auth.status == .signedOut)
+
+    await coordinator.releaseFirstStop()
+    #expect(await recovery.value == false)
+    #expect(auth.status == .signedOut)
+    #expect(await coordinator.startCount == 0)
   }
 }
 

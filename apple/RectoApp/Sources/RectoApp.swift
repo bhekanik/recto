@@ -2,7 +2,25 @@ import SwiftUI
 
 @main
 struct RectoApp: App {
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var model = RectoApplicationModel()
+
     var body: some Scene {
+        Window("Recto", id: "cloud-library") {
+            RectoCloudRootView(model: model)
+                .onChange(of: scenePhase) { _, phase in
+                    Task {
+                        if phase == .active {
+                            await model.enterForeground()
+                        } else {
+                            await model.leaveActive()
+                        }
+                    }
+                }
+        }
+        .defaultSize(width: 1_100, height: 760)
+        .windowResizability(.contentMinSize)
+
         DocumentGroup(newDocument: RectoDocument()) { configuration in
             EditorHostView(
                 document: configuration.$document,

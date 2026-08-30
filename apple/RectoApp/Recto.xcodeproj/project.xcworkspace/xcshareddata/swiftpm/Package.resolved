@@ -1,5 +1,5 @@
 {
-  "originHash" : "10fb3d31fcf23d077bfcae9e9368979f1ecf2856f0a0e4954e3b1b52c0e6e00a",
+  "originHash" : "0e65f529de64ea0ccb440ac9f4814e7de3cb4e482d645b047d79eddb588933e7",
   "pins" : [
     {
       "identity" : "clerk-ios",
@@ -44,6 +44,14 @@
       "state" : {
         "revision" : "cf2f1df6f2fe8b49701f4b43f0e97c7bd113d034",
         "version" : "5.0.8"
+      }
+    },
+    {
+      "identity" : "swift-markdown-engine",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/bhekanik/swift-markdown-engine",
+      "state" : {
+        "revision" : "5fd928683c7846fa0e99ae1af3415ab82b360936"
       }
     }
   ],

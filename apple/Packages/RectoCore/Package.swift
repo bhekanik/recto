@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
   name: "RectoCore",
-  platforms: [.macOS(.v26), .iOS(.v26)],
+  platforms: [.macOS("26.2"), .iOS(.v26)],
   products: [
     .library(name: "RectoCore", targets: ["RectoCore"])
   ],

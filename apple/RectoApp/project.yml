@@ -2,7 +2,7 @@ name: Recto
 options:
   bundleIdPrefix: com.bhekani
   deploymentTarget:
-    macOS: "26.0"
+    macOS: "26.2"
   createIntermediateGroups: true
   groupSortPosition: top
 
@@ -10,8 +10,18 @@ fileGroups:
   - Brand
 
 packages:
+  RectoAuth:
+    path: ../Packages/RectoAuth
+  RectoCore:
+    path: ../Packages/RectoCore
   RectoEditor:
     path: ../Packages/RectoEditor
+  RectoHistory:
+    path: ../Packages/RectoHistory
+  RectoStore:
+    path: ../Packages/RectoStore
+  RectoSync:
+    path: ../Packages/RectoSync
 
 settings:
   base:
@@ -31,12 +41,18 @@ targets:
       - path: Resources/Assets.xcassets
         buildPhase: resources
     dependencies:
+      - package: RectoAuth
+      - package: RectoCore
       - package: RectoEditor
+      - package: RectoHistory
+      - package: RectoStore
+      - package: RectoSync
     entitlements:
       path: Support/Recto.entitlements
       properties:
         com.apple.security.app-sandbox: true
         com.apple.security.files.user-selected.read-write: true
+        com.apple.security.network.client: true
     info:
       path: Support/Info.plist
       properties:
@@ -47,6 +63,8 @@ targets:
         LSApplicationCategoryType: public.app-category.productivity
         LSMinimumSystemVersion: "$(MACOSX_DEPLOYMENT_TARGET)"
         NSHumanReadableCopyright: "Copyright © 2026 Bhekani Khumalo"
+        RectoClerkPublishableKey: "$(RECTO_CLERK_PUBLISHABLE_KEY)"
+        RectoConvexURL: "$(RECTO_CONVEX_URL)"
         CFBundleDocumentTypes:
           - CFBundleTypeName: Markdown document
             CFBundleTypeRole: Editor
@@ -68,6 +86,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.bhekani.recto
         COMBINE_HIDPI_IMAGES: YES
         ENABLE_HARDENED_RUNTIME: YES
+        ARCHS: arm64
         SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
 
   RectoTests:

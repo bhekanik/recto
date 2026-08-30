@@ -42,6 +42,7 @@ export function DocumentSwitcher({
 					title: "Untitled",
 					wordCount: 0,
 					updatedAt: now,
+					documentUuid: undefined,
 				},
 				...current,
 			]);

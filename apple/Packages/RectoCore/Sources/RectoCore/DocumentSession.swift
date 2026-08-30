@@ -31,6 +31,7 @@ public struct Divergence: Sendable, Equatable {
 
 public enum SessionError: Error, Equatable, Sendable {
   case notOpen
+  case editableHolderExists(String)
   /// The session is frozen while sign-out decides what to do with unsent work.
   case frozen
   /// The mirror this session was reading has been purged by an identity change.
@@ -54,9 +55,9 @@ public enum RectoWordCount {
 ///
 /// Owns the grouping controller, writes every commit as one SQLite transaction
 /// (node + head + outbox job), and reflects what the sync engine mirrors back.
-/// One instance per document per process — see `DocumentSessionRegistry`; two
-/// Mac windows on the same document share this actor, which is what makes the
-/// orchestrator's "same document in two windows" decision safe.
+/// One instance per document per process — see `DocumentSessionRegistry`.
+/// Session state can have multiple readers, but the app permits one editable
+/// full-snapshot ingress per document.
 public actor DocumentSession {
   /// The draft row is written on every change, debounced, so a crash between
   /// keystroke and node boundary loses nothing (plan 023 §4.3).
@@ -185,11 +186,17 @@ public actor DocumentSession {
     // Text that was persisted but never reached a node boundary. Without this the
     // recovery draft is on disk but invisible: the editor would show the head and
     // the user's last sentences would look lost.
+    let recoveredIngress = document.editorIngressRevision != nil
     if let draft = document.draftMarkdown {
       restored.restorePendingDraft(
         markdown: draft, selection: document.draftSelection, now: now())
     }
     controller = restored
+
+    // A synchronous editor ingress can survive a kill before its async worker
+    // runs. Promote that recovered draft to a node/outbox job during open so a
+    // read-only relaunch will still sync it after connectivity returns.
+    if recoveredIngress { try await performFlush() }
 
     if let sync {
       await sync.openDocument(localId: documentLocalId)
@@ -281,7 +288,24 @@ public actor DocumentSession {
   ) async throws {
     try await withTransition {
       try await performLocalChange(
-        markdown: markdown, selection: selection, structural: structural)
+        markdown: markdown, selection: selection, structural: structural,
+        persistedGeneration: nil)
+    }
+  }
+
+  /// Process a snapshot that the synchronous editor callback already wrote.
+  /// A newer callback may supersede it while this actor is suspended; the
+  /// generation keeps the older snapshot from clearing the newer draft.
+  public func applyPersistedLocalChange(
+    markdown: String,
+    selection: NodeSelection?,
+    structural: Bool = false,
+    generation: Int
+  ) async throws {
+    try await withTransition {
+      try await performLocalChange(
+        markdown: markdown, selection: selection, structural: structural,
+        persistedGeneration: generation)
     }
   }
 
@@ -338,19 +362,37 @@ public actor DocumentSession {
   }
 
   private func performLocalChange(
-    markdown: String, selection: NodeSelection?, structural: Bool
+    markdown: String,
+    selection: NodeSelection?,
+    structural: Bool,
+    persistedGeneration: Int?
   ) async throws {
     try requireWritable()
-    guard controller != nil, let document else { throw SessionError.notOpen }
+    guard controller != nil else { throw SessionError.notOpen }
     let timestamp = now()
 
-    // Write-ahead: the text is on disk BEFORE any in-memory state moves. A crash
-    // between here and the commit loses nothing, and a store failure below
-    // leaves a draft row that `open()` restores rather than a controller
-    // advanced past a node SQLite rejected.
-    let generation = try await store.saveDraft(
-      documentLocalId: documentLocalId, markdown: markdown, selection: selection,
-      wordCount: countWords(markdown), job: nil, now: timestamp)
+    let generation: Int
+    if let persistedGeneration {
+      let stored = try await store.document(localId: documentLocalId)
+      guard stored?.draftRevision == persistedGeneration,
+        stored?.displayMarkdown == markdown
+      else {
+        try await rebuildControllerFromStore()
+        publish()
+        return
+      }
+      if stored?.localHeadNodeId != document?.localHeadNodeId {
+        try await rebuildControllerFromStore()
+      }
+      generation = persistedGeneration
+    } else {
+      // Write-ahead: the text is on disk BEFORE any in-memory state moves. A
+      // crash between here and the commit loses nothing.
+      generation = try await store.saveDraft(
+        documentLocalId: documentLocalId, markdown: markdown, selection: selection,
+        wordCount: countWords(markdown), job: nil, now: timestamp)
+    }
+    guard let document else { throw SessionError.notOpen }
 
     // Stage the grouping decision in a copy; the live controller is only
     // replaced once every store write for it has succeeded.
@@ -358,10 +400,14 @@ public actor DocumentSession {
     let commits = staged.record(
       markdown: markdown, selection: selection, structural: structural, now: timestamp)
 
+    var expectedGeneration = generation
     do {
       var head = document.localHeadNodeId
       for commit in commits {
-        head = try await persist(commit, base: head, at: timestamp)
+        let persisted = try await persist(
+          commit, base: head, expectedDraftRevision: expectedGeneration, at: timestamp)
+        head = persisted.localHeadNodeId
+        expectedGeneration = persisted.draftRevision
       }
       controller = staged
     } catch {
@@ -372,17 +418,29 @@ public actor DocumentSession {
       )
       try? await rebuildControllerFromStore()
       publish()
-      throw error
+      switch error {
+      case StoreError.staleGeneration, StoreError.headMoved, StoreError.parentMismatch:
+        return
+      default:
+        throw error
+      }
     }
 
     try await reload()
+    guard self.document?.draftRevision == expectedGeneration else {
+      try await rebuildControllerFromStore()
+      publish()
+      return
+    }
     // The revision the write-ahead save produced, or whatever the commits left
     // behind — either way it is the token a later timer must still match.
-    let scheduled = self.document?.draftRevision ?? generation
-    scheduleIdleCommit(generation: scheduled)
-    scheduleDraftSave(markdown: markdown, selection: selection, generation: scheduled)
+    scheduleIdleCommit(generation: expectedGeneration)
+    if persistedGeneration == nil {
+      scheduleDraftSave(
+        markdown: markdown, selection: selection, generation: expectedGeneration)
+    }
     publish()
-    if !commits.isEmpty { await sync?.requestDrain() }
+    if persistedGeneration != nil || !commits.isEmpty { await sync?.requestDrain() }
   }
 
   /// Re-seed the controller from the persisted head and draft. The store is the
@@ -417,7 +475,9 @@ public actor DocumentSession {
       var staged = controller
       guard let commit = staged?.tick() else { return }
       do {
-        _ = try await persist(commit, base: document.localHeadNodeId, at: now())
+        _ = try await persist(
+          commit, base: document.localHeadNodeId,
+          expectedDraftRevision: document.draftRevision, at: now())
         controller = staged
       } catch {
         logger.error(
@@ -448,7 +508,9 @@ public actor DocumentSession {
     // the node is on disk.
     var staged = controller
     if let document, let commit = staged?.flush() {
-      _ = try await persist(commit, base: document.localHeadNodeId, at: now())
+      _ = try await persist(
+        commit, base: document.localHeadNodeId,
+        expectedDraftRevision: document.draftRevision, at: now())
       controller = staged
       try await reload()
       publish()
@@ -456,8 +518,12 @@ public actor DocumentSession {
     await sync?.requestDrain()
   }
 
-  private func persist(_ commit: GroupCommit, base: String, at timestamp: Double) async throws
-    -> String
+  private func persist(
+    _ commit: GroupCommit,
+    base: String,
+    expectedDraftRevision: Int? = nil,
+    at timestamp: Double
+  ) async throws -> DocumentRecord
   {
     let words = countWords(commit.markdown)
     let node = DocNodeRecord(
@@ -479,10 +545,10 @@ public actor DocumentSession {
       ).encoded,
       createdAt: timestamp)
 
-    _ = try await store.commit(
+    return try await store.commit(
       documentLocalId: documentLocalId, node: node, markdown: commit.markdown, wordCount: words,
-      expectedHeadNodeId: base, job: job, now: timestamp)
-    return commit.nodeId
+      expectedHeadNodeId: base, expectedDraftRevision: expectedDraftRevision,
+      job: job, now: timestamp)
   }
 
   // MARK: - Navigation
@@ -531,7 +597,9 @@ public actor DocumentSession {
     // Commit any pending draft first, so we branch from a real node rather than
     // mid-edit text that would be lost.
     if let document, let commit = controller?.flush() {
-      _ = try await persist(commit, base: document.localHeadNodeId, at: now())
+      _ = try await persist(
+        commit, base: document.localHeadNodeId,
+        expectedDraftRevision: document.draftRevision, at: now())
       try await reload()
     }
     guard let base = document?.localHeadNodeId else { return }

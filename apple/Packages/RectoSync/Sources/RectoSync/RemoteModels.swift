@@ -72,17 +72,25 @@ public struct RemoteDocumentSummary: Decodable, Sendable, Equatable {
   public let title: String
   public let wordCount: Double
   public let updatedAt: Double
+  public let documentUuid: String?
 
   private enum CodingKeys: String, CodingKey {
     case id = "_id"
-    case title, wordCount, updatedAt
+    case title, wordCount, updatedAt, documentUuid
   }
 
-  public init(id: String, title: String, wordCount: Double, updatedAt: Double) {
+  public init(
+    id: String,
+    title: String,
+    wordCount: Double,
+    updatedAt: Double,
+    documentUuid: String? = nil
+  ) {
     self.id = id
     self.title = title
     self.wordCount = wordCount
     self.updatedAt = updatedAt
+    self.documentUuid = documentUuid
   }
 }
 

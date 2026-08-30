@@ -36,25 +36,15 @@ struct Harness {
   func createLocalDocument(title: String = "native-spike-doc", localId: String = UUID().uuidString)
     async throws -> String
   {
-    let rootNodeId = ulid()
-    let now = Date().timeIntervalSince1970 * 1000
-    try await store.save(
-      DocumentRecord(
-        localId: localId, convexId: nil, title: title, markdown: "", wordCount: 0,
-        localHeadNodeId: rootNodeId, syncState: .pending, updatedAt: now, createdAt: now))
-    try await store.mergeRemoteNodes(
-      documentLocalId: localId,
-      nodes: [
-        DocNodeRecord(
-          documentLocalId: localId, nodeId: rootNodeId, parentNodeId: nil,
-          patch: TextPatch(from: 0, to: 0, insert: "").encoded, snapshot: "", origin: "local",
-          createdAt: now, materialized: "", synced: false)
-      ])
-    _ = try await store.enqueue(
-      OutboxJob(
-        documentLocalId: localId, kind: .createDocument, clientMutationId: ulid(),
-        payload: OutboxPayload(title: title).encoded, createdAt: now))
-    return localId
+    let library = DocumentLibrary(
+      store: store,
+      sync: nil,
+      origin: "local",
+      localId: { localId },
+      nodeId: { ulid() },
+      mutationId: { ulid() },
+      now: { Date().timeIntervalSince1970 * 1_000 })
+    return try await library.createDocument(title: title).localId
   }
 
   /// Adopt a document that already exists on the server.
