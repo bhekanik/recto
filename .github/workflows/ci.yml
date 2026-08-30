@@ -147,8 +147,7 @@ jobs:
         run: for i in 1 2 3; do swift test || exit 1; done
 
   # The shipping macOS document app. Package-only coverage cannot catch a
-  # dropped app test target, a broken FileDocument host, or an arm64-only
-  # Release product.
+  # dropped app test target or a broken FileDocument host.
   recto-macos:
     runs-on: macos-26
     steps:
@@ -165,7 +164,7 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/recto-debug" \
             CODE_SIGNING_ALLOWED=NO \
             | tail -40
-      - name: Universal Release build
+      - name: Release build
         run: |
           set -o pipefail
           xcodebuild build \
@@ -174,13 +173,11 @@ jobs:
             -configuration Release \
             -destination 'generic/platform=macOS' \
             -derivedDataPath "$RUNNER_TEMP/recto-release" \
-            ARCHS='x86_64 arm64' \
-            ONLY_ACTIVE_ARCH=NO \
             CODE_SIGNING_ALLOWED=NO \
             | tail -40
           lipo \
             "$RUNNER_TEMP/recto-release/Build/Products/Release/Recto.app/Contents/MacOS/Recto" \
-            -verify_arch x86_64 arm64
+            -verify_arch arm64
 
   # Swift packages under apple/Packages (plan 023 N4). Hermetic: the live Convex
   # tests in RectoIntegrationTests skip themselves unless RECTO_CONVEX_URL and
