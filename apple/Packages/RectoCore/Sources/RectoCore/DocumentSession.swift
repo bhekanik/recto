@@ -440,7 +440,7 @@ public actor DocumentSession {
         markdown: markdown, selection: selection, generation: expectedGeneration)
     }
     publish()
-    if !commits.isEmpty { await sync?.requestDrain() }
+    if persistedGeneration != nil || !commits.isEmpty { await sync?.requestDrain() }
   }
 
   /// Re-seed the controller from the persisted head and draft. The store is the

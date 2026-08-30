@@ -12,6 +12,43 @@ import Testing
 ///  two-client fast-forward and divergence flows pass."
 @Suite("N4 acceptance")
 struct AcceptanceTests {
+  @Test("a live clean revert wakes the sync drain")
+  func liveCleanRevertWakesSyncDrain() async throws {
+    let directory = Harness.makeDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let server = InMemoryTransport()
+    let remote = try await server.createDocument(
+      title: "Live clean revert", documentUuid: "live-clean-revert")
+    let harness = try Harness(directory: directory, transport: server)
+    let localId = try await harness.adoptRemoteDocument(remote, localId: "live-clean-revert")
+    let session = DocumentSession(
+      documentLocalId: localId, store: harness.store, sync: harness.sync, origin: "mac",
+      schedulesTimers: false)
+    try await session.open()
+    await harness.sync.start()
+
+    let older = "older draft already sent"
+    let olderGeneration = try harness.store.saveEditorIngressSynchronously(
+      documentLocalId: localId, markdown: older, selection: nil, wordCount: 4,
+      clientMutationId: ulid(),
+      draftPayload: OutboxPayload(markdown: older, wordCount: 4).encoded)
+    try await session.applyPersistedLocalChange(
+      markdown: older, selection: nil, generation: olderGeneration)
+    await harness.sync.drainNow()
+    #expect(try await server.getDocument(documentId: remote.documentId)?.markdown == older)
+
+    let clean = ""
+    let cleanGeneration = try harness.store.saveEditorIngressSynchronously(
+      documentLocalId: localId, markdown: clean, selection: nil, wordCount: 0,
+      clientMutationId: ulid(),
+      draftPayload: OutboxPayload(markdown: clean, wordCount: 0).encoded)
+    try await session.applyPersistedLocalChange(
+      markdown: clean, selection: nil, generation: cleanGeneration)
+
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(try await server.getDocument(documentId: remote.documentId)?.markdown == clean)
+  }
+
   @Test("a clean revert survives relaunch and supersedes an older remote draft")
   func cleanRevertIsDurableRemoteIntent() async throws {
     let directory = Harness.makeDirectory()

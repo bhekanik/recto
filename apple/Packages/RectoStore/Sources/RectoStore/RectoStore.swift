@@ -281,27 +281,49 @@ public actor RectoStore {
       stored.materializedAt = now
       try stored.save(db)
 
+      // Grouping can commit the previous body while the current callback starts
+      // the next group. That newer ingress must follow the commit, not vanish.
+      let retainedEditorIngress =
+        document.editorIngressRevision != nil && document.draftMarkdown != markdown
+      var retainedDraftJob: OutboxJob?
+      if retainedEditorIngress, job != nil {
+        retainedDraftJob =
+          try OutboxJob
+          .filter(Column("documentLocalId") == documentLocalId)
+          .filter(Column("kind") == OutboxKind.draftSave.rawValue)
+          .fetchOne(db)
+      }
+
       document.localHeadNodeId = node.nodeId
       document.markdown = markdown
-      document.wordCount = wordCount
-      // The node now describes the text, so there is no draft ahead of the head.
-      document.draftMarkdown = nil
-      document.draftSelectionAnchor = nil
-      document.draftSelectionHead = nil
-      document.editorIngressRevision = nil
+      if !retainedEditorIngress {
+        document.wordCount = wordCount
+        document.draftMarkdown = nil
+        document.draftSelectionAnchor = nil
+        document.draftSelectionHead = nil
+        document.editorIngressRevision = nil
+      }
       document.updatedAt = now
       document.draftRevision += 1
+      if retainedEditorIngress { document.editorIngressRevision = document.draftRevision }
       if document.syncState != .diverged { document.syncState = .pending }
       try document.update(db)
 
       if var job {
-        // The immutable commit carries this exact body, so any mutable draft
-        // save it promoted is now redundant.
-        _ = try OutboxJob
+        _ =
+          try OutboxJob
           .filter(Column("documentLocalId") == documentLocalId)
           .filter(Column("kind") == OutboxKind.draftSave.rawValue)
           .deleteAll(db)
         try job.insert(db)
+        if var retainedDraftJob {
+          retainedDraftJob.id = nil
+          retainedDraftJob.baseHeadNodeId = node.nodeId
+          retainedDraftJob.attempts = 0
+          retainedDraftJob.lastError = nil
+          retainedDraftJob.nextAttemptAt = 0
+          try retainedDraftJob.insert(db)
+        }
       }
       try Self.trimMaterializationCache(db, documentLocalId: documentLocalId)
       return document
