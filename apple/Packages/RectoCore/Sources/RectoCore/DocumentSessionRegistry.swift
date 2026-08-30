@@ -20,6 +20,7 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
   private let sync: SyncEngine?
   private let origin: String
   private let countWords: @Sendable (String) -> Int
+  private let beforeFreezePass: (@Sendable () async -> Void)?
   private let beforeSessionResume: (@Sendable (String) async -> Void)?
   private var sessions: [String: DocumentSession] = [:]
   private var ingresses: [UUID: any EditorIngressCoordinating] = [:]
@@ -39,6 +40,10 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
     let storeGeneration: Int
   }
   private var activeFreeze: ActiveFreeze?
+  private var freezePassActive = false
+  private var freezePassWaiters: [CheckedContinuation<Void, Never>] = []
+  private var freezeWorkCount = 0
+  private var freezeWorkWaiters: [CheckedContinuation<Void, Never>] = []
   /// A reopen can refreeze a session while `resumeAll()` is suspended on another
   /// session. The generation makes that pass repeat before editors are exposed.
   private var sessionFreezeGeneration = 0
@@ -53,6 +58,7 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
     self.sync = sync
     self.origin = origin
     self.countWords = countWords
+    self.beforeFreezePass = nil
     self.beforeSessionResume = nil
   }
 
@@ -61,12 +67,14 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
     sync: SyncEngine?,
     origin: String,
     countWords: @escaping @Sendable (String) -> Int = RectoWordCount.plainText,
+    beforeFreezePass: (@Sendable () async -> Void)? = nil,
     beforeSessionResume: @escaping @Sendable (String) async -> Void
   ) {
     self.store = store
     self.sync = sync
     self.origin = origin
     self.countWords = countWords
+    self.beforeFreezePass = beforeFreezePass
     self.beforeSessionResume = beforeSessionResume
   }
 
@@ -92,7 +100,7 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
     do {
       if freezeNewSession {
         sessionFreezeGeneration += 1
-        await session.freeze()
+        await freezeSession(session)
       }
       try await session.open()
     } catch {
@@ -128,7 +136,7 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
     let id = UUID()
     ingresses[id] = ingress
     ingressDocumentIds[id] = documentLocalId
-    if isFrozen { await ingress.freezeAndDrain() }
+    if isFrozen { await freezeIngress(ingress) }
     return id
   }
 
@@ -159,14 +167,19 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
   /// Stop accepting edits and flush. Sign-out cannot honestly count unsynced
   /// work while an open document can still write into the gap.
   public func freezeAndFlushAll() async -> EditSessionFreezeToken {
+    await acquireFreezePass()
+    defer { releaseFreezePass() }
+    await beforeFreezePass?()
+    await waitForFreezeWork()
     // Registry-wide first and synchronously, so sessions opened during the
     // awaits below are born frozen too.
     let token = EditSessionFreezeToken()
     isFrozen = true
     activeFreeze = ActiveFreeze(token: token, storeGeneration: store.freezeLocalMutations())
-    for ingress in ingresses.values { await ingress.freezeAndDrain() }
-    for session in sessions.values { await session.freeze() }
+    for ingress in ingresses.values { await freezeIngress(ingress) }
+    for session in sessions.values { await freezeSession(session) }
     for session in sessions.values { try? await session.flush() }
+    await waitForFreezeWork()
     return token
   }
 
@@ -174,28 +187,33 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
   public func resumeAll(after freeze: EditSessionFreezeToken) async -> Bool {
     guard owns(freeze) else { return false }
     while true {
+      await waitForFreezeWork()
+      guard owns(freeze) else { return false }
       let generation = sessionFreezeGeneration
-      let snapshot = Array(sessions.values)
-      for session in snapshot {
+      let sessionSnapshot = Array(sessions.values)
+      let ingressSnapshot = ingresses
+      for session in sessionSnapshot {
         guard owns(freeze) else { return false }
         await beforeSessionResume?(session.documentLocalId)
         guard owns(freeze) else { return false }
         await session.resume()
         guard owns(freeze) else { return false }
       }
-      let resumed = Set(snapshot.map(ObjectIdentifier.init))
-      let current = Set(sessions.values.map(ObjectIdentifier.init))
-      if generation == sessionFreezeGeneration, resumed == current { break }
-    }
-
-    while true {
-      let snapshot = ingresses
-      for ingress in snapshot.values {
+      for ingress in ingressSnapshot.values {
         guard owns(freeze) else { return false }
         await ingress.resume()
         guard owns(freeze) else { return false }
       }
-      if Set(snapshot.keys) == Set(ingresses.keys) { break }
+      await waitForFreezeWork()
+      guard owns(freeze) else { return false }
+      let resumedSessions = Set(sessionSnapshot.map(ObjectIdentifier.init))
+      let currentSessions = Set(sessions.values.map(ObjectIdentifier.init))
+      if generation == sessionFreezeGeneration,
+        resumedSessions == currentSessions,
+        Set(ingressSnapshot.keys) == Set(ingresses.keys)
+      {
+        break
+      }
     }
 
     guard let activeFreeze, activeFreeze.token == freeze else { return false }
@@ -207,6 +225,48 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
 
   private func owns(_ freeze: EditSessionFreezeToken) -> Bool {
     isFrozen && activeFreeze?.token == freeze
+  }
+
+  private func acquireFreezePass() async {
+    guard freezePassActive else {
+      freezePassActive = true
+      return
+    }
+    await withCheckedContinuation { freezePassWaiters.append($0) }
+  }
+
+  private func releaseFreezePass() {
+    guard !freezePassWaiters.isEmpty else {
+      freezePassActive = false
+      return
+    }
+    freezePassWaiters.removeFirst().resume()
+  }
+
+  private func freezeSession(_ session: DocumentSession) async {
+    freezeWorkCount += 1
+    await session.freeze()
+    finishFreezeWork()
+  }
+
+  private func freezeIngress(_ ingress: any EditorIngressCoordinating) async {
+    freezeWorkCount += 1
+    await ingress.freezeAndDrain()
+    finishFreezeWork()
+  }
+
+  private func finishFreezeWork() {
+    freezeWorkCount -= 1
+    guard freezeWorkCount == 0 else { return }
+    let waiters = freezeWorkWaiters
+    freezeWorkWaiters.removeAll()
+    for waiter in waiters { waiter.resume() }
+  }
+
+  private func waitForFreezeWork() async {
+    while freezeWorkCount > 0 {
+      await withCheckedContinuation { freezeWorkWaiters.append($0) }
+    }
   }
 
   /// Empty and drop every session, after an identity change has purged the
@@ -230,6 +290,8 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
 
   /// Whether new sessions are currently born frozen.
   public var isFrozenForTesting: Bool { isFrozen }
+  var freezePassWaiterCountForTesting: Int { freezePassWaiters.count }
+  var freezeWorkCountForTesting: Int { freezeWorkCount }
 
   public var openDocumentIds: [String] { Array(sessions.keys) }
 }
