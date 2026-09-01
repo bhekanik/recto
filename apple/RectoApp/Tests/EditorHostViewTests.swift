@@ -531,6 +531,43 @@ struct EditorHostViewTests {
         #expect(!coordinator.isSelectionPanelVisible)
     }
 
+    @Test("stale coordinator teardown preserves replacement callbacks")
+    func staleCoordinatorTeardownPreservesReplacementCallbacks() async throws {
+        _ = NSApplication.shared
+        let storage = RectoTextStorage(documentId: "selection-replacement", markdown: "Select me")
+        let controller = RectoWritingController()
+        let host = NSHostingView(rootView: RectoEditorView(
+            storage: storage,
+            styler: MarkdownStyler(presentation: .rich, theme: .twilight),
+            writingController: controller
+        ))
+        let window = NSWindow(contentViewController: NSViewController())
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        await drainMainQueue()
+        let textView = try #require(storage.textView.nsTextView)
+        textView.setSelectedRange(NSRange(location: 0, length: 6))
+
+        let staleCoordinator = WritingControlsHost.Coordinator(controller: controller)
+        staleCoordinator.install()
+        let replacementCoordinator = WritingControlsHost.Coordinator(controller: controller)
+        replacementCoordinator.install()
+        defer {
+            replacementCoordinator.uninstall()
+            Self.retainedTransformWindows.append(window)
+        }
+
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
+        #expect(replacementCoordinator.isSelectionPanelVisible)
+
+        staleCoordinator.uninstall()
+        #expect(controller.onStateChange != nil)
+        #expect(controller.onActivateSlashEntry != nil)
+        controller.onStateChange?()
+        #expect(replacementCoordinator.isSelectionPanelVisible)
+    }
+
     @Test("selection chrome follows scrolling and owner window geometry")
     func selectionChromeGeometryLifecycle() async throws {
         _ = NSApplication.shared
@@ -889,6 +926,44 @@ struct EditorHostViewTests {
         controller.refreshSelectionGeometry()
 
         #expect(await waitUntil { !popoverWindow.isVisible })
+    }
+
+    @Test("owner window close dismisses destination input")
+    func ownerWindowCloseDismissesDestinationInput() async throws {
+        _ = NSApplication.shared
+        let storage = RectoTextStorage(documentId: "destination-close", markdown: "Recto")
+        let controller = RectoWritingController()
+        let host = NSHostingView(rootView: RectoEditorView(
+            storage: storage,
+            styler: MarkdownStyler(presentation: .rich, theme: .twilight),
+            writingController: controller
+        ))
+        let window = NSWindow(contentViewController: NSViewController())
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        await drainMainQueue()
+        let textView = try #require(storage.textView.nsTextView)
+        textView.setSelectedRange(NSRange(location: 0, length: 5))
+
+        let coordinator = WritingControlsHost.Coordinator(controller: controller)
+        coordinator.install()
+        defer {
+            coordinator.uninstall()
+            Self.retainedTransformWindows.append(window)
+        }
+        coordinator.showSelectionLinkInput()
+        await drainMainQueue()
+        #expect(coordinator.isInputPopoverShown)
+
+        let foreignWindow = NSWindow(contentViewController: NSViewController())
+        defer { Self.retainedTransformWindows.append(foreignWindow) }
+        NotificationCenter.default.post(name: NSWindow.willCloseNotification, object: foreignWindow)
+        #expect(coordinator.isInputPopoverShown)
+
+        window.close()
+        await drainMainQueue()
+        #expect(!coordinator.isInputPopoverShown)
     }
 
     @Test("selection chrome stays hidden while inactive and returns after activation")

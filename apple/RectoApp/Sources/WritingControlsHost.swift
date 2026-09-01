@@ -24,6 +24,7 @@ struct WritingControlsHost: NSViewRepresentable {
     @MainActor
     final class Coordinator {
         private static let selectionPanelSize = NSSize(width: 246, height: 38)
+        private static let callbackOwners = NSMapTable<RectoWritingController, Coordinator>.weakToWeakObjects()
 
         private weak var controller: RectoWritingController?
         private let slashPopover = NSPopover()
@@ -34,6 +35,7 @@ struct WritingControlsHost: NSViewRepresentable {
         private weak var observedScrollView: NSScrollView?
         private weak var observedClipView: NSClipView?
         private var windowObservers: [NSObjectProtocol] = []
+        private var inputOwnerCloseObserver: NSObjectProtocol?
         private var clipObserver: NSObjectProtocol?
         private var clipViewOriginallyPostedBoundsChanges = false
         private var applicationIsActive = true
@@ -50,14 +52,21 @@ struct WritingControlsHost: NSViewRepresentable {
         }
 
         func install() {
-            controller?.onStateChange = { [weak self] in self?.refresh() }
-            controller?.onActivateSlashEntry = { [weak self] entry in self?.selectSlash(entry) }
+            guard let controller else { return }
+            Self.callbackOwners.setObject(self, forKey: controller)
+            controller.onStateChange = { [weak self] in self?.refresh() }
+            controller.onActivateSlashEntry = { [weak self] entry in self?.selectSlash(entry) }
             refresh()
         }
 
         func uninstall() {
-            controller?.onStateChange = nil
-            controller?.onActivateSlashEntry = nil
+            if let controller {
+                if Self.callbackOwners.object(forKey: controller) === self {
+                    controller.onStateChange = nil
+                    controller.onActivateSlashEntry = nil
+                    Self.callbackOwners.removeObject(forKey: controller)
+                }
+            }
             removeLifecycleObservers()
             hideChrome()
             selectionPanel = nil
@@ -127,7 +136,7 @@ struct WritingControlsHost: NSViewRepresentable {
                         MainActor.assumeIsolated {
                             guard let self, self.observedWindow === window else { return }
                             self.ownerWindowIsKey = false
-                            self.hideChrome()
+                            self.hideChrome(immediatelyClosingInput: true)
                         }
                     },
                     center.addObserver(forName: NSWindow.didMoveNotification, object: window, queue: .main) { [weak self, weak window] _ in
@@ -268,9 +277,14 @@ struct WritingControlsHost: NSViewRepresentable {
             }
         }
 
-        private func hideChrome(preservingInput: Bool = false) {
+        private func hideChrome(
+            preservingInput: Bool = false,
+            immediatelyClosingInput: Bool = false
+        ) {
             slashPopover.close()
-            if !preservingInput { inputPopover.close() }
+            if !preservingInput {
+                closeInputPopover(immediately: immediatelyClosingInput)
+            }
             selectionPanel?.orderOut(nil)
         }
 
@@ -376,11 +390,27 @@ struct WritingControlsHost: NSViewRepresentable {
 
         private func showDestinationInput(kind: DestinationKind) {
             guard let textView = controllerTextView else { return }
+            if let inputOwnerCloseObserver {
+                NotificationCenter.default.removeObserver(inputOwnerCloseObserver)
+            }
+            inputOwnerCloseObserver = nil
+            if let window = textView.window {
+                inputOwnerCloseObserver = NotificationCenter.default.addObserver(
+                    forName: NSWindow.willCloseNotification,
+                    object: window,
+                    queue: .main
+                ) { [weak self, weak window] _ in
+                    MainActor.assumeIsolated {
+                        guard let self, window != nil else { return }
+                        self.closeInputPopover(immediately: true)
+                    }
+                }
+            }
             let title = kind == .slashImage ? "Add image" : "Add link"
             inputPopover.contentViewController = NSHostingController(rootView: DestinationInputView(
                 title: title,
                 asksForAltText: kind == .slashImage,
-                onCancel: { [weak inputPopover] in inputPopover?.close() },
+                onCancel: { [weak self] in self?.closeInputPopover() },
                 onSubmit: { [weak self] destination, alt in
                     guard let self else { return }
                     switch kind {
@@ -395,7 +425,7 @@ struct WritingControlsHost: NSViewRepresentable {
                             alt: alt
                         )
                     }
-                    self.inputPopover.close()
+                    self.closeInputPopover()
                 }
             ))
             inputPopover.contentSize = NSSize(width: 320, height: kind == .slashImage ? 132 : 96)
@@ -403,6 +433,18 @@ struct WritingControlsHost: NSViewRepresentable {
                 ?? controller?.slashMenuState?.anchorRect
                 ?? textView.bounds
             inputPopover.show(relativeTo: anchor, of: textView, preferredEdge: .maxY)
+        }
+
+        private func closeInputPopover(immediately: Bool = false) {
+            let animates = inputPopover.animates
+            // AppKit can keep an animated popover visible while its positioning window closes.
+            if immediately { inputPopover.animates = false }
+            inputPopover.close()
+            inputPopover.animates = animates
+            if let inputOwnerCloseObserver {
+                NotificationCenter.default.removeObserver(inputOwnerCloseObserver)
+            }
+            inputOwnerCloseObserver = nil
         }
 
         private enum DestinationKind { case selectionLink, slashLink, slashImage }
