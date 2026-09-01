@@ -614,16 +614,20 @@ struct EditorHostViewTests {
         NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
         #expect(coordinator.isSelectionPanelVisible)
         #expect(coordinator.selectionPanelParent === window)
+        let firstPanelNumber = try #require(coordinator.selectionPanelWindow).windowNumber
 
         NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: window)
         await drainMainQueue()
         #expect(!coordinator.isSelectionPanelVisible)
+        #expect(coordinator.selectionPanelWindow == nil)
+        #expect(!NSApp.windows.contains { $0.windowNumber == firstPanelNumber })
 
         NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
         #expect(coordinator.isSelectionPanelVisible)
 
         NotificationCenter.default.post(name: NSWindow.willCloseNotification, object: window)
         #expect(!coordinator.isSelectionPanelVisible)
+        #expect(coordinator.selectionPanelWindow == nil)
 
         coordinator.uninstall()
         #expect(coordinator.selectionPanelParent == nil)
@@ -1098,16 +1102,87 @@ struct EditorHostViewTests {
         }
         NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
         #expect(coordinator.isSelectionPanelVisible)
+        let activePanelNumber = try #require(coordinator.selectionPanelWindow).windowNumber
 
         NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: NSApp)
         coordinator.refresh()
         controller.refreshSelectionGeometry()
         await drainMainQueue()
         #expect(!coordinator.isSelectionPanelVisible)
+        #expect(coordinator.selectionPanelWindow == nil)
+        #expect(!NSApp.windows.contains { $0.windowNumber == activePanelNumber })
 
         NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
         NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
         #expect(coordinator.isSelectionPanelVisible)
+
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        controller.refreshSelectionGeometry()
+        #expect(coordinator.selectionPanelWindow == nil)
+    }
+
+    @Test("cloud selection teardown cannot poison the next local save")
+    func cloudSelectionTeardownBeforeLocalSave() async throws {
+        _ = NSApplication.shared
+        let cloudText = "# Cloud NFD cafe\u{301} 🧑🏽‍💻 東京 مرحبا\n"
+        let cloudStorage = RectoTextStorage(documentId: "cloud-before-local", markdown: "Before")
+        let cloudController = RectoWritingController()
+        let cloudHost = NSHostingView(rootView: RectoEditorView(
+            storage: cloudStorage,
+            styler: MarkdownStyler(presentation: .rich, theme: .twilight),
+            writingController: cloudController
+        ))
+        let cloudWindow = NSWindow(contentViewController: NSViewController())
+        cloudWindow.contentView = cloudHost
+        cloudWindow.makeKeyAndOrderFront(nil)
+        cloudHost.layoutSubtreeIfNeeded()
+        await drainMainQueue()
+        let cloudEditor = try #require(cloudStorage.textView.nsTextView)
+        cloudEditor.setAccessibilityValue(cloudText)
+        cloudEditor.setSelectedRange(NSRange(location: 2, length: 5))
+        let coordinator = WritingControlsHost.Coordinator(controller: cloudController)
+        coordinator.install()
+        defer {
+            coordinator.uninstall()
+            NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
+            Self.retainedTransformWindows.append(cloudWindow)
+        }
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: cloudWindow)
+        #expect(coordinator.isSelectionPanelVisible)
+        let panelNumber = try #require(coordinator.selectionPanelWindow).windowNumber
+
+        NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: NSApp)
+        await drainMainQueue()
+        #expect(coordinator.selectionPanelWindow == nil)
+        #expect(!NSApp.windows.contains { $0.windowNumber == panelNumber })
+
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "recto-cloud-local-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fileURL = directory.appending(path: "local.md")
+        let original = "# Local before\n"
+        try Data(original.utf8).write(to: fileURL)
+        let localModel = ExternalDocumentModel(markdown: try String(contentsOf: fileURL, encoding: .utf8))
+        let localStorage = RectoTextStorage(documentId: "local-after-cloud", markdown: original)
+        let localHost = NSHostingView(rootView: ExternalDocumentHost(model: localModel, storage: localStorage))
+        let localWindow = NSWindow(contentViewController: NSViewController())
+        localWindow.contentView = localHost
+        localWindow.makeKeyAndOrderFront(nil)
+        localHost.layoutSubtreeIfNeeded()
+        await drainMainQueue()
+        defer { Self.retainedTransformWindows.append(localWindow) }
+        let localEditor = try #require(localStorage.textView.nsTextView)
+        let expected = "# Local NFD cafe\u{301} 🚀 東京 مرحبا\n"
+        localEditor.setAccessibilityValue(expected)
+        #expect((localModel.document.markdown as NSString).isEqual(to: expected))
+
+        try localModel.document.serializedFileWrapper().write(
+            to: fileURL,
+            options: .atomic,
+            originalContentsURL: fileURL
+        )
+        #expect(try Data(contentsOf: fileURL) == Data(expected.utf8))
     }
 
     private func drainMainQueue() async {
