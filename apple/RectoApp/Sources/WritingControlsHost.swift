@@ -23,15 +23,22 @@ struct WritingControlsHost: NSViewRepresentable {
 
     @MainActor
     final class Coordinator {
+        private static let selectionPanelSize = NSSize(width: 246, height: 38)
+
         private weak var controller: RectoWritingController?
         private let slashPopover = NSPopover()
         private let inputPopover = NSPopover()
         private var selectionPanel: NSPanel?
+        private weak var observedTextView: NSTextView?
         private weak var observedWindow: NSWindow?
+        private weak var observedClipView: NSClipView?
         private var windowObservers: [NSObjectProtocol] = []
+        private var clipObserver: NSObjectProtocol?
+        private var clipViewOriginallyPostedBoundsChanges = false
         private var ownerWindowIsKey = false
 
         var isSelectionPanelVisible: Bool { selectionPanel?.isVisible == true }
+        var selectionPanelFrame: NSRect? { selectionPanel?.frame }
         var isInputPopoverShown: Bool { inputPopover.isShown }
 
         init(controller: RectoWritingController) {
@@ -49,15 +56,15 @@ struct WritingControlsHost: NSViewRepresentable {
         func uninstall() {
             controller?.onStateChange = nil
             controller?.onActivateSlashEntry = nil
-            removeWindowObservers()
+            removeLifecycleObservers()
             hideChrome()
             selectionPanel = nil
         }
 
         func refresh() {
             guard let controller else { return }
-            let window = controllerTextView?.window
-            observe(window)
+            let textView = controllerTextView
+            observe(textView)
             guard ownerWindowIsKey || inputPopoverWindowIsKey else {
                 hideChrome()
                 return
@@ -70,39 +77,83 @@ struct WritingControlsHost: NSViewRepresentable {
             updateSelectionPanel(controller)
         }
 
-        private func observe(_ window: NSWindow?) {
-            guard observedWindow !== window else { return }
-            removeWindowObservers()
+        private func observe(_ textView: NSTextView?) {
+            let window = textView?.window
+            let clipView = textView?.enclosingScrollView?.contentView
+            guard observedTextView !== textView
+                    || observedWindow !== window
+                    || observedClipView !== clipView else { return }
+            removeLifecycleObservers()
+            observedTextView = textView
             observedWindow = window
+            observedClipView = clipView
             ownerWindowIsKey = window?.isKeyWindow == true
-            guard let window else { return }
             let center = NotificationCenter.default
-            windowObservers = [
-                center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main) { [weak self] _ in
+            if let window {
+                windowObservers = [
+                    center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main) { [weak self, weak window] _ in
+                        MainActor.assumeIsolated {
+                            guard let self, self.observedWindow === window else { return }
+                            self.ownerWindowIsKey = true
+                            self.refresh()
+                        }
+                    },
+                    center.addObserver(forName: NSWindow.didResignKeyNotification, object: window, queue: .main) { [weak self, weak window] _ in
+                        MainActor.assumeIsolated {
+                            guard let self, let window, self.observedWindow === window else { return }
+                            self.ownerWindowIsKey = false
+                            self.ownerWindowDidResignKey(window)
+                        }
+                    },
+                    center.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self, weak window] _ in
+                        MainActor.assumeIsolated {
+                            guard let self, self.observedWindow === window else { return }
+                            self.ownerWindowIsKey = false
+                            self.hideChrome()
+                        }
+                    },
+                    center.addObserver(forName: NSWindow.didMoveNotification, object: window, queue: .main) { [weak self, weak window] _ in
+                        MainActor.assumeIsolated {
+                            guard let self, let window else { return }
+                            self.scheduleGeometryRefresh(for: window, recomputingSelection: false)
+                        }
+                    },
+                    center.addObserver(forName: NSWindow.didResizeNotification, object: window, queue: .main) { [weak self, weak window] _ in
+                        MainActor.assumeIsolated {
+                            guard let self, let window else { return }
+                            self.scheduleGeometryRefresh(for: window, recomputingSelection: true)
+                        }
+                    },
+                ]
+            }
+            if let clipView {
+                clipViewOriginallyPostedBoundsChanges = clipView.postsBoundsChangedNotifications
+                clipView.postsBoundsChangedNotifications = true
+                clipObserver = center.addObserver(
+                    forName: NSView.boundsDidChangeNotification,
+                    object: clipView,
+                    queue: .main
+                ) { [weak self, weak clipView] _ in
                     MainActor.assumeIsolated {
-                        self?.ownerWindowIsKey = true
-                        self?.refresh()
+                        guard let self, let clipView else { return }
+                        self.scheduleGeometryRefresh(for: clipView)
                     }
-                },
-                center.addObserver(forName: NSWindow.didResignKeyNotification, object: window, queue: .main) { [weak self] _ in
-                    MainActor.assumeIsolated {
-                        self?.ownerWindowIsKey = false
-                        self?.ownerWindowDidResignKey()
-                    }
-                },
-                center.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
-                    MainActor.assumeIsolated {
-                        self?.ownerWindowIsKey = false
-                        self?.hideChrome()
-                    }
-                },
-            ]
+                }
+            }
         }
 
-        private func removeWindowObservers() {
+        private func removeLifecycleObservers() {
             for observer in windowObservers { NotificationCenter.default.removeObserver(observer) }
             windowObservers.removeAll()
+            if let clipObserver { NotificationCenter.default.removeObserver(clipObserver) }
+            clipObserver = nil
+            if let observedClipView {
+                observedClipView.postsBoundsChangedNotifications = clipViewOriginallyPostedBoundsChanges
+            }
+            observedTextView = nil
             observedWindow = nil
+            observedClipView = nil
+            clipViewOriginallyPostedBoundsChanges = false
             ownerWindowIsKey = false
         }
 
@@ -110,9 +161,32 @@ struct WritingControlsHost: NSViewRepresentable {
             inputPopover.contentViewController?.view.window?.isKeyWindow == true
         }
 
-        private func ownerWindowDidResignKey() {
+        // AppKit posts these notifications before text-to-screen conversion settles.
+        private func scheduleGeometryRefresh(for window: NSWindow, recomputingSelection: Bool) {
+            DispatchQueue.main.async { [weak self, weak window] in
+                DispatchQueue.main.async { [weak self, weak window] in
+                    guard let self, let window, self.observedWindow === window else { return }
+                    if recomputingSelection {
+                        self.controller?.refreshSelectionGeometry()
+                    } else {
+                        self.refresh()
+                    }
+                }
+            }
+        }
+
+        private func scheduleGeometryRefresh(for clipView: NSClipView) {
+            DispatchQueue.main.async { [weak self, weak clipView] in
+                DispatchQueue.main.async { [weak self, weak clipView] in
+                    guard let self, let clipView, self.observedClipView === clipView else { return }
+                    self.refresh()
+                }
+            }
+        }
+
+        private func ownerWindowDidResignKey(_ window: NSWindow) {
             DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
+                guard let self, self.observedWindow === window else { return }
                 if self.inputPopoverWindowIsKey {
                     self.hideChrome(preservingInput: true)
                 } else {
@@ -161,9 +235,14 @@ struct WritingControlsHost: NSViewRepresentable {
                 selectionPanel?.orderOut(nil)
                 return
             }
+            let visibleAnchor = anchor.intersection(textView.visibleRect)
+            guard !visibleAnchor.isNull, !visibleAnchor.isEmpty else {
+                selectionPanel?.orderOut(nil)
+                return
+            }
 
             let panel = selectionPanel ?? makeSelectionPanel()
-            panel.contentView = NSHostingView(rootView: SelectionFormatBar(
+            let contentView = NSHostingView(rootView: SelectionFormatBar(
                 active: state.activeInlineCommands,
                 onCommand: { [weak self] command in
                     guard let self else { return }
@@ -174,7 +253,10 @@ struct WritingControlsHost: NSViewRepresentable {
                     }
                 }
             ))
-            let windowRect = textView.convert(anchor, to: nil)
+            panel.contentView = contentView
+            contentView.layoutSubtreeIfNeeded()
+            panel.setContentSize(contentView.fittingSize)
+            let windowRect = textView.convert(visibleAnchor, to: nil)
             let screenRect = window.convertToScreen(windowRect)
             let size = panel.frame.size
             panel.setFrameOrigin(NSPoint(
@@ -190,7 +272,7 @@ struct WritingControlsHost: NSViewRepresentable {
 
         private func makeSelectionPanel() -> NSPanel {
             let panel = NSPanel(
-                contentRect: NSRect(x: 0, y: 0, width: 246, height: 38),
+                contentRect: NSRect(origin: .zero, size: Self.selectionPanelSize),
                 styleMask: [.borderless, .nonactivatingPanel],
                 backing: .buffered,
                 defer: false

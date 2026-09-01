@@ -531,6 +531,136 @@ struct EditorHostViewTests {
         #expect(!coordinator.isSelectionPanelVisible)
     }
 
+    @Test("selection chrome follows scrolling and owner window geometry")
+    func selectionChromeGeometryLifecycle() async throws {
+        _ = NSApplication.shared
+        let lines = (0..<60).map { "line \($0) target" }.joined(separator: "\n")
+        let storage = RectoTextStorage(documentId: "selection-geometry", markdown: lines)
+        let controller = RectoWritingController()
+        let host = NSHostingView(rootView: RectoEditorView(
+            storage: storage,
+            styler: MarkdownStyler(presentation: .rich, theme: .twilight),
+            writingController: controller
+        ))
+        let window = NSWindow(
+            contentRect: NSRect(x: 120, y: 160, width: 620, height: 320),
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        await drainMainQueue()
+        let textView = try #require(storage.textView.nsTextView)
+        let selection = (lines as NSString).range(of: "line 3 target")
+        textView.setSelectedRange(selection)
+
+        let coordinator = WritingControlsHost.Coordinator(controller: controller)
+        coordinator.install()
+        defer {
+            coordinator.uninstall()
+            window.close()
+        }
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
+        coordinator.refresh()
+        let initialFrame = try #require(coordinator.selectionPanelFrame)
+        expectSelectionPanelPosition(coordinator, controller: controller)
+
+        window.setFrameOrigin(NSPoint(x: window.frame.origin.x + 70, y: window.frame.origin.y + 45))
+        #expect(await waitUntil {
+            selectionPanelMatchesPosition(coordinator, controller: controller)
+        })
+        let movedFrame = try #require(coordinator.selectionPanelFrame)
+        #expect(movedFrame != initialFrame)
+
+        window.setContentSize(NSSize(width: 440, height: 260))
+        #expect(await waitUntil {
+            selectionPanelMatchesPosition(coordinator, controller: controller)
+        })
+        #expect(coordinator.isSelectionPanelVisible)
+
+        let clipView = try #require(textView.enclosingScrollView?.contentView)
+        let frameBeforeScroll = try #require(coordinator.selectionPanelFrame)
+        clipView.scroll(to: NSPoint(x: clipView.bounds.origin.x, y: clipView.bounds.origin.y + 12))
+        textView.enclosingScrollView?.reflectScrolledClipView(clipView)
+        #expect(await waitUntil {
+            guard let frameAfterScroll = coordinator.selectionPanelFrame else { return false }
+            return abs(frameAfterScroll.origin.y - frameBeforeScroll.origin.y) > 1
+        })
+
+        clipView.scroll(to: NSPoint(
+            x: clipView.bounds.origin.x,
+            y: max(0, textView.bounds.maxY - clipView.bounds.height)
+        ))
+        textView.enclosingScrollView?.reflectScrolledClipView(clipView)
+        #expect(await waitUntil { !coordinator.isSelectionPanelVisible })
+    }
+
+    @Test("old view lifecycle notifications cannot move successor chrome")
+    func staleSelectionChromeNotificationsAreIgnored() async throws {
+        _ = NSApplication.shared
+        let controller = RectoWritingController()
+        let firstStorage = RectoTextStorage(documentId: "selection-old", markdown: "old selection")
+        let firstHost = NSHostingView(rootView: RectoEditorView(
+            storage: firstStorage,
+            styler: MarkdownStyler(presentation: .rich, theme: .twilight),
+            writingController: controller
+        ))
+        let firstWindow = NSWindow(contentViewController: NSViewController())
+        firstWindow.contentView = firstHost
+        firstWindow.makeKeyAndOrderFront(nil)
+        firstHost.layoutSubtreeIfNeeded()
+        await drainMainQueue()
+        let firstTextView = try #require(firstStorage.textView.nsTextView)
+        firstTextView.setSelectedRange(NSRange(location: 0, length: 3))
+        let firstClipView = try #require(firstTextView.enclosingScrollView?.contentView)
+        let firstClipViewNotificationSetting = firstClipView.postsBoundsChangedNotifications
+
+        let coordinator = WritingControlsHost.Coordinator(controller: controller)
+        coordinator.install()
+        defer {
+            coordinator.uninstall()
+            firstWindow.close()
+        }
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: firstWindow)
+        #expect(coordinator.isSelectionPanelVisible)
+        #expect(firstClipView.postsBoundsChangedNotifications)
+        NotificationCenter.default.post(name: NSWindow.didMoveNotification, object: firstWindow)
+
+        let secondStorage = RectoTextStorage(documentId: "selection-new", markdown: "new selection")
+        let secondHost = NSHostingView(rootView: RectoEditorView(
+            storage: secondStorage,
+            styler: MarkdownStyler(presentation: .rich, theme: .twilight),
+            writingController: controller
+        ))
+        let secondWindow = NSWindow(contentViewController: NSViewController())
+        secondWindow.contentView = secondHost
+        secondWindow.makeKeyAndOrderFront(nil)
+        defer { secondWindow.close() }
+        secondHost.layoutSubtreeIfNeeded()
+        await drainMainQueue()
+        let secondTextView = try #require(secondStorage.textView.nsTextView)
+        secondTextView.setSelectedRange(NSRange(location: 0, length: 3))
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: secondWindow)
+        coordinator.refresh()
+        #expect(coordinator.isSelectionPanelVisible)
+        #expect(firstClipView.postsBoundsChangedNotifications == firstClipViewNotificationSetting)
+        let successorFrame = try #require(coordinator.selectionPanelFrame)
+
+        NotificationCenter.default.post(name: NSWindow.willCloseNotification, object: firstWindow)
+        NotificationCenter.default.post(
+            name: NSView.boundsDidChangeNotification,
+            object: firstTextView.enclosingScrollView?.contentView
+        )
+        await drainMainQueue()
+        await drainMainQueue()
+
+        #expect(coordinator.isSelectionPanelVisible)
+        #expect(coordinator.selectionPanelFrame == successorFrame)
+        expectSelectionPanelPosition(coordinator, controller: controller)
+    }
+
     @Test("destination input survives key focus and submits the link")
     func destinationInputSurvivesKeyFocus() async throws {
         _ = NSApplication.shared
@@ -584,6 +714,50 @@ struct EditorHostViewTests {
                 continuation.resume()
             }
         }
+    }
+
+    private func waitUntil(_ condition: () -> Bool) async -> Bool {
+        for _ in 0..<20 {
+            if condition() { return true }
+            await drainMainQueue()
+        }
+        return condition()
+    }
+
+    private func selectionPanelMatchesPosition(
+        _ coordinator: WritingControlsHost.Coordinator,
+        controller: RectoWritingController
+    ) -> Bool {
+        guard let panelFrame = coordinator.selectionPanelFrame,
+              let anchor = controller.selectionState.anchorRect,
+              let textView = controller.attachedTextView,
+              let window = textView.window else { return false }
+        let visibleAnchor = anchor.intersection(textView.visibleRect)
+        guard !visibleAnchor.isNull, !visibleAnchor.isEmpty else { return false }
+        let screenRect = window.convertToScreen(textView.convert(visibleAnchor, to: nil))
+        return abs(panelFrame.origin.x - (screenRect.midX - panelFrame.width / 2)) < 1
+            && abs(panelFrame.origin.y - (screenRect.maxY + 8)) < 1
+    }
+
+    private func expectSelectionPanelPosition(
+        _ coordinator: WritingControlsHost.Coordinator,
+        controller: RectoWritingController
+    ) {
+        guard let panelFrame = coordinator.selectionPanelFrame,
+              let anchor = controller.selectionState.anchorRect,
+              let textView = controller.attachedTextView,
+              let window = textView.window else {
+            Issue.record("selection panel geometry is unavailable")
+            return
+        }
+        let visibleAnchor = anchor.intersection(textView.visibleRect)
+        guard !visibleAnchor.isNull, !visibleAnchor.isEmpty else {
+            Issue.record("selection anchor is offscreen")
+            return
+        }
+        let screenRect = window.convertToScreen(textView.convert(visibleAnchor, to: nil))
+        #expect(abs(panelFrame.origin.x - (screenRect.midX - panelFrame.width / 2)) < 1)
+        #expect(abs(panelFrame.origin.y - (screenRect.maxY + 8)) < 1)
     }
 
 }

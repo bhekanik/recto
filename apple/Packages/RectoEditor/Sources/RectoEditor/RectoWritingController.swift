@@ -94,6 +94,10 @@ public final class RectoWritingController {
         onStateChange?()
     }
 
+    public func refreshSelectionGeometry() {
+        refreshState()
+    }
+
     @discardableResult
     public func selectSlashEntry(
         id: String? = nil,

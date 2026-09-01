@@ -238,8 +238,10 @@ enum RectoCommandTransformer {
 
         let selected = selection.length == 0 ? placeholder : markdown.substring(with: selection)
         let selectedText = selected as NSString
-        guard selectedText.range(of: "\n").location == NSNotFound,
-              selectedText.range(of: "\r").location == NSNotFound else { return nil }
+        guard let marker = delimiter.first,
+              selectedText.range(of: "\n").location == NSNotFound,
+              selectedText.range(of: "\r").location == NSNotFound,
+              selectedText.range(of: String(marker)).location == NSNotFound else { return nil }
         var contentStart = 0
         while contentStart < selectedText.length, isWhitespace(selectedText.character(at: contentStart)) {
             contentStart += 1
@@ -411,7 +413,7 @@ enum RectoCommandTransformer {
         markdown: NSString,
         selection: NSRange,
         command: LineCommand
-    ) -> RectoCommandEdit {
+    ) -> RectoCommandEdit? {
         let selectedCharacters = selection.length > 0
             ? NSRange(location: selection.location, length: selection.length - 1)
             : selection
@@ -435,6 +437,7 @@ enum RectoCommandTransformer {
                 parsePrefix(in: "")
             ))
         }
+        guard lines.allSatisfy({ hasSupportedIndentation($0.contents as NSString) }) else { return nil }
 
         let nonEmptyLines = lines.filter { !$0.contents.isEmpty }
         let removesQuote = if case .blockquote = command {
@@ -565,6 +568,12 @@ enum RectoCommandTransformer {
         var index = start
         while index < line.length, isWhitespace(line.character(at: index)) { index += 1 }
         return index
+    }
+
+    private static func hasSupportedIndentation(_ line: NSString) -> Bool {
+        var index = 0
+        while index < line.length, line.character(at: index) == 32 { index += 1 }
+        return index <= 3 && (index == line.length || line.character(at: index) != 9)
     }
 
     private static func isWhitespace(_ character: unichar) -> Bool {

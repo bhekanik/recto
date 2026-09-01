@@ -64,6 +64,17 @@ struct WritingControlsTests {
                 selection: NSRange(location: 0, length: (unsupported as NSString).length)
             ) == nil)
         }
+        for item in [
+            (RectoEditorCommand.bold, "a**b"),
+            (.italic, "a_b"),
+            (.strikethrough, "a~~b"),
+        ] {
+            #expect(RectoCommandTransformer.edit(
+                command: item.0,
+                markdown: item.1,
+                selection: NSRange(location: 0, length: (item.1 as NSString).length)
+            ) == nil)
+        }
     }
 
     @Test("block commands replace an existing block prefix")
@@ -117,6 +128,61 @@ struct WritingControlsTests {
         ))
         #expect(divider.patch.replacement == "---\r")
         #expect(divider.patch.range == NSRange(location: 0, length: 6))
+
+        let lineCommands: [(RectoEditorCommand, String)] = [
+            (.heading(level: 1), "# "),
+            (.bulletList, "- "),
+            (.orderedList, "1. "),
+            (.taskList, "- [ ] "),
+            (.blockquote, "> "),
+        ]
+        for (command, prefix) in lineCommands {
+            for indentation in 0...3 {
+                let markdown = String(repeating: " ", count: indentation) + "keep me"
+                let edit = try #require(RectoCommandTransformer.edit(
+                    command: command,
+                    markdown: markdown,
+                    selection: NSRange(location: (markdown as NSString).length, length: 0)
+                ))
+                #expect(edit.patch.replacement == String(repeating: " ", count: indentation) + prefix + "keep me")
+            }
+            for markdown in ["    keep me", "\tkeep me", " \tkeep me"] {
+                #expect(RectoCommandTransformer.edit(
+                    command: command,
+                    markdown: markdown,
+                    selection: NSRange(location: (markdown as NSString).length, length: 0)
+                ) == nil)
+            }
+        }
+    }
+
+    @Test("mounted line commands refuse indented code")
+    func mountedLineCommandsRefuseIndentedCode() throws {
+        for (commandIndex, command) in [
+            RectoEditorCommand.heading(level: 1), .bulletList, .orderedList, .taskList, .blockquote,
+        ].enumerated() {
+            for (indentIndex, markdown) in ["    keep me", "\tkeep me"].enumerated() {
+                let storage = RectoTextStorage(
+                    documentId: "line-indent-\(commandIndex)-\(indentIndex)",
+                    markdown: markdown
+                )
+                let controller = RectoWritingController()
+                let harness = WindowHarness(
+                    RectoEditorView(
+                        storage: storage,
+                        styler: MarkdownStyler(presentation: .rich, theme: .twilight),
+                        writingController: controller
+                    )
+                )
+                let textView = try #require(harness.editorTextView)
+                textView.setSelectedRange(NSRange(location: (markdown as NSString).length, length: 0))
+
+                #expect(!controller.perform(command))
+                #expect(textView.string == markdown)
+                #expect(storage.markdown == markdown)
+                harness.tearDown()
+            }
+        }
     }
 
     @Test("a heading keeps a collapsed caret at its content")
