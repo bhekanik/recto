@@ -28,11 +28,22 @@ export const EMPTY_META: DocumentMeta = {
 	preview: "",
 };
 
-function toStringField(value: unknown): string {
+function toStringField(
+	value: unknown,
+	activeArrays = new WeakSet<unknown[]>(),
+): string {
 	if (typeof value === "string") return value;
 	if (value == null) return "";
 	if (value instanceof Date) return value.toISOString();
-	if (Array.isArray(value)) return value.map(toStringField).join(",");
+	if (Array.isArray(value)) {
+		if (activeArrays.has(value)) return "";
+		activeArrays.add(value);
+		try {
+			return value.map((item) => toStringField(item, activeArrays)).join(",");
+		} finally {
+			activeArrays.delete(value);
+		}
+	}
 	return String(value);
 }
 

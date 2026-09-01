@@ -19,13 +19,9 @@ let package = Package(
     products: [
         .library(name: "RectoCoreJS", targets: ["RectoCoreJS"])
     ],
-    dependencies: [
-        .package(url: "https://github.com/jpsim/Yams.git", from: "6.2.2")
-    ],
     targets: [
         .target(
             name: "RectoCoreJS",
-            dependencies: ["Yams"],
             resources: [.copy("JS")]
         ),
         .testTarget(

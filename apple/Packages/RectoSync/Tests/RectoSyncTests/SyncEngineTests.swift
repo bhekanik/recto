@@ -132,8 +132,9 @@ struct SyncEngineTests {
     #expect(renamed.titleMode == .manual)
 
     try await transport.rename(documentId: seeded.documentId, title: "authoritative remote")
+    let pendingJobs = try await store.pendingJobs(documentLocalId: local.localId)
     let pendingRename = try #require(
-      try await store.pendingJobs(documentLocalId: local.localId).first { $0.kind == .rename })
+      pendingJobs.first { $0.kind == .rename })
     try await store.completeJob(id: try #require(pendingRename.id))
     try await engine.mirrorLibrary(await transport.summaries())
 

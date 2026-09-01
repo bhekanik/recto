@@ -97,6 +97,11 @@
     { "name": "array date uses UTC ISO string", "markdown": "---\ntitle: [2001-12-15]\n---", "title": "2001-12-15T00:00:00.000Z" },
     { "name": "array null and date use stable coercion", "markdown": "---\ntitle: [null, 2001-12-15]\n---", "title": ",2001-12-15T00:00:00.000Z" },
     { "name": "nested array date uses stable coercion", "markdown": "---\ntitle: [[2001-12-15]]\n---", "title": "2001-12-15T00:00:00.000Z" },
-    { "name": "array date and map use stable coercion", "markdown": "---\ntitle: [2001-12-15, {x: 1}]\n---", "title": "2001-12-15T00:00:00.000Z,[object Object]" }
+    { "name": "array date and map use stable coercion", "markdown": "---\ntitle: [2001-12-15, {x: 1}]\n---", "title": "2001-12-15T00:00:00.000Z,[object Object]" },
+    { "name": "self-referencing array has no usable title", "markdown": "---\ntitle: &a [*a]\n---\nBody", "title": "Body" },
+    { "name": "nested self-referencing array uses an empty field", "markdown": "---\ntitle: [one, &a [*a]]\n---\nBody", "title": "one," },
+    { "name": "reused array alias is stringified each time", "markdown": "---\ntitle: [&a [one], *a]\n---", "title": "one,one" },
+    { "name": "mutually recursive array and mapping do not recurse", "markdown": "---\ntitle: &a [{parent: *a}]\n---", "title": "[object Object]" },
+    { "name": "self-referencing mapping does not recurse", "markdown": "---\ntitle: &a {self: *a}\n---", "title": "[object Object]" }
   ]
 }

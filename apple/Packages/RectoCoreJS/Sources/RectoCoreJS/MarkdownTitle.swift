@@ -1,28 +1,9 @@
 import Foundation
 import JavaScriptCore
-import Yams
 
 /// Title derivation for local editor writes.
 public enum MarkdownTitle {
-    private static let javascriptScalar = JavaScriptScalarConverter()
-    // Yams accepts YAML 1.1 octals and numeric separators. Recto's web parser
-    // uses these narrower js-yaml 4.2 bool, int, and float resolvers.
-    private static let yamlResolver: Resolver = {
-        do {
-            return try Resolver.default
-                .replacing(.bool, with: "^(?:true|True|TRUE|false|False|FALSE)$")
-                .replacing(
-                    .int,
-                    with: "^(?:[-+]?0b[01]+|[-+]?0o[0-7]+|[-+]?0x[0-9a-fA-F]+|[-+]?[0-9]+)$"
-                )
-                .replacing(
-                    .float,
-                    with: "^(?:[-+]?[0-9]+(?:\\.[0-9]*)?(?:[eE][-+]?[0-9]+)?|\\.[0-9]+(?:[eE][-+]?[0-9]+)?|[-+]?\\.(?:inf|Inf|INF)|\\.(?:nan|NaN|NAN))$"
-                )
-        } catch {
-            preconditionFailure("static YAML resolver patterns must compile: \(error)")
-        }
-    }()
+    private static let yamlTitleParser = JavaScriptYamlTitleParser()
 
     public static func derive(_ markdown: String) -> String {
         let frontmatter = leadingFrontmatter(markdown)
@@ -90,17 +71,7 @@ public enum MarkdownTitle {
     }
 
     private static func yamlTitle(_ yaml: String) -> String? {
-        var scalars = Constructor.defaultScalarMap
-        // Yams constructs fixed-width integers and accepts floating-point
-        // overflow. js-yaml constructs both through a finite Number check.
-        scalars[.int] = { scalar in javascriptScalar.number(scalar.string) }
-        scalars[.float] = { scalar in javascriptScalar.number(scalar.string) }
-        scalars[.timestamp] = { scalar in javascriptScalar.date(scalar.string) }
-        let constructor = Constructor(scalars)
-        guard let mapping = try? load(yaml: yaml, yamlResolver, constructor) as? [String: Any],
-              let value = mapping["title"], !(value is NSNull)
-        else { return nil }
-        return trimJSWhitespace(javascriptString(value))
+        yamlTitleParser.title(in: yaml).map(trimJSWhitespace)
     }
 
     private static func trimJSWhitespaceStart(_ value: String) -> String {
@@ -108,84 +79,55 @@ public enum MarkdownTitle {
         return String(value.unicodeScalars[start...])
     }
 
-    private static func javascriptString(_ value: Any) -> String {
-        switch value {
-        case let value as String:
-            value
-        case let value as Bool:
-            value ? "true" : "false"
-        case let value as Int:
-            javascriptScalar.string(Double(value))
-        case let value as Double:
-            javascriptScalar.string(value)
-        case let value as [Any]:
-            value.map { $0 is NSNull ? "" : javascriptString($0) }.joined(separator: ",")
-        case _ as [AnyHashable: Any]:
-            "[object Object]"
-        default:
-            String(describing: value)
-        }
-    }
-
 }
 
 /// `JSContext` is not Sendable; every access is serialized by `lock`.
-private final class JavaScriptScalarConverter: @unchecked Sendable {
+private final class JavaScriptYamlTitleParser: @unchecked Sendable {
     private let lock = NSLock()
-    private let context: JSContext
-    private let parseNumber: JSValue
-    private let stringifyTimestamp: JSValue
+    private let parseTitle: JSValue
 
     init() {
-        guard let context = JSContext(),
-              let parseNumber = context.evaluateScript(
-                "value => { const negative = value[0] === '-'; const unsigned = '+-'.includes(value[0]) ? value.slice(1) : value; return (negative ? -1 : 1) * Number(unsigned); }"),
-              let stringifyTimestamp = context.evaluateScript(
-                #"""
-                value => {
-                  const date = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-                  const match = date ?? /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[Tt]|[ \t]+)(\d{1,2}):(\d{2}):(\d{2})(?:\.(\d*))?(?:[ \t]*(Z|([-+])(\d{1,2})(?::(\d{2}))?))?$/.exec(value);
-                  if (!match[4]) return new Date(Date.UTC(+match[1], +match[2] - 1, +match[3])).toISOString();
-                  const fraction = (match[7] ?? "0").slice(0, 3).padEnd(3, "0");
-                  let time = Date.UTC(+match[1], +match[2] - 1, +match[3], +match[4], +match[5], +match[6], +fraction);
-                  if (match[9]) {
-                    let delta = (+match[10] * 60 + +(match[11] ?? 0)) * 60000;
-                    if (match[9] === "-") delta = -delta;
-                    time -= delta;
-                  }
-                  return new Date(time).toISOString();
-                }
-                """#)
+        guard let url = Bundle.module.url(
+            forResource: "js-yaml.min", withExtension: "js", subdirectory: "JS"),
+            let source = try? String(contentsOf: url, encoding: .utf8),
+            let context = JSContext()
         else {
-            preconditionFailure("JavaScriptCore must provide a context for Number formatting")
+            preconditionFailure("the bundled js-yaml parser must be readable")
         }
-        self.context = context
-        self.parseNumber = parseNumber
-        self.stringifyTimestamp = stringifyTimestamp
+        context.evaluateScript(source, withSourceURL: url)
+        guard context.exception == nil,
+              let parseTitle = context.evaluateScript(
+                #"""
+                yaml => {
+                  try {
+                    const document = jsyaml.load(yaml);
+                    if (!document || typeof document !== "object" || Array.isArray(document)) return null;
+                    const activeArrays = new WeakSet();
+                    const stringify = value => {
+                      if (typeof value === "string") return value;
+                      if (value == null) return "";
+                      if (value instanceof Date) return value.toISOString();
+                      if (!Array.isArray(value)) return String(value);
+                      if (activeArrays.has(value)) return "";
+                      activeArrays.add(value);
+                      try { return value.map(stringify).join(","); }
+                      finally { activeArrays.delete(value); }
+                    };
+                    return stringify(document.title);
+                  } catch { return null; }
+                }
+                """#), context.exception == nil
+        else {
+            preconditionFailure("the bundled js-yaml parser must expose jsyaml.load")
+        }
+        self.parseTitle = parseTitle
     }
 
-    func number(_ yamlNumber: String) -> Double? {
+    func title(in yaml: String) -> String? {
         lock.withLock {
-            switch yamlNumber.lowercased() {
-            case ".inf", "+.inf": return .infinity
-            case "-.inf": return -.infinity
-            case ".nan": return .nan
-            default:
-                let value = parseNumber.call(withArguments: [yamlNumber]).toDouble()
-                return value.isFinite ? value : nil
-            }
-        }
-    }
-
-    func string(_ value: Double) -> String {
-        lock.withLock {
-            JSValue(double: value, in: context).toString()
-        }
-    }
-
-    func date(_ yamlTimestamp: String) -> String {
-        lock.withLock {
-            stringifyTimestamp.call(withArguments: [yamlTimestamp]).toString()
+            guard let value = parseTitle.call(withArguments: [yaml]), !value.isNull,
+                  !value.isUndefined else { return nil }
+            return value.toString()
         }
     }
 }

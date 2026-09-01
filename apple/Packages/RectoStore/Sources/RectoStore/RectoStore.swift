@@ -596,6 +596,50 @@ public actor RectoStore {
     }
   }
 
+  /// Finish title work that was deliberately kept off AppKit's synchronous
+  /// callback. The body must still be current, while title mode protects a
+  /// manual rename that happened while derivation ran. A clean acknowledged
+  /// body remains eligible because the server still needs its exact title.
+  @discardableResult
+  public func finishEditorIngressTitle(
+    documentLocalId: String,
+    markdown: String,
+    expectedDraftRevision: Int,
+    title: String,
+    job: OutboxJob
+  ) throws -> Bool {
+    try writer.write { db in
+      guard var document = try DocumentRecord.fetchOne(db, key: documentLocalId) else {
+        throw StoreError.documentNotFound(documentLocalId)
+      }
+      guard document.titleMode == .derived,
+        document.draftRevision >= expectedDraftRevision,
+        document.displayMarkdown == markdown
+      else { return false }
+
+      document.title = title
+      try document.update(db)
+
+      // The body-only ingress job may already be in flight. Replacing every
+      // queued draft with this exact body/title pair is safe either way: an
+      // in-flight body-only write can land first, then this job repairs title.
+      _ = try OutboxJob
+        .filter(Column("documentLocalId") == documentLocalId)
+        .filter(Column("kind") == OutboxKind.draftSave.rawValue)
+        .deleteAll(db)
+      var stored = job
+      stored.id = nil
+      stored.documentLocalId = documentLocalId
+      stored.kind = .draftSave
+      stored.baseHeadNodeId = document.localHeadNodeId
+      stored.attempts = 0
+      stored.lastError = nil
+      stored.nextAttemptAt = 0
+      try stored.insert(db)
+      return true
+    }
+  }
+
   /// Clear a clean-head ingress only after the server accepted that exact body.
   /// A non-clean draft still needs its local row until history commits it.
   public func acknowledgeEditorIngress(
