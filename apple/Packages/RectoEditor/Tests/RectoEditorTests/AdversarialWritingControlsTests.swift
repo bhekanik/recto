@@ -387,6 +387,8 @@ struct AdversarialWritingControlsTests {
             ("**_~~foo bar~~_**", .bold, [.italic, .strikethrough]),
             ("_**~~foo bar~~**_", .italic, [.bold, .strikethrough]),
             ("~~**_foo bar_**~~", .strikethrough, [.bold, .italic]),
+            ("***~~foo bar~~***", .bold, [.italic, .strikethrough]),
+            ("***~~foo bar~~***", .italic, [.bold, .strikethrough]),
         ]
 
         for (markdown, command, selectedCommands) in cases {

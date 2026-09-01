@@ -267,7 +267,8 @@ enum RectoCommandTransformer {
                     in: markdown,
                     wrapper: wrapper,
                     nested: nested,
-                    selection: selection
+                    selection: selection,
+                    removing: delimiter
                 )
             }
             let contentStart = wrapper.contentRange.location
@@ -400,7 +401,8 @@ enum RectoCommandTransformer {
         in markdown: NSString,
         wrapper: MarkdownSemanticSpan,
         nested: [MarkdownSemanticSpan],
-        selection: NSRange
+        selection: NSRange,
+        removing delimiter: String
     ) -> RectoCommandEdit {
         let outermost = nested[0]
         let beforeNested = markdown.substring(with: NSRange(
@@ -418,6 +420,16 @@ enum RectoCommandTransformer {
             selected = (
                 fragment.markdown,
                 selected.contentOffset + fragment.contentOffset
+            )
+        }
+        if let remaining = remainingDelimiter(afterRemoving: delimiter, from: wrapper.kind) {
+            selected = (
+                markedFragment(selected.markdown, delimiter: remaining),
+                selected.contentOffset + insertedOpeningDelimiterLength(
+                    in: selected.markdown,
+                    sourceOffset: 0,
+                    delimiter: remaining
+                )
             )
         }
         let nestedSuffix = nestedFragment(after: selection, spans: nested, in: markdown)
