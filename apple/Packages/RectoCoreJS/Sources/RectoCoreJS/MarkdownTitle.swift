@@ -91,9 +91,11 @@ public enum MarkdownTitle {
 
     private static func yamlTitle(_ yaml: String) -> String? {
         var scalars = Constructor.defaultScalarMap
-        // Yams constructs fixed-width integers. js-yaml constructs every
-        // integer as a JavaScript Number, including base-prefixed values.
+        // Yams constructs fixed-width integers and accepts floating-point
+        // overflow. js-yaml constructs both through a finite Number check.
         scalars[.int] = { scalar in javascriptScalar.number(scalar.string) }
+        scalars[.float] = { scalar in javascriptScalar.number(scalar.string) }
+        scalars[.timestamp] = { scalar in javascriptScalar.date(scalar.string) }
         let constructor = Constructor(scalars)
         guard let mapping = try? load(yaml: yaml, yamlResolver, constructor) as? [String: Any],
               let value = mapping["title"], !(value is NSNull)
@@ -116,8 +118,6 @@ public enum MarkdownTitle {
             javascriptScalar.string(Double(value))
         case let value as Double:
             javascriptScalar.string(value)
-        case let value as Date:
-            javascriptScalar.string(value)
         case let value as [Any]:
             value.map { $0 is NSNull ? "" : javascriptString($0) }.joined(separator: ",")
         case _ as [AnyHashable: Any]:
@@ -133,25 +133,47 @@ public enum MarkdownTitle {
 private final class JavaScriptScalarConverter: @unchecked Sendable {
     private let lock = NSLock()
     private let context: JSContext
-    private let parseInteger: JSValue
-    private let stringifyDate: JSValue
+    private let parseNumber: JSValue
+    private let stringifyTimestamp: JSValue
 
     init() {
         guard let context = JSContext(),
-              let parseInteger = context.evaluateScript(
+              let parseNumber = context.evaluateScript(
                 "value => { const negative = value[0] === '-'; const unsigned = '+-'.includes(value[0]) ? value.slice(1) : value; return (negative ? -1 : 1) * Number(unsigned); }"),
-              let stringifyDate = context.evaluateScript("value => new Date(value).toISOString()")
+              let stringifyTimestamp = context.evaluateScript(
+                #"""
+                value => {
+                  const date = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+                  const match = date ?? /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[Tt]|[ \t]+)(\d{1,2}):(\d{2}):(\d{2})(?:\.(\d*))?(?:[ \t]*(Z|([-+])(\d{1,2})(?::(\d{2}))?))?$/.exec(value);
+                  if (!match[4]) return new Date(Date.UTC(+match[1], +match[2] - 1, +match[3])).toISOString();
+                  const fraction = (match[7] ?? "0").slice(0, 3).padEnd(3, "0");
+                  let time = Date.UTC(+match[1], +match[2] - 1, +match[3], +match[4], +match[5], +match[6], +fraction);
+                  if (match[9]) {
+                    let delta = (+match[10] * 60 + +(match[11] ?? 0)) * 60000;
+                    if (match[9] === "-") delta = -delta;
+                    time -= delta;
+                  }
+                  return new Date(time).toISOString();
+                }
+                """#)
         else {
             preconditionFailure("JavaScriptCore must provide a context for Number formatting")
         }
         self.context = context
-        self.parseInteger = parseInteger
-        self.stringifyDate = stringifyDate
+        self.parseNumber = parseNumber
+        self.stringifyTimestamp = stringifyTimestamp
     }
 
-    func number(_ yamlInteger: String) -> Double {
+    func number(_ yamlNumber: String) -> Double? {
         lock.withLock {
-            parseInteger.call(withArguments: [yamlInteger]).toDouble()
+            switch yamlNumber.lowercased() {
+            case ".inf", "+.inf": return .infinity
+            case "-.inf": return -.infinity
+            case ".nan": return .nan
+            default:
+                let value = parseNumber.call(withArguments: [yamlNumber]).toDouble()
+                return value.isFinite ? value : nil
+            }
         }
     }
 
@@ -161,9 +183,9 @@ private final class JavaScriptScalarConverter: @unchecked Sendable {
         }
     }
 
-    func string(_ value: Date) -> String {
+    func date(_ yamlTimestamp: String) -> String {
         lock.withLock {
-            stringifyDate.call(withArguments: [value.timeIntervalSince1970 * 1_000]).toString()
+            stringifyTimestamp.call(withArguments: [yamlTimestamp]).toString()
         }
     }
 }

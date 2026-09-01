@@ -32,6 +32,7 @@ function toStringField(value: unknown): string {
 	if (typeof value === "string") return value;
 	if (value == null) return "";
 	if (value instanceof Date) return value.toISOString();
+	if (Array.isArray(value)) return value.map(toStringField).join(",");
 	return String(value);
 }
 
