@@ -829,7 +829,7 @@ struct EditorHostViewTests {
         let field = try #require(NSApp.windows
             .flatMap(\.descendantViews)
             .compactMap { $0 as? NSTextField }
-            .first { $0.placeholderString == "URL or path" })
+            .first { $0.placeholderString == "URL or path" && $0.window?.isVisible == true })
         let popoverWindow = try #require(field.window)
         popoverWindow.makeKey()
         #expect(popoverWindow.makeFirstResponder(field))
@@ -845,6 +845,48 @@ struct EditorHostViewTests {
         await drainMainQueue()
 
         #expect(storage.markdown == "[Recto](https://recto.example/path)")
+    }
+
+    @Test("app deactivation closes destination input after key focus")
+    func appDeactivationClosesDestinationInput() async throws {
+        _ = NSApplication.shared
+        let storage = RectoTextStorage(documentId: "destination-deactivation", markdown: "Recto")
+        let controller = RectoWritingController()
+        let host = NSHostingView(rootView: RectoEditorView(
+            storage: storage,
+            styler: MarkdownStyler(presentation: .rich, theme: .twilight),
+            writingController: controller
+        ))
+        let window = NSWindow(contentViewController: NSViewController())
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        await drainMainQueue()
+        let textView = try #require(storage.textView.nsTextView)
+        textView.setSelectedRange(NSRange(location: 0, length: 5))
+
+        let coordinator = WritingControlsHost.Coordinator(controller: controller)
+        coordinator.install()
+        defer {
+            coordinator.uninstall()
+            Self.retainedTransformWindows.append(window)
+        }
+        coordinator.showSelectionLinkInput()
+        await drainMainQueue()
+        let field = try #require(NSApp.windows
+            .flatMap(\.descendantViews)
+            .compactMap { $0 as? NSTextField }
+            .first { $0.placeholderString == "URL or path" && $0.window?.isVisible == true })
+        let popoverWindow = try #require(field.window)
+        popoverWindow.makeKey()
+        #expect(popoverWindow.makeFirstResponder(field))
+        NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: window)
+        await drainMainQueue()
+        #expect(popoverWindow.isVisible)
+
+        NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: NSApp)
+
+        #expect(await waitUntil { !popoverWindow.isVisible })
     }
 
     private func drainMainQueue() async {

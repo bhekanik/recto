@@ -140,6 +140,15 @@ struct WritingControlsHost: NSViewRepresentable {
                 ]
             }
             windowObservers.append(center.addObserver(
+                forName: NSApplication.didResignActiveNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.hideChrome()
+                }
+            })
+            windowObservers.append(center.addObserver(
                 forName: NSView.boundsDidChangeNotification,
                 object: nil,
                 queue: .main
