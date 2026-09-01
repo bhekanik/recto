@@ -36,6 +36,7 @@ struct WritingControlsHost: NSViewRepresentable {
         private var windowObservers: [NSObjectProtocol] = []
         private var clipObserver: NSObjectProtocol?
         private var clipViewOriginallyPostedBoundsChanges = false
+        private var applicationIsActive = true
         private var ownerWindowIsKey = false
 
         var isSelectionPanelVisible: Bool { selectionPanel?.isVisible == true }
@@ -66,6 +67,10 @@ struct WritingControlsHost: NSViewRepresentable {
             guard let controller else { return }
             let textView = controllerTextView
             observe(textView)
+            guard applicationIsActive else {
+                hideChrome()
+                return
+            }
             guard ownerWindowIsKey || inputPopoverWindowIsKey else {
                 hideChrome()
                 return
@@ -145,7 +150,20 @@ struct WritingControlsHost: NSViewRepresentable {
                 queue: .main
             ) { [weak self] _ in
                 MainActor.assumeIsolated {
-                    self?.hideChrome()
+                    guard let self else { return }
+                    self.applicationIsActive = false
+                    self.hideChrome()
+                }
+            })
+            windowObservers.append(center.addObserver(
+                forName: NSApplication.didBecomeActiveNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.applicationIsActive = true
+                    self.refresh()
                 }
             })
             windowObservers.append(center.addObserver(

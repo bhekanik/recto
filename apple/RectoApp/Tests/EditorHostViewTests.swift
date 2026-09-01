@@ -885,8 +885,48 @@ struct EditorHostViewTests {
         #expect(popoverWindow.isVisible)
 
         NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: NSApp)
+        coordinator.refresh()
+        controller.refreshSelectionGeometry()
 
         #expect(await waitUntil { !popoverWindow.isVisible })
+    }
+
+    @Test("selection chrome stays hidden while inactive and returns after activation")
+    func selectionChromeFollowsApplicationLifecycle() async throws {
+        _ = NSApplication.shared
+        let storage = RectoTextStorage(documentId: "selection-app-lifecycle", markdown: "Select me")
+        let controller = RectoWritingController()
+        let host = NSHostingView(rootView: RectoEditorView(
+            storage: storage,
+            styler: MarkdownStyler(presentation: .rich, theme: .twilight),
+            writingController: controller
+        ))
+        let window = NSWindow(contentViewController: NSViewController())
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        await drainMainQueue()
+        let textView = try #require(storage.textView.nsTextView)
+        textView.setSelectedRange(NSRange(location: 0, length: 6))
+
+        let coordinator = WritingControlsHost.Coordinator(controller: controller)
+        coordinator.install()
+        defer {
+            coordinator.uninstall()
+            Self.retainedTransformWindows.append(window)
+        }
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
+        #expect(coordinator.isSelectionPanelVisible)
+
+        NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: NSApp)
+        coordinator.refresh()
+        controller.refreshSelectionGeometry()
+        await drainMainQueue()
+        #expect(!coordinator.isSelectionPanelVisible)
+
+        NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
+        #expect(coordinator.isSelectionPanelVisible)
     }
 
     private func drainMainQueue() async {
