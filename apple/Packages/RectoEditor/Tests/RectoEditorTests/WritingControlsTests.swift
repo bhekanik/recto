@@ -350,24 +350,70 @@ struct WritingControlsTests {
 
     @Test("slash opens only at a source-line command position")
     func slashCommandPosition() throws {
-        let valid = "  /hea"
-        let state = try #require(RectoSlashMenu.state(
-            markdown: valid,
-            selection: NSRange(location: (valid as NSString).length, length: 0),
-            selectedIndex: 0,
-            anchorRect: nil
-        ))
-        #expect(state.query == "hea")
-        #expect(state.entries.map(\.id) == ["h1", "h2", "h3", "link"])
-        #expect(state.queryRange == NSRange(location: 2, length: 4))
+        for indentation in 0...3 {
+            let valid = String(repeating: " ", count: indentation) + "/hea"
+            let state = try #require(RectoSlashMenu.state(
+                markdown: valid,
+                selection: NSRange(location: (valid as NSString).length, length: 0),
+                selectedIndex: 0,
+                anchorRect: nil
+            ))
+            #expect(state.query == "hea")
+            #expect(state.entries.map(\.id) == ["h1", "h2", "h3", "link"])
+            #expect(state.queryRange == NSRange(location: indentation, length: 4))
+        }
 
-        let prose = "word /hea"
-        #expect(RectoSlashMenu.state(
-            markdown: prose,
-            selection: NSRange(location: (prose as NSString).length, length: 0),
-            selectedIndex: 0,
-            anchorRect: nil
-        ) == nil)
+        for invalid in ["word /hea", "    /hea", "\t/hea", " \t/hea"] {
+            #expect(RectoSlashMenu.state(
+                markdown: invalid,
+                selection: NSRange(location: (invalid as NSString).length, length: 0),
+                selectedIndex: 0,
+                anchorRect: nil
+            ) == nil)
+        }
+    }
+
+    @Test("mounted slash headings keep valid CommonMark indentation")
+    func mountedSlashHeadingIndentation() throws {
+        for indentation in 0...3 {
+            let spaces = String(repeating: " ", count: indentation)
+            let markdown = spaces + "/h1"
+            let storage = RectoTextStorage(documentId: "slash-indent-\(indentation)", markdown: markdown)
+            let controller = RectoWritingController()
+            let harness = WindowHarness(
+                RectoEditorView(
+                    storage: storage,
+                    styler: MarkdownStyler(presentation: .rich, theme: .twilight),
+                    writingController: controller
+                )
+            )
+            let textView = try #require(harness.editorTextView)
+            textView.setSelectedRange(NSRange(location: (markdown as NSString).length, length: 0))
+
+            #expect(controller.selectSlashEntry(id: "h1"))
+            #expect(textView.string == spaces + "# ")
+            #expect(textView.selectedRange() == NSRange(location: indentation + 2, length: 0))
+            harness.tearDown()
+        }
+
+        for (index, markdown) in ["    /h1", "\t/h1"].enumerated() {
+            let storage = RectoTextStorage(documentId: "slash-reject-\(index)", markdown: markdown)
+            let controller = RectoWritingController()
+            let harness = WindowHarness(
+                RectoEditorView(
+                    storage: storage,
+                    styler: MarkdownStyler(presentation: .rich, theme: .twilight),
+                    writingController: controller
+                )
+            )
+            let textView = try #require(harness.editorTextView)
+            textView.setSelectedRange(NSRange(location: (markdown as NSString).length, length: 0))
+
+            #expect(controller.slashMenuState == nil)
+            #expect(!controller.selectSlashEntry(id: "h1"))
+            #expect(textView.string == markdown)
+            harness.tearDown()
+        }
     }
 
     @Test("slash entries match the generated web fixture")

@@ -105,7 +105,7 @@ public enum RectoSlashMenu {
         ))
         guard let slash = beforeCaret.lastIndex(of: "/") else { return nil }
         let beforeSlash = beforeCaret[..<slash]
-        guard beforeSlash.allSatisfy({ $0 == " " || $0 == "\t" }) else { return nil }
+        guard beforeSlash.count <= 3, beforeSlash.allSatisfy({ $0 == " " }) else { return nil }
         let query = String(beforeCaret[beforeCaret.index(after: slash)...])
         guard query.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" || $0 == " " }) else {
             return nil
