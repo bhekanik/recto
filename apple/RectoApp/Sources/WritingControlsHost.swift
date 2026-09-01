@@ -44,6 +44,7 @@ struct WritingControlsHost: NSViewRepresentable {
         var isSelectionPanelVisible: Bool { selectionPanel?.isVisible == true }
         var selectionPanelFrame: NSRect? { selectionPanel?.frame }
         var selectionPanelParent: NSWindow? { selectionPanel?.parent }
+        var selectionPanelWindow: NSPanel? { selectionPanel }
         var isInputPopoverShown: Bool { inputPopover.isShown }
 
         init(controller: RectoWritingController) {
@@ -70,10 +71,6 @@ struct WritingControlsHost: NSViewRepresentable {
             }
             removeLifecycleObservers()
             hideChrome()
-            if let selectionPanel {
-                selectionPanel.parent?.removeChildWindow(selectionPanel)
-            }
-            selectionPanel = nil
         }
 
         func refresh() {
@@ -289,7 +286,7 @@ struct WritingControlsHost: NSViewRepresentable {
             if !preservingInput {
                 closeInputPopover(immediately: immediatelyClosingInput)
             }
-            selectionPanel?.orderOut(nil)
+            destroySelectionPanel()
         }
 
         func showSelectionLinkInput() {
@@ -323,12 +320,12 @@ struct WritingControlsHost: NSViewRepresentable {
                   let anchor = state.anchorRect,
                   let textView = controllerTextView,
                   let window = textView.window else {
-                selectionPanel?.orderOut(nil)
+                destroySelectionPanel()
                 return
             }
             let visibleAnchor = anchor.intersection(textView.visibleRect)
             guard !visibleAnchor.isNull, !visibleAnchor.isEmpty else {
-                selectionPanel?.orderOut(nil)
+                destroySelectionPanel()
                 return
             }
 
@@ -368,6 +365,14 @@ struct WritingControlsHost: NSViewRepresentable {
                 window.addChildWindow(panel, ordered: .above)
             }
             panel.orderFront(nil)
+        }
+
+        private func destroySelectionPanel() {
+            guard let panel = selectionPanel else { return }
+            // orderOut detaches child windows but leaves this retained panel in NSApp's window set.
+            panel.parent?.removeChildWindow(panel)
+            panel.close()
+            selectionPanel = nil
         }
 
         private var controllerTextView: NSTextView? {
