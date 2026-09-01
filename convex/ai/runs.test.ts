@@ -1,4 +1,5 @@
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
+import { getDocumentSize } from "convex/values";
 import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
 import { api, internal } from "../_generated/api";
@@ -165,6 +166,134 @@ describe("AI run durability", () => {
 		).resolves.toMatchObject({ _id: runId, status: "provider_started" });
 	});
 
+	it.each([
+		"reserved",
+		"provider_started",
+		"outcome_unknown",
+		"succeeded",
+	] as const)("does not let a terminal same-id retry displace an active %s run", async (activeStatus) => {
+		const t = convexTest(schema, modules);
+		registerRateLimiter(t);
+		const { documentId, runId } = await seedRun(t);
+		const { activeId, requestId, requestHash } = await t.run(async (ctx) => {
+			await ctx.db.patch(runId, {
+				status: "failed",
+				keySource: undefined,
+				completedAt: 2,
+				acknowledgedAt: 3,
+			});
+			const requestId = `active-${activeStatus}`;
+			const requestHash = activeStatus.padEnd(64, "x");
+			const activeId = await ctx.db.insert("aiRuns", {
+				userId: USER,
+				requestId,
+				kind: "transform",
+				documentId,
+				sourceNodeId: "source",
+				sourceHash: "a".repeat(64),
+				sourceMarkdown: "source",
+				requestHash,
+				model: "model",
+				status: activeStatus,
+				keySource: activeStatus === "reserved" ? undefined : ("house" as const),
+				output: activeStatus === "succeeded" ? "active output" : undefined,
+				applicable: activeStatus === "succeeded" ? true : undefined,
+				providerStartedAt: activeStatus === "reserved" ? undefined : 1,
+				consentAcceptedAt: activeStatus === "reserved" ? undefined : 1,
+				createdAt: 1,
+				updatedAt: 4,
+			});
+			await ctx.db.insert("aiActiveRuns", {
+				userId: USER,
+				documentId,
+				kind: "transform",
+				runId: activeId,
+				sourceNodeId: "source",
+				updatedAt: 4,
+			});
+			return { activeId, requestId, requestHash };
+		});
+		const original = await t.run(async (ctx) => await ctx.db.get(runId));
+		if (!original) throw new Error("missing seeded run");
+		await expect(
+			t.mutation(internal.ai.runs.begin, {
+				userId: USER,
+				requestId: original.requestId,
+				kind: "transform",
+				documentId,
+				sourceNodeId: "source",
+				sourceHash: "a".repeat(64),
+				expectedSourceMarkdown: "source",
+				requestHash: original.requestHash,
+				model: "model",
+			}),
+		).rejects.toThrow("earlier AI request");
+		await expect(
+			t.run(async (ctx) => ({
+				active: await ctx.db.query("aiActiveRuns").unique(),
+				original: await ctx.db.get(runId),
+				competitor: await ctx.db.get(activeId),
+			})),
+		).resolves.toMatchObject({
+			active: { runId: activeId },
+			original: { status: "failed", acknowledgedAt: 3 },
+			competitor: { requestId, requestHash, status: activeStatus },
+		});
+	});
+
+	it("cleans an invalid active row before retrying a terminal request", async () => {
+		const t = convexTest(schema, modules);
+		registerRateLimiter(t);
+		const { documentId, runId } = await seedRun(t);
+		const original = await t.run(async (ctx) => {
+			await ctx.db.patch(runId, {
+				status: "failed",
+				keySource: undefined,
+				completedAt: 2,
+			});
+			const staleId = await ctx.db.insert("aiRuns", {
+				userId: USER,
+				requestId: "stale-active",
+				kind: "transform",
+				documentId,
+				sourceNodeId: "source",
+				sourceHash: "a".repeat(64),
+				sourceMarkdown: "source",
+				requestHash: "s".repeat(64),
+				model: "model",
+				status: "failed",
+				createdAt: 1,
+				updatedAt: 2,
+			});
+			await ctx.db.insert("aiActiveRuns", {
+				userId: USER,
+				documentId,
+				kind: "transform",
+				runId: staleId,
+				sourceNodeId: "source",
+				updatedAt: 2,
+			});
+			return await ctx.db.get(runId);
+		});
+		if (!original) throw new Error("missing seeded run");
+		await expect(
+			t.mutation(internal.ai.runs.begin, {
+				userId: USER,
+				requestId: original.requestId,
+				kind: "transform",
+				documentId,
+				sourceNodeId: "source",
+				sourceHash: "a".repeat(64),
+				expectedSourceMarkdown: "source",
+				requestHash: original.requestHash,
+				model: "model",
+			}),
+		).resolves.toMatchObject({ replay: false, run: { status: "reserved" } });
+		await expect(
+			t.run(async (ctx) => await ctx.db.query("aiActiveRuns").unique()),
+		).resolves.toMatchObject({ runId });
+	});
+
 	it("uses one active row despite a large acknowledged history", async () => {
 		const t = convexTest(schema, modules);
 		registerRateLimiter(t);
@@ -318,6 +447,24 @@ describe("AI run durability", () => {
 				kind: "transform",
 			}),
 		).resolves.toBeNull();
+		const original = await t.run(async (ctx) => await ctx.db.get(runId));
+		if (!original) throw new Error("missing seeded run");
+		const replay = await t.mutation(internal.ai.runs.begin, {
+			userId: USER,
+			requestId: original.requestId,
+			kind: "transform",
+			documentId,
+			sourceNodeId: "source",
+			sourceHash: "a".repeat(64),
+			expectedSourceMarkdown: "source",
+			requestHash: original.requestHash,
+			model: "model",
+		});
+		expect(replay).toMatchObject({
+			replay: true,
+			run: { applicable: false },
+		});
+		expect(replay.run).not.toHaveProperty("output");
 		await expect(
 			t.mutation(internal.ai.runs.begin, {
 				userId: USER,
@@ -331,6 +478,242 @@ describe("AI run durability", () => {
 				model: "model",
 			}),
 		).resolves.toMatchObject({ replay: false });
+	});
+
+	it("refuses an in-flight result after consent is revoked and reaccepted", async () => {
+		const t = convexTest(schema, modules);
+		const { documentId, runId } = await seedRun(t);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(runId, {
+				providerStartedAt: 2,
+				consentAcceptedAt: 1,
+			});
+			const consent = await ctx.db.query("aiConsents").unique();
+			if (consent) await ctx.db.delete(consent._id);
+			await ctx.db.insert("aiConsents", {
+				userId: USER,
+				version: 1,
+				acceptedAt: 10,
+			});
+		});
+		await expect(settleRun(t, runId)).resolves.toMatchObject({
+			applicable: false,
+		});
+		const owner = t.withIdentity({ subject: USER });
+		await expect(
+			owner.query(api.ai.runs.get, {
+				requestId:
+					(await t.run(async (ctx) => await ctx.db.get(runId)))?.requestId ??
+					"missing",
+			}),
+		).resolves.toMatchObject({ applicable: false });
+		await expect(
+			owner.query(api.ai.runs.latestRecoverable, {
+				documentId,
+				kind: "transform",
+			}),
+		).resolves.toBeNull();
+	});
+
+	it("binds a retried provider attempt to the reaccepted consent epoch", async () => {
+		const t = convexTest(schema, modules);
+		registerRateLimiter(t);
+		const { documentId, runId } = await seedRun(t);
+		const original = await t.run(async (ctx) => {
+			await ctx.db.patch(runId, {
+				status: "failed",
+				keySource: undefined,
+				completedAt: 2,
+				acknowledgedAt: 3,
+			});
+			const consent = await ctx.db.query("aiConsents").unique();
+			if (consent) await ctx.db.delete(consent._id);
+			await ctx.db.insert("aiConsents", {
+				userId: USER,
+				version: 1,
+				acceptedAt: 10,
+			});
+			return await ctx.db.get(runId);
+		});
+		if (!original) throw new Error("missing seeded run");
+		await expect(
+			t.mutation(internal.ai.runs.begin, {
+				userId: USER,
+				requestId: original.requestId,
+				kind: "transform",
+				documentId,
+				sourceNodeId: "source",
+				sourceHash: "a".repeat(64),
+				expectedSourceMarkdown: "source",
+				requestHash: original.requestHash,
+				model: "model",
+			}),
+		).resolves.toMatchObject({ replay: false, run: { status: "reserved" } });
+		await expect(
+			t.mutation(internal.ai.runs.markProviderStarted, {
+				runId,
+				userId: USER,
+				keySource: "house",
+				expectedSourceMarkdown: "source",
+			}),
+		).resolves.toMatchObject({ started: true });
+		await expect(settleRun(t, runId)).resolves.toMatchObject({
+			applicable: true,
+		});
+		const owner = t.withIdentity({ subject: USER });
+		await expect(
+			owner.query(api.ai.runs.latestRecoverable, {
+				documentId,
+				kind: "transform",
+			}),
+		).resolves.toMatchObject({
+			_id: runId,
+			status: "succeeded",
+			consentAcceptedAt: 10,
+		});
+		await expect(
+			t.mutation(internal.ai.runs.begin, {
+				userId: USER,
+				requestId: "duplicate-after-retry",
+				kind: "transform",
+				documentId,
+				sourceNodeId: "source",
+				sourceHash: "a".repeat(64),
+				expectedSourceMarkdown: "source",
+				requestHash: "d".repeat(64),
+				model: "model",
+			}),
+		).rejects.toThrow("earlier AI request");
+	});
+
+	it("keeps maximum embedding rows below the Convex document limit", async () => {
+		const t = convexTest(schema, modules);
+		registerRateLimiter(t);
+		const source = "x".repeat(950_000);
+		const { documentId } = await t.run(async (ctx) => {
+			const documentId = await ctx.db.insert("documents", {
+				userId: USER,
+				title: "Large draft",
+				markdown: source,
+				wordCount: 1,
+				currentNodeId: "source",
+				createdAt: 1,
+				updatedAt: 1,
+			});
+			await ctx.db.insert("docNodes", {
+				documentId,
+				nodeId: "source",
+				parentNodeId: null,
+				patch: "",
+				snapshot: source,
+				selection: null,
+				origin: "edit",
+				createdAt: 1,
+			});
+			await ctx.db.insert("aiConsents", {
+				userId: USER,
+				version: 1,
+				acceptedAt: 1,
+			});
+			return { documentId };
+		});
+		const request = {
+			userId: USER,
+			requestId: "maximum-embedding",
+			kind: "embed" as const,
+			documentId,
+			sourceNodeId: "source",
+			sourceHash: "a".repeat(64),
+			expectedSourceMarkdown: source,
+			requestHash: "b".repeat(64),
+			model: "model",
+		};
+		const begun = await t.mutation(internal.ai.runs.begin, request);
+		expect(begun.run).not.toHaveProperty("sourceMarkdown");
+		await t.mutation(internal.ai.runs.markProviderStarted, {
+			runId: begun.run._id,
+			userId: USER,
+			keySource: "house",
+			expectedSourceMarkdown: source,
+		});
+		const output = JSON.stringify(
+			Array.from({ length: 16 }, () => Array(1_536).fill(0.123456789)),
+		);
+		await expect(
+			t.mutation(internal.ai.runs.succeed, {
+				runId: begun.run._id,
+				userId: USER,
+				output,
+				expectedSourceMarkdown: source,
+				usage: {
+					promptTokens: 1,
+					completionTokens: 1,
+					reasoningTokens: 0,
+					costMicros: 1,
+					latencyMs: 1,
+				},
+			}),
+		).resolves.toMatchObject({ applicable: true });
+		const stored = await t.run(async (ctx) => await ctx.db.get(begun.run._id));
+		if (!stored) throw new Error("missing embedding run");
+		expect(stored.sourceMarkdown).toBeUndefined();
+		expect(getDocumentSize(stored)).toBeLessThan(1_048_576);
+		for (const [kind, durableOutput] of [
+			["transform", "😀".repeat(4_096)],
+			[
+				"review",
+				JSON.stringify({
+					commentsPlaced: 100,
+					commentsTotal: 100,
+					commentsDropped: 0,
+					editsPlaced: 100,
+					editsTotal: 100,
+					editsDropped: 0,
+					branchId: "b".repeat(32),
+				}),
+			],
+		] as const) {
+			const durable = await t.mutation(internal.ai.runs.begin, {
+				...request,
+				requestId: `maximum-${kind}`,
+				kind,
+				requestHash: kind.padEnd(64, "x"),
+			});
+			await t.mutation(internal.ai.runs.markProviderStarted, {
+				runId: durable.run._id,
+				userId: USER,
+				keySource: "house",
+				expectedSourceMarkdown: source,
+			});
+			await t.mutation(internal.ai.runs.succeed, {
+				runId: durable.run._id,
+				userId: USER,
+				output: durableOutput,
+				expectedSourceMarkdown: source,
+				usage: {
+					promptTokens: 1,
+					completionTokens: 1,
+					reasoningTokens: 0,
+					costMicros: 1,
+					latencyMs: 1,
+				},
+			});
+			const durableStored = await t.run(
+				async (ctx) => await ctx.db.get(durable.run._id),
+			);
+			if (!durableStored) throw new Error(`missing ${kind} run`);
+			expect(durableStored.sourceMarkdown).toBe(source);
+			expect(getDocumentSize(durableStored)).toBeLessThan(1_048_576);
+		}
+		await expect(
+			t.mutation(internal.ai.runs.begin, request),
+		).resolves.toMatchObject({ replay: true, run: { output } });
+		await t.run(async (ctx) => {
+			await ctx.db.patch(documentId, { markdown: `${source}y` });
+		});
+		await expect(t.mutation(internal.ai.runs.begin, request)).rejects.toThrow(
+			"draft changed",
+		);
 	});
 
 	it("serializes random ids across tabs and keeps failed acknowledgement locked", async () => {

@@ -179,6 +179,7 @@ export default defineSchema({
 		createdAt: v.number(),
 		updatedAt: v.number(),
 		providerStartedAt: v.optional(v.number()),
+		consentAcceptedAt: v.optional(v.number()),
 		completedAt: v.optional(v.number()),
 		acknowledgedAt: v.optional(v.number()),
 		applicable: v.optional(v.boolean()),

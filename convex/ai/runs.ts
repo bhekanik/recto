@@ -88,7 +88,16 @@ async function reserveActiveRun(
 	const { kind } = run;
 	if (!isDurableRunKind(kind)) return;
 	const active = await activeRunRow(ctx, { ...run, kind });
-	if (active) await ctx.db.delete(active._id);
+	if (active) {
+		if (active.runId !== run._id) {
+			aiError(
+				"request_in_progress",
+				"Resolve the earlier AI request before starting another.",
+			);
+		}
+		await ctx.db.patch(active._id, { updatedAt: Date.now() });
+		return;
+	}
 	await ctx.db.insert("aiActiveRuns", {
 		userId: run.userId,
 		documentId: run.documentId,
@@ -97,6 +106,32 @@ async function reserveActiveRun(
 		sourceNodeId: run.sourceNodeId,
 		updatedAt: Date.now(),
 	});
+}
+
+async function recoverableActiveRun(
+	ctx: QueryCtx | MutationCtx,
+	active: Doc<"aiActiveRuns"> | null,
+	args: {
+		userId: string;
+		documentId: Id<"documents">;
+		kind: DurableRunKind;
+		sourceNodeId: string;
+	},
+): Promise<Doc<"aiRuns"> | null> {
+	if (!active) return null;
+	const run = await ctx.db.get(active.runId);
+	if (
+		!run ||
+		run.userId !== args.userId ||
+		run.documentId !== args.documentId ||
+		run.kind !== args.kind ||
+		run.sourceNodeId !== args.sourceNodeId ||
+		!isRecoverableRun(run) ||
+		(run.status === "succeeded" && !(await runApplicableNow(ctx, run)))
+	) {
+		return null;
+	}
+	return run;
 }
 
 async function hasCurrentConsent(
@@ -108,6 +143,28 @@ async function hasCurrentConsent(
 		.withIndex("by_user", (q) => q.eq("userId", userId))
 		.unique();
 	return consent?.version === AI_CONSENT_VERSION;
+}
+
+function consentAppliesToRun(
+	run: Doc<"aiRuns">,
+	consent: Doc<"aiConsents"> | null,
+): boolean {
+	if (consent?.version !== AI_CONSENT_VERSION) return false;
+	if (run.consentAcceptedAt !== undefined) {
+		return consent.acceptedAt === run.consentAcceptedAt;
+	}
+	return consent.acceptedAt <= (run.providerStartedAt ?? run.createdAt);
+}
+
+async function runConsentAppliesNow(
+	ctx: QueryCtx | MutationCtx,
+	run: Doc<"aiRuns">,
+): Promise<boolean> {
+	const consent = await ctx.db
+		.query("aiConsents")
+		.withIndex("by_user", (q) => q.eq("userId", run.userId))
+		.unique();
+	return consentAppliesToRun(run, consent);
 }
 
 async function runApplicableNow(
@@ -141,8 +198,7 @@ async function runApplicableNow(
 	return (
 		!deletion &&
 		!tombstone &&
-		consent?.version === AI_CONSENT_VERSION &&
-		consent.acceptedAt <= run.createdAt &&
+		consentAppliesToRun(run, consent) &&
 		!share &&
 		document?.userId === run.userId &&
 		document.currentNodeId === run.sourceNodeId &&
@@ -250,7 +306,39 @@ export const begin = internalMutation({
 				existingUsage ||
 				(existing.status !== "failed" && existing.status !== "cancelled")
 			) {
+				if (existing.status === "succeeded") {
+					const applicable =
+						existing.applicable === true &&
+						(existing.kind === "embed"
+							? await runConsentAppliesNow(ctx, existing)
+							: await runApplicableNow(ctx, existing));
+					if (!applicable) {
+						return {
+							replay: true as const,
+							run: {
+								...existing,
+								output: undefined,
+								applicable: false as const,
+							},
+						};
+					}
+				}
 				return { replay: true as const, run: existing };
+			}
+			if (isDurableRunKind(existing.kind)) {
+				const kind = existing.kind;
+				const active = await activeRunRow(ctx, { ...existing, kind });
+				const activeRun = await recoverableActiveRun(ctx, active, {
+					...existing,
+					kind,
+				});
+				if (activeRun && activeRun._id !== existing._id) {
+					aiError(
+						"request_in_progress",
+						"Resolve the earlier AI request before starting another.",
+					);
+				}
+				if (active && !activeRun) await ctx.db.delete(active._id);
 			}
 			const retryLimit = await aiRateLimiter.limit(ctx, "aiRequests", {
 				key: args.userId,
@@ -269,11 +357,14 @@ export const begin = internalMutation({
 				output: undefined,
 				errorCode: undefined,
 				providerStartedAt: undefined,
+				consentAcceptedAt: undefined,
 				completedAt: undefined,
 				acknowledgedAt: undefined,
 				applicable: undefined,
 				langsmithRunId: undefined,
-				sourceMarkdown: args.expectedSourceMarkdown,
+				sourceMarkdown: isDurableRunKind(existing.kind)
+					? args.expectedSourceMarkdown
+					: undefined,
 				updatedAt: now,
 			});
 			const retried = await ctx.db.get(existing._id);
@@ -287,14 +378,10 @@ export const begin = internalMutation({
 		if (isDurableRunKind(args.kind)) {
 			const kind = args.kind;
 			const active = await activeRunRow(ctx, { ...args, kind });
-			const activeRun = active ? await ctx.db.get(active.runId) : null;
-			const validActiveRun =
-				activeRun &&
-				isRecoverableRun(activeRun) &&
-				(activeRun.status !== "succeeded" ||
-					(await runApplicableNow(ctx, activeRun)))
-					? activeRun
-					: null;
+			const validActiveRun = await recoverableActiveRun(ctx, active, {
+				...args,
+				kind,
+			});
 			if (active && !validActiveRun) {
 				await ctx.db.delete(active._id);
 			}
@@ -343,7 +430,9 @@ export const begin = internalMutation({
 		const { expectedSourceMarkdown, ...runInput } = args;
 		const runId = await ctx.db.insert("aiRuns", {
 			...runInput,
-			sourceMarkdown: expectedSourceMarkdown,
+			sourceMarkdown: isDurableRunKind(args.kind)
+				? expectedSourceMarkdown
+				: undefined,
 			status: "reserved",
 			createdAt: now,
 			updatedAt: now,
@@ -373,11 +462,22 @@ export const markProviderStarted = internalMutation({
 			sourceNodeId: run.sourceNodeId,
 			expectedSourceMarkdown: args.expectedSourceMarkdown,
 		});
+		const consent = await ctx.db
+			.query("aiConsents")
+			.withIndex("by_user", (q) => q.eq("userId", run.userId))
+			.unique();
+		if (consent?.version !== AI_CONSENT_VERSION) {
+			aiError(
+				"ai_consent_required",
+				"Accept the current AI consent notice first.",
+			);
+		}
 		const now = Date.now();
 		await ctx.db.patch(run._id, {
 			status: "provider_started",
 			keySource: args.keySource,
 			providerStartedAt: now,
+			consentAcceptedAt: consent.acceptedAt,
 			updatedAt: now,
 		});
 		return { started: true as const };
@@ -474,14 +574,17 @@ export const succeed = internalMutation({
 				createdAt: now,
 			});
 		}
-		const [deletion, tombstone, consentCurrent, document, share, sourceNode] =
+		const [deletion, tombstone, consent, document, share, sourceNode] =
 			await Promise.all([
 				ctx.db
 					.query("aiDocumentDeletions")
 					.withIndex("by_document", (q) => q.eq("documentId", run.documentId))
 					.unique(),
 				findTombstone(ctx, run.userId),
-				hasCurrentConsent(ctx, run.userId),
+				ctx.db
+					.query("aiConsents")
+					.withIndex("by_user", (q) => q.eq("userId", run.userId))
+					.unique(),
 				ctx.db.get(run.documentId),
 				ctx.db
 					.query("documentShares")
@@ -497,7 +600,7 @@ export const succeed = internalMutation({
 		const applicable =
 			!deletion &&
 			!tombstone &&
-			consentCurrent &&
+			consentAppliesToRun(run, consent) &&
 			!share &&
 			document?.userId === run.userId &&
 			document.currentNodeId === run.sourceNodeId &&
