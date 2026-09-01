@@ -43,6 +43,7 @@ struct WritingControlsHost: NSViewRepresentable {
 
         var isSelectionPanelVisible: Bool { selectionPanel?.isVisible == true }
         var selectionPanelFrame: NSRect? { selectionPanel?.frame }
+        var selectionPanelParent: NSWindow? { selectionPanel?.parent }
         var isInputPopoverShown: Bool { inputPopover.isShown }
 
         init(controller: RectoWritingController) {
@@ -69,6 +70,9 @@ struct WritingControlsHost: NSViewRepresentable {
             }
             removeLifecycleObservers()
             hideChrome()
+            if let selectionPanel {
+                selectionPanel.parent?.removeChildWindow(selectionPanel)
+            }
             selectionPanel = nil
         }
 
@@ -357,6 +361,12 @@ struct WritingControlsHost: NSViewRepresentable {
                 x: min(max(screenRect.midX - size.width / 2, visibleFrame.minX), visibleFrame.maxX - size.width),
                 y: min(max(preferredY, visibleFrame.minY), visibleFrame.maxY - size.height)
             ))
+            // A detached panel can deadlock FileDocument's synchronous save after Unicode edits.
+            // Child ownership keeps formatting chrome out of the top-level document-window set.
+            if panel.parent !== window {
+                panel.parent?.removeChildWindow(panel)
+                window.addChildWindow(panel, ordered: .above)
+            }
             panel.orderFront(nil)
         }
 

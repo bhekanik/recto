@@ -613,6 +613,7 @@ struct EditorHostViewTests {
 
         NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
         #expect(coordinator.isSelectionPanelVisible)
+        #expect(coordinator.selectionPanelParent === window)
 
         NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: window)
         await drainMainQueue()
@@ -623,6 +624,10 @@ struct EditorHostViewTests {
 
         NotificationCenter.default.post(name: NSWindow.willCloseNotification, object: window)
         #expect(!coordinator.isSelectionPanelVisible)
+
+        coordinator.uninstall()
+        #expect(coordinator.selectionPanelParent == nil)
+        #expect((window.childWindows ?? []).isEmpty)
     }
 
     @Test("stale coordinator teardown preserves replacement callbacks")
@@ -760,6 +765,7 @@ struct EditorHostViewTests {
         }
         NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: firstWindow)
         #expect(coordinator.isSelectionPanelVisible)
+        #expect(coordinator.selectionPanelParent === firstWindow)
 
         let secondWindow = NSWindow(
             contentRect: NSRect(x: 220, y: 220, width: 620, height: 320),
@@ -774,7 +780,13 @@ struct EditorHostViewTests {
         host.layoutSubtreeIfNeeded()
         NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: secondWindow)
         #expect(coordinator.isSelectionPanelVisible)
+        #expect(coordinator.selectionPanelParent === secondWindow)
+        #expect((firstWindow.childWindows ?? []).isEmpty)
         expectSelectionPanelPosition(coordinator, controller: controller)
+
+        coordinator.uninstall()
+        #expect((firstWindow.childWindows ?? []).isEmpty)
+        #expect((secondWindow.childWindows ?? []).isEmpty)
     }
 
     @Test("selection chrome rebinds before a replacement clip scrolls")
