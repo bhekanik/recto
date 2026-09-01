@@ -87,6 +87,84 @@ async function settleRun(
 }
 
 describe("AI run durability", () => {
+	it.each([
+		"failed",
+		"cancelled",
+	] as const)("fully resets an acknowledged %s run before retry", async (status) => {
+		const t = convexTest(schema, modules);
+		registerRateLimiter(t);
+		const { documentId, runId } = await seedRun(t);
+		const original = await t.run(async (ctx) => {
+			await ctx.db.patch(runId, {
+				status,
+				keySource: undefined,
+				output: "stale output",
+				errorCode: "stale_error",
+				langsmithRunId: "stale-trace",
+				providerStartedAt: 2,
+				completedAt: 3,
+				acknowledgedAt: 4,
+				applicable: true,
+			});
+			return await ctx.db.get(runId);
+		});
+		if (!original) throw new Error("missing seeded run");
+		const retried = await t.mutation(internal.ai.runs.begin, {
+			userId: USER,
+			requestId: original.requestId,
+			kind: "transform",
+			documentId,
+			sourceNodeId: "source",
+			sourceHash: "a".repeat(64),
+			expectedSourceMarkdown: "source",
+			requestHash: "b".repeat(64),
+			model: "model",
+		});
+		expect(retried).toMatchObject({
+			replay: false,
+			run: { status: "reserved" },
+		});
+		expect(retried.run).not.toHaveProperty("acknowledgedAt");
+		expect(retried.run).not.toHaveProperty("applicable");
+		expect(retried.run).not.toHaveProperty("output");
+		expect(retried.run).not.toHaveProperty("errorCode");
+		expect(retried.run).not.toHaveProperty("langsmithRunId");
+		const owner = t.withIdentity({ subject: USER });
+		await expect(
+			owner.query(api.ai.runs.latestRecoverable, {
+				documentId,
+				kind: "transform",
+			}),
+		).resolves.toMatchObject({ _id: runId, status: "reserved" });
+		await expect(
+			t.mutation(internal.ai.runs.begin, {
+				userId: USER,
+				requestId: `concurrent-${status}`,
+				kind: "transform",
+				documentId,
+				sourceNodeId: "source",
+				sourceHash: "a".repeat(64),
+				expectedSourceMarkdown: "source",
+				requestHash: status.padEnd(64, "x"),
+				model: "model",
+			}),
+		).rejects.toThrow("earlier AI request");
+		await expect(
+			t.mutation(internal.ai.runs.markProviderStarted, {
+				runId,
+				userId: USER,
+				keySource: "house",
+				expectedSourceMarkdown: "source",
+			}),
+		).resolves.toMatchObject({ started: true });
+		await expect(
+			owner.query(api.ai.runs.latestRecoverable, {
+				documentId,
+				kind: "transform",
+			}),
+		).resolves.toMatchObject({ _id: runId, status: "provider_started" });
+	});
+
 	it("uses one active row despite a large acknowledged history", async () => {
 		const t = convexTest(schema, modules);
 		registerRateLimiter(t);

@@ -270,13 +270,18 @@ export const begin = internalMutation({
 				errorCode: undefined,
 				providerStartedAt: undefined,
 				completedAt: undefined,
+				acknowledgedAt: undefined,
+				applicable: undefined,
+				langsmithRunId: undefined,
 				sourceMarkdown: args.expectedSourceMarkdown,
 				updatedAt: now,
 			});
-			await reserveActiveRun(ctx, existing);
+			const retried = await ctx.db.get(existing._id);
+			if (!retried) throw new Error("AI run retry disappeared");
+			await reserveActiveRun(ctx, retried);
 			return {
 				replay: false as const,
-				run: { ...existing, status: "reserved" as const, updatedAt: now },
+				run: retried,
 			};
 		}
 		if (isDurableRunKind(args.kind)) {
