@@ -1,6 +1,7 @@
 import Foundation
 import OSLog
 import RectoHistory
+import RectoCoreJS
 import RectoStore
 import RectoSync
 
@@ -9,6 +10,7 @@ public struct DocumentState: Sendable, Equatable {
   public var localId: String
   public var convexId: String?
   public var title: String
+  public var titleMode: TitleMode
   /// The text the editor should show: the pending draft when there is one,
   /// otherwise the materialized head.
   public var markdown: String
@@ -68,6 +70,7 @@ public actor DocumentSession {
   private let sync: SyncEngine?
   private let origin: String
   private let countWords: @Sendable (String) -> Int
+  private let deriveTitle: @Sendable (String) -> String
   private let now: @Sendable () -> Double
   private let schedulesTimers: Bool
 
@@ -93,6 +96,9 @@ public actor DocumentSession {
   private var isFrozen = false
   /// The mirror this session was reading no longer exists. Terminal.
   private var isInvalidated = false
+  /// The app's editor ingress derives this draft's title on its own latest-wins
+  /// lane. Recovery and non-editor callers still derive inside the session.
+  private var editorTitleLaneOwnsDraft = false
 
   /// Tail of the transition queue. Actor isolation does NOT prevent reentrancy:
   /// every `await` is a place another window's keystroke can run a whole edit.
@@ -124,6 +130,7 @@ public actor DocumentSession {
     sync: SyncEngine?,
     origin: String,
     countWords: @escaping @Sendable (String) -> Int = RectoWordCount.plainText,
+    deriveTitle: @escaping @Sendable (String) -> String = MarkdownTitle.derive,
     now: @escaping @Sendable () -> Double = { Date().timeIntervalSince1970 * 1000 },
     schedulesTimers: Bool = true
   ) {
@@ -132,6 +139,7 @@ public actor DocumentSession {
     self.sync = sync
     self.origin = origin
     self.countWords = countWords
+    self.deriveTitle = deriveTitle
     self.now = now
     self.schedulesTimers = schedulesTimers
   }
@@ -187,19 +195,28 @@ public actor DocumentSession {
     // recovery draft is on disk but invisible: the editor would show the head and
     // the user's last sentences would look lost.
     let recoveredIngress = document.editorIngressRevision != nil
-    if let draft = document.draftMarkdown {
+    let cleanRecoveredIngress = recoveredIngress && document.draftMarkdown == markdown
+    if let draft = document.draftMarkdown, !cleanRecoveredIngress {
       restored.restorePendingDraft(
         markdown: draft, selection: document.draftSelection, now: now())
     }
     controller = restored
+    var repairedRecoveredTitle = false
 
     // A synchronous editor ingress can survive a kill before its async worker
     // runs. Promote that recovered draft to a node/outbox job during open so a
     // read-only relaunch will still sync it after connectivity returns.
-    if recoveredIngress { try await performFlush() }
+    if cleanRecoveredIngress {
+      repairedRecoveredTitle = try await repairRecoveredEditorTitle(
+        markdown: markdown, revision: document.draftRevision)
+      try await reload()
+    } else if recoveredIngress {
+      try await performFlush()
+    }
 
     if let sync {
       await sync.openDocument(localId: documentLocalId)
+      if repairedRecoveredTitle { await sync.requestDrain() }
       eventTask = Task { [weak self] in
         for await event in await sync.events {
           guard let self else { break }
@@ -253,6 +270,7 @@ public actor DocumentSession {
       localId: document.localId,
       convexId: document.convexId,
       title: document.title,
+      titleMode: document.titleMode,
       markdown: controller?.draft ?? document.displayMarkdown,
       head: document.localHeadNodeId,
       wordCount: document.wordCount,
@@ -384,13 +402,16 @@ public actor DocumentSession {
       if stored?.localHeadNodeId != document?.localHeadNodeId {
         try await rebuildControllerFromStore()
       }
+      editorTitleLaneOwnsDraft = true
       generation = persistedGeneration
     } else {
       // Write-ahead: the text is on disk BEFORE any in-memory state moves. A
       // crash between here and the commit loses nothing.
+      editorTitleLaneOwnsDraft = false
       generation = try await store.saveDraft(
         documentLocalId: documentLocalId, markdown: markdown, selection: selection,
-        wordCount: countWords(markdown), job: nil, now: timestamp)
+        wordCount: countWords(markdown), title: derivedTitle(for: markdown), job: nil,
+        now: timestamp)
     }
     guard let document else { throw SessionError.notOpen }
 
@@ -405,7 +426,8 @@ public actor DocumentSession {
       var head = document.localHeadNodeId
       for commit in commits {
         let persisted = try await persist(
-          commit, base: head, expectedDraftRevision: expectedGeneration, at: timestamp)
+          commit, base: head, expectedDraftRevision: expectedGeneration,
+          includeDerivedTitle: !editorTitleLaneOwnsDraft, at: timestamp)
         head = persisted.localHeadNodeId
         expectedGeneration = persisted.draftRevision
       }
@@ -427,6 +449,7 @@ public actor DocumentSession {
     }
 
     try await reload()
+    editorTitleLaneOwnsDraft = self.document?.editorIngressRevision != nil
     guard self.document?.draftRevision == expectedGeneration else {
       try await rebuildControllerFromStore()
       publish()
@@ -477,7 +500,8 @@ public actor DocumentSession {
       do {
         _ = try await persist(
           commit, base: document.localHeadNodeId,
-          expectedDraftRevision: document.draftRevision, at: now())
+          expectedDraftRevision: document.draftRevision,
+          includeDerivedTitle: !editorTitleLaneOwnsDraft, at: now())
         controller = staged
       } catch {
         logger.error(
@@ -487,6 +511,7 @@ public actor DocumentSession {
         return
       }
       try await reload()
+      editorTitleLaneOwnsDraft = self.document?.editorIngressRevision != nil
       publish()
       await sync?.requestDrain()
     }
@@ -510,9 +535,11 @@ public actor DocumentSession {
     if let document, let commit = staged?.flush() {
       _ = try await persist(
         commit, base: document.localHeadNodeId,
-        expectedDraftRevision: document.draftRevision, at: now())
+        expectedDraftRevision: document.draftRevision,
+        includeDerivedTitle: !editorTitleLaneOwnsDraft, at: now())
       controller = staged
       try await reload()
+      editorTitleLaneOwnsDraft = self.document?.editorIngressRevision != nil
       publish()
     }
     await sync?.requestDrain()
@@ -522,10 +549,12 @@ public actor DocumentSession {
     _ commit: GroupCommit,
     base: String,
     expectedDraftRevision: Int? = nil,
+    includeDerivedTitle: Bool = true,
     at timestamp: Double
   ) async throws -> DocumentRecord
   {
     let words = countWords(commit.markdown)
+    let title = includeDerivedTitle ? derivedTitle(for: commit.markdown) : nil
     let node = DocNodeRecord(
       documentLocalId: documentLocalId,
       nodeId: commit.nodeId,
@@ -541,12 +570,15 @@ public actor DocumentSession {
       clientMutationId: ulid(),
       baseHeadNodeId: commit.parentNodeId,
       payload: OutboxPayload.commit(
-        commit, origin: origin, createdAt: timestamp, wordCount: words
+        commit, origin: origin, createdAt: timestamp, wordCount: words,
+        title: title
       ).encoded,
       createdAt: timestamp)
 
     return try await store.commit(
       documentLocalId: documentLocalId, node: node, markdown: commit.markdown, wordCount: words,
+      title: title,
+      preserveQueuedDraftJob: !includeDerivedTitle,
       expectedHeadNodeId: base, expectedDraftRevision: expectedDraftRevision,
       job: job, now: timestamp)
   }
@@ -599,14 +631,17 @@ public actor DocumentSession {
     if let document, let commit = controller?.flush() {
       _ = try await persist(
         commit, base: document.localHeadNodeId,
-        expectedDraftRevision: document.draftRevision, at: now())
+        expectedDraftRevision: document.draftRevision,
+        includeDerivedTitle: !editorTitleLaneOwnsDraft, at: now())
       try await reload()
+      editorTitleLaneOwnsDraft = self.document?.editorIngressRevision != nil
     }
     guard let base = document?.localHeadNodeId else { return }
 
     let markdown = try await store.materializedMarkdown(
       documentLocalId: documentLocalId, nodeId: nodeId)
     let words = countWords(markdown)
+    let title = derivedTitle(for: markdown)
     let timestamp = now()
     let job = OutboxJob(
       documentLocalId: documentLocalId,
@@ -615,7 +650,8 @@ public actor DocumentSession {
       baseHeadNodeId: nodeId,
       // The event time, so a retry of this move cannot outrank a later one.
       payload: OutboxPayload(
-        nodeId: nodeId, createdAt: timestamp, markdown: markdown, wordCount: words
+        title: title, nodeId: nodeId, createdAt: timestamp,
+        markdown: markdown, wordCount: words
       ).encoded,
       createdAt: timestamp)
 
@@ -623,6 +659,7 @@ public actor DocumentSession {
     // stale, and applying it would strand the newer node's queued commit.
     _ = try await store.moveHead(
       documentLocalId: documentLocalId, to: nodeId, markdown: markdown, wordCount: words,
+      title: title,
       expectedHeadNodeId: base, job: job, now: timestamp)
     controller?.setCurrent(
       nodeId: nodeId, markdown: markdown,
@@ -703,11 +740,13 @@ public actor DocumentSession {
           patch: patch.encoded, snapshot: nil, selection: nil, origin: origin,
           createdAt: timestamp)
         let words = countWords(localMarkdown)
+        let title = derivedTitle(for: localMarkdown)
         let job = OutboxJob(
           documentLocalId: documentLocalId, kind: .commitEdit, clientMutationId: ulid(),
           baseHeadNodeId: remoteHead,
           payload: OutboxPayload(
-            nodeId: nodeId, parentNodeId: remoteHead, patch: patch.encoded, snapshot: nil,
+            title: title, nodeId: nodeId,
+            parentNodeId: remoteHead, patch: patch.encoded, snapshot: nil,
             selection: nil, origin: origin, createdAt: timestamp, markdown: localMarkdown,
             wordCount: words
           ).encoded,
@@ -717,11 +756,13 @@ public actor DocumentSession {
           documentLocalId: documentLocalId, expecting: expectation,
           remoteMarkdown: remoteMarkdown, remoteWordCount: remoteWords,
           rebasedNode: node, rebasedMarkdown: localMarkdown, rebasedWordCount: words,
+          title: title,
           rebasedJob: job, now: timestamp)
       } else {
         try await store.resolveKeepingRemote(
           documentLocalId: documentLocalId, expecting: expectation,
-          markdown: remoteMarkdown, wordCount: remoteWords, now: now())
+          markdown: remoteMarkdown, wordCount: remoteWords,
+          title: derivedTitle(for: remoteMarkdown), now: now())
       }
     } catch {
       await sync?.endExclusiveQueue(localId: documentLocalId, release: shouldRelease)
@@ -784,6 +825,30 @@ public actor DocumentSession {
     nodesById = indexNodes(try await store.nodes(documentLocalId: documentLocalId).map(\.docNode))
   }
 
+  private func derivedTitle(for markdown: String) -> String? {
+    guard document?.titleMode == .derived else { return nil }
+    return deriveTitle(markdown)
+  }
+
+  private func repairRecoveredEditorTitle(markdown: String, revision: Int) async throws -> Bool {
+    guard let title = derivedTitle(for: markdown) else { return false }
+    let timestamp = now()
+    let job = OutboxJob(
+      documentLocalId: documentLocalId,
+      kind: .draftSave,
+      clientMutationId: ulid(),
+      payload: OutboxPayload(
+        title: title, markdown: markdown, wordCount: countWords(markdown)
+      ).encoded,
+      createdAt: timestamp)
+    return try await store.finishEditorIngressTitle(
+      documentLocalId: documentLocalId,
+      markdown: markdown,
+      expectedDraftRevision: revision,
+      title: title,
+      job: job)
+  }
+
   private func children(of nodeId: String) -> [String] {
     nodesById.values
       .filter { $0.parentNodeId == nodeId }
@@ -837,17 +902,21 @@ public actor DocumentSession {
     guard !isFrozen else { return }
     guard let document else { return }
     let words = countWords(markdown)
+    let title = derivedTitle(for: markdown)
     let job = OutboxJob(
       documentLocalId: documentLocalId,
       kind: .draftSave,
       clientMutationId: ulid(),
       baseHeadNodeId: document.localHeadNodeId,
-      payload: OutboxPayload(markdown: markdown, wordCount: words).encoded,
+      payload: OutboxPayload(
+        title: title, markdown: markdown, wordCount: words
+      ).encoded,
       createdAt: now())
     do {
       _ = try await store.saveDraft(
         documentLocalId: documentLocalId, markdown: markdown, selection: selection,
-        wordCount: words, job: job, expectedDraftRevision: expectedDraftRevision, now: now())
+        wordCount: words, title: title, job: job,
+        expectedDraftRevision: expectedDraftRevision, now: now())
       try await reload()
     } catch StoreError.staleGeneration {
       // A newer change already landed. Dropping this is the point.

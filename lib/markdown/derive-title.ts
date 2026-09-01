@@ -34,5 +34,11 @@ export function deriveTitleFromMdast(root: Root): string {
 		if (title.length > 0) return;
 		title = phrasingToText(node.children).trim();
 	});
+	if (title.length > 0) return title;
+
+	visit(root, "paragraph", (node) => {
+		if (title.length > 0) return;
+		title = phrasingToText(node.children).trim();
+	});
 	return title.length > 0 ? title : "Untitled";
 }

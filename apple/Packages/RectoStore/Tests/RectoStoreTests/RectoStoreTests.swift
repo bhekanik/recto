@@ -733,6 +733,9 @@ struct MigrationTests {
     #expect(document.remotePointerRevision == 0)
     #expect(document.remoteMarkdownHeadNodeId == nil)
     #expect(document.draftRevision == 0)
+    #expect(document.titleMode == .manual)
+    #expect(document.remoteTitleUpdatedAt == nil)
+    #expect(!document.editorIngressAcknowledged)
 
     #expect(try await store.nodes(documentLocalId: "doc-1").count == 3)
 
@@ -747,6 +750,120 @@ struct MigrationTests {
     try await store.setSyncState(
       documentLocalId: "doc-1", .pending, remotePointerRevision: 3)
     #expect(try await store.document(localId: "doc-1")?.remotePointerRevision == 3)
+  }
+
+  @Test("a recorded partial v6 schema is repaired without losing local work")
+  func repairsPartialV6Schema() async throws {
+    let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appending(path: "recto-partial-v6-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: directory) }
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let url = directory.appending(path: "recto.sqlite")
+
+    do {
+      let pool = try RectoStore.openAtSchemaVersion(url: url, target: Migrations.v7)
+      try await pool.write { db in
+        let columns = try db.columns(in: "documents")
+        #expect(!columns.contains { $0.name == "remoteTitleUpdatedAt" })
+        try db.execute(
+          sql: """
+            INSERT INTO documents
+              (localId, title, titleMode, markdown, draftMarkdown, wordCount, localHeadNodeId,
+               draftRevision, editorIngressRevision, editorIngressAcknowledged,
+               syncState, updatedAt, createdAt)
+            VALUES ('kept', 'Kept', 'derived', 'head', 'draft', 1, 'root', 4, 4, 1,
+                    'pending', 5, 1)
+            """)
+        try db.execute(
+          sql: """
+            INSERT INTO doc_nodes
+              (documentLocalId, nodeId, patch, snapshot, origin, createdAt, synced)
+            VALUES ('kept', 'root', '{"from":0,"to":0,"insert":"head"}', 'head',
+                    'mac', 1, 0)
+            """)
+        try db.execute(
+          sql: """
+            INSERT INTO outbox
+              (documentLocalId, kind, clientMutationId, baseHeadNodeId, payload, attempts,
+               nextAttemptAt, createdAt)
+            VALUES ('kept', 'draftSave', 'KEEP-ME', 'root', '{"markdown":"draft"}', 2,
+                    99, 2)
+            """)
+      }
+      try pool.close()
+    }
+
+    let store = try RectoStore(url: url)
+    let kept = try #require(try await store.document(localId: "kept"))
+    #expect(kept.titleMode == .derived)
+    #expect(kept.draftMarkdown == "draft")
+    #expect(kept.editorIngressRevision == 4)
+    #expect(kept.editorIngressAcknowledged)
+    #expect(kept.remoteTitleUpdatedAt == nil)
+    let keptJob = try #require(try await store.pendingJobs(documentLocalId: "kept").first)
+    #expect(keptJob.clientMutationId == "KEEP-ME")
+    #expect(keptJob.attempts == 2)
+    #expect(keptJob.nextAttemptAt == 99)
+
+    let created = DocumentRecord(
+      localId: "created", title: "Created", titleMode: .derived, markdown: "", wordCount: 0,
+      localHeadNodeId: "created-root", syncState: .pending, updatedAt: 10, createdAt: 10)
+    let root = DocNodeRecord(
+      documentLocalId: "created", nodeId: "created-root", parentNodeId: nil,
+      patch: TextPatch(from: 0, to: 0, insert: "").encoded, snapshot: "", origin: "mac",
+      createdAt: 10)
+    let createJob = OutboxJob(
+      documentLocalId: "created", kind: .createDocument, clientMutationId: "CREATE-AFTER-V8",
+      payload: "{}", createdAt: 10)
+    _ = try await store.createLocalDocument(created, rootNode: root, createJob: createJob)
+    #expect(try await store.document(localId: "created") != nil)
+  }
+
+  @Test("v8 accepts a schema that already has the remote title revision")
+  func acceptsCompleteV6Schema() async throws {
+    let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appending(path: "recto-complete-v6-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: directory) }
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let url = directory.appending(path: "recto.sqlite")
+
+    do {
+      let pool = try RectoStore.openAtSchemaVersion(url: url, target: Migrations.v7)
+      try await pool.write { db in
+        try db.alter(table: "documents") { t in
+          t.add(column: "remoteTitleUpdatedAt", .double)
+        }
+        try db.execute(
+          sql: """
+            INSERT INTO documents
+              (localId, title, titleMode, markdown, wordCount, localHeadNodeId,
+               remoteTitleUpdatedAt, syncState, updatedAt, createdAt)
+            VALUES ('complete', 'Complete', 'manual', '', 0, 'root', 42, 'synced', 5, 1)
+            """)
+      }
+      try pool.close()
+    }
+
+    let store = try RectoStore(url: url)
+    #expect(try await store.document(localId: "complete")?.remoteTitleUpdatedAt == 42)
+  }
+
+  @Test("a v5 database reaches the current insert schema")
+  func upgradesFromV5() async throws {
+    let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appending(path: "recto-v5-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: directory) }
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let url = directory.appending(path: "recto.sqlite")
+    let pool = try RectoStore.openAtSchemaVersion(url: url, target: Migrations.v5)
+    try pool.close()
+
+    let store = try RectoStore(url: url)
+    let document = DocumentRecord(
+      localId: "after-v5", title: "After v5", markdown: "", wordCount: 0,
+      localHeadNodeId: "root", syncState: .pending, updatedAt: 1, createdAt: 1)
+    try await store.save(document)
+    #expect(try await store.document(localId: "after-v5") != nil)
   }
 }
 
@@ -818,13 +935,22 @@ struct RemoteFieldUpdateTests {
 
     let updated = try #require(try await store.document(localId: "doc-1"))
     #expect(updated.title == "renamed elsewhere")
-    #expect(updated.remoteUpdatedAt == 99)
+    #expect(updated.remoteUpdatedAt == afterEdit.remoteUpdatedAt)
+    #expect(updated.remoteTitleUpdatedAt == 99)
     // Everything a whole-record save from `stale` would have reverted:
     #expect(updated.draftMarkdown == "typed after the list arrived")
     #expect(updated.draftRevision == afterEdit.draftRevision)
     #expect(updated.syncState == afterEdit.syncState)
     #expect(updated.localHeadNodeId == afterEdit.localHeadNodeId)
     #expect(stale.draftMarkdown == nil, "the stale copy really did predate the edit")
+
+    #expect(
+      try await store.updateRemoteTitle(
+        documentLocalId: "doc-1", title: "renamed elsewhere", remoteUpdatedAt: 100))
+    #expect(
+      try await !store.updateRemoteTitle(
+        documentLocalId: "doc-1", title: "stale rename", remoteUpdatedAt: 99))
+    #expect(try await store.document(localId: "doc-1")?.title == "renamed elsewhere")
   }
 }
 

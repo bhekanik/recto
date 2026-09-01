@@ -23,7 +23,7 @@ export function DocumentSwitcher({
 	open,
 	onOpenChange,
 }: DocumentSwitcherProps) {
-	const { workspace, actions, registry } = useWorkspace();
+	const { workspace, actions } = useWorkspace();
 	const documents = useQuery(api.documents.list, open ? {} : "skip");
 	// Docs shared WITH the caller — a SEPARATE query (not merged into
 	// documents.list) so the switcher's optimistic-update contract is untouched.
@@ -40,6 +40,7 @@ export function DocumentSwitcher({
 				{
 					_id: crypto.randomUUID() as Id<"documents">,
 					title: "Untitled",
+					titleMode: "derived" as const,
 					wordCount: 0,
 					updatedAt: now,
 					documentUuid: undefined,
@@ -60,6 +61,7 @@ export function DocumentSwitcher({
 						? {
 								...doc,
 								title: args.title.trim() || "Untitled",
+								titleMode: "manual" as const,
 								updatedAt: Date.now(),
 							}
 						: doc,
@@ -131,12 +133,11 @@ export function DocumentSwitcher({
 		setPending(true);
 		try {
 			await renameDocument({ documentId: renameId, title: renameValue });
-			registry.markManualRename(renameId);
 			setRenameId(null);
 		} finally {
 			setPending(false);
 		}
-	}, [registry, renameDocument, renameId, renameValue]);
+	}, [renameDocument, renameId, renameValue]);
 
 	const handleDelete = useCallback(
 		async (documentId: Id<"documents">, title: string) => {

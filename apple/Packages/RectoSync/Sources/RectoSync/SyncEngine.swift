@@ -225,15 +225,18 @@ public actor SyncEngine: SyncControlling {
         try await hydrate(convexId: summary.id, generation: generation)
         continue
       }
-      let titleChanged = local.title != summary.title
+      let titleChanged = local.title != summary.title || local.titleMode != summary.titleMode
+      let titleMetadataMayHaveChanged =
+        titleChanged || summary.updatedAt > (local.remoteTitleUpdatedAt ?? -1)
       let bodyMayHaveChanged = summary.updatedAt > (local.remoteUpdatedAt ?? -1)
-      guard titleChanged || bodyMayHaveChanged else { continue }
+      guard titleMetadataMayHaveChanged || bodyMayHaveChanged else { continue }
 
-      if titleChanged {
+      if titleMetadataMayHaveChanged {
         // Title only. `local` was read before this loop and a session may have
         // written a draft or a new head since; a whole-record save would revert it.
-        try await store.updateRemoteTitle(
-          documentLocalId: local.localId, title: summary.title, remoteUpdatedAt: nil)
+        _ = try await store.updateRemoteTitle(
+          documentLocalId: local.localId, title: summary.title, titleMode: summary.titleMode,
+          remoteUpdatedAt: summary.updatedAt)
       }
       // `documents.list` carries no body. A newer `updatedAt` on a document we
       // already have can be another device's draft save, which only `get`
@@ -302,6 +305,7 @@ public actor SyncEngine: SyncControlling {
 
     let adopted = try await store.adoptServerDraft(
       documentLocalId: localId, markdown: remote.markdown, wordCount: Int(remote.wordCount),
+      title: remote.title,
       stampedHeadNodeId: stamp, remoteUpdatedAt: remote.updatedAt)
     if adopted { emit(.documentChanged(localId: localId)) }
     if headMoved {
@@ -337,11 +341,13 @@ public actor SyncEngine: SyncControlling {
       localId: localId,
       convexId: remote.id,
       title: remote.title,
+      titleMode: remote.titleMode,
       markdown: remote.markdown,
       wordCount: Int(remote.wordCount),
       localHeadNodeId: remote.currentNodeId,
       remoteHeadNodeId: remote.currentNodeId,
       remoteUpdatedAt: remote.updatedAt,
+      remoteTitleUpdatedAt: remote.updatedAt,
       remotePointerRevision: remote.pointerRevision,
       remoteMarkdownHeadNodeId: remote.markdownHeadNodeId,
       syncState: .synced,
@@ -997,7 +1003,8 @@ public actor SyncEngine: SyncControlling {
         // jobs in this document's FIFO queue legitimately bump the revision, and
         // sending the enqueue-time value would make our own commit reject our
         // own undo.
-        expectedPointerRevision: document.remotePointerRevision ?? 0)
+        expectedPointerRevision: document.remotePointerRevision ?? 0,
+        title: payload.title)
       guard response.applied else {
         // Deliberately do NOT record the response's revision here. `reconcileHead`
         // compares the freshly fetched revision against the one still on the
@@ -1045,7 +1052,8 @@ public actor SyncEngine: SyncControlling {
       }
       try await store.acknowledgeEditorIngress(
         documentLocalId: document.localId,
-        markdown: payload.markdown ?? document.displayMarkdown)
+        markdown: payload.markdown ?? document.displayMarkdown,
+        title: payload.title)
       return .completed
 
     case .rename:
@@ -1086,6 +1094,7 @@ public actor SyncEngine: SyncControlling {
       createdAt: payload.createdAt ?? job.createdAt,
       markdown: payload.markdown ?? document.markdown,
       wordCount: payload.wordCount ?? document.wordCount,
+      title: payload.title,
       // Validated before we got here: a commit whose base head we had to guess
       // is a commit onto the wrong parent.
       expectedHeadNodeId: job.baseHeadNodeId ?? "",

@@ -108,6 +108,67 @@ struct SyncEngineTests {
     let documents = try await store.documents()
     #expect(documents.count == 1)
     #expect(documents.first?.title == "native-spike-after")
+    #expect(documents.first?.titleMode == .manual)
+  }
+
+  @Test("a stale summary cannot undo an offline same-value rename")
+  func pendingManualRenameWinsOverStaleSummary() async throws {
+    let transport = InMemoryTransport()
+    let seeded = await transport.seedDocument(title: "same visible title")
+    let (store, engine) = try makeEngine(transport)
+    try await engine.mirrorLibrary(await transport.summaries())
+    let local = try #require(try await store.documents().first)
+    #expect(local.titleMode == .derived)
+
+    let rename = OutboxJob(
+      documentLocalId: local.localId, kind: .rename, clientMutationId: ulid(),
+      payload: OutboxPayload(title: local.title).encoded, createdAt: 1)
+    _ = try await store.renameDocument(
+      documentLocalId: local.localId, title: local.title, job: rename, now: 1)
+
+    try await engine.mirrorLibrary(await transport.summaries())
+    var renamed = try #require(try await store.document(localId: local.localId))
+    #expect(renamed.title == local.title)
+    #expect(renamed.titleMode == .manual)
+
+    try await transport.rename(documentId: seeded.documentId, title: "authoritative remote")
+    let pendingJobs = try await store.pendingJobs(documentLocalId: local.localId)
+    let pendingRename = try #require(
+      pendingJobs.first { $0.kind == .rename })
+    try await store.completeJob(id: try #require(pendingRename.id))
+    try await engine.mirrorLibrary(await transport.summaries())
+
+    renamed = try #require(try await store.document(localId: local.localId))
+    #expect(renamed.title == "authoritative remote")
+    #expect(renamed.titleMode == .manual)
+  }
+
+  @Test("a pending derived edit wins over remote derived metadata but not remote manual metadata")
+  func pendingDerivedTitleHasProvenanceFence() async throws {
+    let transport = InMemoryTransport()
+    let seeded = await transport.seedDocument(title: "remote derived")
+    let (store, engine) = try makeEngine(transport)
+    try await engine.mirrorLibrary(await transport.summaries())
+    let local = try #require(try await store.documents().first)
+    let payload = OutboxPayload(
+      title: "local derived", markdown: "# local derived", wordCount: 2)
+    let job = OutboxJob(
+      documentLocalId: local.localId, kind: .draftSave, clientMutationId: ulid(),
+      payload: payload.encoded, createdAt: 1)
+    _ = try await store.saveDraft(
+      documentLocalId: local.localId, markdown: "# local derived", selection: nil,
+      wordCount: 2, title: "local derived", job: job, now: 1)
+
+    try await engine.mirrorLibrary(await transport.summaries())
+    var updated = try #require(try await store.document(localId: local.localId))
+    #expect(updated.title == "local derived")
+    #expect(updated.titleMode == .derived)
+
+    try await transport.rename(documentId: seeded.documentId, title: "remote manual")
+    try await engine.mirrorLibrary(await transport.summaries())
+    updated = try #require(try await store.document(localId: local.localId))
+    #expect(updated.title == "remote manual")
+    #expect(updated.titleMode == .manual)
   }
 
   @Test("a document deleted elsewhere is dropped locally")

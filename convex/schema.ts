@@ -6,6 +6,9 @@ export default defineSchema({
 	documents: defineTable({
 		userId: v.string(),
 		title: v.string(),
+		// Optional during rollout. Missing means manual so an old title is never
+		// replaced by a derived one before the bounded backfill reaches it.
+		titleMode: v.optional(v.union(v.literal("derived"), v.literal("manual"))),
 		markdown: v.string(),
 		wordCount: v.number(),
 		currentNodeId: v.string(),

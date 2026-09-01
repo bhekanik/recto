@@ -30,6 +30,10 @@ export function utf8Length(value: string): number {
 export const MARKDOWN_TOO_LARGE_MESSAGE =
 	"Document exceeds the ~1 MiB size limit; split it into multiple documents.";
 
+function nextDocumentUpdatedAt(previous: number): number {
+	return Math.max(Date.now(), previous + 1);
+}
+
 /**
  * Client-generated ids are ULIDs (26 chars) but legacy roots are UUIDs, so the
  * shape is not pinned — only that an id is a plausible non-empty identifier.
@@ -121,6 +125,7 @@ export const list = query({
 		return rows.map((row) => ({
 			_id: row._id,
 			title: row.title,
+			titleMode: row.titleMode ?? ("manual" as const),
 			wordCount: row.wordCount,
 			updatedAt: row.updatedAt,
 			documentUuid: row.documentUuid,
@@ -154,6 +159,7 @@ export const get = query({
 		return {
 			_id: doc._id,
 			title: doc.title,
+			titleMode: doc.titleMode ?? ("manual" as const),
 			markdown: doc.markdown,
 			wordCount: doc.wordCount,
 			currentNodeId: doc.currentNodeId,
@@ -216,6 +222,7 @@ export const create = mutation({
 		const documentId = await ctx.db.insert("documents", {
 			userId,
 			title,
+			titleMode: "derived",
 			markdown: "",
 			wordCount: 0,
 			currentNodeId: rootNodeId,
@@ -309,6 +316,7 @@ export const updateCurrentNodeId = mutation({
 		currentNodeId: v.string(),
 		markdown: v.string(),
 		wordCount: v.number(),
+		title: v.optional(v.string()),
 		updatedAt: v.number(),
 		/**
 		 * The pointerRevision the caller last observed. When given, the move is a
@@ -356,8 +364,8 @@ export const updateCurrentNodeId = mutation({
 				pointerRevision: doc.pointerRevision ?? 0,
 			};
 		}
-		const updatedAt = Date.now();
-		await ctx.db.patch(args.documentId, {
+		const updatedAt = nextDocumentUpdatedAt(doc.updatedAt);
+		const patch = {
 			currentNodeId: args.currentNodeId,
 			markdown: args.markdown,
 			wordCount: args.wordCount,
@@ -365,7 +373,13 @@ export const updateCurrentNodeId = mutation({
 			pointerRevision,
 			// This writes the materialization of the node it is pointing at.
 			markdownHeadNodeId: args.currentNodeId,
-		});
+		};
+		await ctx.db.patch(
+			args.documentId,
+			doc.titleMode === "derived" && args.title !== undefined
+				? { ...patch, title: args.title.trim() || "Untitled" }
+				: patch,
+		);
 		await syncBlobReferences(ctx, doc.userId, "document", args.documentId, [
 			args.markdown,
 		]);
@@ -436,6 +450,7 @@ export const commitEdit = mutation({
 		}),
 		markdown: v.string(),
 		wordCount: v.number(),
+		title: v.optional(v.string()),
 		/** The document head the caller believes it is committing onto. */
 		expectedHeadNodeId: v.string(),
 		/** Caller-generated idempotency key for this commit attempt. */
@@ -539,9 +554,9 @@ export const commitEdit = mutation({
 			};
 		}
 
-		const updatedAt = Date.now();
+		const updatedAt = nextDocumentUpdatedAt(doc.updatedAt);
 		const pointerRevision = (doc.pointerRevision ?? 0) + 1;
-		await ctx.db.patch(args.documentId, {
+		const patch = {
 			currentNodeId: args.node.nodeId,
 			markdown: args.markdown,
 			wordCount: args.wordCount,
@@ -554,7 +569,13 @@ export const commitEdit = mutation({
 				updatedAt,
 				pointerRevision,
 			},
-		});
+		};
+		await ctx.db.patch(
+			args.documentId,
+			doc.titleMode === "derived" && args.title !== undefined
+				? { ...patch, title: args.title.trim() || "Untitled" }
+				: patch,
+		);
 		await syncBlobReferences(ctx, doc.userId, "document", args.documentId, [
 			args.markdown,
 		]);
@@ -575,10 +596,11 @@ export const rename = mutation({
 		title: v.string(),
 	},
 	handler: async (ctx, args) => {
-		await requireOwnedDocument(ctx, args.documentId);
+		const doc = await requireOwnedDocument(ctx, args.documentId);
 		await ctx.db.patch(args.documentId, {
 			title: args.title.trim() || "Untitled",
-			updatedAt: Date.now(),
+			titleMode: "manual",
+			updatedAt: nextDocumentUpdatedAt(doc.updatedAt),
 		});
 	},
 });
@@ -631,7 +653,7 @@ export const updateMarkdown = mutation({
 			};
 		}
 
-		const updatedAt = Date.now();
+		const updatedAt = nextDocumentUpdatedAt(doc.updatedAt);
 		const patch: {
 			markdown: string;
 			wordCount: number;
@@ -648,7 +670,7 @@ export const updateMarkdown = mutation({
 			// into a branch it never belonged to (ADR-19, deployment window).
 			markdownHeadNodeId: args.expectedHeadNodeId,
 		};
-		if (args.title !== undefined) {
+		if (doc.titleMode === "derived" && args.title !== undefined) {
 			patch.title = args.title.trim() || "Untitled";
 		}
 

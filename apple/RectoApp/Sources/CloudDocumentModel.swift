@@ -112,7 +112,7 @@ final class CloudDocumentModel {
     }
 
     var pendingEditCount: Int { edits.pendingCount }
-    var editError: String? { edits.lastError ?? errorMessage }
+    var editError: String? { edits.lastError ?? edits.lastTitleError ?? errorMessage }
 
     func accept(_ markdown: String) {
         guard markdown != storage.markdown || markdown != state.markdown else { return }

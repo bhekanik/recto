@@ -55,7 +55,8 @@ struct Harness {
     let remote = try await transport.getDocument(documentId: response.documentId)!
     try await store.save(
       DocumentRecord(
-        localId: localId, convexId: remote.id, title: remote.title, markdown: remote.markdown,
+        localId: localId, convexId: remote.id, title: remote.title, titleMode: remote.titleMode,
+        markdown: remote.markdown,
         wordCount: Int(remote.wordCount), localHeadNodeId: remote.currentNodeId,
         remoteHeadNodeId: remote.currentNodeId, remoteUpdatedAt: remote.updatedAt,
         syncState: .synced, updatedAt: remote.updatedAt, createdAt: remote.createdAt))

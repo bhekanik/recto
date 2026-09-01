@@ -186,7 +186,7 @@ function OwnerSyncHost({
 		serverCurrentNodeId: document?.currentNodeId,
 		enabled,
 		deriveTitle: deriveTitleFromMarkdown,
-		isManualTitle: registry.isManuallyRenamed(documentId),
+		isManualTitle: document?.titleMode !== "derived",
 		getCurrentHeadNodeId,
 		getHasPendingDraft,
 		reconcileRemote,

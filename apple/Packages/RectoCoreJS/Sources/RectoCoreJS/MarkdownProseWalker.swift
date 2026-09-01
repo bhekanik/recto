@@ -13,7 +13,7 @@ extension MarkdownProse {
             lines = Self.splitLines(source)
         }
 
-        func run() -> (prose: String, headings: [OutlineHeading]) {
+        func run() -> (prose: String, headings: [OutlineHeading], firstParagraph: String?) {
             var definitionScanner = BlockScanner(
                 source: source, lines: lines, definitionLabels: [], footnoteDefinitionLabels: [])
             let definitions = definitionScanner.run(allowsFrontmatter: true)
@@ -24,7 +24,8 @@ extension MarkdownProse {
             let result = scanner.run(allowsFrontmatter: true)
             return (
                 String(decoding: result.prose, as: UTF16.self),
-                result.headings
+                result.headings,
+                result.firstParagraph.map { String(decoding: $0, as: UTF16.self) }
             )
         }
 
@@ -255,6 +256,7 @@ private struct SourceLine {
 private struct BlockResult {
     var prose: [UInt16] = []
     var headings: [OutlineHeading] = []
+    var firstParagraph: [UInt16]?
     var definitionLabels: Set<String> = []
     var footnoteDefinitionLabels: Set<String> = []
 }
@@ -434,6 +436,7 @@ private struct BlockScanner {
         result.prose.append(contentsOf: nested.prose)
         result.definitionLabels.formUnion(nested.definitionLabels)
         result.footnoteDefinitionLabels.formUnion(nested.footnoteDefinitionLabels)
+        if result.firstParagraph == nil { result.firstParagraph = nested.firstParagraph }
         for heading in nested.headings {
             result.headings.append(
                 OutlineHeading(
@@ -601,8 +604,10 @@ private struct BlockScanner {
             }
         }
 
-        result.prose.append(contentsOf: inlineContent(paragraphLines).prose)
+        let inline = inlineContent(paragraphLines)
+        result.prose.append(contentsOf: inline.prose)
         result.prose.append(ASCII.space)
+        if result.firstParagraph == nil { result.firstParagraph = inline.flattened }
         return cursor
     }
 
@@ -1864,7 +1869,7 @@ private struct InlineScanner {
 /// Matches JavaScript `String.trim` rather than Foundation's whitespace sets.
 /// JavaScript `\s` excludes U+200B ZERO WIDTH SPACE, while
 /// `CharacterSet.whitespacesAndNewlines` includes it.
-private func trimJSWhitespace(_ value: String) -> String {
+func trimJSWhitespace(_ value: String) -> String {
     var start = value.unicodeScalars.startIndex
     var end = value.unicodeScalars.endIndex
     while start < end, MarkdownProse.isJSWhitespace(value.unicodeScalars[start]) {

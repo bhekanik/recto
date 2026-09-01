@@ -58,6 +58,7 @@ public actor DocumentLibrary {
     let document = DocumentRecord(
       localId: localId,
       title: title,
+      titleMode: .derived,
       markdown: "",
       wordCount: 0,
       localHeadNodeId: rootNodeId,
@@ -88,5 +89,22 @@ public actor DocumentLibrary {
       createJob: createJob)
     await sync?.requestDrain()
     return created
+  }
+
+  @discardableResult
+  public func renameDocument(localId: String, title: String) async throws -> DocumentRecord {
+    let normalized = title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      ? "Untitled" : title.trimmingCharacters(in: .whitespacesAndNewlines)
+    let timestamp = now()
+    let job = OutboxJob(
+      documentLocalId: localId,
+      kind: .rename,
+      clientMutationId: makeMutationId(),
+      payload: OutboxPayload(title: normalized).encoded,
+      createdAt: timestamp)
+    let renamed = try await store.renameDocument(
+      documentLocalId: localId, title: normalized, job: job, now: timestamp)
+    await sync?.requestDrain()
+    return renamed
   }
 }

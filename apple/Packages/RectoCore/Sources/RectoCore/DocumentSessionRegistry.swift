@@ -1,5 +1,6 @@
 import Foundation
 import RectoHistory
+import RectoCoreJS
 import RectoAuth
 import RectoStore
 import RectoSync
@@ -20,6 +21,7 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
   private let sync: SyncEngine?
   private let origin: String
   private let countWords: @Sendable (String) -> Int
+  private let deriveTitle: @Sendable (String) -> String
   private let beforeFreezePass: (@Sendable () async -> Void)?
   private let beforeSessionResume: (@Sendable (String) async -> Void)?
   private var sessions: [String: DocumentSession] = [:]
@@ -52,12 +54,14 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
     store: RectoStore,
     sync: SyncEngine?,
     origin: String,
-    countWords: @escaping @Sendable (String) -> Int = RectoWordCount.plainText
+    countWords: @escaping @Sendable (String) -> Int = RectoWordCount.plainText,
+    deriveTitle: @escaping @Sendable (String) -> String = MarkdownTitle.derive
   ) {
     self.store = store
     self.sync = sync
     self.origin = origin
     self.countWords = countWords
+    self.deriveTitle = deriveTitle
     self.beforeFreezePass = nil
     self.beforeSessionResume = nil
   }
@@ -67,6 +71,7 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
     sync: SyncEngine?,
     origin: String,
     countWords: @escaping @Sendable (String) -> Int = RectoWordCount.plainText,
+    deriveTitle: @escaping @Sendable (String) -> String = MarkdownTitle.derive,
     beforeFreezePass: (@Sendable () async -> Void)? = nil,
     beforeSessionResume: @escaping @Sendable (String) async -> Void
   ) {
@@ -74,6 +79,7 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
     self.sync = sync
     self.origin = origin
     self.countWords = countWords
+    self.deriveTitle = deriveTitle
     self.beforeFreezePass = beforeFreezePass
     self.beforeSessionResume = beforeSessionResume
   }
@@ -90,7 +96,7 @@ public actor DocumentSessionRegistry: EditSessionCoordinating {
     } else {
       session = DocumentSession(
         documentLocalId: documentLocalId, store: store, sync: sync, origin: origin,
-        countWords: countWords)
+        countWords: countWords, deriveTitle: deriveTitle)
       sessions[documentLocalId] = session
     }
     holders[documentLocalId, default: 0] += 1

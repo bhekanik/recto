@@ -59,6 +59,10 @@ enum MarkdownProse {
         Walker(markdown: markdown).run().prose
     }
 
+    static func firstParagraph(in markdown: String) -> String? {
+        Walker(markdown: markdown).run().firstParagraph
+    }
+
     /// Headings in document order, with UTF-16 offsets into `markdown`.
     static func headings(in markdown: String) -> [OutlineHeading] {
         Walker(markdown: markdown).run().headings

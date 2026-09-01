@@ -12,6 +12,136 @@ import Testing
 ///  two-client fast-forward and divergence flows pass."
 @Suite("N4 acceptance")
 struct AcceptanceTests {
+  @Test("a title acknowledged before its body commit leaves no phantom ingress")
+  func titleBeforeBodyAcknowledgementSettles() async throws {
+    let directory = Harness.makeDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let server = InMemoryTransport()
+    let remote = try await server.createDocument(
+      title: "Before", documentUuid: "title-before-body-ack")
+    let harness = try Harness(directory: directory, transport: server)
+    let localId = try await harness.adoptRemoteDocument(remote, localId: "title-before-body-ack")
+    let session = DocumentSession(
+      documentLocalId: localId, store: harness.store, sync: harness.sync, origin: "mac",
+      deriveTitle: { $0 }, schedulesTimers: false)
+    try await session.open()
+    await harness.sync.start()
+    let markdown = "# Title reached the server first"
+    let generation = try harness.store.saveEditorIngressSynchronously(
+      documentLocalId: localId, markdown: markdown, selection: nil, wordCount: 5,
+      clientMutationId: ulid(),
+      draftPayload: OutboxPayload(markdown: markdown, wordCount: 5).encoded)
+    let titleJob = OutboxJob(
+      documentLocalId: localId, kind: .draftSave, clientMutationId: ulid(),
+      payload: OutboxPayload(title: markdown, markdown: markdown, wordCount: 5).encoded,
+      createdAt: 1)
+    #expect(try await harness.store.finishEditorIngressTitle(
+      documentLocalId: localId, markdown: markdown, expectedDraftRevision: generation,
+      title: markdown, job: titleJob))
+
+    await harness.sync.drainNow()
+    let titleAcknowledged = try #require(try await harness.store.document(localId: localId))
+    #expect(titleAcknowledged.markdown != markdown)
+    #expect(titleAcknowledged.editorIngressRevision != nil)
+    #expect(titleAcknowledged.editorIngressAcknowledged)
+    #expect(try await harness.store.pendingJobs(documentLocalId: localId).isEmpty)
+
+    try await session.applyPersistedLocalChange(
+      markdown: markdown, selection: nil, structural: true, generation: generation)
+    await harness.sync.drainNow()
+
+    let settled = try #require(try await harness.store.document(localId: localId))
+    let remoteSettled = try #require(try await server.getDocument(documentId: remote.documentId))
+    #expect(remoteSettled.markdown == markdown)
+    #expect(remoteSettled.title == markdown)
+    #expect(settled.draftMarkdown == nil)
+    #expect(settled.editorIngressRevision == nil)
+    #expect(!settled.editorIngressAcknowledged)
+    #expect(try await harness.store.pendingJobs(documentLocalId: localId).isEmpty)
+    #expect(try await harness.store.unsyncedWorkCount() == 0)
+    #expect(try await harness.store.nodes(documentLocalId: localId).count == 2)
+  }
+
+  @Test("opening a recovered clean head wakes an already-running sync engine")
+  func recoveredTitleRepairWakesSync() async throws {
+    let directory = Harness.makeDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let server = InMemoryTransport()
+    let remote = try await server.createDocument(
+      title: "Before", documentUuid: "recovered-title-wake")
+    let localId: String
+    let markdown = "# Recovered remotely"
+    let nodeCount: Int
+
+    do {
+      let first = try Harness(directory: directory, transport: server)
+      localId = try await first.adoptRemoteDocument(remote, localId: "recovered-title-wake")
+      let session = DocumentSession(
+        documentLocalId: localId, store: first.store, sync: first.sync, origin: "mac",
+        deriveTitle: { $0 }, schedulesTimers: false)
+      try await session.open()
+      await first.sync.start()
+
+      let generation = try first.store.saveEditorIngressSynchronously(
+        documentLocalId: localId, markdown: markdown, selection: nil, wordCount: 2,
+        clientMutationId: ulid(),
+        draftPayload: OutboxPayload(markdown: markdown, wordCount: 2).encoded)
+      try await session.applyPersistedLocalChange(
+        markdown: markdown, selection: nil, structural: true, generation: generation)
+      await first.sync.drainNow()
+
+      // The commit advanced the server CAS while the preserved body-only draft
+      // was already in flight. Complete its retry explicitly at the refreshed
+      // baseline, then kill the client before any title worker can run.
+      if let bodyOnlyJob = try await first.store.pendingJobs(documentLocalId: localId)
+        .first(where: { $0.kind == .draftSave })
+      {
+        let beforeBodyAck = try #require(try await first.store.document(localId: localId))
+        let bodyResponse = try await server.updateMarkdown(
+          documentId: remote.documentId, markdown: markdown, wordCount: 2,
+          expectedUpdatedAt: try #require(beforeBodyAck.remoteUpdatedAt),
+          expectedHeadNodeId: bodyOnlyJob.baseHeadNodeId,
+          title: nil)
+        #expect(!bodyResponse.stale)
+        #expect(!bodyResponse.headMoved)
+        try await first.store.setSyncState(
+          documentLocalId: localId, beforeBodyAck.syncState,
+          remoteUpdatedAt: bodyResponse.updatedAt)
+        try await first.store.acknowledgeEditorIngress(
+          documentLocalId: localId, markdown: markdown, title: nil)
+        try await first.store.completeJob(id: try #require(bodyOnlyJob.id))
+      }
+
+      let pending = try #require(try await first.store.document(localId: localId))
+      #expect(pending.editorIngressRevision != nil)
+      #expect(pending.draftMarkdown == markdown)
+      #expect(try await first.store.pendingJobs(documentLocalId: localId).isEmpty)
+      #expect(try await server.getDocument(documentId: remote.documentId)?.title == "Before")
+      nodeCount = try await first.store.nodes(documentLocalId: localId).count
+      await first.sync.stop()
+      try await first.store.closeForTesting()
+    }
+
+    let relaunched = try Harness(directory: directory, transport: server)
+    await relaunched.sync.start()
+    await relaunched.sync.drainNow()
+    #expect(try await server.getDocument(documentId: remote.documentId)?.title == "Before")
+
+    let reopened = DocumentSession(
+      documentLocalId: localId, store: relaunched.store, sync: relaunched.sync, origin: "mac",
+      deriveTitle: { $0 }, schedulesTimers: false)
+    try await reopened.open()
+    for _ in 0..<100 {
+      if try await server.getDocument(documentId: remote.documentId)?.title == markdown { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+
+    #expect(try await server.getDocument(documentId: remote.documentId)?.title == markdown)
+    #expect(try await relaunched.store.nodes(documentLocalId: localId).count == nodeCount)
+    #expect(try await relaunched.store.document(localId: localId)?.editorIngressRevision == nil)
+    #expect(try await relaunched.store.pendingJobs(documentLocalId: localId).isEmpty)
+  }
+
   @Test("a live clean revert wakes the sync drain")
   func liveCleanRevertWakesSyncDrain() async throws {
     let directory = Harness.makeDirectory()
@@ -417,6 +547,8 @@ struct AcceptanceTests {
     #expect(attempts == [key, key], "the idempotency key is reused, not regenerated")
     #expect(try await mac.store.pendingJobs(documentLocalId: localId).isEmpty)
     #expect(try await server.getDocument(documentId: seeded.documentId)?.markdown == "committed once")
+    #expect(try await server.getDocument(documentId: seeded.documentId)?.title == "committed once")
+    #expect(try await mac.store.document(localId: localId)?.title == "committed once")
     #expect(try await mac.store.document(localId: localId)?.syncState == .synced)
   }
 
