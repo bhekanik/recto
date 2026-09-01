@@ -99,8 +99,13 @@ enum RectoCommandTransformer {
         guard selection.location != NSNotFound,
               selection.length >= 0,
               NSMaxRange(selection) <= source.length else { return nil }
-        if RectoMarkdownContext.intersectsFencedCode(in: source, range: selection) {
-            guard case .codeBlock = command else { return nil }
+        if let code = enclosingCodeContext(in: source, selection: selection) {
+            switch (command, code.kind) {
+            case (.inlineCode, .inlineCode), (.codeBlock, .codeBlock):
+                break
+            default:
+                return nil
+            }
         }
 
         switch command {
@@ -209,15 +214,23 @@ enum RectoCommandTransformer {
     static func activeInlineCommands(markdown: String, selection: NSRange) -> Set<RectoEditorCommand> {
         guard selection.length > 0 else { return [] }
         let source = markdown as NSString
-        return [
-            (RectoEditorCommand.bold, "**"),
-            (.italic, "_"),
-            (.strikethrough, "~~"),
-        ].reduce(into: Set<RectoEditorCommand>()) { active, item in
-            if enclosingDelimiter(in: source, selection: selection, delimiter: item.1) != nil {
-                active.insert(item.0)
+        return RectoMarkdownContext.semanticSpans(in: source).reduce(into: Set()) { active, span in
+            guard contains(span.contentRange, selection) else { return }
+            switch span.kind {
+            case .emphasis(.bold):
+                active.insert(.bold)
+            case .emphasis(.italic):
+                active.insert(.italic)
+            case .emphasis(.boldItalic):
+                active.formUnion([.bold, .italic])
+            case .inlineCode:
+                active.insert(.inlineCode)
+            case .inlineExtension(StrikethroughExtension.identifier):
+                active.insert(.strikethrough)
+            case .codeBlock, .blockExtension, .inlineExtension:
+                break
             }
-        }.union(enclosingCodeSpan(in: source, selection: selection) == nil ? [] : [.inlineCode])
+        }
     }
 
     private static func inline(
@@ -226,49 +239,63 @@ enum RectoCommandTransformer {
         delimiter: String,
         placeholder: String
     ) -> RectoCommandEdit? {
-        let delimiterLength = (delimiter as NSString).length
         if selection.length > 0,
-           let marker = delimiter.first,
-           markdown.substring(with: selection).contains(marker) { return nil }
-        if selection.length > 0, isWrapped(markdown, selection: selection, delimiter: delimiter) {
-            let expanded = NSRange(
-                location: selection.location - delimiterLength,
-                length: selection.length + delimiterLength * 2
-            )
-            let selected = markdown.substring(with: selection)
-            return RectoCommandEdit(
-                patch: MarkdownTextPatch(range: expanded, replacement: selected),
-                selection: NSRange(location: expanded.location, length: selection.length)
-            )
-        }
-
-        if selection.length > 0,
-           let wrapper = enclosingDelimiter(in: markdown, selection: selection, delimiter: delimiter) {
-            let contentStart = wrapper.location + delimiterLength
-            let contentEnd = NSMaxRange(wrapper) - delimiterLength
+           let wrapper = enclosingInlineSpan(
+               in: markdown,
+               selection: selection,
+               delimiter: delimiter
+           ) {
+            let preservedRange = nestedSpanContainingSelection(
+                in: markdown,
+                wrapper: wrapper,
+                selection: selection
+            )?.range ?? selection
+            let contentStart = wrapper.contentRange.location
+            let contentEnd = NSMaxRange(wrapper.contentRange)
             let prefix = markdown.substring(with: NSRange(
                 location: contentStart,
-                length: selection.location - contentStart
+                length: preservedRange.location - contentStart
             ))
-            let selected = markdown.substring(with: selection)
+            let selected = markdown.substring(with: preservedRange)
             let suffix = markdown.substring(with: NSRange(
-                location: NSMaxRange(selection),
-                length: contentEnd - NSMaxRange(selection)
+                location: NSMaxRange(preservedRange),
+                length: contentEnd - NSMaxRange(preservedRange)
             ))
-            let fragmentDelimiter = delimiter == "_" ? "*" : delimiter
-            let markedPrefix = prefix.isEmpty ? "" : fragmentDelimiter + prefix + fragmentDelimiter
-            let markedSuffix = suffix.isEmpty ? "" : fragmentDelimiter + suffix + fragmentDelimiter
+            let fragmentDelimiter = fragmentDelimiter(for: wrapper, in: markdown)
+            let markedPrefix = markedFragment(prefix, delimiter: fragmentDelimiter)
+            let markedSuffix = markedFragment(suffix, delimiter: fragmentDelimiter)
+            let remainingDelimiter = remainingDelimiter(
+                afterRemoving: delimiter,
+                from: wrapper.kind
+            )
+            let selectedReplacement = remainingDelimiter.map {
+                markedFragment(selected, delimiter: $0)
+            } ?? selected
+            let selectedOffset = selection.location - preservedRange.location
+                + (remainingDelimiter.map {
+                    insertedOpeningDelimiterLength(
+                        in: selected,
+                        sourceOffset: selection.location - preservedRange.location,
+                        delimiter: $0
+                    )
+                } ?? 0)
             return RectoCommandEdit(
                 patch: MarkdownTextPatch(
-                    range: wrapper,
-                    replacement: markedPrefix + selected + markedSuffix
+                    range: wrapper.range,
+                    replacement: markedPrefix + selectedReplacement + markedSuffix
                 ),
-                selection: NSRange(location: wrapper.location + (markedPrefix as NSString).length, length: selection.length)
+                selection: NSRange(
+                    location: wrapper.range.location
+                        + (markedPrefix as NSString).length
+                        + selectedOffset,
+                    length: selection.length
+                )
             )
         }
 
         let selected = selection.length == 0 ? placeholder : markdown.substring(with: selection)
         let selectedText = selected as NSString
+        let delimiterLength = (delimiter as NSString).length
         guard let marker = delimiter.first,
               selectedText.range(of: "\n").location == NSNotFound,
               selectedText.range(of: "\r").location == NSNotFound,
@@ -295,77 +322,132 @@ enum RectoCommandTransformer {
         )
     }
 
-    private static func isWrapped(_ markdown: NSString, selection: NSRange, delimiter: String) -> Bool {
-        let length = (delimiter as NSString).length
-        guard selection.location >= length,
-              NSMaxRange(selection) + length <= markdown.length else { return false }
-        return markdown.substring(with: NSRange(location: selection.location - length, length: length)) == delimiter
-            && markdown.substring(with: NSRange(location: NSMaxRange(selection), length: length)) == delimiter
-    }
-
-    private static func enclosingDelimiter(
+    private static func enclosingInlineSpan(
         in markdown: NSString,
         selection: NSRange,
         delimiter: String
-    ) -> NSRange? {
-        let delimiterLength = (delimiter as NSString).length
-        guard selection.length > 0 else { return nil }
-        var searchEnd = selection.location
-        while searchEnd >= delimiterLength {
-            let searchRange = NSRange(location: 0, length: searchEnd)
-            let opening = markdown.range(of: delimiter, options: .backwards, range: searchRange)
-            guard opening.location != NSNotFound else { return nil }
-            let contentStart = NSMaxRange(opening)
-            let lineBreak = markdown.range(of: "\n", range: NSRange(
-                location: contentStart,
-                length: selection.location - contentStart
-            ))
-            if lineBreak.location == NSNotFound {
-                let closing = markdown.range(of: delimiter, range: NSRange(
-                    location: NSMaxRange(selection),
-                    length: markdown.length - NSMaxRange(selection)
-                ))
-                if closing.location != NSNotFound,
-                   markdown.range(of: "\n", range: NSRange(
-                    location: NSMaxRange(selection),
-                    length: closing.location - NSMaxRange(selection)
-                   )).location == NSNotFound {
-                    return NSRange(location: opening.location, length: NSMaxRange(closing) - opening.location)
+    ) -> MarkdownSemanticSpan? {
+        RectoMarkdownContext.semanticSpans(in: markdown)
+            .filter { span in
+                guard contains(span.contentRange, selection) else { return false }
+                switch (delimiter, span.kind) {
+                case ("**", .emphasis(.bold)),
+                     ("**", .emphasis(.boldItalic)),
+                     ("_", .emphasis(.italic)),
+                     ("_", .emphasis(.boldItalic)),
+                     ("~~", .inlineExtension(StrikethroughExtension.identifier)):
+                    return true
+                default:
+                    return false
                 }
             }
-            searchEnd = opening.location
+            .min { $0.range.length < $1.range.length }
+    }
+
+    private static func enclosingCodeContext(
+        in markdown: NSString,
+        selection: NSRange
+    ) -> MarkdownSemanticSpan? {
+        RectoMarkdownContext.semanticSpans(in: markdown).first {
+            switch $0.kind {
+            case .inlineCode, .codeBlock:
+                RectoMarkdownContext.intersects(selection, $0.range)
+            default:
+                false
+            }
         }
-        return nil
+    }
+
+    private static func nestedSpanContainingSelection(
+        in markdown: NSString,
+        wrapper: MarkdownSemanticSpan,
+        selection: NSRange
+    ) -> MarkdownSemanticSpan? {
+        RectoMarkdownContext.semanticSpans(in: markdown)
+            .filter {
+                $0.range != wrapper.range
+                    && contains(wrapper.contentRange, $0.range)
+                    && contains($0.contentRange, selection)
+            }
+            .max { $0.range.length < $1.range.length }
+    }
+
+    private static func fragmentDelimiter(
+        for span: MarkdownSemanticSpan,
+        in markdown: NSString
+    ) -> String {
+        guard let opening = span.markerRanges.first else { return "" }
+        let sourceDelimiter = markdown.substring(with: opening)
+        return sourceDelimiter == "_" ? "*" : sourceDelimiter
+    }
+
+    private static func remainingDelimiter(
+        afterRemoving delimiter: String,
+        from kind: MarkdownSemanticKind
+    ) -> String? {
+        guard kind == .emphasis(.boldItalic) else { return nil }
+        return delimiter == "**" ? "*" : "**"
+    }
+
+    private static func markedFragment(_ value: String, delimiter: String) -> String {
+        guard !value.isEmpty else { return "" }
+        let source = value as NSString
+        var contentStart = 0
+        while contentStart < source.length, isWhitespace(source.character(at: contentStart)) {
+            contentStart += 1
+        }
+        var contentEnd = source.length
+        while contentEnd > contentStart, isWhitespace(source.character(at: contentEnd - 1)) {
+            contentEnd -= 1
+        }
+        guard contentStart < contentEnd else { return value }
+        return source.substring(to: contentStart)
+            + delimiter
+            + source.substring(with: NSRange(location: contentStart, length: contentEnd - contentStart))
+            + delimiter
+            + source.substring(from: contentEnd)
+    }
+
+    private static func insertedOpeningDelimiterLength(
+        in value: String,
+        sourceOffset: Int,
+        delimiter: String
+    ) -> Int {
+        let source = value as NSString
+        var contentStart = 0
+        while contentStart < source.length, isWhitespace(source.character(at: contentStart)) {
+            contentStart += 1
+        }
+        return sourceOffset >= contentStart ? (delimiter as NSString).length : 0
+    }
+
+    private static func contains(_ outer: NSRange, _ inner: NSRange) -> Bool {
+        inner.location >= outer.location && NSMaxRange(inner) <= NSMaxRange(outer)
     }
 
     private static func codeSpan(markdown: NSString, selection: NSRange) -> RectoCommandEdit {
-        if selection.length > 0, let wrapper = codeSpanWrapper(in: markdown, selection: selection) {
-            let selected = markdown.substring(with: selection)
-            return RectoCommandEdit(
-                patch: MarkdownTextPatch(range: wrapper, replacement: selected),
-                selection: NSRange(location: wrapper.location, length: selection.length)
-            )
-        }
-
-        if selection.length > 0, let enclosure = enclosingCodeSpan(in: markdown, selection: selection) {
+        if selection.length > 0,
+           let enclosure = RectoMarkdownContext.semanticSpans(in: markdown).first(where: {
+               $0.kind == .inlineCode && contains($0.contentRange, selection)
+           }) {
             let prefix = markdown.substring(with: NSRange(
-                location: enclosure.content.location,
-                length: selection.location - enclosure.content.location
+                location: enclosure.contentRange.location,
+                length: selection.location - enclosure.contentRange.location
             ))
             let selected = markdown.substring(with: selection)
             let suffix = markdown.substring(with: NSRange(
                 location: NSMaxRange(selection),
-                length: NSMaxRange(enclosure.content) - NSMaxRange(selection)
+                length: NSMaxRange(enclosure.contentRange) - NSMaxRange(selection)
             ))
             let markedPrefix = prefix.isEmpty ? "" : codeSpanMarkdown(prefix)
             let markedSuffix = suffix.isEmpty ? "" : codeSpanMarkdown(suffix)
             return RectoCommandEdit(
                 patch: MarkdownTextPatch(
-                    range: enclosure.wrapper,
+                    range: enclosure.range,
                     replacement: markedPrefix + selected + markedSuffix
                 ),
                 selection: NSRange(
-                    location: enclosure.wrapper.location + (markedPrefix as NSString).length,
+                    location: enclosure.range.location + (markedPrefix as NSString).length,
                     length: selection.length
                 )
             )
@@ -395,79 +477,6 @@ enum RectoCommandTransformer {
         return delimiter + padding + content + padding + delimiter
     }
 
-    private static func enclosingCodeSpan(
-        in markdown: NSString,
-        selection: NSRange
-    ) -> (wrapper: NSRange, content: NSRange)? {
-        guard selection.length > 0 else { return nil }
-        var openingEnd = selection.location
-        while openingEnd > 0 {
-            let openingStart = startOfBacktickRun(in: markdown, endingAt: openingEnd)
-            if openingStart < openingEnd {
-                let length = openingEnd - openingStart
-                var closingStart = NSMaxRange(selection)
-                while closingStart < markdown.length {
-                    let found = markdown.range(of: "`", range: NSRange(
-                        location: closingStart,
-                        length: markdown.length - closingStart
-                    ))
-                    guard found.location != NSNotFound else { break }
-                    let closingEnd = endOfBacktickRun(in: markdown, startingAt: found.location)
-                    if closingEnd - found.location == length {
-                        var content = NSRange(
-                            location: openingEnd,
-                            length: found.location - openingEnd
-                        )
-                        if content.length >= 2,
-                           markdown.character(at: content.location) == 32,
-                           markdown.character(at: NSMaxRange(content) - 1) == 32 {
-                            content = NSRange(location: content.location + 1, length: content.length - 2)
-                        }
-                        if selection.location >= content.location,
-                           NSMaxRange(selection) <= NSMaxRange(content) {
-                            return (
-                                NSRange(location: openingStart, length: closingEnd - openingStart),
-                                content
-                            )
-                        }
-                    }
-                    closingStart = closingEnd
-                }
-            }
-            openingEnd -= 1
-            if markdown.character(at: openingEnd) == 10 || markdown.character(at: openingEnd) == 13 { break }
-        }
-        return nil
-    }
-
-    private static func codeSpanWrapper(in markdown: NSString, selection: NSRange) -> NSRange? {
-        for padding in [0, 1] {
-            let leftEnd = selection.location - padding
-            let rightStart = NSMaxRange(selection) + padding
-            guard leftEnd > 0, rightStart < markdown.length else { continue }
-            if padding == 1,
-               (markdown.character(at: selection.location - 1) != 32
-                || markdown.character(at: NSMaxRange(selection)) != 32) { continue }
-            let leftStart = startOfBacktickRun(in: markdown, endingAt: leftEnd)
-            let rightEnd = endOfBacktickRun(in: markdown, startingAt: rightStart)
-            let leftLength = leftEnd - leftStart
-            guard leftLength > 0, rightEnd - rightStart == leftLength else { continue }
-            return NSRange(location: leftStart, length: rightEnd - leftStart)
-        }
-        return nil
-    }
-
-    private static func startOfBacktickRun(in markdown: NSString, endingAt end: Int) -> Int {
-        var index = end
-        while index > 0, markdown.character(at: index - 1) == 96 { index -= 1 }
-        return index
-    }
-
-    private static func endOfBacktickRun(in markdown: NSString, startingAt start: Int) -> Int {
-        var index = start
-        while index < markdown.length, markdown.character(at: index) == 96 { index += 1 }
-        return index
-    }
 
     private static func longestRun(of character: Character, in value: String) -> Int {
         var longest = 0

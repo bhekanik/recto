@@ -137,6 +137,216 @@ struct AdversarialWritingControlsTests {
         }
     }
 
+    @Test("plain text between marked runs is not active")
+    func separateInlineRuns() {
+        let cases: [(String, RectoEditorCommand)] = [
+            ("**one** gap **two**", .bold),
+            ("_one_ gap _two_", .italic),
+            ("~~one~~ gap ~~two~~", .strikethrough),
+            ("`one` gap `two`", .inlineCode),
+        ]
+        for (markdown, command) in cases {
+            let selection = (markdown as NSString).range(of: "gap")
+            #expect(!RectoCommandTransformer.activeInlineCommands(
+                markdown: markdown,
+                selection: selection
+            ).contains(command))
+        }
+    }
+
+    @Test("active marks follow parsed delimiter grammar")
+    func parsedDelimiterGrammar() throws {
+        for markdown in [
+            "snake_case_value",
+            #"snake\_case_value"#,
+            "** one **",
+            #"\*\*literal\*\*"#,
+            "~~~strike~~~",
+        ] {
+            let selection = (markdown as NSString).range(of: "case").location == NSNotFound
+                ? (markdown as NSString).range(of: "literal").location == NSNotFound
+                    ? (markdown as NSString).range(of: "strike")
+                    : (markdown as NSString).range(of: "literal")
+                : (markdown as NSString).range(of: "case")
+            #expect(RectoCommandTransformer.activeInlineCommands(
+                markdown: markdown,
+                selection: selection
+            ).isEmpty)
+        }
+
+        let spacedStrike = "~~ strike ~~"
+        #expect(RectoCommandTransformer.activeInlineCommands(
+            markdown: spacedStrike,
+            selection: (spacedStrike as NSString).range(of: "strike")
+        ) == [.strikethrough])
+
+        let identifier = "snake_case_value"
+        let selection = (identifier as NSString).range(of: "case")
+        let edit = try #require(RectoCommandTransformer.edit(
+            command: .italic,
+            markdown: identifier,
+            selection: selection
+        ))
+        #expect(edit.patch.replacement == "_case_")
+        #expect((identifier as NSString).replacingCharacters(
+            in: edit.patch.range,
+            with: edit.patch.replacement
+        ) == "snake__case__value")
+    }
+
+    @Test("all parsed code contexts reject non-code commands")
+    func parsedCodeContexts() {
+        for markdown in [
+            "    literal",
+            "`**literal**`",
+            "> ```swift\n> literal\n> ```",
+            "- ~~~swift\n  literal\n  ~~~",
+            "> - ```swift\n>   literal\n>   ```",
+            "1. > ~~~swift\n   > literal\n   > ~~~",
+            "- parent\n  - ```\n    before\n\n\n    literal\n    ```",
+            "> ```swift\n> literal",
+        ] {
+            let selection = (markdown as NSString).range(of: "literal")
+            for command in [
+                RectoEditorCommand.bold,
+                .italic,
+                .strikethrough,
+                .heading(level: 2),
+                .bulletList,
+                .blockquote,
+            ] {
+                #expect(RectoCommandTransformer.edit(
+                    command: command,
+                    markdown: markdown,
+                    selection: selection
+                ) == nil)
+            }
+        }
+
+        let inline = "`**literal**`"
+        let selection = (inline as NSString).range(of: "literal")
+        #expect(RectoCommandTransformer.activeInlineCommands(
+            markdown: inline,
+            selection: selection
+        ) == [.inlineCode])
+        #expect(RectoCommandTransformer.edit(
+            command: .inlineCode,
+            markdown: inline,
+            selection: selection
+        ) != nil)
+    }
+
+    @Test("slash menu stays closed in container fences but not after deindent")
+    func containerFenceSlashContext() {
+        for markdown in [
+            "> ```\n> /heading\n> ```",
+            "- ~~~\n  /heading\n  ~~~",
+            "> - ```\n>   /heading\n>   ```",
+            "- parent\n  - ```\n    before\n\n\n    /heading\n    ```",
+            "> ```\n> /heading",
+        ] {
+            let caret = (markdown as NSString).range(of: "/heading").upperBound
+            #expect(RectoSlashMenu.state(
+                markdown: markdown,
+                selection: NSRange(location: caret, length: 0),
+                selectedIndex: 0,
+                anchorRect: nil
+            ) == nil)
+        }
+
+        let deindented = "> ```\n> code\n/heading"
+        let caret = (deindented as NSString).length
+        #expect(RectoSlashMenu.state(
+            markdown: deindented,
+            selection: NSRange(location: caret, length: 0),
+            selectedIndex: 0,
+            anchorRect: nil
+        ) != nil)
+    }
+
+    @Test("partial outer mark removal preserves nested semantics")
+    func nestedOuterRemoval() throws {
+        let markdown = "**bold _and italic_ end**"
+        let selection = (markdown as NSString).range(of: "and italic")
+        let edit = try #require(RectoCommandTransformer.edit(
+            command: .bold,
+            markdown: markdown,
+            selection: selection
+        ))
+        let result = (markdown as NSString).replacingCharacters(
+            in: edit.patch.range,
+            with: edit.patch.replacement
+        )
+        #expect((result as NSString).substring(with: edit.selection) == "and italic")
+        #expect(MarkdownHTMLRenderer.html(from: result) == "<p><strong>bold</strong> <em>and italic</em> <strong>end</strong></p>")
+
+        let repeated = "**_foo foo_**"
+        let firstFoo = (repeated as NSString).range(of: "foo")
+        let secondFoo = (repeated as NSString).range(
+            of: "foo",
+            options: [],
+            range: NSRange(
+                location: NSMaxRange(firstFoo),
+                length: (repeated as NSString).length - NSMaxRange(firstFoo)
+            )
+        )
+        let repeatedEdit = try #require(RectoCommandTransformer.edit(
+            command: .bold,
+            markdown: repeated,
+            selection: secondFoo
+        ))
+        let repeatedResult = (repeated as NSString).replacingCharacters(
+            in: repeatedEdit.patch.range,
+            with: repeatedEdit.patch.replacement
+        )
+        #expect(repeatedResult == "_foo foo_")
+        #expect(repeatedEdit.selection.location == 5)
+        #expect((repeatedResult as NSString).substring(with: repeatedEdit.selection) == "foo")
+    }
+
+    @Test("bold italic reports and removes either semantic independently")
+    func boldItalicToggles() throws {
+        let markdown = "***both***"
+        let selection = (markdown as NSString).range(of: "both")
+        #expect(RectoCommandTransformer.activeInlineCommands(
+            markdown: markdown,
+            selection: selection
+        ) == [.bold, .italic])
+
+        for (command, html) in [
+            (RectoEditorCommand.bold, "<p><em>both</em></p>"),
+            (.italic, "<p><strong>both</strong></p>"),
+        ] {
+            let edit = try #require(RectoCommandTransformer.edit(
+                command: command,
+                markdown: markdown,
+                selection: selection
+            ))
+            let result = (markdown as NSString).replacingCharacters(
+                in: edit.patch.range,
+                with: edit.patch.replacement
+            )
+            #expect(MarkdownHTMLRenderer.html(from: result) == html)
+            #expect((result as NSString).substring(with: edit.selection) == "both")
+        }
+    }
+
+    @Test("table cell marks keep source coordinates")
+    func tableCellMarks() {
+        let markdown = "| **bold** | `code` | ~~strike~~ |\n| --- | --- | --- |"
+        for (needle, command) in [
+            ("bold", RectoEditorCommand.bold),
+            ("code", .inlineCode),
+            ("strike", .strikethrough),
+        ] {
+            let selection = (markdown as NSString).range(of: needle)
+            #expect(RectoCommandTransformer.activeInlineCommands(
+                markdown: markdown,
+                selection: selection
+            ).contains(command))
+        }
+    }
+
     @Test("partial inline toggles change rendered semantics and preserve selection")
     func partialInlineToggles() throws {
         let cases: [(String, String, RectoEditorCommand, String)] = [

@@ -95,8 +95,7 @@ public enum RectoSlashMenu {
     ) -> RectoSlashMenuState? {
         guard selection.length == 0 else { return nil }
         let source = markdown as NSString
-        guard selection.location <= source.length,
-              !RectoMarkdownContext.intersectsFencedCode(in: source, range: selection) else { return nil }
+        guard selection.location <= source.length else { return nil }
         let prefixRange = source.lineRange(for: NSRange(location: selection.location, length: 0))
         let beforeCaretLength = selection.location - prefixRange.location
         guard beforeCaretLength >= 1 else { return nil }
@@ -109,6 +108,9 @@ public enum RectoSlashMenu {
         guard beforeSlash.count <= 3, beforeSlash.allSatisfy({ $0 == " " }) else { return nil }
         let query = String(beforeCaret[beforeCaret.index(after: slash)...])
         guard query.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" || $0 == " " }) else {
+            return nil
+        }
+        guard !RectoMarkdownContext.intersectsFencedCode(in: source, range: selection) else {
             return nil
         }
         let entries = filteredEntries(query: query)
