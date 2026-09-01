@@ -65,6 +65,74 @@ async function seedRun(
 }
 
 describe("AI run durability", () => {
+	it("hides blocked shares before bounded cleanup finishes", async () => {
+		const t = convexTest(schema, modules);
+		const { documentId } = await seedRun(t);
+		await t.run(async (ctx) => {
+			await ctx.db.insert("userBlocks", {
+				blockerUserId: USER,
+				blockedUserId: "reviewer",
+				createdAt: 1,
+			});
+			for (let index = 0; index < 130; index += 1) {
+				await ctx.db.insert("documentShares", {
+					documentId,
+					ownerUserId: USER,
+					granteeEmail: "reviewer@example.com",
+					granteeUserId: "reviewer",
+					role: "commenter",
+					createdAt: index + 1,
+				});
+			}
+		});
+		const reviewer = t.withIdentity({
+			subject: "reviewer",
+			email: "reviewer@example.com",
+		});
+		await expect(
+			reviewer.query(api.review.listSharedWithMe, {}),
+		).resolves.toEqual([]);
+		await expect(
+			reviewer.query(api.review.documentShareState, { documentId }),
+		).resolves.toBeNull();
+		const first = await t.mutation(internal.review.cleanupBlockedShares, {
+			blockerUserId: USER,
+			blockedUserId: "reviewer",
+		});
+		expect(first).toEqual({ revoked: 128, complete: false });
+	});
+
+	it("refuses same-head draft drift at reservation and provider start", async () => {
+		const t = convexTest(schema, modules);
+		const { documentId, runId } = await seedRun(t, "reserved");
+		await t.run(async (ctx) => {
+			await ctx.db.patch(documentId, { markdown: "changed draft" });
+		});
+		await expect(
+			t.mutation(internal.ai.runs.begin, {
+				userId: USER,
+				requestId: crypto.randomUUID(),
+				kind: "transform",
+				documentId,
+				sourceNodeId: "source",
+				sourceHash: "a".repeat(64),
+				expectedSourceMarkdown: "source",
+				requestHash: "c".repeat(64),
+				model: "model",
+			}),
+		).rejects.toThrow("draft changed");
+		await expect(
+			t.mutation(internal.ai.runs.markProviderStarted, {
+				runId,
+				userId: USER,
+				keySource: "house",
+				expectedSourceMarkdown: "source",
+			}),
+		).rejects.toThrow("draft changed");
+		const run = await t.run(async (ctx) => await ctx.db.get(runId));
+		expect(run?.status).toBe("reserved");
+	});
+
 	it("applies review comments and a branch atomically at the reserved head", async () => {
 		const t = convexTest(schema, modules);
 		const { documentId } = await seedRun(t);
@@ -95,6 +163,21 @@ describe("AI run durability", () => {
 		}));
 		expect(rows.comments).toHaveLength(1);
 		expect(rows.branches).toHaveLength(1);
+	});
+
+	it("rejects an AI review branch above the UTF-8 byte ceiling", async () => {
+		const t = convexTest(schema, modules);
+		const { documentId } = await seedRun(t);
+		await expect(
+			t.mutation(internal.review.applyAiReview, {
+				userId: USER,
+				documentId,
+				sourceNodeId: "source",
+				sourceText: "source",
+				comments: [],
+				branchMarkdown: "😀".repeat(240_000),
+			}),
+		).rejects.toThrow("~1 MiB size limit");
 	});
 
 	it("refuses all review writes after source movement or sharing", async () => {

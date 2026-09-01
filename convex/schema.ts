@@ -296,7 +296,8 @@ export default defineSchema({
 	})
 		.index("by_document", ["documentId"])
 		.index("by_grantee_email", ["granteeEmail"])
-		.index("by_grantee_user", ["granteeUserId"]),
+		.index("by_grantee_user", ["granteeUserId"])
+		.index("by_owner_grantee_user", ["ownerUserId", "granteeUserId"]),
 
 	// A reviewer's shadow suggestion branch off the owner's tree (plan 010).
 	// headNodeId advances as the reviewer appends; status drives the review surface.

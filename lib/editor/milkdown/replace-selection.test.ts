@@ -40,7 +40,11 @@ function parser(value: string): ProseMirrorNode {
 			),
 		]);
 	}
-	return schema.node("doc", null, [paragraph(schema.text(value))]);
+	return schema.node(
+		"doc",
+		null,
+		value.split("\n\n").map((block) => paragraph(schema.text(block))),
+	);
 }
 
 function replaceWholeTextblock(
@@ -90,6 +94,62 @@ describe("replaceMarkdownSelection", () => {
 		const listed = replaceWholeTextblock(list, 3, 7);
 		expect(listed?.child(0).type.name).toBe("bullet_list");
 		expect(listed?.child(0).child(0).child(0).textContent).toBe("replacement");
+	});
+
+	it("keeps every block in a full textblock replacement", () => {
+		for (const [doc, from, to] of [
+			[schema.node("doc", null, [paragraph(schema.text("old"))]), 1, 4],
+			[
+				schema.node("doc", null, [
+					schema.node("heading", { level: 2 }, schema.text("old")),
+				]),
+				1,
+				4,
+			],
+			[
+				schema.node("doc", null, [
+					schema.node("code_block", null, schema.text("old")),
+				]),
+				1,
+				4,
+			],
+		] as const) {
+			const next = replaceMarkdownSelection({
+				doc,
+				selection: TextSelection.create(doc, from, to),
+				replacement: "first\n\nsecond",
+				parse: parser,
+			});
+			expect(next?.childCount).toBe(2);
+			expect(next?.textContent).toBe("firstsecond");
+		}
+
+		const list = schema.node("doc", null, [
+			schema.node("bullet_list", null, [
+				schema.node("list_item", null, [paragraph(schema.text("old"))]),
+			]),
+		]);
+		const listed = replaceMarkdownSelection({
+			doc: list,
+			selection: TextSelection.create(list, 3, 6),
+			replacement: "first\n\nsecond",
+			parse: parser,
+		});
+		expect(listed?.child(0).type.name).toBe("bullet_list");
+		expect(listed?.child(0).child(0).childCount).toBe(2);
+		expect(listed?.textContent).toBe("firstsecond");
+	});
+
+	it("refuses multi-block output for a partial inline selection", () => {
+		const doc = schema.node("doc", null, [paragraph(schema.text("old text"))]);
+		expect(
+			replaceMarkdownSelection({
+				doc,
+				selection: TextSelection.create(doc, 2, 4),
+				replacement: "first\n\nsecond",
+				parse: parser,
+			}),
+		).toBeNull();
 	});
 
 	it("keeps boundary spaces for a partial inline selection", () => {

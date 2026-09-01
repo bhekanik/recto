@@ -84,6 +84,7 @@ export const run = action({
 			documentId: args.documentId,
 			sourceNodeId: args.sourceNodeId,
 			sourceHash: args.sourceHash,
+			expectedSourceMarkdown: sourceMarkdown,
 			requestHash: hash,
 			model: AI_EMBEDDING_MODEL,
 		});
@@ -111,7 +112,12 @@ export const run = action({
 			});
 			const started = await ctx.runMutation(
 				internal.ai.runs.markProviderStarted,
-				{ runId, userId, keySource: credential.source },
+				{
+					runId,
+					userId,
+					keySource: credential.source,
+					expectedSourceMarkdown: sourceMarkdown,
+				},
 			);
 			if (!started.started) {
 				aiError("request_conflict", "The AI request was superseded.");

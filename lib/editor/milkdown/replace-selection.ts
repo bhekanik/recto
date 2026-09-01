@@ -30,16 +30,10 @@ function textblockAtSelection(
 	return null;
 }
 
-function firstTextblock(doc: ProseMirrorNode): ProseMirrorNode | null {
-	let found: ProseMirrorNode | null = null;
-	doc.descendants((node) => {
-		if (!found && node.isTextblock) {
-			found = node;
-			return false;
-		}
-		return found === null;
-	});
-	return found;
+function onlyTextblock(doc: ProseMirrorNode): ProseMirrorNode | null {
+	if (doc.childCount !== 1) return null;
+	const child = doc.child(0);
+	return child.isTextblock ? child : null;
 }
 
 function sentinelOffset(
@@ -80,7 +74,7 @@ function partialInlineContent(
 ): Fragment | null {
 	const parsed = parse(`${OPEN_SENTINEL}${replacement}${CLOSE_SENTINEL}`);
 	if (!parsed) return null;
-	const block = firstTextblock(parsed);
+	const block = onlyTextblock(parsed);
 	if (!block) return null;
 	const open = sentinelOffset(block, OPEN_SENTINEL);
 	const close = sentinelOffset(block, CLOSE_SENTINEL);
@@ -108,8 +102,19 @@ export function replaceMarkdownSelection(args: {
 		let content: Fragment | null;
 		if (exact) {
 			const parsed = parse(replacement);
-			const parsedBlock = parsed ? firstTextblock(parsed) : null;
-			if (!parsedBlock) return null;
+			if (!parsed) return null;
+			const parsedBlock = onlyTextblock(parsed);
+			if (!parsedBlock) {
+				try {
+					return doc.replace(
+						doc.resolve(selection.from).before(block.depth),
+						doc.resolve(selection.to).after(block.depth),
+						new Slice(parsed.content, 0, 0),
+					);
+				} catch {
+					return null;
+				}
+			}
 			content = block.node.type.spec.code
 				? Fragment.from(block.node.type.schema.text(parsedBlock.textContent))
 				: parsedBlock.content;

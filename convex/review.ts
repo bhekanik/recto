@@ -1,5 +1,6 @@
 import type { GenericMutationCtx, GenericQueryCtx } from "convex/server";
 import { v } from "convex/values";
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internalMutation, mutation, query } from "./_generated/server";
 import { assertNotDeleting } from "./accountGuard";
@@ -11,6 +12,7 @@ import {
 	MAX_MARKDOWN_LENGTH,
 	requireOwnedDocument,
 	requireUserId,
+	utf8Length,
 } from "./documents";
 import {
 	applyAcceptedHunks,
@@ -302,6 +304,7 @@ export const listSharedWithMe = query({
 			if (seen.has(s._id)) continue;
 			// Don't surface the caller's own documents as "shared with me".
 			if (s.ownerUserId === userId) continue;
+			if (await usersAreBlocked(ctx, userId, s.ownerUserId)) continue;
 			seen.add(s._id);
 			shares.push(s);
 		}
@@ -358,10 +361,20 @@ export const documentShareState = query({
 				.query("documentShares")
 				.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
 				.collect();
+			const visibleShares: typeof shares = [];
+			for (const share of shares) {
+				if (
+					share.granteeUserId &&
+					(await usersAreBlocked(ctx, userId, share.granteeUserId))
+				) {
+					continue;
+				}
+				visibleShares.push(share);
+			}
 			return {
 				role: "owner" as const,
-				shareCount: shares.length,
-				shared: shares.length > 0,
+				shareCount: visibleShares.length,
+				shared: visibleShares.length > 0,
 			};
 		}
 
@@ -370,15 +383,17 @@ export const documentShareState = query({
 			.query("documentShares")
 			.withIndex("by_grantee_user", (q) => q.eq("granteeUserId", userId))
 			.filter((q) => q.eq(q.field("documentId"), args.documentId))
-			.unique();
+			.first();
 		if (!share && email) {
 			share = await ctx.db
 				.query("documentShares")
 				.withIndex("by_grantee_email", (q) => q.eq("granteeEmail", email))
 				.filter((q) => q.eq(q.field("documentId"), args.documentId))
-				.unique();
+				.first();
 		}
-		if (!share) return null;
+		if (!share || (await usersAreBlocked(ctx, userId, share.ownerUserId))) {
+			return null;
+		}
 		return { role: share.role, shareCount: 1, shared: true };
 	},
 });
@@ -431,12 +446,12 @@ export const reviewerAppend = mutation({
 			if (!parent) throw new Error("Parent node not found");
 
 			// (c) Bound patch + snapshot length (same cap as documents.updateMarkdown).
-			if (args.patch.length > MAX_MARKDOWN_LENGTH) {
+			if (utf8Length(args.patch) > MAX_MARKDOWN_LENGTH) {
 				throw new Error(MARKDOWN_TOO_LARGE_MESSAGE);
 			}
 			if (
 				args.snapshot !== undefined &&
-				args.snapshot.length > MAX_MARKDOWN_LENGTH
+				utf8Length(args.snapshot) > MAX_MARKDOWN_LENGTH
 			) {
 				throw new Error(MARKDOWN_TOO_LARGE_MESSAGE);
 			}
@@ -556,7 +571,7 @@ export const aiSuggestBranch = mutation({
 
 		// Bound the AI branch head like documents.updateMarkdown — it is written to
 		// docNodes.snapshot and guards the same Convex ~1 MiB per-value ceiling.
-		if (args.branchMarkdown.length > MAX_MARKDOWN_LENGTH) {
+		if (utf8Length(args.branchMarkdown) > MAX_MARKDOWN_LENGTH) {
 			throw new Error(MARKDOWN_TOO_LARGE_MESSAGE);
 		}
 
@@ -702,7 +717,7 @@ export const applyAiReview = internalMutation({
 			args.branchMarkdown !== undefined &&
 			args.branchMarkdown !== args.sourceText
 		) {
-			if (args.branchMarkdown.length > MAX_MARKDOWN_LENGTH) {
+			if (utf8Length(args.branchMarkdown) > MAX_MARKDOWN_LENGTH) {
 				throw new Error(MARKDOWN_TOO_LARGE_MESSAGE);
 			}
 			const now = Date.now();
@@ -938,7 +953,7 @@ export const acceptHunks = mutation({
 		const merged = applyAcceptedHunks(runs, args.acceptedHunks);
 
 		// Same ~1 MiB cap as every other write into the owner's doc.
-		if (merged.length > MAX_MARKDOWN_LENGTH) {
+		if (utf8Length(merged) > MAX_MARKDOWN_LENGTH) {
 			throw new Error(MARKDOWN_TOO_LARGE_MESSAGE);
 		}
 
@@ -1325,6 +1340,57 @@ export const reportComment = mutation({
 	},
 });
 
+const BLOCKED_SHARE_CLEANUP_BATCH = 128;
+
+export const cleanupBlockedShares = internalMutation({
+	args: { blockerUserId: v.string(), blockedUserId: v.string() },
+	handler: async (ctx, args) => {
+		const block = await ctx.db
+			.query("userBlocks")
+			.withIndex("by_blocker_blocked", (q) =>
+				q
+					.eq("blockerUserId", args.blockerUserId)
+					.eq("blockedUserId", args.blockedUserId),
+			)
+			.unique();
+		if (!block) return { revoked: 0, complete: true as const };
+		const [blockedAsGrantee, blockerAsGrantee] = await Promise.all([
+			ctx.db
+				.query("documentShares")
+				.withIndex("by_owner_grantee_user", (q) =>
+					q
+						.eq("ownerUserId", args.blockerUserId)
+						.eq("granteeUserId", args.blockedUserId),
+				)
+				.take(BLOCKED_SHARE_CLEANUP_BATCH + 1),
+			ctx.db
+				.query("documentShares")
+				.withIndex("by_owner_grantee_user", (q) =>
+					q
+						.eq("ownerUserId", args.blockedUserId)
+						.eq("granteeUserId", args.blockerUserId),
+				)
+				.take(BLOCKED_SHARE_CLEANUP_BATCH + 1),
+		]);
+		const shares = [
+			...blockedAsGrantee.slice(0, BLOCKED_SHARE_CLEANUP_BATCH),
+			...blockerAsGrantee.slice(0, BLOCKED_SHARE_CLEANUP_BATCH),
+		];
+		for (const share of shares) await ctx.db.delete(share._id);
+		const complete =
+			blockedAsGrantee.length <= BLOCKED_SHARE_CLEANUP_BATCH &&
+			blockerAsGrantee.length <= BLOCKED_SHARE_CLEANUP_BATCH;
+		if (!complete) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.review.cleanupBlockedShares,
+				args,
+			);
+		}
+		return { revoked: shares.length, complete };
+	},
+});
+
 export const blockUser = mutation({
 	args: { userId: v.string() },
 	handler: async (ctx, args) => {
@@ -1350,32 +1416,11 @@ export const blockUser = mutation({
 				createdAt: Date.now(),
 			});
 		}
-		const [blockedAsGrantee, blockerAsGrantee] = await Promise.all([
-			ctx.db
-				.query("documentShares")
-				.withIndex("by_grantee_user", (q) =>
-					q.eq("granteeUserId", blockedUserId),
-				)
-				.take(256),
-			ctx.db
-				.query("documentShares")
-				.withIndex("by_grantee_user", (q) =>
-					q.eq("granteeUserId", blockerUserId),
-				)
-				.take(256),
-		]);
-		let revoked = 0;
-		for (const share of blockedAsGrantee) {
-			if (share.ownerUserId !== blockerUserId) continue;
-			await ctx.db.delete(share._id);
-			revoked += 1;
-		}
-		for (const share of blockerAsGrantee) {
-			if (share.ownerUserId !== blockedUserId) continue;
-			await ctx.db.delete(share._id);
-			revoked += 1;
-		}
-		return { blocked: true as const, revoked };
+		await ctx.scheduler.runAfter(0, internal.review.cleanupBlockedShares, {
+			blockerUserId,
+			blockedUserId,
+		});
+		return { blocked: true as const };
 	},
 });
 

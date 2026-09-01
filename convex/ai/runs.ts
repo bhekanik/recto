@@ -38,7 +38,12 @@ async function hasCurrentConsent(
 
 async function assertRunBoundary(
 	ctx: QueryCtx | MutationCtx,
-	args: { userId: string; documentId: Id<"documents">; sourceNodeId: string },
+	args: {
+		userId: string;
+		documentId: Id<"documents">;
+		sourceNodeId: string;
+		expectedSourceMarkdown?: string;
+	},
 ): Promise<Doc<"documents">> {
 	if (await findTombstone(ctx, args.userId)) {
 		aiError("account_deletion_in_progress", "Account deletion is in progress.");
@@ -71,6 +76,15 @@ async function assertRunBoundary(
 			"The document changed before the AI request started.",
 		);
 	}
+	if (
+		args.expectedSourceMarkdown !== undefined &&
+		document.markdown !== args.expectedSourceMarkdown
+	) {
+		aiError(
+			"document_changed",
+			"The draft changed before the AI request started.",
+		);
+	}
 	const sourceNode = await ctx.db
 		.query("docNodes")
 		.withIndex("by_document_node", (q) =>
@@ -90,6 +104,7 @@ export const begin = internalMutation({
 		documentId: v.id("documents"),
 		sourceNodeId: v.string(),
 		sourceHash: v.string(),
+		expectedSourceMarkdown: v.string(),
 		requestHash: v.string(),
 		model: v.string(),
 	},
@@ -159,8 +174,9 @@ export const begin = internalMutation({
 			});
 		}
 		const now = Date.now();
+		const { expectedSourceMarkdown: _, ...runInput } = args;
 		const runId = await ctx.db.insert("aiRuns", {
-			...args,
+			...runInput,
 			status: "reserved",
 			createdAt: now,
 			updatedAt: now,
@@ -176,6 +192,7 @@ export const markProviderStarted = internalMutation({
 		runId: v.id("aiRuns"),
 		userId: v.string(),
 		keySource: keySourceValidator,
+		expectedSourceMarkdown: v.string(),
 	},
 	handler: async (ctx, args) => {
 		const run = await ctx.db.get(args.runId);
@@ -186,6 +203,7 @@ export const markProviderStarted = internalMutation({
 			userId: run.userId,
 			documentId: run.documentId,
 			sourceNodeId: run.sourceNodeId,
+			expectedSourceMarkdown: args.expectedSourceMarkdown,
 		});
 		const now = Date.now();
 		await ctx.db.patch(run._id, {

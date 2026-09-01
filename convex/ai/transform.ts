@@ -125,6 +125,7 @@ export async function prepareTransform(
 		documentId: input.documentId,
 		sourceNodeId: input.sourceNodeId,
 		sourceHash: input.sourceHash,
+		expectedSourceMarkdown: sourceMarkdown,
 		requestHash: hash,
 		model: AI_CHAT_MODEL,
 	});
@@ -157,7 +158,7 @@ export async function prepareTransform(
 		// Last retry-safe boundary before outbound inference.
 		const started = await ctx.runMutation(
 			internal.ai.runs.markProviderStarted,
-			{ runId, userId, keySource },
+			{ runId, userId, keySource, expectedSourceMarkdown: sourceMarkdown },
 		);
 		if (!started.started)
 			aiError("request_conflict", "The AI request was superseded.");

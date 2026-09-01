@@ -11,12 +11,15 @@ import { AiRequestOwner, sha256Text } from "./request-owner";
 
 const EMBED_BATCH = 16;
 
-export function embedBatchRequestId(
-	documentId: string,
-	sourceHash: string,
-	offset: number,
-): string {
-	return `e:${documentId}:${sourceHash}:${offset / EMBED_BATCH}`;
+export async function embedBatchRequestId(input: {
+	purpose: "query" | "reindex";
+	documentId: string;
+	sourceHash: string;
+	offset: number;
+	texts: string[];
+}): Promise<string> {
+	const digest = await sha256Text(JSON.stringify(input));
+	return `embed:${input.purpose}:${digest}`;
 }
 
 export function useRag() {
@@ -27,6 +30,7 @@ export function useRag() {
 
 	const embedTexts = useCallback(
 		async (input: {
+			purpose: "query" | "reindex";
 			documentId: Id<"documents">;
 			sourceNodeId: string;
 			sourceMarkdown: string;
@@ -50,16 +54,23 @@ export function useRag() {
 					if (!ownerRef.current.markSent(ticket)) {
 						throw new DOMException("Aborted", "AbortError");
 					}
+					const texts = input.texts.slice(offset, offset + EMBED_BATCH);
+					const requestId = await embedBatchRequestId({
+						purpose: input.purpose,
+						documentId: input.documentId,
+						sourceHash,
+						offset,
+						texts,
+					});
+					if (!ownerRef.current.isCurrent(ticket, input.documentId)) {
+						throw new DOMException("Aborted", "AbortError");
+					}
 					const batch = await embed({
-						requestId: embedBatchRequestId(
-							input.documentId,
-							sourceHash,
-							offset,
-						),
+						requestId,
 						documentId: input.documentId,
 						sourceNodeId: input.sourceNodeId,
 						sourceHash,
-						inputs: input.texts.slice(offset, offset + EMBED_BATCH),
+						inputs: texts,
 						platform: "web",
 						traceContent: true,
 					});
@@ -95,6 +106,7 @@ export function useRag() {
 				return 0;
 			}
 			const embeddings = await embedTexts({
+				purpose: "reindex",
 				documentId: input.documentId,
 				sourceNodeId: input.currentNodeId,
 				sourceMarkdown: input.markdown,
@@ -132,6 +144,7 @@ export function useRag() {
 				throw new Error("No active document");
 			}
 			const [vector] = await embedTexts({
+				purpose: "query",
 				documentId: input.documentId,
 				sourceNodeId: input.sourceNodeId,
 				sourceMarkdown: input.sourceMarkdown,
