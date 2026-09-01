@@ -31,6 +31,7 @@ export const EMPTY_META: DocumentMeta = {
 function toStringField(value: unknown): string {
 	if (typeof value === "string") return value;
 	if (value == null) return "";
+	if (value instanceof Date) return value.toISOString();
 	return String(value);
 }
 

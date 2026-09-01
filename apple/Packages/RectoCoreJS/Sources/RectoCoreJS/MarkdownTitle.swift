@@ -4,14 +4,20 @@ import Yams
 
 /// Title derivation for local editor writes.
 public enum MarkdownTitle {
-    private static let numberFormatter = JavaScriptNumberFormatter()
+    private static let javascriptScalar = JavaScriptScalarConverter()
+    // Yams accepts YAML 1.1 octals and numeric separators. Recto's web parser
+    // uses these narrower js-yaml 4.2 bool, int, and float resolvers.
     private static let yamlResolver: Resolver = {
         do {
             return try Resolver.default
                 .replacing(.bool, with: "^(?:true|True|TRUE|false|False|FALSE)$")
                 .replacing(
                     .int,
-                    with: "^(?:[-+]?0b[0-1_]+|[-+]?0o?[0-7_]+|[+]?0|[-+]?[1-9][0-9_]*|[-+]?0x[0-9a-fA-F_]+|[-+]?[1-9][0-9_]*(?::[0-5]?[0-9])+)$"
+                    with: "^(?:[-+]?0b[01]+|[-+]?0o[0-7]+|[-+]?0x[0-9a-fA-F]+|[-+]?[0-9]+)$"
+                )
+                .replacing(
+                    .float,
+                    with: "^(?:[-+]?[0-9]+(?:\\.[0-9]*)?(?:[eE][-+]?[0-9]+)?|\\.[0-9]+(?:[eE][-+]?[0-9]+)?|[-+]?\\.(?:inf|Inf|INF)|\\.(?:nan|NaN|NAN))$"
                 )
         } catch {
             preconditionFailure("static YAML resolver patterns must compile: \(error)")
@@ -84,7 +90,12 @@ public enum MarkdownTitle {
     }
 
     private static func yamlTitle(_ yaml: String) -> String? {
-        guard let mapping = try? load(yaml: yaml, yamlResolver) as? [String: Any],
+        var scalars = Constructor.defaultScalarMap
+        // Yams constructs fixed-width integers. js-yaml constructs every
+        // integer as a JavaScript Number, including base-prefixed values.
+        scalars[.int] = { scalar in javascriptScalar.number(scalar.string) }
+        let constructor = Constructor(scalars)
+        guard let mapping = try? load(yaml: yaml, yamlResolver, constructor) as? [String: Any],
               let value = mapping["title"], !(value is NSNull)
         else { return nil }
         return trimJSWhitespace(javascriptString(value))
@@ -102,9 +113,11 @@ public enum MarkdownTitle {
         case let value as Bool:
             value ? "true" : "false"
         case let value as Int:
-            numberFormatter.string(Double(value))
+            javascriptScalar.string(Double(value))
         case let value as Double:
-            numberFormatter.string(value)
+            javascriptScalar.string(value)
+        case let value as Date:
+            javascriptScalar.string(value)
         case let value as [Any]:
             value.map { $0 is NSNull ? "" : javascriptString($0) }.joined(separator: ",")
         case _ as [AnyHashable: Any]:
@@ -117,20 +130,40 @@ public enum MarkdownTitle {
 }
 
 /// `JSContext` is not Sendable; every access is serialized by `lock`.
-private final class JavaScriptNumberFormatter: @unchecked Sendable {
+private final class JavaScriptScalarConverter: @unchecked Sendable {
     private let lock = NSLock()
     private let context: JSContext
+    private let parseInteger: JSValue
+    private let stringifyDate: JSValue
 
     init() {
-        guard let context = JSContext() else {
+        guard let context = JSContext(),
+              let parseInteger = context.evaluateScript(
+                "value => { const negative = value[0] === '-'; const unsigned = '+-'.includes(value[0]) ? value.slice(1) : value; return (negative ? -1 : 1) * Number(unsigned); }"),
+              let stringifyDate = context.evaluateScript("value => new Date(value).toISOString()")
+        else {
             preconditionFailure("JavaScriptCore must provide a context for Number formatting")
         }
         self.context = context
+        self.parseInteger = parseInteger
+        self.stringifyDate = stringifyDate
+    }
+
+    func number(_ yamlInteger: String) -> Double {
+        lock.withLock {
+            parseInteger.call(withArguments: [yamlInteger]).toDouble()
+        }
     }
 
     func string(_ value: Double) -> String {
         lock.withLock {
             JSValue(double: value, in: context).toString()
+        }
+    }
+
+    func string(_ value: Date) -> String {
+        lock.withLock {
+            stringifyDate.call(withArguments: [value.timeIntervalSince1970 * 1_000]).toString()
         }
     }
 }

@@ -66,6 +66,22 @@
     { "name": "negative scientific negative exponent boundary", "markdown": "---\ntitle: -1e-7\n---", "title": "-1e-7" },
     { "name": "maximum safe integer", "markdown": "---\ntitle: 9007199254740991\n---", "title": "9007199254740991" },
     { "name": "maximum safe integer plus one", "markdown": "---\ntitle: 9007199254740992\n---", "title": "9007199254740992" },
-    { "name": "maximum safe integer plus two rounds", "markdown": "---\ntitle: 9007199254740993\n---", "title": "9007199254740992" }
+    { "name": "maximum safe integer plus two rounds", "markdown": "---\ntitle: 9007199254740993\n---", "title": "9007199254740992" },
+    { "name": "leading-zero decimal", "markdown": "---\ntitle: 0123\n---", "title": "123" },
+    { "name": "leading-zero decimal with octal digits", "markdown": "---\ntitle: 0777\n---", "title": "777" },
+    { "name": "long leading-zero decimal", "markdown": "---\ntitle: 0012345678\n---", "title": "12345678" },
+    { "name": "zero with underscore is a string", "markdown": "---\ntitle: 0_0\n---", "title": "0_0" },
+    { "name": "integer with underscore is a string", "markdown": "---\ntitle: 1_000\n---", "title": "1_000" },
+    { "name": "unsigned 64-bit boundary rounds as JavaScript Number", "markdown": "---\ntitle: 18446744073709551615\n---", "title": "18446744073709552000" },
+    { "name": "date uses UTC ISO string", "markdown": "---\ntitle: 2001-12-15\n---", "title": "2001-12-15T00:00:00.000Z" },
+    { "name": "timestamp uses UTC ISO string", "markdown": "---\ntitle: 2001-12-15T02:59:43.1Z\n---", "title": "2001-12-15T02:59:43.100Z" },
+    { "name": "timestamp offset normalizes to UTC", "markdown": "---\ntitle: 2001-12-14 21:59:43.10 -05:00\n---", "title": "2001-12-15T02:59:43.100Z" },
+    { "name": "timestamp without timezone is UTC", "markdown": "---\ntitle: 2001-12-15 2:59:43.007\n---", "title": "2001-12-15T02:59:43.007Z" },
+    { "name": "yaml 1.2 yes is a string", "markdown": "---\ntitle: yes\n---", "title": "yes" },
+    { "name": "leading-zero eight is decimal", "markdown": "---\ntitle: 08\n---", "title": "8" },
+    { "name": "explicit octal", "markdown": "---\ntitle: 0o123\n---", "title": "83" },
+    { "name": "leading-dot decimal", "markdown": "---\ntitle: .5\n---", "title": "0.5" },
+    { "name": "negative leading-dot value is a string", "markdown": "---\ntitle: -.5\n---", "title": "-.5" },
+    { "name": "odd unsafe integer rounds as JavaScript Number", "markdown": "---\ntitle: 9007199254740995\n---", "title": "9007199254740996" }
   ]
 }
