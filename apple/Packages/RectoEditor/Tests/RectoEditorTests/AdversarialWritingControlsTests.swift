@@ -414,6 +414,39 @@ struct AdversarialWritingControlsTests {
         }
     }
 
+    @Test("nested removal keeps selections off generated markers")
+    func nestedRemovalTrimsBoundaryWhitespace() throws {
+        for (markdown, needle) in [
+            ("***~~foo bar baz~~***", " bar"),
+            ("***~~foo bar baz~~***", "bar "),
+            ("***~~foo bar baz~~***", " bar "),
+            ("prefix\r***~~Ω bar Ж~~***", " bar "),
+        ] {
+            let selection = (markdown as NSString).range(of: needle)
+            let edit = try #require(RectoCommandTransformer.edit(
+                command: .bold,
+                markdown: markdown,
+                selection: selection
+            ))
+            let result = (markdown as NSString).replacingCharacters(
+                in: edit.patch.range,
+                with: edit.patch.replacement
+            )
+            #expect((result as NSString).substring(with: edit.selection) == "bar")
+            #expect(RectoCommandTransformer.activeInlineCommands(
+                markdown: result,
+                selection: edit.selection
+            ) == [.italic, .strikethrough])
+        }
+
+        let whitespace = "***~~foo  bar~~***"
+        #expect(RectoCommandTransformer.edit(
+            command: .bold,
+            markdown: whitespace,
+            selection: (whitespace as NSString).range(of: "  ")
+        ) == nil)
+    }
+
     @Test("bold italic reports and removes either semantic independently")
     func boldItalicToggles() throws {
         let markdown = "***both***"

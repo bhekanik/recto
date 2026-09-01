@@ -403,18 +403,19 @@ enum RectoCommandTransformer {
         nested: [MarkdownSemanticSpan],
         selection: NSRange,
         removing delimiter: String
-    ) -> RectoCommandEdit {
+    ) -> RectoCommandEdit? {
+        guard let contentSelection = trimmedSelection(selection, in: markdown) else { return nil }
         let outermost = nested[0]
         let beforeNested = markdown.substring(with: NSRange(
             location: wrapper.contentRange.location,
             length: outermost.range.location - wrapper.contentRange.location
         ))
         let nestedPrefix = nestedFragment(
-            before: selection,
+            before: contentSelection,
             spans: nested,
             in: markdown
         )
-        var selected = (markdown: markdown.substring(with: selection), contentOffset: 0)
+        var selected = (markdown: markdown.substring(with: contentSelection), contentOffset: 0)
         for span in nested.reversed() {
             let fragment = semanticFragment(selected.markdown, span: span, in: markdown)
             selected = (
@@ -432,7 +433,7 @@ enum RectoCommandTransformer {
                 )
             )
         }
-        let nestedSuffix = nestedFragment(after: selection, spans: nested, in: markdown)
+        let nestedSuffix = nestedFragment(after: contentSelection, spans: nested, in: markdown)
         let afterNested = markdown.substring(with: NSRange(
             location: NSMaxRange(outermost.range),
             length: NSMaxRange(wrapper.contentRange) - NSMaxRange(outermost.range)
@@ -455,9 +456,26 @@ enum RectoCommandTransformer {
                 location: wrapper.range.location
                     + (markedPrefix as NSString).length
                     + selected.contentOffset,
-                length: selection.length
+                length: contentSelection.length
             )
         )
+    }
+
+    private static func trimmedSelection(
+        _ selection: NSRange,
+        in markdown: NSString
+    ) -> NSRange? {
+        var start = selection.location
+        let selectionEnd = NSMaxRange(selection)
+        while start < selectionEnd, isWhitespace(markdown.character(at: start)) {
+            start += 1
+        }
+        var end = selectionEnd
+        while end > start, isWhitespace(markdown.character(at: end - 1)) {
+            end -= 1
+        }
+        guard start < end else { return nil }
+        return NSRange(location: start, length: end - start)
     }
 
     private static func nestedFragment(
