@@ -381,6 +381,37 @@ struct AdversarialWritingControlsTests {
         #expect(MarkdownHTMLRenderer.html(from: partialResult) == "<p><strong><em>foo</em></strong> <em>bar</em></p>")
     }
 
+    @Test("partial outer removal preserves every deeper mark")
+    func deeplyNestedOuterRemoval() throws {
+        let cases: [(String, RectoEditorCommand, Set<RectoEditorCommand>)] = [
+            ("**_~~foo bar~~_**", .bold, [.italic, .strikethrough]),
+            ("_**~~foo bar~~**_", .italic, [.bold, .strikethrough]),
+            ("~~**_foo bar_**~~", .strikethrough, [.bold, .italic]),
+        ]
+
+        for (markdown, command, selectedCommands) in cases {
+            let selection = (markdown as NSString).range(of: "bar")
+            let edit = try #require(RectoCommandTransformer.edit(
+                command: command,
+                markdown: markdown,
+                selection: selection
+            ))
+            let result = (markdown as NSString).replacingCharacters(
+                in: edit.patch.range,
+                with: edit.patch.replacement
+            )
+            #expect((result as NSString).substring(with: edit.selection) == "bar")
+            #expect(RectoCommandTransformer.activeInlineCommands(
+                markdown: result,
+                selection: edit.selection
+            ) == selectedCommands)
+            #expect(RectoCommandTransformer.activeInlineCommands(
+                markdown: result,
+                selection: (result as NSString).range(of: "foo")
+            ) == [.bold, .italic, .strikethrough])
+        }
+    }
+
     @Test("bold italic reports and removes either semantic independently")
     func boldItalicToggles() throws {
         let markdown = "***both***"

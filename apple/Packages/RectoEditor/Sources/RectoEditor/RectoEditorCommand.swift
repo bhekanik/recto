@@ -257,11 +257,12 @@ enum RectoCommandTransformer {
                selection: selection,
                delimiter: delimiter
            ) {
-            if let nested = nestedSpanContainingSelection(
+            let nested = nestedSpansContainingSelection(
                 in: semanticSpans,
                 wrapper: wrapper,
                 selection: selection
-            ) {
+            )
+            if !nested.isEmpty {
                 return removingInlineMark(
                     in: markdown,
                     wrapper: wrapper,
@@ -381,62 +382,56 @@ enum RectoCommandTransformer {
         }
     }
 
-    private static func nestedSpanContainingSelection(
+    private static func nestedSpansContainingSelection(
         in semanticSpans: [MarkdownSemanticSpan],
         wrapper: MarkdownSemanticSpan,
         selection: NSRange
-    ) -> MarkdownSemanticSpan? {
+    ) -> [MarkdownSemanticSpan] {
         semanticSpans
             .filter {
                 $0.range != wrapper.range
                     && contains(wrapper.contentRange, $0.range)
                     && contains($0.contentRange, selection)
             }
-            .max { $0.range.length < $1.range.length }
+            .sorted { $0.range.length > $1.range.length }
     }
 
     private static func removingInlineMark(
         in markdown: NSString,
         wrapper: MarkdownSemanticSpan,
-        nested: MarkdownSemanticSpan,
+        nested: [MarkdownSemanticSpan],
         selection: NSRange
     ) -> RectoCommandEdit {
+        let outermost = nested[0]
         let beforeNested = markdown.substring(with: NSRange(
             location: wrapper.contentRange.location,
-            length: nested.range.location - wrapper.contentRange.location
+            length: outermost.range.location - wrapper.contentRange.location
         ))
-        let nestedPrefix = semanticFragment(
-            markdown.substring(with: NSRange(
-                location: nested.contentRange.location,
-                length: selection.location - nested.contentRange.location
-            )),
-            span: nested,
+        let nestedPrefix = nestedFragment(
+            before: selection,
+            spans: nested,
             in: markdown
         )
-        let selected = semanticFragment(
-            markdown.substring(with: selection),
-            span: nested,
-            in: markdown
-        )
-        let nestedSuffix = semanticFragment(
-            markdown.substring(with: NSRange(
-                location: NSMaxRange(selection),
-                length: NSMaxRange(nested.contentRange) - NSMaxRange(selection)
-            )),
-            span: nested,
-            in: markdown
-        )
+        var selected = (markdown: markdown.substring(with: selection), contentOffset: 0)
+        for span in nested.reversed() {
+            let fragment = semanticFragment(selected.markdown, span: span, in: markdown)
+            selected = (
+                fragment.markdown,
+                selected.contentOffset + fragment.contentOffset
+            )
+        }
+        let nestedSuffix = nestedFragment(after: selection, spans: nested, in: markdown)
         let afterNested = markdown.substring(with: NSRange(
-            location: NSMaxRange(nested.range),
-            length: NSMaxRange(wrapper.contentRange) - NSMaxRange(nested.range)
+            location: NSMaxRange(outermost.range),
+            length: NSMaxRange(wrapper.contentRange) - NSMaxRange(outermost.range)
         ))
         let outerDelimiter = fragmentDelimiter(for: wrapper, in: markdown)
         let markedPrefix = markedFragment(
-            beforeNested + nestedPrefix.markdown,
+            beforeNested + nestedPrefix,
             delimiter: outerDelimiter
         )
         let markedSuffix = markedFragment(
-            nestedSuffix.markdown + afterNested,
+            nestedSuffix + afterNested,
             delimiter: outerDelimiter
         )
         return RectoCommandEdit(
@@ -451,6 +446,54 @@ enum RectoCommandTransformer {
                 length: selection.length
             )
         )
+    }
+
+    private static func nestedFragment(
+        before selection: NSRange,
+        spans: [MarkdownSemanticSpan],
+        in markdown: NSString
+    ) -> String {
+        var index = spans.count - 1
+        var fragment = markdown.substring(with: NSRange(
+            location: spans[index].contentRange.location,
+            length: selection.location - spans[index].contentRange.location
+        ))
+        fragment = semanticFragment(fragment, span: spans[index], in: markdown).markdown
+        while index > 0 {
+            let child = spans[index]
+            index -= 1
+            let span = spans[index]
+            fragment = markdown.substring(with: NSRange(
+                location: span.contentRange.location,
+                length: child.range.location - span.contentRange.location
+            )) + fragment
+            fragment = semanticFragment(fragment, span: span, in: markdown).markdown
+        }
+        return fragment
+    }
+
+    private static func nestedFragment(
+        after selection: NSRange,
+        spans: [MarkdownSemanticSpan],
+        in markdown: NSString
+    ) -> String {
+        var index = spans.count - 1
+        var fragment = markdown.substring(with: NSRange(
+            location: NSMaxRange(selection),
+            length: NSMaxRange(spans[index].contentRange) - NSMaxRange(selection)
+        ))
+        fragment = semanticFragment(fragment, span: spans[index], in: markdown).markdown
+        while index > 0 {
+            let child = spans[index]
+            index -= 1
+            let span = spans[index]
+            fragment += markdown.substring(with: NSRange(
+                location: NSMaxRange(child.range),
+                length: NSMaxRange(span.contentRange) - NSMaxRange(child.range)
+            ))
+            fragment = semanticFragment(fragment, span: span, in: markdown).markdown
+        }
+        return fragment
     }
 
     private static func semanticFragment(
