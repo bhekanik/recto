@@ -3,18 +3,35 @@ import MarkdownEngine
 
 enum RectoMarkdownContext {
     static func intersectsFencedCode(in markdown: NSString, range: NSRange) -> Bool {
-        semanticSpans(in: markdown).contains {
-            $0.kind == .codeBlock
-                && (intersects(range, $0.range)
-                    || (range.length == 0
-                        && range.location == NSMaxRange($0.range)
-                        && $0.markerRanges.count == 1))
+        semanticSpans(in: markdown, intersecting: range).contains {
+            $0.kind == .codeBlock && intersectsCodeSpan(
+                $0,
+                range: range,
+                documentLength: markdown.length
+            )
         }
     }
 
-    static func semanticSpans(in markdown: NSString) -> [MarkdownSemanticSpan] {
+    static func intersectsCodeSpan(
+        _ span: MarkdownSemanticSpan,
+        range: NSRange,
+        documentLength: Int
+    ) -> Bool {
+        intersects(range, span.range)
+            || (span.kind == .codeBlock
+                && range.length == 0
+                && range.location == documentLength
+                && NSMaxRange(span.range) == documentLength
+                && span.markerRanges.count < 2)
+    }
+
+    static func semanticSpans(
+        in markdown: NSString,
+        intersecting range: NSRange
+    ) -> [MarkdownSemanticSpan] {
         MarkdownSemanticProjection.make(
             markdown: markdown as String,
+            intersecting: range,
             configuration: MarkdownEditorConfiguration(
                 extensions: [StrikethroughExtension()]
             )

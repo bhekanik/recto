@@ -34,6 +34,7 @@ struct PerfTests {
 
     private static let typingBudgetMilliseconds = 8.0
     private static let revealBudgetMilliseconds = 16.0
+    private static let explicitCommandBudgetMilliseconds = 60.0
 
     @Test("typing in the middle of a 10k-word document, p50 under 8 ms")
     func typingBudget() {
@@ -130,6 +131,44 @@ struct PerfTests {
                 "the context-sensitive reparse window walked the whole document")
     }
 
+    @Test("near-limit explicit formatting stays interactive")
+    func explicitFormattingBudget() {
+        let prefix = String(repeating: "plain paragraph text\n", count: 47_500)
+        let markdown = "**old**\n\n" + prefix + "**target**"
+        let selection = (markdown as NSString).range(of: "target", options: .backwards)
+
+        func activeCommand() {
+            #expect(RectoCommandTransformer.activeInlineCommands(
+                markdown: markdown,
+                selection: selection
+            ) == [.bold])
+        }
+        func editCommand() {
+            #expect(RectoCommandTransformer.edit(
+                command: .bold,
+                markdown: markdown,
+                selection: selection
+            ) != nil)
+        }
+
+        let firstActive = milliseconds(ContinuousClock().measure(activeCommand))
+        let firstEdit = milliseconds(ContinuousClock().measure(editCommand))
+        let activeSamples = (0..<9).map { _ in
+            milliseconds(ContinuousClock().measure(activeCommand))
+        }
+        let editSamples = (0..<9).map { _ in
+            milliseconds(ContinuousClock().measure(editCommand))
+        }
+        report("near-limit first active command", [firstActive])
+        report("near-limit first edit command", [firstEdit])
+        report("near-limit active command", activeSamples)
+        report("near-limit edit command", editSamples)
+        #expect(firstActive < Self.explicitCommandBudgetMilliseconds)
+        #expect(firstEdit < Self.explicitCommandBudgetMilliseconds)
+        #expect(percentile(activeSamples, 0.5) < Self.explicitCommandBudgetMilliseconds)
+        #expect(percentile(editSamples, 0.5) < Self.explicitCommandBudgetMilliseconds)
+    }
+
     // MARK: - Helpers
 
     private func typingSamples(in document: String,
@@ -153,6 +192,12 @@ struct PerfTests {
         let sorted = samples.sorted()
         guard !sorted.isEmpty else { return 0 }
         return sorted[min(sorted.count - 1, Int(Double(sorted.count) * fraction))]
+    }
+
+    private func milliseconds(_ duration: Duration) -> Double {
+        let components = duration.components
+        return Double(components.seconds) * 1_000
+            + Double(components.attoseconds) / 1_000_000_000_000_000
     }
 
     private func report(_ name: String, _ samples: [Double]) {

@@ -42,11 +42,18 @@ struct AdversarialWritingControlsTests {
         }
     }
 
-    @Test("line formatting does not rewrite container-indented code")
+    @Test("formatting does not rewrite container-indented code")
     func formattingRejectsContainerIndentedCode() {
-        for markdown in [">     literal", "-     literal", "1.     literal"] {
+        for markdown in [
+            ">     literal", "-     literal", "1.     literal",
+            ">   \tliteral", "-   \tliteral", "1.   \tliteral",
+            "> \t    literal", "- \t    literal", "1. \t    literal",
+        ] {
             let selection = (markdown as NSString).range(of: "literal")
             for command in [
+                RectoEditorCommand.bold,
+                .italic,
+                .strikethrough,
                 RectoEditorCommand.heading(level: 1),
                 .bulletList,
                 .orderedList,
@@ -58,6 +65,32 @@ struct AdversarialWritingControlsTests {
                     markdown: markdown,
                     selection: selection
                 ) == nil)
+            }
+        }
+    }
+
+    @Test("multiline formatting does not cross container-indented code")
+    func multilineFormattingRejectsContainerIndentedCode() {
+        for separator in ["\n", "\r\n"] {
+            for codeLine in [">     literal", "-     literal", "1.     literal"] {
+                let markdown = "prose\(separator)\(codeLine)\(separator)tail"
+                let selection = (markdown as NSString).range(of: "prose\(separator)\(codeLine)")
+                for command in [
+                    RectoEditorCommand.bold,
+                    .italic,
+                    .strikethrough,
+                    .heading(level: 1),
+                    .bulletList,
+                    .orderedList,
+                    .taskList,
+                    .blockquote,
+                ] {
+                    #expect(RectoCommandTransformer.edit(
+                        command: command,
+                        markdown: markdown,
+                        selection: selection
+                    ) == nil)
+                }
             }
         }
     }
@@ -234,6 +267,32 @@ struct AdversarialWritingControlsTests {
             markdown: inline,
             selection: selection
         ) != nil)
+
+        for code in ["```swift\nliteral", "    literal"] {
+            let eof = NSRange(location: (code as NSString).length, length: 0)
+            for command in [
+                RectoEditorCommand.bold,
+                .italic,
+                .strikethrough,
+                .heading(level: 2),
+                .bulletList,
+                .blockquote,
+            ] {
+                #expect(RectoCommandTransformer.edit(
+                    command: command,
+                    markdown: code,
+                    selection: eof
+                ) == nil)
+            }
+        }
+
+        let closed = "```\nliteral\n```"
+        let closedEOF = NSRange(location: (closed as NSString).length, length: 0)
+        #expect(RectoCommandTransformer.edit(
+            command: .bold,
+            markdown: closed,
+            selection: closedEOF
+        ) != nil)
     }
 
     @Test("slash menu stays closed in container fences but not after deindent")
@@ -299,9 +358,27 @@ struct AdversarialWritingControlsTests {
             in: repeatedEdit.patch.range,
             with: repeatedEdit.patch.replacement
         )
-        #expect(repeatedResult == "_foo foo_")
-        #expect(repeatedEdit.selection.location == 5)
+        #expect(repeatedResult == "**_foo_** _foo_")
+        #expect(repeatedEdit.selection.location == (repeatedResult as NSString).range(
+            of: "foo",
+            options: .backwards
+        ).location)
         #expect((repeatedResult as NSString).substring(with: repeatedEdit.selection) == "foo")
+        #expect(MarkdownHTMLRenderer.html(from: repeatedResult) == "<p><strong><em>foo</em></strong> <em>foo</em></p>")
+
+        let partialNested = "**_foo bar_**"
+        let bar = (partialNested as NSString).range(of: "bar")
+        let partialEdit = try #require(RectoCommandTransformer.edit(
+            command: .bold,
+            markdown: partialNested,
+            selection: bar
+        ))
+        let partialResult = (partialNested as NSString).replacingCharacters(
+            in: partialEdit.patch.range,
+            with: partialEdit.patch.replacement
+        )
+        #expect((partialResult as NSString).substring(with: partialEdit.selection) == "bar")
+        #expect(MarkdownHTMLRenderer.html(from: partialResult) == "<p><strong><em>foo</em></strong> <em>bar</em></p>")
     }
 
     @Test("bold italic reports and removes either semantic independently")

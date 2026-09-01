@@ -99,7 +99,15 @@ enum RectoCommandTransformer {
         guard selection.location != NSNotFound,
               selection.length >= 0,
               NSMaxRange(selection) <= source.length else { return nil }
-        if let code = enclosingCodeContext(in: source, selection: selection) {
+        let semanticSpans = RectoMarkdownContext.semanticSpans(
+            in: source,
+            intersecting: selection
+        )
+        if let code = enclosingCodeContext(
+            in: semanticSpans,
+            selection: selection,
+            documentLength: source.length
+        ) {
             switch (command, code.kind) {
             case (.inlineCode, .inlineCode), (.codeBlock, .codeBlock):
                 break
@@ -110,13 +118,13 @@ enum RectoCommandTransformer {
 
         switch command {
         case .bold:
-            return inline(markdown: source, selection: selection, delimiter: "**", placeholder: "text")
+            return inline(markdown: source, selection: selection, delimiter: "**", placeholder: "text", semanticSpans: semanticSpans)
         case .italic:
-            return inline(markdown: source, selection: selection, delimiter: "_", placeholder: "text")
+            return inline(markdown: source, selection: selection, delimiter: "_", placeholder: "text", semanticSpans: semanticSpans)
         case .strikethrough:
-            return inline(markdown: source, selection: selection, delimiter: "~~", placeholder: "text")
+            return inline(markdown: source, selection: selection, delimiter: "~~", placeholder: "text", semanticSpans: semanticSpans)
         case .inlineCode:
-            return codeSpan(markdown: source, selection: selection)
+            return codeSpan(markdown: source, selection: selection, semanticSpans: semanticSpans)
         case let .heading(level):
             guard (1...6).contains(level) else { return nil }
             return rewriteLines(
@@ -214,7 +222,10 @@ enum RectoCommandTransformer {
     static func activeInlineCommands(markdown: String, selection: NSRange) -> Set<RectoEditorCommand> {
         guard selection.length > 0 else { return [] }
         let source = markdown as NSString
-        return RectoMarkdownContext.semanticSpans(in: source).reduce(into: Set()) { active, span in
+        return RectoMarkdownContext.semanticSpans(
+            in: source,
+            intersecting: selection
+        ).reduce(into: Set()) { active, span in
             guard contains(span.contentRange, selection) else { return }
             switch span.kind {
             case .emphasis(.bold):
@@ -237,29 +248,37 @@ enum RectoCommandTransformer {
         markdown: NSString,
         selection: NSRange,
         delimiter: String,
-        placeholder: String
+        placeholder: String,
+        semanticSpans: [MarkdownSemanticSpan]
     ) -> RectoCommandEdit? {
         if selection.length > 0,
-           let wrapper = enclosingInlineSpan(
-               in: markdown,
+            let wrapper = enclosingInlineSpan(
+               in: semanticSpans,
                selection: selection,
                delimiter: delimiter
            ) {
-            let preservedRange = nestedSpanContainingSelection(
-                in: markdown,
+            if let nested = nestedSpanContainingSelection(
+                in: semanticSpans,
                 wrapper: wrapper,
                 selection: selection
-            )?.range ?? selection
+            ) {
+                return removingInlineMark(
+                    in: markdown,
+                    wrapper: wrapper,
+                    nested: nested,
+                    selection: selection
+                )
+            }
             let contentStart = wrapper.contentRange.location
             let contentEnd = NSMaxRange(wrapper.contentRange)
             let prefix = markdown.substring(with: NSRange(
                 location: contentStart,
-                length: preservedRange.location - contentStart
+                length: selection.location - contentStart
             ))
-            let selected = markdown.substring(with: preservedRange)
+            let selected = markdown.substring(with: selection)
             let suffix = markdown.substring(with: NSRange(
-                location: NSMaxRange(preservedRange),
-                length: contentEnd - NSMaxRange(preservedRange)
+                location: NSMaxRange(selection),
+                length: contentEnd - NSMaxRange(selection)
             ))
             let fragmentDelimiter = fragmentDelimiter(for: wrapper, in: markdown)
             let markedPrefix = markedFragment(prefix, delimiter: fragmentDelimiter)
@@ -271,14 +290,13 @@ enum RectoCommandTransformer {
             let selectedReplacement = remainingDelimiter.map {
                 markedFragment(selected, delimiter: $0)
             } ?? selected
-            let selectedOffset = selection.location - preservedRange.location
-                + (remainingDelimiter.map {
+            let selectedOffset = remainingDelimiter.map {
                     insertedOpeningDelimiterLength(
                         in: selected,
-                        sourceOffset: selection.location - preservedRange.location,
+                        sourceOffset: 0,
                         delimiter: $0
                     )
-                } ?? 0)
+                } ?? 0
             return RectoCommandEdit(
                 patch: MarkdownTextPatch(
                     range: wrapper.range,
@@ -323,11 +341,11 @@ enum RectoCommandTransformer {
     }
 
     private static func enclosingInlineSpan(
-        in markdown: NSString,
+        in semanticSpans: [MarkdownSemanticSpan],
         selection: NSRange,
         delimiter: String
     ) -> MarkdownSemanticSpan? {
-        RectoMarkdownContext.semanticSpans(in: markdown)
+        semanticSpans
             .filter { span in
                 guard contains(span.contentRange, selection) else { return false }
                 switch (delimiter, span.kind) {
@@ -345,13 +363,18 @@ enum RectoCommandTransformer {
     }
 
     private static func enclosingCodeContext(
-        in markdown: NSString,
-        selection: NSRange
+        in semanticSpans: [MarkdownSemanticSpan],
+        selection: NSRange,
+        documentLength: Int
     ) -> MarkdownSemanticSpan? {
-        RectoMarkdownContext.semanticSpans(in: markdown).first {
+        semanticSpans.first {
             switch $0.kind {
             case .inlineCode, .codeBlock:
-                RectoMarkdownContext.intersects(selection, $0.range)
+                RectoMarkdownContext.intersectsCodeSpan(
+                    $0,
+                    range: selection,
+                    documentLength: documentLength
+                )
             default:
                 false
             }
@@ -359,17 +382,98 @@ enum RectoCommandTransformer {
     }
 
     private static func nestedSpanContainingSelection(
-        in markdown: NSString,
+        in semanticSpans: [MarkdownSemanticSpan],
         wrapper: MarkdownSemanticSpan,
         selection: NSRange
     ) -> MarkdownSemanticSpan? {
-        RectoMarkdownContext.semanticSpans(in: markdown)
+        semanticSpans
             .filter {
                 $0.range != wrapper.range
                     && contains(wrapper.contentRange, $0.range)
                     && contains($0.contentRange, selection)
             }
             .max { $0.range.length < $1.range.length }
+    }
+
+    private static func removingInlineMark(
+        in markdown: NSString,
+        wrapper: MarkdownSemanticSpan,
+        nested: MarkdownSemanticSpan,
+        selection: NSRange
+    ) -> RectoCommandEdit {
+        let beforeNested = markdown.substring(with: NSRange(
+            location: wrapper.contentRange.location,
+            length: nested.range.location - wrapper.contentRange.location
+        ))
+        let nestedPrefix = semanticFragment(
+            markdown.substring(with: NSRange(
+                location: nested.contentRange.location,
+                length: selection.location - nested.contentRange.location
+            )),
+            span: nested,
+            in: markdown
+        )
+        let selected = semanticFragment(
+            markdown.substring(with: selection),
+            span: nested,
+            in: markdown
+        )
+        let nestedSuffix = semanticFragment(
+            markdown.substring(with: NSRange(
+                location: NSMaxRange(selection),
+                length: NSMaxRange(nested.contentRange) - NSMaxRange(selection)
+            )),
+            span: nested,
+            in: markdown
+        )
+        let afterNested = markdown.substring(with: NSRange(
+            location: NSMaxRange(nested.range),
+            length: NSMaxRange(wrapper.contentRange) - NSMaxRange(nested.range)
+        ))
+        let outerDelimiter = fragmentDelimiter(for: wrapper, in: markdown)
+        let markedPrefix = markedFragment(
+            beforeNested + nestedPrefix.markdown,
+            delimiter: outerDelimiter
+        )
+        let markedSuffix = markedFragment(
+            nestedSuffix.markdown + afterNested,
+            delimiter: outerDelimiter
+        )
+        return RectoCommandEdit(
+            patch: MarkdownTextPatch(
+                range: wrapper.range,
+                replacement: markedPrefix + selected.markdown + markedSuffix
+            ),
+            selection: NSRange(
+                location: wrapper.range.location
+                    + (markedPrefix as NSString).length
+                    + selected.contentOffset,
+                length: selection.length
+            )
+        )
+    }
+
+    private static func semanticFragment(
+        _ value: String,
+        span: MarkdownSemanticSpan,
+        in markdown: NSString
+    ) -> (markdown: String, contentOffset: Int) {
+        guard !value.isEmpty else { return ("", 0) }
+        if span.kind == .inlineCode {
+            let delimiterLength = longestRun(of: "`", in: value) + 1
+            let hasBoundarySpace = (value.hasPrefix(" ") || value.hasSuffix(" "))
+                && !value.allSatisfy { $0 == " " }
+            let paddingLength = value.hasPrefix("`") || value.hasSuffix("`") || hasBoundarySpace ? 1 : 0
+            return (
+                codeSpanMarkdown(value),
+                delimiterLength + paddingLength
+            )
+        }
+        let delimiter = span.markerRanges.first.map { markdown.substring(with: $0) } ?? ""
+        return (
+            markedFragment(value, delimiter: delimiter),
+            insertedOpeningDelimiterLength(in: value, sourceOffset: 0, delimiter: delimiter)
+        )
     }
 
     private static func fragmentDelimiter(
@@ -425,9 +529,13 @@ enum RectoCommandTransformer {
         inner.location >= outer.location && NSMaxRange(inner) <= NSMaxRange(outer)
     }
 
-    private static func codeSpan(markdown: NSString, selection: NSRange) -> RectoCommandEdit {
+    private static func codeSpan(
+        markdown: NSString,
+        selection: NSRange,
+        semanticSpans: [MarkdownSemanticSpan]
+    ) -> RectoCommandEdit {
         if selection.length > 0,
-           let enclosure = RectoMarkdownContext.semanticSpans(in: markdown).first(where: {
+           let enclosure = semanticSpans.first(where: {
                $0.kind == .inlineCode && contains($0.contentRange, selection)
            }) {
             let prefix = markdown.substring(with: NSRange(
