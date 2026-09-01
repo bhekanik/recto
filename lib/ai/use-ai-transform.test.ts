@@ -5,8 +5,11 @@ import {
 	commitTransformAfterAcknowledgement,
 	type PendingAiCommit,
 	readAiTransformError,
+	reconcileTransformRun,
 	resolveTransformRun,
 	snapshotMatchesCurrent,
+	transformReconciliationIsCurrent,
+	type UnresolvedTransform,
 } from "./use-ai-transform";
 
 const documentId = "doc-a";
@@ -195,6 +198,170 @@ describe("AI transform acknowledgement boundary", () => {
 });
 
 describe("AI transform run recovery", () => {
+	type Deferred<T> = { promise: Promise<T>; resolve: (value: T) => void };
+
+	function deferred<T>(): Deferred<T> {
+		let resolve!: (value: T) => void;
+		const promise = new Promise<T>((resolvePromise) => {
+			resolve = resolvePromise;
+		});
+		return { promise, resolve };
+	}
+
+	const unresolved = (
+		requestId: string,
+		document: string,
+		generation: number,
+	): UnresolvedTransform => ({
+		requestId,
+		// SAFETY: Tests use inert document ids and never pass them to Convex.
+		documentId: document as UnresolvedTransform["documentId"],
+		generation,
+		partial: "",
+	});
+
+	it.each([
+		"reserved cancellation",
+		"failed acknowledgement",
+		"succeeded acknowledgement and commit",
+		"acknowledgement failure",
+	])("drops document A's %s continuation after switching to B", () => {
+		const captured = unresolved("request-a", "doc-a", 1);
+		const current = unresolved("request-b", "doc-b", 2);
+		expect(
+			transformReconciliationIsCurrent(
+				captured,
+				current,
+				current.documentId,
+				2,
+			),
+		).toBe(false);
+	});
+
+	it("does not revive an A continuation after A to B to A with a newer request", () => {
+		const captured = unresolved("old-a", "doc-a", 1);
+		const current = unresolved("new-a", "doc-a", 3);
+		expect(
+			transformReconciliationIsCurrent(
+				captured,
+				current,
+				current.documentId,
+				3,
+			),
+		).toBe(false);
+		expect(
+			transformReconciliationIsCurrent(
+				captured,
+				captured,
+				captured.documentId,
+				3,
+			),
+		).toBe(false);
+	});
+
+	it("drops A while its reserved cancellation settles on B", async () => {
+		let current = true;
+		const cancellation = deferred<{ cancelled: true }>();
+		const acknowledged: string[] = [];
+		const result = reconcileTransformRun({
+			requestId: "request-a",
+			query: async () => ({ status: "reserved" }),
+			cancel: async () => await cancellation.promise,
+			acknowledge: async () => {
+				acknowledged.push("request-a");
+				return true;
+			},
+			isCurrent: () => current,
+		});
+		await Promise.resolve();
+		current = false;
+		cancellation.resolve({ cancelled: true });
+		await expect(result).resolves.toEqual({ status: "stale" });
+		expect(acknowledged).toEqual([]);
+	});
+
+	it("drops A's retry-safe result after its lookup resolves on B", async () => {
+		let current = true;
+		const lookup = deferred<{ status: "failed" }>();
+		const result = reconcileTransformRun({
+			requestId: "request-a",
+			query: async () => await lookup.promise,
+			cancel: async () => ({ cancelled: true }),
+			acknowledge: async () => true,
+			isCurrent: () => current,
+		});
+		current = false;
+		lookup.resolve({ status: "failed" });
+		await expect(result).resolves.toEqual({ status: "stale" });
+	});
+
+	it("drops A's success before commit when acknowledgement resolves on B", async () => {
+		let current = true;
+		const acknowledgement = deferred<boolean>();
+		const result = reconcileTransformRun({
+			requestId: "request-a",
+			query: async () => ({
+				status: "succeeded",
+				applicable: true,
+				output: "replacement",
+			}),
+			cancel: async () => ({ cancelled: true }),
+			acknowledge: async () => await acknowledgement.promise,
+			isCurrent: () => current,
+		});
+		await Promise.resolve();
+		current = false;
+		acknowledgement.resolve(true);
+		await expect(result).resolves.toEqual({ status: "stale" });
+	});
+
+	it("does not let A's acknowledgement failure overwrite B", async () => {
+		let current = true;
+		const acknowledgement = deferred<void>();
+		const result = reconcileTransformRun({
+			requestId: "request-a",
+			query: async () => ({
+				status: "succeeded",
+				applicable: true,
+				output: "replacement",
+			}),
+			cancel: async () => ({ cancelled: true }),
+			acknowledge: async () => {
+				await acknowledgement.promise;
+				throw new Error("transport failed");
+			},
+			isCurrent: () => current,
+		});
+		await Promise.resolve();
+		current = false;
+		acknowledgement.resolve();
+		await expect(result).resolves.toEqual({ status: "stale" });
+	});
+
+	it("drops old A after A to B to A installs a newer generation", async () => {
+		const captured = unresolved("old-a", "doc-a", 1);
+		let current: UnresolvedTransform | null = captured;
+		let generation = 1;
+		const lookup = deferred<{ status: "failed" }>();
+		const result = reconcileTransformRun({
+			requestId: captured.requestId,
+			query: async () => await lookup.promise,
+			cancel: async () => ({ cancelled: true }),
+			acknowledge: async () => true,
+			isCurrent: () =>
+				transformReconciliationIsCurrent(
+					captured,
+					current,
+					current?.documentId ?? null,
+					generation,
+				),
+		});
+		current = unresolved("new-a", "doc-a", 3);
+		generation = 3;
+		lookup.resolve({ status: "failed" });
+		await expect(result).resolves.toEqual({ status: "stale" });
+	});
+
 	it("keeps missing and reserved runs locked", () => {
 		expect(resolveTransformRun(null)).toEqual({ status: "unresolved" });
 		expect(resolveTransformRun({ status: "reserved" })).toEqual({

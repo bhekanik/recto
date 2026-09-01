@@ -637,7 +637,7 @@ describe("AI run durability", () => {
 			expectedSourceMarkdown: source,
 		});
 		const output = JSON.stringify(
-			Array.from({ length: 16 }, () => Array(1_536).fill(0.123456789)),
+			Array.from({ length: 16 }, () => Array(1_536).fill(-0.1234567890123456)),
 		);
 		await expect(
 			t.mutation(internal.ai.runs.succeed, {
