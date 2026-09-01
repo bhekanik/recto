@@ -49,6 +49,20 @@ export type ReviewCompletionClient = {
 	};
 };
 
+export class ProviderUsageSettlementError extends Error {
+	constructor() {
+		super("A completed provider call could not be recorded.");
+		this.name = "ProviderUsageSettlementError";
+	}
+}
+
+export function reviewOutcomeIsUnknown(error: Error): boolean {
+	return (
+		error instanceof ProviderUsageSettlementError ||
+		providerOutcomeIsUnknown(error)
+	);
+}
+
 const MAX_REVIEW_TOKENS = 4_000;
 const MAX_REVIEW_ITERATIONS = 8;
 const MAX_REVIEW_ITEMS = 100;
@@ -169,11 +183,15 @@ export async function reviewWithTools(args: {
 		);
 		const callUsage = parseProviderUsage(completion.usage);
 		addUsage(usage, completion.usage);
-		await args.settle({
-			callIndex: iteration,
-			usage: callUsage,
-			latencyMs: Date.now() - callStartedAt,
-		});
+		try {
+			await args.settle({
+				callIndex: iteration,
+				usage: callUsage,
+				latencyMs: Date.now() - callStartedAt,
+			});
+		} catch {
+			throw new ProviderUsageSettlementError();
+		}
 		const message = completion.choices[0]?.message;
 		const calls = message?.tool_calls ?? [];
 		if (!message || calls.length === 0) break;
@@ -438,7 +456,7 @@ export const run = action({
 				runId,
 				userId,
 				errorCode: errorCode(failure),
-				outcomeUnknown: providerOutcomeIsUnknown(failure),
+				outcomeUnknown: reviewOutcomeIsUnknown(failure),
 			});
 			throw error;
 		} finally {

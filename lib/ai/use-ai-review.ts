@@ -71,6 +71,13 @@ export function resolveReviewRun(run: ReviewRun): ReviewRunResolution {
 const UNKNOWN_REVIEW =
 	"The review may have reached the provider. Check its status before starting another.";
 
+export function canStartAiReview(
+	recoveryReady: boolean,
+	unresolvedRequestId: string | null,
+): boolean {
+	return recoveryReady && unresolvedRequestId === null;
+}
+
 export function useAiReview(args: {
 	documentId: Id<"documents"> | null;
 	getDocMarkdown: () => string;
@@ -80,10 +87,12 @@ export function useAiReview(args: {
 	const runReview = useAction(api.ai.review.run);
 	const convex = useConvex();
 	const cancelRun = useMutation(api.ai.runs.cancel);
+	const acknowledgeRun = useMutation(api.ai.runs.acknowledge);
 	const ownerRef = useRef(new AiRequestOwner());
 	const unresolvedRequestRef = useRef<string | null>(null);
 	const documentRef = useRef(documentId);
 	const previousDocumentRef = useRef(documentId);
+	const recoveryReadyRef = useRef(false);
 	documentRef.current = documentId;
 	const [state, setState] = useState<AiReviewState>("idle");
 	const [summary, setSummary] = useState<AiReviewSummary | null>(null);
@@ -109,8 +118,42 @@ export function useAiReview(args: {
 		[],
 	);
 
+	useEffect(() => {
+		let current = true;
+		recoveryReadyRef.current = documentId === null;
+		if (!documentId) return;
+		setState("loading");
+		void convex
+			.query(api.ai.runs.latestRecoverable, { documentId, kind: "review" })
+			.then((run) => {
+				if (!current || documentRef.current !== documentId) return;
+				if (run) {
+					unresolvedRequestRef.current = run.requestId;
+					setState("outcome-unknown");
+					setError(UNKNOWN_REVIEW);
+				} else if (!unresolvedRequestRef.current) {
+					setState("idle");
+					setError(null);
+				}
+			})
+			.catch(() => {
+				if (current) {
+					setState("outcome-unknown");
+					setError(UNKNOWN_REVIEW);
+				}
+			})
+			.finally(() => {
+				if (current) recoveryReadyRef.current = true;
+			});
+		return () => {
+			current = false;
+		};
+	}, [convex, documentId]);
+
 	const reset = useCallback(() => {
-		if (unresolvedRequestRef.current) {
+		if (
+			!canStartAiReview(recoveryReadyRef.current, unresolvedRequestRef.current)
+		) {
 			setState("outcome-unknown");
 			setError(UNKNOWN_REVIEW);
 			return;
@@ -124,7 +167,9 @@ export function useAiReview(args: {
 	}, []);
 
 	const run = useCallback(async () => {
-		if (unresolvedRequestRef.current) {
+		if (
+			!canStartAiReview(recoveryReadyRef.current, unresolvedRequestRef.current)
+		) {
 			setState("outcome-unknown");
 			setError(UNKNOWN_REVIEW);
 			return;
@@ -165,6 +210,12 @@ export function useAiReview(args: {
 				traceContent: true,
 			});
 			if (!ownerRef.current.isCurrent(ticket, documentRef.current)) return;
+			const acknowledged = await acknowledgeRun({
+				requestId: ticket.requestId,
+			});
+			if (!acknowledged.acknowledged) {
+				throw new Error("The completed review could not be reconciled.");
+			}
 			ownerRef.current.finish(ticket);
 			setSummary(result);
 			setState("done");
@@ -196,6 +247,17 @@ export function useAiReview(args: {
 			}
 			ownerRef.current.finish(ticket);
 			if (resolution.status === "succeeded") {
+				try {
+					const acknowledged = await acknowledgeRun({
+						requestId: ticket.requestId,
+					});
+					if (!acknowledged.acknowledged) throw new Error("not acknowledged");
+				} catch {
+					unresolvedRequestRef.current = ticket.requestId;
+					setState("outcome-unknown");
+					setError(UNKNOWN_REVIEW);
+					return;
+				}
 				unresolvedRequestRef.current = null;
 				setSummary(resolution.summary);
 				setState("done");
@@ -214,6 +276,7 @@ export function useAiReview(args: {
 			);
 		}
 	}, [
+		acknowledgeRun,
 		cancelRun,
 		convex,
 		documentId,
@@ -239,12 +302,16 @@ export function useAiReview(args: {
 				}
 			}
 			if (resolution.status === "succeeded") {
+				const acknowledged = await acknowledgeRun({ requestId });
+				if (!acknowledged.acknowledged) throw new Error("not acknowledged");
 				unresolvedRequestRef.current = null;
 				setSummary(resolution.summary);
 				setState("done");
 				return;
 			}
 			if (resolution.status === "retry-safe") {
+				const acknowledged = await acknowledgeRun({ requestId });
+				if (!acknowledged.acknowledged) throw new Error("not acknowledged");
 				unresolvedRequestRef.current = null;
 				setState("error");
 				setError(
@@ -257,7 +324,7 @@ export function useAiReview(args: {
 		}
 		setState("outcome-unknown");
 		setError(UNKNOWN_REVIEW);
-	}, [cancelRun, convex]);
+	}, [acknowledgeRun, cancelRun, convex]);
 
 	return { state, summary, error, run, reset, reconcile };
 }

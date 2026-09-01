@@ -179,9 +179,16 @@ export default defineSchema({
 		updatedAt: v.number(),
 		providerStartedAt: v.optional(v.number()),
 		completedAt: v.optional(v.number()),
+		acknowledgedAt: v.optional(v.number()),
 	})
 		.index("by_user_request", ["userId", "requestId"])
 		.index("by_user_created", ["userId", "createdAt"])
+		.index("by_user_document_kind_updated", [
+			"userId",
+			"documentId",
+			"kind",
+			"updatedAt",
+		])
 		.index("by_document", ["documentId"])
 		.index("by_status_updated", ["status", "updatedAt"]),
 
@@ -218,6 +225,10 @@ export default defineSchema({
 		name: v.literal("global"),
 		staleCount: v.number(),
 		scannedCount: v.number(),
+		sweepCursor: v.optional(v.string()),
+		pendingStaleCount: v.optional(v.number()),
+		pendingScannedCount: v.optional(v.number()),
+		hasCompletedSweep: v.optional(v.boolean()),
 		updatedAt: v.number(),
 	}).index("by_name", ["name"]),
 

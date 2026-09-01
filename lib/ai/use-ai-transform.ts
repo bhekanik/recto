@@ -160,9 +160,9 @@ export async function readAiTransformError(response: Response): Promise<{
 type UnresolvedTransform = {
 	requestId: string;
 	documentId: Id<"documents">;
-	snapshot: AiTransformSnapshot;
-	controller: HistoryController;
-	instructionLabel: string;
+	snapshot?: AiTransformSnapshot;
+	controller?: HistoryController;
+	instructionLabel?: string;
 	partial: string;
 };
 
@@ -176,12 +176,14 @@ export function useAiTransform(args: {
 	const { getToken } = useAuth();
 	const convex = useConvex();
 	const cancelRun = useMutation(api.ai.runs.cancel);
+	const acknowledgeRun = useMutation(api.ai.runs.acknowledge);
 	const [state, setState] = useState<AiTransformState>(INITIAL);
 	const ownerRef = useRef(new AiRequestOwner());
 	const documentIdRef = useRef<Id<"documents"> | null>(documentId);
 	const previousDocumentRef = useRef<Id<"documents"> | null>(documentId);
 	const pendingCommitRef = useRef<PendingAiCommit | null>(null);
 	const unresolvedRef = useRef<UnresolvedTransform | null>(null);
+	const recoveryReadyRef = useRef(false);
 	documentIdRef.current = documentId;
 
 	useEffect(
@@ -202,6 +204,40 @@ export function useAiTransform(args: {
 				: INITIAL,
 		);
 	}, [documentId]);
+
+	useEffect(() => {
+		let current = true;
+		recoveryReadyRef.current = documentId === null;
+		if (!documentId) return;
+		setState((value) => (value.status === "idle" ? unknownOutcome() : value));
+		void convex
+			.query(api.ai.runs.latestRecoverable, {
+				documentId,
+				kind: "transform",
+			})
+			.then((run) => {
+				if (!current || documentIdRef.current !== documentId) return;
+				if (run) {
+					unresolvedRef.current = {
+						requestId: run.requestId,
+						documentId,
+						partial: "",
+					};
+					setState(unknownOutcome());
+				} else if (!unresolvedRef.current) {
+					setState(INITIAL);
+				}
+			})
+			.catch(() => {
+				if (current) setState(unknownOutcome());
+			})
+			.finally(() => {
+				if (current) recoveryReadyRef.current = true;
+			});
+		return () => {
+			current = false;
+		};
+	}, [convex, documentId]);
 
 	const reset = useCallback(() => {
 		const phase = ownerRef.current.supersede();
@@ -229,8 +265,8 @@ export function useAiTransform(args: {
 			instructionLabel: string;
 			snapshot: AiTransformSnapshot;
 		}) => {
-			if (unresolvedRef.current) {
-				setState(unknownOutcome(unresolvedRef.current.partial));
+			if (!recoveryReadyRef.current || unresolvedRef.current) {
+				setState(unknownOutcome(unresolvedRef.current?.partial));
 				return;
 			}
 			if (!documentId) {
@@ -399,6 +435,16 @@ export function useAiTransform(args: {
 			const committed = controller.commitProgrammatic(nextMarkdown, {
 				origin: `ai:${input.instructionLabel}`,
 			});
+			try {
+				const acknowledged = await acknowledgeRun({
+					requestId: ticket.requestId,
+				});
+				if (!acknowledged.acknowledged) throw new Error("not acknowledged");
+			} catch {
+				ownerRef.current.finish(ticket);
+				setState(unknownOutcome(aiText));
+				return;
+			}
 			ownerRef.current.finish(ticket);
 			unresolvedRef.current = null;
 			if (!committed) {
@@ -418,7 +464,7 @@ export function useAiTransform(args: {
 				awaitingDecision: mode === "pending",
 			});
 		},
-		[documentId, getController, getDocMarkdown, getToken, mode],
+		[acknowledgeRun, documentId, getController, getDocMarkdown, getToken, mode],
 	);
 
 	const reconcile = useCallback(async () => {
@@ -446,6 +492,10 @@ export function useAiTransform(args: {
 				}
 			}
 			if (resolution.status === "retry-safe") {
+				const acknowledged = await acknowledgeRun({
+					requestId: unresolved.requestId,
+				});
+				if (!acknowledged.acknowledged) throw new Error("not acknowledged");
 				unresolvedRef.current = null;
 				setState({
 					...INITIAL,
@@ -456,7 +506,24 @@ export function useAiTransform(args: {
 				return;
 			}
 			if (resolution.status === "succeeded") {
+				const acknowledged = await acknowledgeRun({
+					requestId: unresolved.requestId,
+				});
+				if (!acknowledged.acknowledged) throw new Error("not acknowledged");
 				unresolvedRef.current = null;
+				if (
+					!unresolved.snapshot ||
+					!unresolved.controller ||
+					!unresolved.instructionLabel
+				) {
+					setState({
+						...INITIAL,
+						status: "error",
+						error:
+							"The earlier transform finished, but its selection was lost after reload. Select the text again.",
+					});
+					return;
+				}
 				if (
 					documentIdRef.current !== unresolved.documentId ||
 					!snapshotMatchesCurrent(
@@ -515,7 +582,7 @@ export function useAiTransform(args: {
 			// Keep the request locked until its server state is known.
 		}
 		setState(unknownOutcome(unresolved.partial));
-	}, [cancelRun, convex, getDocMarkdown, mode]);
+	}, [acknowledgeRun, cancelRun, convex, getDocMarkdown, mode]);
 
 	const accept = useCallback(() => {
 		pendingCommitRef.current = null;

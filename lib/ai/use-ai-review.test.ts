@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { resolveReviewRun } from "./use-ai-review";
+import { canStartAiReview, resolveReviewRun } from "./use-ai-review";
+
+describe("AI review reload gate", () => {
+	it("blocks until recovery finishes and while a request is unresolved", () => {
+		expect(canStartAiReview(false, null)).toBe(false);
+		expect(canStartAiReview(true, "request-1")).toBe(false);
+		expect(canStartAiReview(true, null)).toBe(true);
+	});
+});
 
 describe("AI review run recovery", () => {
 	it("does not treat missing or reserved status as retry-safe", () => {

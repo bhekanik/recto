@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
 	applySuggestions,
+	ProviderUsageSettlementError,
 	type ReviewCompletionClient,
+	reviewOutcomeIsUnknown,
 	reviewWithTools,
 } from "./review";
 
@@ -18,6 +20,47 @@ describe("AI review suggestion accounting", () => {
 });
 
 describe("AI review provider settlement", () => {
+	it("keeps a completed call outcome unknown when usage persistence fails", async () => {
+		const client: ReviewCompletionClient = {
+			chat: {
+				completions: {
+					create: async () => ({
+						usage: {
+							prompt_tokens: 10,
+							completion_tokens: 2,
+							total_tokens: 12,
+						},
+						choices: [
+							{
+								finish_reason: "stop",
+								index: 0,
+								logprobs: null,
+								message: {
+									role: "assistant",
+									content: "Done",
+									refusal: null,
+								},
+							},
+						],
+					}),
+				},
+			},
+		};
+
+		const request = reviewWithTools({
+			client,
+			text: "draft",
+			settle: async () => {
+				throw new Error("request_conflict");
+			},
+		});
+
+		await expect(request).rejects.toBeInstanceOf(ProviderUsageSettlementError);
+		expect(reviewOutcomeIsUnknown(new ProviderUsageSettlementError())).toBe(
+			true,
+		);
+	});
+
 	it("settles one completion before it can issue the next", async () => {
 		const settled: number[] = [];
 		let callCount = 0;

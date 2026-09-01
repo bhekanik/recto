@@ -1,3 +1,4 @@
+import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
 import { api, internal } from "../_generated/api";
@@ -85,6 +86,81 @@ async function settleRun(
 }
 
 describe("AI run durability", () => {
+	it("serializes random ids across tabs and keeps failed acknowledgement locked", async () => {
+		const t = convexTest(schema, modules);
+		registerRateLimiter(t);
+		const { documentId, runId } = await seedRun(t, "reserved");
+		const run = await t.run(async (ctx) => await ctx.db.get(runId));
+		if (!run) throw new Error("missing seeded run");
+		const owner = t.withIdentity({ subject: USER });
+		await expect(
+			owner.mutation(api.ai.runs.acknowledge, { requestId: run.requestId }),
+		).resolves.toEqual({ acknowledged: false });
+		const begin = (requestId: string) =>
+			t.mutation(internal.ai.runs.begin, {
+				userId: USER,
+				requestId,
+				kind: "transform" as const,
+				documentId,
+				sourceNodeId: "source",
+				sourceHash: "a".repeat(64),
+				expectedSourceMarkdown: "source",
+				requestHash: requestId.padEnd(64, "x"),
+				model: "model",
+			});
+		await expect(begin("other-tab-before-cancel")).rejects.toThrow(
+			"earlier AI request",
+		);
+
+		await owner.mutation(api.ai.runs.cancel, { requestId: run.requestId });
+		const outcomes = await Promise.allSettled([
+			begin("tab-one"),
+			begin("tab-two"),
+		]);
+		expect(
+			outcomes.filter((result) => result.status === "fulfilled"),
+		).toHaveLength(1);
+		expect(
+			outcomes.filter((result) => result.status === "rejected"),
+		).toHaveLength(1);
+	});
+
+	it("recovers reloadable runs and rejects stale-source recovery", async () => {
+		const t = convexTest(schema, modules);
+		const { documentId, runId } = await seedRun(t, "reserved");
+		const owner = t.withIdentity({ subject: USER });
+		for (const status of [
+			"reserved",
+			"provider_started",
+			"outcome_unknown",
+			"succeeded",
+		] as const) {
+			await t.run(async (ctx) => {
+				await ctx.db.patch(runId, {
+					status,
+					output: status === "succeeded" ? "result" : undefined,
+					updatedAt: Date.now(),
+				});
+			});
+			await expect(
+				owner.query(api.ai.runs.latestRecoverable, {
+					documentId,
+					kind: "transform",
+				}),
+			).resolves.toMatchObject({ status });
+		}
+
+		await t.run(async (ctx) => {
+			await ctx.db.patch(documentId, { currentNodeId: "changed" });
+		});
+		await expect(
+			owner.query(api.ai.runs.latestRecoverable, {
+				documentId,
+				kind: "transform",
+			}),
+		).resolves.toBeNull();
+	});
+
 	it("hides blocked shares before bounded cleanup finishes", async () => {
 		const t = convexTest(schema, modules);
 		const { documentId } = await seedRun(t);

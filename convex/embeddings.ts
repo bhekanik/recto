@@ -37,7 +37,7 @@ const AI_EMBEDDING_DIM = 1536;
 
 /** How many stale documents to embed per scheduled sweep (bounds action time). */
 const SWEEP_DOC_LIMIT = 25;
-const SWEEP_SCAN_LIMIT = 256;
+const SWEEP_SCAN_LIMIT = SWEEP_DOC_LIMIT;
 const EMBED_BATCH = 16;
 
 /** Target chunk window in characters — mirrors CHUNK_TARGET_CHARS in lib/ai/chunk.ts. */
@@ -371,16 +371,27 @@ async function findStaleDocuments(
  * all users since the cron has no caller identity.
  */
 export const allStaleDocuments = internalQuery({
-	args: { cursor: v.union(v.string(), v.null()) },
+	args: { cursor: v.optional(v.union(v.string(), v.null())) },
 	handler: async (ctx, args) => {
+		const state = await ctx.db
+			.query("embeddingHealthState")
+			.withIndex("by_name", (q) => q.eq("name", "global"))
+			.unique();
+		const cursor =
+			args.cursor === undefined ? (state?.sweepCursor ?? null) : args.cursor;
 		const result = await ctx.db.query("documents").order("asc").paginate({
-			cursor: args.cursor,
+			cursor,
 			numItems: SWEEP_SCAN_LIMIT,
 			maximumRowsRead: SWEEP_SCAN_LIMIT,
 		});
+		const [cronStale, allStale] = await Promise.all([
+			findStaleDocuments(ctx, result.page, true),
+			findStaleDocuments(ctx, result.page),
+		]);
 		return {
-			stale: await findStaleDocuments(ctx, result.page, true),
-			staleCount: (await findStaleDocuments(ctx, result.page)).length,
+			startedAtBeginning: cursor === null,
+			stale: cronStale,
+			staleCount: allStale.length,
 			continueCursor: result.continueCursor,
 			isDone: result.isDone,
 			scanned: result.page.length,
@@ -405,7 +416,10 @@ export const embeddingHealth = query({
 			.query("embeddingHealthState")
 			.withIndex("by_name", (q) => q.eq("name", "global"))
 			.unique();
-		if (state) return { staleCount: state.staleCount };
+		if (state)
+			return {
+				staleCount: state.hasCompletedSweep === false ? null : state.staleCount,
+			};
 		const firstPage = await ctx.db
 			.query("documents")
 			.order("asc")
@@ -416,14 +430,72 @@ export const embeddingHealth = query({
 	},
 });
 
-export const recordEmbeddingHealth = internalMutation({
-	args: { staleCount: v.number(), scannedCount: v.number() },
+export type EmbeddingSweepProgress = {
+	staleCount: number;
+	scannedCount: number;
+	pendingStaleCount?: number;
+	pendingScannedCount?: number;
+	sweepCursor?: string;
+	hasCompletedSweep?: boolean;
+};
+
+export function nextEmbeddingSweepProgress(args: {
+	previous?: EmbeddingSweepProgress;
+	startedAtBeginning: boolean;
+	isDone: boolean;
+	continueCursor: string;
+	pageStaleCount: number;
+	pageScannedCount: number;
+	resolvedCount: number;
+}): EmbeddingSweepProgress {
+	const pendingStaleCount =
+		(args.startedAtBeginning ? 0 : (args.previous?.pendingStaleCount ?? 0)) +
+		args.pageStaleCount -
+		args.resolvedCount;
+	const pendingScannedCount =
+		(args.startedAtBeginning ? 0 : (args.previous?.pendingScannedCount ?? 0)) +
+		args.pageScannedCount;
+	if (args.isDone) {
+		return {
+			staleCount: Math.max(0, pendingStaleCount),
+			scannedCount: pendingScannedCount,
+			pendingStaleCount: undefined,
+			pendingScannedCount: undefined,
+			sweepCursor: undefined,
+			hasCompletedSweep: true,
+		};
+	}
+	return {
+		staleCount: args.previous?.staleCount ?? 0,
+		scannedCount: args.previous?.scannedCount ?? 0,
+		pendingStaleCount,
+		pendingScannedCount,
+		sweepCursor: args.continueCursor,
+		hasCompletedSweep: args.previous?.hasCompletedSweep ?? false,
+	};
+}
+
+export const recordEmbeddingSweepPage = internalMutation({
+	args: {
+		startedAtBeginning: v.boolean(),
+		isDone: v.boolean(),
+		continueCursor: v.string(),
+		pageStaleCount: v.number(),
+		pageScannedCount: v.number(),
+		resolvedCount: v.number(),
+	},
 	handler: async (ctx, args) => {
 		const existing = await ctx.db
 			.query("embeddingHealthState")
 			.withIndex("by_name", (q) => q.eq("name", "global"))
 			.unique();
-		const value = { ...args, updatedAt: Date.now() };
+		const value = {
+			...nextEmbeddingSweepProgress({
+				previous: existing ?? undefined,
+				...args,
+			}),
+			updatedAt: Date.now(),
+		};
 		if (existing) await ctx.db.patch(existing._id, value);
 		else
 			await ctx.db.insert("embeddingHealthState", { name: "global", ...value });
@@ -499,8 +571,8 @@ export const replaceChunksInternal = internalMutation({
  * Convex-side `OPENROUTER_API_KEY`, then persist via `replaceChunksInternal` and
  * advance `embeddedNodeId` to the current node so it isn't re-embedded next sweep.
  *
- * Bounded to `SWEEP_DOC_LIMIT` documents per run to respect Convex action limits;
- * remaining stale docs are picked up on the next daily run. If the key is missing
+ * Each run advances one persisted `SWEEP_DOC_LIMIT` page, even when every provider
+ * call fails, so bad early documents cannot starve the rest of the corpus. If the key is missing
  * the sweep logs and returns gracefully (it does NOT throw — a cron failure would
  * just retry forever). Per-document errors are logged and skipped so one bad doc
  * doesn't abort the whole sweep.
@@ -508,41 +580,31 @@ export const replaceChunksInternal = internalMutation({
 export const reindexSweep = internalAction({
 	args: {},
 	handler: async (ctx): Promise<{ scanned: number; embedded: number }> => {
-		let cursor: string | null = null;
-		let scanned = 0;
-		let staleCount = 0;
-		const stale: StaleDocument[] = [];
-		do {
-			const page: {
-				stale: StaleDocument[];
-				continueCursor: string;
-				staleCount: number;
-				isDone: boolean;
-				scanned: number;
-			} = await ctx.runQuery(internal.embeddings.allStaleDocuments, { cursor });
-			scanned += page.scanned;
-			staleCount += page.staleCount;
-			for (const document of page.stale) {
-				if (stale.length < SWEEP_DOC_LIMIT) stale.push(document);
-			}
-			cursor = page.isDone ? null : page.continueCursor;
-			if (page.isDone) break;
-		} while (cursor !== null);
+		const page: {
+			stale: StaleDocument[];
+			continueCursor: string;
+			staleCount: number;
+			isDone: boolean;
+			scanned: number;
+			startedAtBeginning: boolean;
+		} = await ctx.runQuery(internal.embeddings.allStaleDocuments, {});
 
 		if (!process.env.OPENROUTER_API_KEY?.trim()) {
 			console.warn(
 				"reindexSweep: OPENROUTER_API_KEY not set in Convex env — skipping embedding generation",
 			);
-			await ctx.runMutation(internal.embeddings.recordEmbeddingHealth, {
-				staleCount,
-				scannedCount: scanned,
+			await ctx.runMutation(internal.embeddings.recordEmbeddingSweepPage, {
+				...page,
+				pageStaleCount: page.staleCount,
+				pageScannedCount: page.scanned,
+				resolvedCount: 0,
 			});
-			return { scanned, embedded: 0 };
+			return { scanned: page.scanned, embedded: 0 };
 		}
 
 		let embedded = 0;
 		let purged = 0;
-		for (const doc of stale) {
+		for (const doc of page.stale) {
 			try {
 				const chunks = chunkMarkdown(doc.markdown).slice(0, CHUNK_LIMIT);
 				if (chunks.length === 0) {
@@ -624,10 +686,12 @@ export const reindexSweep = internalAction({
 			}
 		}
 
-		await ctx.runMutation(internal.embeddings.recordEmbeddingHealth, {
-			staleCount: Math.max(0, staleCount - embedded - purged),
-			scannedCount: scanned,
+		await ctx.runMutation(internal.embeddings.recordEmbeddingSweepPage, {
+			...page,
+			pageStaleCount: page.staleCount,
+			pageScannedCount: page.scanned,
+			resolvedCount: embedded + purged,
 		});
-		return { scanned, embedded };
+		return { scanned: page.scanned, embedded };
 	},
 });

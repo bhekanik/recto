@@ -164,6 +164,36 @@ export const begin = internalMutation({
 				run: { ...existing, status: "reserved" as const, updatedAt: now },
 			};
 		}
+		if (args.kind !== "embed") {
+			const recoverable = await ctx.db
+				.query("aiRuns")
+				.withIndex("by_user_document_kind_updated", (q) =>
+					q
+						.eq("userId", args.userId)
+						.eq("documentId", args.documentId)
+						.eq("kind", args.kind),
+				)
+				.order("desc")
+				.filter((q) =>
+					q.and(
+						q.eq(q.field("acknowledgedAt"), undefined),
+						q.eq(q.field("sourceNodeId"), args.sourceNodeId),
+						q.or(
+							q.eq(q.field("status"), "reserved"),
+							q.eq(q.field("status"), "provider_started"),
+							q.eq(q.field("status"), "outcome_unknown"),
+							q.eq(q.field("status"), "succeeded"),
+						),
+					),
+				)
+				.first();
+			if (recoverable) {
+				aiError(
+					"request_in_progress",
+					"Resolve the earlier AI request before starting another.",
+				);
+			}
+		}
 
 		const limited = await aiRateLimiter.limit(ctx, "aiRequests", {
 			key: args.userId,
@@ -423,6 +453,66 @@ export const get = query({
 			.first();
 		if (share) aiError("document_shared", "AI is disabled on shared documents");
 		return run;
+	},
+});
+
+export const latestRecoverable = query({
+	args: {
+		documentId: v.id("documents"),
+		kind: v.union(v.literal("transform"), v.literal("review")),
+	},
+	handler: async (ctx, args) => {
+		const userId = await requireUserId(ctx);
+		const document = await requireOwnedDocument(ctx, args.documentId);
+		const run = await ctx.db
+			.query("aiRuns")
+			.withIndex("by_user_document_kind_updated", (q) =>
+				q
+					.eq("userId", userId)
+					.eq("documentId", args.documentId)
+					.eq("kind", args.kind),
+			)
+			.order("desc")
+			.filter((q) =>
+				q.and(
+					q.eq(q.field("acknowledgedAt"), undefined),
+					q.or(
+						q.eq(q.field("status"), "reserved"),
+						q.eq(q.field("status"), "provider_started"),
+						q.eq(q.field("status"), "outcome_unknown"),
+						q.eq(q.field("status"), "succeeded"),
+					),
+				),
+			)
+			.first();
+		if (!run || run.sourceNodeId !== document.currentNodeId) {
+			return null;
+		}
+		return run;
+	},
+});
+
+export const acknowledge = mutation({
+	args: { requestId: v.string() },
+	handler: async (ctx, args) => {
+		const userId = await requireUserId(ctx);
+		const run = await ctx.db
+			.query("aiRuns")
+			.withIndex("by_user_request", (q) =>
+				q.eq("userId", userId).eq("requestId", args.requestId),
+			)
+			.unique();
+		if (!run) return { acknowledged: false as const };
+		await requireOwnedDocument(ctx, run.documentId);
+		if (
+			run.status === "reserved" ||
+			run.status === "provider_started" ||
+			run.status === "outcome_unknown"
+		) {
+			return { acknowledged: false as const };
+		}
+		await ctx.db.patch(run._id, { acknowledgedAt: Date.now() });
+		return { acknowledged: true as const };
 	},
 });
 

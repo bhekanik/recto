@@ -34,6 +34,53 @@ function docRow(currentNodeId: string, markdown = "Some words.") {
 }
 
 describe("plan 015 — embeddingHealth query", () => {
+	it("clears the persisted cursor before the next full sweep cycle", async () => {
+		const t = convexTest(schema, modules);
+		await t.mutation(internal.embeddings.recordEmbeddingSweepPage, {
+			startedAtBeginning: true,
+			isDone: false,
+			continueCursor: "tail-cursor",
+			pageStaleCount: 25,
+			pageScannedCount: 25,
+			resolvedCount: 0,
+		});
+		await t.mutation(internal.embeddings.recordEmbeddingSweepPage, {
+			startedAtBeginning: false,
+			isDone: true,
+			continueCursor: "done-cursor",
+			pageStaleCount: 1,
+			pageScannedCount: 1,
+			resolvedCount: 1,
+		});
+		const completed = await t.run(
+			async (ctx) => await ctx.db.query("embeddingHealthState").unique(),
+		);
+		expect(completed).toMatchObject({
+			staleCount: 25,
+			scannedCount: 26,
+			hasCompletedSweep: true,
+		});
+		expect(completed?.sweepCursor).toBeUndefined();
+		expect(completed?.pendingStaleCount).toBeUndefined();
+
+		await t.mutation(internal.embeddings.recordEmbeddingSweepPage, {
+			startedAtBeginning: true,
+			isDone: false,
+			continueCursor: "next-cycle",
+			pageStaleCount: 2,
+			pageScannedCount: 2,
+			resolvedCount: 0,
+		});
+		const next = await t.run(
+			async (ctx) => await ctx.db.query("embeddingHealthState").unique(),
+		);
+		expect(next).toMatchObject({
+			sweepCursor: "next-cycle",
+			pendingStaleCount: 2,
+			pendingScannedCount: 2,
+		});
+	});
+
 	it("keys scheduled batches by source, offset, and exact inputs", async () => {
 		const request = (
 			overrides: Partial<Parameters<typeof scheduledEmbedRequestId>[0]> = {},
@@ -172,17 +219,31 @@ describe("plan 015 — embeddingHealth query", () => {
 				}
 			});
 
-			const first = await t.query(internal.embeddings.allStaleDocuments, {
-				cursor: null,
-			});
-			const second = await t.query(internal.embeddings.allStaleDocuments, {
-				cursor: first.continueCursor,
-			});
-			expect(first).toMatchObject({ scanned: 256, isDone: false });
-			expect(second).toMatchObject({ scanned: 44, isDone: true });
-			expect(first.staleCount + second.staleCount).toBe(300);
-			const ids = [...first.stale, ...second.stale].map(
-				(document) => document.documentId,
+			const pages: Array<{
+				continueCursor: string;
+				isDone: boolean;
+				scanned: number;
+				staleCount: number;
+				stale: Array<{ documentId: string }>;
+			}> = [];
+			let cursor: string | null = null;
+			do {
+				const page: (typeof pages)[number] = await t.query(
+					internal.embeddings.allStaleDocuments,
+					{
+						cursor,
+					},
+				);
+				pages.push(page);
+				cursor = page.isDone ? null : page.continueCursor;
+				if (page.isDone) break;
+			} while (cursor !== null);
+			expect(pages.length).toBeGreaterThan(11);
+			expect(pages[0]).toMatchObject({ scanned: 25, isDone: false });
+			expect(pages.at(-1)).toMatchObject({ isDone: true });
+			expect(pages.reduce((sum, page) => sum + page.staleCount, 0)).toBe(300);
+			const ids = pages.flatMap((page) =>
+				page.stale.map((document) => document.documentId),
 			);
 			expect(ids).toHaveLength(300);
 			expect(new Set(ids).size).toBe(300);
@@ -190,9 +251,13 @@ describe("plan 015 — embeddingHealth query", () => {
 				t.withIdentity(USER).query(api.embeddings.embeddingHealth, {}),
 			).resolves.toEqual({ staleCount: null });
 
-			await t.mutation(internal.embeddings.recordEmbeddingHealth, {
-				staleCount: ids.length,
-				scannedCount: 300,
+			await t.mutation(internal.embeddings.recordEmbeddingSweepPage, {
+				startedAtBeginning: true,
+				isDone: true,
+				continueCursor: "",
+				pageStaleCount: ids.length,
+				pageScannedCount: 300,
+				resolvedCount: 0,
 			});
 			await expect(
 				t.withIdentity(USER).query(api.embeddings.embeddingHealth, {}),
