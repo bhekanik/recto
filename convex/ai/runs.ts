@@ -301,23 +301,30 @@ export const succeed = internalMutation({
 			completedAt: now,
 			updatedAt: now,
 		});
-		const deletion = await ctx.db
-			.query("aiDocumentDeletions")
-			.withIndex("by_document", (q) => q.eq("documentId", run.documentId))
-			.unique();
-		const document = await ctx.db.get(run.documentId);
-		const share = await ctx.db
-			.query("documentShares")
-			.withIndex("by_document", (q) => q.eq("documentId", run.documentId))
-			.first();
-		const sourceNode = await ctx.db
-			.query("docNodes")
-			.withIndex("by_document_node", (q) =>
-				q.eq("documentId", run.documentId).eq("nodeId", run.sourceNodeId),
-			)
-			.unique();
+		const [deletion, tombstone, consentCurrent, document, share, sourceNode] =
+			await Promise.all([
+				ctx.db
+					.query("aiDocumentDeletions")
+					.withIndex("by_document", (q) => q.eq("documentId", run.documentId))
+					.unique(),
+				findTombstone(ctx, run.userId),
+				hasCurrentConsent(ctx, run.userId),
+				ctx.db.get(run.documentId),
+				ctx.db
+					.query("documentShares")
+					.withIndex("by_document", (q) => q.eq("documentId", run.documentId))
+					.first(),
+				ctx.db
+					.query("docNodes")
+					.withIndex("by_document_node", (q) =>
+						q.eq("documentId", run.documentId).eq("nodeId", run.sourceNodeId),
+					)
+					.unique(),
+			]);
 		const applicable =
 			!deletion &&
+			!tombstone &&
+			consentCurrent &&
 			!share &&
 			document?.userId === run.userId &&
 			document.currentNodeId === run.sourceNodeId &&

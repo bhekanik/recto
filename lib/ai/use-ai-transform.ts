@@ -2,6 +2,7 @@
 
 import { useAuth } from "@clerk/nextjs";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { z } from "zod";
 
 import type { Id } from "@/convex/_generated/dataModel";
 import type { HistoryController } from "@/lib/history/use-document-history";
@@ -68,6 +69,29 @@ function unknownOutcome(partial = ""): AiTransformState {
 		error:
 			"The provider may have processed this request. The result was not applied. Check AI usage before deciding whether to start another.",
 		awaitingDecision: false,
+	};
+}
+
+const aiTransformErrorSchema = z.object({
+	error: z.string(),
+	code: z.string().optional(),
+});
+
+export async function readAiTransformError(response: Response): Promise<{
+	message: string;
+	outcomeUnknown: boolean;
+}> {
+	const body = await response
+		.json()
+		.then((value) => aiTransformErrorSchema.safeParse(value))
+		.catch(() => null);
+	return {
+		message: body?.success
+			? body.data.error
+			: `AI request failed (${response.status})`,
+		outcomeUnknown: Boolean(
+			body?.success && body.data.code === "request_outcome_unknown",
+		),
 	};
 }
 
@@ -171,8 +195,12 @@ export function useAiTransform(args: {
 					signal: ticket.controller.signal,
 				});
 				if (!ownerRef.current.isCurrent(ticket, documentIdRef.current)) return;
-				if (!response.ok || !response.body) {
-					retryIsKnownSafe = !response.ok;
+				if (!response.ok) {
+					const failure = await readAiTransformError(response);
+					retryIsKnownSafe = !failure.outcomeUnknown;
+					throw new Error(failure.message);
+				}
+				if (!response.body) {
 					throw new Error(`AI request failed (${response.status})`);
 				}
 				const reader = response.body.getReader();

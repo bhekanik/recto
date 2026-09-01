@@ -2,7 +2,7 @@ import { httpRouter } from "convex/server";
 import { z } from "zod";
 import { internal } from "./_generated/api";
 import { httpAction } from "./_generated/server";
-import { errorMessage, httpStatusForAiError } from "./ai/errors";
+import { errorCode, errorMessage, httpStatusForAiError } from "./ai/errors";
 import { executePreparedTransform, prepareTransform } from "./ai/transform";
 import { MAX_UPLOAD_BYTES, UPLOAD_TOO_LARGE_MESSAGE } from "./files";
 
@@ -162,7 +162,7 @@ const aiTransform = httpAction(async (ctx, request) => {
 		const failure =
 			error instanceof Error ? error : new Error("AI request failed");
 		return json(
-			{ error: errorMessage(failure) },
+			{ error: errorMessage(failure), code: errorCode(failure) },
 			httpStatusForAiError(failure),
 			origin,
 		);

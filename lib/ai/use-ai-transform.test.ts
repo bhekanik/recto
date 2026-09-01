@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { HistoryNode } from "@/lib/history/use-document-history";
-import { canRejectAiCommit, type PendingAiCommit } from "./use-ai-transform";
+import {
+	canRejectAiCommit,
+	type PendingAiCommit,
+	readAiTransformError,
+} from "./use-ai-transform";
 
 const documentId = "doc-a";
 
@@ -65,5 +69,47 @@ describe("AI transform rejection ownership", () => {
 		expect(canRejectAiCommit(pending(owner), documentId, replacement)).toBe(
 			false,
 		);
+	});
+});
+
+describe("AI transform HTTP errors", () => {
+	it("preserves outcome-unknown instead of treating its 409 as retry-safe", async () => {
+		await expect(
+			readAiTransformError(
+				Response.json(
+					{
+						error: "This request may already have reached the provider.",
+						code: "request_outcome_unknown",
+					},
+					{ status: 409 },
+				),
+			),
+		).resolves.toEqual({
+			message: "This request may already have reached the provider.",
+			outcomeUnknown: true,
+		});
+	});
+
+	it("keeps known pre-provider failures retry-safe", async () => {
+		await expect(
+			readAiTransformError(
+				Response.json(
+					{ error: "The document changed.", code: "document_changed" },
+					{ status: 409 },
+				),
+			),
+		).resolves.toEqual({
+			message: "The document changed.",
+			outcomeUnknown: false,
+		});
+	});
+
+	it("falls back safely for an unstructured non-2xx response", async () => {
+		await expect(
+			readAiTransformError(new Response("gateway", { status: 503 })),
+		).resolves.toEqual({
+			message: "AI request failed (503)",
+			outcomeUnknown: false,
+		});
 	});
 });

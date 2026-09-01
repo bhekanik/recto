@@ -7,10 +7,12 @@ describe("multi-batch embedding request identity", () => {
 			purpose: "query" | "reindex",
 			offset: number,
 			texts: string[],
+			sourceNodeId = "node-1",
 		) =>
 			embedBatchRequestId({
 				purpose,
 				documentId: "doc",
+				sourceNodeId,
 				sourceHash: "a".repeat(64),
 				offset,
 				texts,
@@ -27,6 +29,7 @@ describe("multi-batch embedding request identity", () => {
 		expect(new Set(first).size).toBe(2);
 		expect(await id("query", 0, ["one"])).not.toBe(first[0]);
 		expect(await id("reindex", 0, ["different"])).not.toBe(first[0]);
+		expect(await id("reindex", 0, ["one"], "node-2")).not.toBe(first[0]);
 		expect(first.every((requestId) => requestId.length <= 128)).toBe(true);
 	});
 });

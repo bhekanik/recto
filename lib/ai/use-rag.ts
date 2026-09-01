@@ -14,6 +14,7 @@ const EMBED_BATCH = 16;
 export async function embedBatchRequestId(input: {
 	purpose: "query" | "reindex";
 	documentId: string;
+	sourceNodeId: string;
 	sourceHash: string;
 	offset: number;
 	texts: string[];
@@ -58,6 +59,7 @@ export function useRag() {
 					const requestId = await embedBatchRequestId({
 						purpose: input.purpose,
 						documentId: input.documentId,
+						sourceNodeId: input.sourceNodeId,
 						sourceHash,
 						offset,
 						texts,

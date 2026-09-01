@@ -64,6 +64,25 @@ async function seedRun(
 	});
 }
 
+async function settleRun(
+	t: ReturnType<typeof convexTest>,
+	runId: Awaited<ReturnType<typeof seedRun>>["runId"],
+) {
+	return await t.mutation(internal.ai.runs.succeed, {
+		runId,
+		userId: USER,
+		output: "result",
+		expectedSourceMarkdown: "source",
+		usage: {
+			promptTokens: 1,
+			completionTokens: 1,
+			reasoningTokens: 0,
+			costMicros: 2,
+			latencyMs: 1,
+		},
+	});
+}
+
 describe("AI run durability", () => {
 	it("hides blocked shares before bounded cleanup finishes", async () => {
 		const t = convexTest(schema, modules);
@@ -285,6 +304,53 @@ describe("AI run durability", () => {
 		expect(snapshot.run?.status).toBe("succeeded");
 		expect(snapshot.usage).toHaveLength(1);
 		expect(snapshot.usage[0]?.costMicros).toBe(42);
+	});
+
+	it("settles charged work but refuses application after account deletion starts", async () => {
+		const t = convexTest(schema, modules);
+		const { runId } = await seedRun(t);
+		await t.run(async (ctx) => {
+			await ctx.db.insert("accountDeletions", {
+				userId: USER,
+				startedAt: 2,
+				updatedAt: 2,
+				phase: "rows",
+			});
+		});
+		const result = await settleRun(t, runId);
+		expect(result.applicable).toBe(false);
+		expect(
+			await t.run(
+				async (ctx) =>
+					await ctx.db
+						.query("aiUsage")
+						.withIndex("by_run", (q) => q.eq("runId", runId))
+						.unique(),
+			),
+		).not.toBeNull();
+	});
+
+	it("settles charged work but refuses application after consent revocation", async () => {
+		const t = convexTest(schema, modules);
+		const { runId } = await seedRun(t);
+		await t.run(async (ctx) => {
+			const consent = await ctx.db
+				.query("aiConsents")
+				.withIndex("by_user", (q) => q.eq("userId", USER))
+				.unique();
+			if (consent) await ctx.db.delete(consent._id);
+		});
+		const result = await settleRun(t, runId);
+		expect(result.applicable).toBe(false);
+		expect(
+			await t.run(
+				async (ctx) =>
+					await ctx.db
+						.query("aiUsage")
+						.withIndex("by_run", (q) => q.eq("runId", runId))
+						.unique(),
+			),
+		).not.toBeNull();
 	});
 
 	it("refuses same-head draft drift after recording provider usage", async () => {
