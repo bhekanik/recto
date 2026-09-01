@@ -1,20 +1,26 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useAuth } from "@clerk/nextjs";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { Id } from "@/convex/_generated/dataModel";
 import type { HistoryController } from "@/lib/history/use-document-history";
 import type { AiTransformMode } from "@/lib/studio/use-studio-settings";
 import { applyTransform, type TransformRange } from "./apply-transform";
+import { requireConvexSiteUrl } from "./convex-http";
+import { AiRequestOwner, sha256Text } from "./request-owner";
 
-export type AiTransformStatus = "idle" | "streaming" | "committed" | "error";
+export type AiTransformStatus =
+	| "idle"
+	| "streaming"
+	| "committed"
+	| "outcome-unknown"
+	| "error";
 
 export type AiTransformState = {
 	status: AiTransformStatus;
-	/** Partial (then full) streamed rewrite, for live display. */
 	partial: string;
 	error: string | null;
-	/** True only in "pending" mode after a commit, until accept/reject. */
 	awaitingDecision: boolean;
 };
 
@@ -25,68 +31,111 @@ const INITIAL: AiTransformState = {
 	awaitingDecision: false,
 };
 
-/**
- * Reversible AI selection transform hook (plan 009, Phase A). Streams a rewrite
- * of the selected span from the Next route, displays the partial text, and on
- * completion commits the result as an undo-tree node via the history controller
- * (reversible by construction). Respects `aiTransformMode`:
- *  - "replace": commit and done (undo still rejects).
- *  - "pending": commit, then expose accept()/reject(); reject undoes the node.
- * Cancellation aborts the fetch and commits nothing.
- */
+export type PendingAiCommit = {
+	documentId: string;
+	controller: Pick<HistoryController, "currentNodeId" | "nodes" | "navigateTo">;
+	sourceNodeId: string;
+	aiNodeId: string;
+};
+
+export function canRejectAiCommit(
+	pending: PendingAiCommit | null,
+	documentId: string | null,
+	controller: Pick<
+		HistoryController,
+		"currentNodeId" | "nodes" | "navigateTo"
+	> | null,
+): pending is PendingAiCommit {
+	return Boolean(
+		pending &&
+			controller &&
+			documentId === pending.documentId &&
+			controller === pending.controller &&
+			controller.currentNodeId === pending.aiNodeId &&
+			controller.nodes.some(
+				(node) =>
+					node.nodeId === pending.aiNodeId &&
+					node.parentNodeId === pending.sourceNodeId &&
+					node.origin?.startsWith("ai:"),
+			),
+	);
+}
+
+function unknownOutcome(partial = ""): AiTransformState {
+	return {
+		status: "outcome-unknown",
+		partial,
+		error:
+			"The provider may have processed this request. The result was not applied. Check AI usage before deciding whether to start another.",
+		awaitingDecision: false,
+	};
+}
+
 export function useAiTransform(args: {
-	/** The active document — sent to the route so the server can enforce the
-	 * no-AI-on-shared-documents rule (plan 016). */
 	documentId: Id<"documents"> | null;
 	getController: () => HistoryController | null;
 	getDocMarkdown: () => string;
 	mode: AiTransformMode;
 }) {
 	const { documentId, getController, getDocMarkdown, mode } = args;
+	const { getToken } = useAuth();
 	const [state, setState] = useState<AiTransformState>(INITIAL);
-	const abortRef = useRef<AbortController | null>(null);
-	// The pre-AI nodeId, so reject can return precisely there.
-	const preNodeRef = useRef<string | null>(null);
+	const ownerRef = useRef(new AiRequestOwner());
+	const documentIdRef = useRef<Id<"documents"> | null>(documentId);
+	const previousDocumentRef = useRef<Id<"documents"> | null>(documentId);
+	const pendingCommitRef = useRef<PendingAiCommit | null>(null);
+	documentIdRef.current = documentId;
+
+	useEffect(
+		() => () => {
+			ownerRef.current.supersede();
+		},
+		[],
+	);
+
+	useEffect(() => {
+		if (previousDocumentRef.current === documentId) return;
+		previousDocumentRef.current = documentId;
+		const phase = ownerRef.current.supersede();
+		pendingCommitRef.current = null;
+		setState(phase === "sent" ? unknownOutcome() : INITIAL);
+	}, [documentId]);
 
 	const reset = useCallback(() => {
-		abortRef.current?.abort();
-		abortRef.current = null;
-		preNodeRef.current = null;
-		setState(INITIAL);
+		const phase = ownerRef.current.supersede();
+		pendingCommitRef.current = null;
+		setState(phase === "sent" ? unknownOutcome() : INITIAL);
 	}, []);
 
 	const cancel = useCallback(() => {
-		abortRef.current?.abort();
-		abortRef.current = null;
-		setState(INITIAL);
+		const phase = ownerRef.current.supersede();
+		pendingCommitRef.current = null;
+		setState(phase === "sent" ? unknownOutcome() : INITIAL);
 	}, []);
 
-	/**
-	 * Stream + commit. For the CodeMirror lenses (raw/vim) `range` is offsets into
-	 * the CURRENT doc markdown and the rewrite splices in via {@link applyTransform}.
-	 * For the rich (Milkdown) lens ProseMirror positions are not markdown offsets,
-	 * so `richReplace(aiText)` returns the new FULL canonical markdown with the
-	 * selection replaced (computed by the editor handle); when present it is used
-	 * instead of the offset splice. Either way the result is committed exactly once.
-	 */
 	const transform = useCallback(
 		async (input: {
 			instruction: string;
 			instructionLabel: string;
 			range: TransformRange;
 			selection: string;
-			/** Rich-lens path: compute new full markdown from the AI text. */
 			richReplace?: (aiText: string) => string | null;
 		}) => {
-			const controller = getController();
-			if (!controller || !documentId) {
+			if (!documentId) {
 				setState({ ...INITIAL, status: "error", error: "No active document" });
 				return;
 			}
-			abortRef.current?.abort();
-			const ac = new AbortController();
-			abortRef.current = ac;
-			preNodeRef.current = controller.currentNodeId;
+			// Digest and token APIs both yield. Claim ownership before either starts.
+			const ticket = ownerRef.current.begin(documentId);
+			const controller = getController();
+			const sourceNodeId = controller?.currentNodeId;
+			if (!controller || !sourceNodeId) {
+				ownerRef.current.finish(ticket);
+				setState({ ...INITIAL, status: "error", error: "No active document" });
+				return;
+			}
+			const sourceMarkdown = getDocMarkdown();
+			pendingCommitRef.current = null;
 			setState({
 				status: "streaming",
 				partial: "",
@@ -95,51 +144,66 @@ export function useAiTransform(args: {
 			});
 
 			let acc = "";
+			let retryIsKnownSafe = false;
 			try {
-				const res = await fetch("/api/ai/transform", {
+				const sourceHash = await sha256Text(sourceMarkdown);
+				if (!ownerRef.current.isCurrent(ticket, documentIdRef.current)) return;
+				const token = await getToken({ template: "convex" });
+				if (!ownerRef.current.isCurrent(ticket, documentIdRef.current)) return;
+				if (!token) throw new Error("Sign in to use AI");
+				if (!ownerRef.current.markSent(ticket)) return;
+				const response = await fetch(`${requireConvexSiteUrl()}/ai/transform`, {
 					method: "POST",
-					headers: { "Content-Type": "application/json" },
+					headers: {
+						Authorization: `Bearer ${token}`,
+						"Content-Type": "application/json",
+					},
 					body: JSON.stringify({
+						requestId: ticket.requestId,
 						documentId,
+						sourceNodeId,
+						sourceHash,
 						instruction: input.instruction,
 						selection: input.selection,
+						platform: "web",
+						traceContent: true,
 					}),
-					signal: ac.signal,
+					signal: ticket.controller.signal,
 				});
-				if (!res.ok || !res.body) {
-					const msg =
-						res.status === 401
-							? "Sign in to use AI"
-							: `AI request failed (${res.status})`;
-					setState({ ...INITIAL, status: "error", error: msg });
-					return;
+				if (!ownerRef.current.isCurrent(ticket, documentIdRef.current)) return;
+				if (!response.ok || !response.body) {
+					retryIsKnownSafe = !response.ok;
+					throw new Error(`AI request failed (${response.status})`);
 				}
-				const reader = res.body.getReader();
+				const reader = response.body.getReader();
 				const decoder = new TextDecoder();
 				while (true) {
 					const { value, done } = await reader.read();
+					if (!ownerRef.current.isCurrent(ticket, documentIdRef.current))
+						return;
 					if (done) break;
 					acc += decoder.decode(value, { stream: true });
-					setState((s) => ({ ...s, partial: acc }));
+					setState((current) => ({ ...current, partial: acc }));
 				}
-			} catch (err) {
-				if ((err as Error)?.name === "AbortError") {
-					// Cancelled — commit nothing.
-					setState(INITIAL);
+			} catch (error) {
+				if (!ownerRef.current.isCurrent(ticket, documentIdRef.current)) return;
+				ownerRef.current.finish(ticket);
+				if (ticket.phase === "sent" && !retryIsKnownSafe) {
+					setState(unknownOutcome(acc));
 					return;
 				}
 				setState({
 					...INITIAL,
 					status: "error",
-					error: (err as Error).message || "AI request failed",
+					error: error instanceof Error ? error.message : "AI request failed",
 				});
 				return;
-			} finally {
-				if (abortRef.current === ac) abortRef.current = null;
 			}
 
-			const aiText = acc.trim();
-			if (aiText.length === 0) {
+			if (!ownerRef.current.isCurrent(ticket, documentIdRef.current)) return;
+			const aiText = acc;
+			if (!aiText.trim()) {
+				ownerRef.current.finish(ticket);
 				setState({
 					...INITIAL,
 					status: "error",
@@ -147,87 +211,75 @@ export function useAiTransform(args: {
 				});
 				return;
 			}
-
-			// Compute the new full canonical markdown. Rich lens: ask the editor handle
-			// to splice via a ProseMirror transaction over the live selection (no
-			// offset math). CodeMirror lenses: splice by offset into the freshest doc
-			// markdown (the live editor is the source of truth; re-read in case
-			// anything shifted while streaming).
-			let newDoc: string;
-			if (input.richReplace) {
-				const replaced = input.richReplace(aiText);
-				if (replaced === null) {
-					setState({
-						...INITIAL,
-						status: "error",
-						error: "Lost the selection — select again and retry",
-					});
-					return;
-				}
-				newDoc = replaced;
-			} else {
-				const doc = getDocMarkdown();
-				const range = clampRange(input.range, doc.length);
-				try {
-					newDoc = applyTransform(doc, range, aiText);
-				} catch (err) {
-					setState({
-						...INITIAL,
-						status: "error",
-						error: (err as Error).message,
-					});
-					return;
-				}
-			}
-
-			const committed = controller.commitProgrammatic(newDoc, {
-				origin: `ai:${input.instructionLabel}`,
-			});
-			if (!committed) {
-				// No-op edit (AI returned the same text) — nothing to confirm.
-				setState({ ...INITIAL, status: "committed" });
+			if (
+				controller.currentNodeId !== sourceNodeId ||
+				getDocMarkdown() !== sourceMarkdown ||
+				!ownerRef.current.isCurrent(ticket, documentIdRef.current)
+			) {
+				ownerRef.current.finish(ticket);
+				setState({
+					...INITIAL,
+					status: "error",
+					error: "The document changed. Run the transform again.",
+				});
 				return;
 			}
 
-			if (mode === "replace") {
-				setState({
-					status: "committed",
-					partial: aiText,
-					error: null,
-					awaitingDecision: false,
-				});
+			let nextMarkdown: string;
+			if (input.richReplace) {
+				const replaced = input.richReplace(aiText);
+				if (replaced === null) {
+					ownerRef.current.finish(ticket);
+					setState({
+						...INITIAL,
+						status: "error",
+						error: "Lost the selection. Select again and retry.",
+					});
+					return;
+				}
+				nextMarkdown = replaced;
 			} else {
-				setState({
-					status: "committed",
-					partial: aiText,
-					error: null,
-					awaitingDecision: true,
-				});
+				nextMarkdown = applyTransform(sourceMarkdown, input.range, aiText);
 			}
+			if (!ownerRef.current.isCurrent(ticket, documentIdRef.current)) return;
+			const committed = controller.commitProgrammatic(nextMarkdown, {
+				origin: `ai:${input.instructionLabel}`,
+			});
+			ownerRef.current.finish(ticket);
+			if (!committed) {
+				setState({ ...INITIAL, status: "committed" });
+				return;
+			}
+			pendingCommitRef.current = {
+				documentId,
+				controller,
+				sourceNodeId,
+				aiNodeId: committed,
+			};
+			setState({
+				status: "committed",
+				partial: aiText,
+				error: null,
+				awaitingDecision: mode === "pending",
+			});
 		},
-		[documentId, getController, getDocMarkdown, mode],
+		[documentId, getController, getDocMarkdown, getToken, mode],
 	);
 
-	/** Keep the AI node (no-op — it's already the tip). */
 	const accept = useCallback(() => {
-		preNodeRef.current = null;
+		pendingCommitRef.current = null;
 		setState(INITIAL);
 	}, []);
 
-	/** Reject: undo back to the pre-AI node. */
 	const reject = useCallback(() => {
+		const pending = pendingCommitRef.current;
 		const controller = getController();
-		controller?.undo();
-		preNodeRef.current = null;
+		if (canRejectAiCommit(pending, documentIdRef.current, controller)) {
+			pending.controller.navigateTo(pending.sourceNodeId);
+		}
+		pendingCommitRef.current = null;
 		setState(INITIAL);
 	}, [getController]);
 
 	return { state, transform, accept, reject, cancel, reset };
-}
-
-/** Clamp a range to a doc whose length may have shifted. */
-function clampRange(range: TransformRange, len: number): TransformRange {
-	const from = Math.max(0, Math.min(range.from, len));
-	const to = Math.max(from, Math.min(range.to, len));
-	return { from, to };
 }

@@ -63,6 +63,7 @@ import {
 	setCommentMeta,
 } from "@/lib/review/comment-decorations-pm";
 import { lintPlugin, setLintMeta } from "./lint-plugin";
+import { replaceMarkdownSelection } from "./replace-selection";
 import { SelectionToolbarView } from "./selection-toolbar-view";
 import { SlashMenuView } from "./slash-menu-view";
 
@@ -609,27 +610,28 @@ const MilkdownEditorInner = forwardRef<MilkdownEditorHandle, InnerProps>(
 					return null;
 				}
 			},
-			replaceSelectionMarkdown(replacement: string) {
+			captureSelectionMarkdownReplacement() {
 				const editor = editorRef.current;
 				if (!editor) return null;
 				try {
 					const view = editor.ctx.get(editorViewCtx);
-					const { from, to } = view.state.selection;
+					const { doc, selection } = view.state;
+					const { from, to } = selection;
 					if (to <= from) return null;
-					const parser = editor.ctx.get(parserCtx);
 					const serializer = editor.ctx.get(serializerCtx);
-					// Parse the AI Markdown to a full doc node, then fit its content into
-					// the selection range via a THROWAWAY transaction — the live editor is
-					// never mutated here. replaceWith lets ProseMirror reconcile the slice
-					// into the surrounding context (inline-into-inline, block-into-block).
-					const parsed = parser(replacement);
-					if (!parsed) return null;
-					const tr = view.state.tr.replaceWith(from, to, parsed.content);
-					// Serialize the resulting doc back to canonical body Markdown and
-					// re-attach this pane's frontmatter so the handle contract still
-					// speaks full canonical Markdown. The caller commits this once.
-					const body = serializer(tr.doc);
-					return composeFrontmatter(metaRef.current, body, extraRef.current);
+					const parse = editor.ctx.get(parserCtx);
+					const meta = metaRef.current;
+					const extra = extraRef.current;
+					return (replacement: string) => {
+						const nextDoc = replaceMarkdownSelection({
+							doc,
+							selection,
+							replacement,
+							parse,
+						});
+						if (!nextDoc) return null;
+						return composeFrontmatter(meta, serializer(nextDoc), extra);
+					};
 				} catch {
 					return null;
 				}

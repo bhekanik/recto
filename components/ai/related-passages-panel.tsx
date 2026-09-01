@@ -13,6 +13,7 @@ type Props = {
 	activeDocumentId: Id<"documents"> | null;
 	/** Reads the current section/document markdown to use as the query. */
 	getQueryText: () => string;
+	getSourceNodeId: () => string | null;
 	/** Open a cited passage: switch to that doc and scroll to charStart. */
 	onOpenPassage: (documentId: Id<"documents">, charStart: number) => void;
 	onClose: () => void;
@@ -30,6 +31,7 @@ export function RelatedPassagesPanel({
 	open,
 	activeDocumentId,
 	getQueryText,
+	getSourceNodeId,
 	onOpenPassage,
 	onClose,
 }: Props) {
@@ -44,7 +46,8 @@ export function RelatedPassagesPanel({
 		abortRef.current?.abort();
 		const ac = new AbortController();
 		abortRef.current = ac;
-		const text = getQueryText().trim();
+		const sourceMarkdown = getQueryText();
+		const text = sourceMarkdown.trim();
 		if (!text) {
 			setStatus("error");
 			setError("Nothing to match — the document is empty.");
@@ -55,6 +58,8 @@ export function RelatedPassagesPanel({
 		try {
 			const results = await findRelated({
 				documentId: activeDocumentId,
+				sourceNodeId: getSourceNodeId(),
+				sourceMarkdown,
 				queryText: text,
 				signal: ac.signal,
 			});
@@ -66,7 +71,7 @@ export function RelatedPassagesPanel({
 			setStatus("error");
 			setError((err as Error).message || "Search failed");
 		}
-	}, [findRelated, getQueryText, activeDocumentId]);
+	}, [findRelated, getQueryText, getSourceNodeId, activeDocumentId]);
 
 	useEffect(() => {
 		if (open) {

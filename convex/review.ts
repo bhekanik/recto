@@ -1,8 +1,10 @@
 import type { GenericMutationCtx, GenericQueryCtx } from "convex/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import { mutation, query } from "./_generated/server";
+import { internalMutation, mutation, query } from "./_generated/server";
 import { assertNotDeleting } from "./accountGuard";
+import { AI_CONSENT_VERSION } from "./ai/consent";
+import { aiError } from "./ai/errors";
 import { syncBlobReferences } from "./blobReferences";
 import {
 	MARKDOWN_TOO_LARGE_MESSAGE,
@@ -47,6 +49,29 @@ const AI_REVIEW_ORIGIN_PREFIX = "ai:review:";
 const ROLE_RANK = { commenter: 1, suggester: 2, owner: 3 } as const;
 type AccessRole = keyof typeof ROLE_RANK;
 type GranteeRole = "commenter" | "suggester";
+
+async function usersAreBlocked(
+	ctx: QueryCtx | MutationCtx,
+	left: string,
+	right: string,
+): Promise<boolean> {
+	if (left === right || right === AI_REVIEWER_AUTHOR_ID) return false;
+	const [leftBlocks, rightBlocks] = await Promise.all([
+		ctx.db
+			.query("userBlocks")
+			.withIndex("by_blocker_blocked", (q) =>
+				q.eq("blockerUserId", left).eq("blockedUserId", right),
+			)
+			.unique(),
+		ctx.db
+			.query("userBlocks")
+			.withIndex("by_blocker_blocked", (q) =>
+				q.eq("blockerUserId", right).eq("blockedUserId", left),
+			)
+			.unique(),
+	]);
+	return leftBlocks !== null || rightBlocks !== null;
+}
 
 function toServerNode(row: Doc<"docNodes">): ServerNode {
 	return {
@@ -138,6 +163,9 @@ export async function requireDocumentAccess(
 	}
 
 	if (!share) throw new Error("Document not found");
+	if (await usersAreBlocked(ctx, userId, doc.userId)) {
+		throw new Error("Document not found");
+	}
 
 	const role: GranteeRole = share.role;
 	if (ROLE_RANK[role] < ROLE_RANK[minRole]) {
@@ -593,6 +621,137 @@ export const aiSuggestBranch = mutation({
 		});
 
 		return { branchId, nodeId: newNodeId };
+	},
+});
+
+const aiCommentValidator = v.object({
+	anchor: v.object({
+		quote: v.string(),
+		prefix: v.string(),
+		suffix: v.string(),
+		offsetHint: v.number(),
+	}),
+	body: v.string(),
+});
+
+/** Atomically materialize one provider review against the exact reserved head. */
+export const applyAiReview = internalMutation({
+	args: {
+		userId: v.string(),
+		documentId: v.id("documents"),
+		sourceNodeId: v.string(),
+		sourceText: v.string(),
+		comments: v.array(aiCommentValidator),
+		branchMarkdown: v.optional(v.string()),
+	},
+	handler: async (ctx, args) => {
+		await assertNotDeleting(ctx, args.userId);
+		const doc = await ctx.db.get(args.documentId);
+		if (!doc || doc.userId !== args.userId) {
+			aiError("document_not_found", "Document not found");
+		}
+		if (doc.currentNodeId !== args.sourceNodeId) {
+			aiError(
+				"document_changed",
+				"The document changed before review application.",
+			);
+		}
+		if (doc.markdown !== args.sourceText) {
+			aiError(
+				"document_changed",
+				"The draft changed before review application.",
+			);
+		}
+		const deletion = await ctx.db
+			.query("aiDocumentDeletions")
+			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+			.unique();
+		if (deletion) aiError("document_not_found", "Document not found");
+		const share = await ctx.db
+			.query("documentShares")
+			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+			.first();
+		if (share) aiError("document_shared", "AI is disabled on shared documents");
+		const consent = await ctx.db
+			.query("aiConsents")
+			.withIndex("by_user", (q) => q.eq("userId", args.userId))
+			.unique();
+		if (consent?.version !== AI_CONSENT_VERSION) {
+			aiError(
+				"ai_consent_required",
+				"Accept the current AI consent notice first.",
+			);
+		}
+
+		for (const comment of args.comments) {
+			const body = comment.body.trim();
+			if (!body) continue;
+			await ctx.db.insert("comments", {
+				documentId: args.documentId,
+				authorUserId: AI_REVIEWER_AUTHOR_ID,
+				authorName: `AI · ${aiModelLabel(AI_REVIEW_MODEL)}`,
+				anchor: comment.anchor,
+				body,
+				resolved: false,
+				createdAt: Date.now(),
+			});
+		}
+
+		let branchId: Id<"reviewBranches"> | null = null;
+		if (
+			args.branchMarkdown !== undefined &&
+			args.branchMarkdown !== args.sourceText
+		) {
+			if (args.branchMarkdown.length > MAX_MARKDOWN_LENGTH) {
+				throw new Error(MARKDOWN_TOO_LARGE_MESSAGE);
+			}
+			const now = Date.now();
+			const priorOpen = await ctx.db
+				.query("reviewBranches")
+				.withIndex("by_document_reviewer", (q) =>
+					q
+						.eq("documentId", args.documentId)
+						.eq("reviewerUserId", AI_REVIEWER_AUTHOR_ID),
+				)
+				.filter((q) => q.eq(q.field("status"), "open"))
+				.take(101);
+			if (priorOpen.length > 100) {
+				throw new Error("Too many open AI review branches.");
+			}
+			for (const branch of priorOpen) {
+				await ctx.db.patch(branch._id, { status: "rejected", updatedAt: now });
+			}
+			const newNodeId = crypto.randomUUID();
+			const patch = JSON.stringify({
+				from: 0,
+				to: args.sourceText.length,
+				insert: args.branchMarkdown,
+			});
+			const nodeRowId = await ctx.db.insert("docNodes", {
+				documentId: args.documentId,
+				nodeId: newNodeId,
+				parentNodeId: args.sourceNodeId,
+				patch,
+				snapshot: args.branchMarkdown,
+				selection: null,
+				origin: `${AI_REVIEW_ORIGIN_PREFIX}${AI_REVIEW_MODEL}`,
+				createdAt: now,
+			});
+			await syncBlobReferences(ctx, doc.userId, "node", nodeRowId, [
+				patch,
+				args.branchMarkdown,
+			]);
+			branchId = await ctx.db.insert("reviewBranches", {
+				documentId: args.documentId,
+				reviewerUserId: AI_REVIEWER_AUTHOR_ID,
+				baseNodeId: args.sourceNodeId,
+				headNodeId: newNodeId,
+				status: "open",
+				createdAt: now,
+				updatedAt: now,
+			});
+		}
+		return { commentsPlaced: args.comments.length, branchId };
 	},
 });
 
@@ -1100,13 +1259,23 @@ export const addComment = mutation({
 export const listComments = query({
 	args: { documentId: v.id("documents") },
 	handler: async (ctx, args) => {
-		await requireDocumentAccess(ctx, args.documentId, "commenter");
+		const { userId } = await requireDocumentAccess(
+			ctx,
+			args.documentId,
+			"commenter",
+		);
 		const rows = await ctx.db
 			.query("comments")
 			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
 			.collect();
-		rows.sort((a, b) => a.createdAt - b.createdAt);
-		return rows.map((c) => ({
+		const visible = [];
+		for (const row of rows) {
+			if (!(await usersAreBlocked(ctx, userId, row.authorUserId))) {
+				visible.push(row);
+			}
+		}
+		visible.sort((a, b) => a.createdAt - b.createdAt);
+		return visible.map((c) => ({
 			_id: c._id,
 			authorUserId: c.authorUserId,
 			authorName: c.authorName,
@@ -1116,6 +1285,97 @@ export const listComments = query({
 			resolved: c.resolved,
 			createdAt: c.createdAt,
 		}));
+	},
+});
+
+export const reportComment = mutation({
+	args: { commentId: v.id("comments"), reason: v.string() },
+	handler: async (ctx, args) => {
+		const comment = await ctx.db.get(args.commentId);
+		if (!comment) throw new Error("Comment not found");
+		const { userId } = await requireDocumentAccess(
+			ctx,
+			comment.documentId,
+			"commenter",
+		);
+		if (comment.authorUserId === userId) {
+			throw new Error("You cannot report your own comment.");
+		}
+		const reason = args.reason.trim();
+		if (!reason || reason.length > 2_000) {
+			throw new Error("A report reason is required.");
+		}
+		const existing = await ctx.db
+			.query("commentReports")
+			.withIndex("by_comment_reporter", (q) =>
+				q.eq("commentId", args.commentId).eq("reporterUserId", userId),
+			)
+			.unique();
+		if (existing) return { reportId: existing._id, duplicate: true as const };
+		const reportId = await ctx.db.insert("commentReports", {
+			commentId: args.commentId,
+			documentId: comment.documentId,
+			reporterUserId: userId,
+			reportedUserId: comment.authorUserId,
+			reason,
+			status: "open",
+			createdAt: Date.now(),
+		});
+		return { reportId, duplicate: false as const };
+	},
+});
+
+export const blockUser = mutation({
+	args: { userId: v.string() },
+	handler: async (ctx, args) => {
+		const blockerUserId = await requireUserId(ctx);
+		const blockedUserId = args.userId.trim();
+		if (
+			!blockedUserId ||
+			blockedUserId === blockerUserId ||
+			blockedUserId === AI_REVIEWER_AUTHOR_ID
+		) {
+			throw new Error("Invalid user to block.");
+		}
+		const existing = await ctx.db
+			.query("userBlocks")
+			.withIndex("by_blocker_blocked", (q) =>
+				q.eq("blockerUserId", blockerUserId).eq("blockedUserId", blockedUserId),
+			)
+			.unique();
+		if (!existing) {
+			await ctx.db.insert("userBlocks", {
+				blockerUserId,
+				blockedUserId,
+				createdAt: Date.now(),
+			});
+		}
+		const [blockedAsGrantee, blockerAsGrantee] = await Promise.all([
+			ctx.db
+				.query("documentShares")
+				.withIndex("by_grantee_user", (q) =>
+					q.eq("granteeUserId", blockedUserId),
+				)
+				.take(256),
+			ctx.db
+				.query("documentShares")
+				.withIndex("by_grantee_user", (q) =>
+					q.eq("granteeUserId", blockerUserId),
+				)
+				.take(256),
+		]);
+		let revoked = 0;
+		for (const share of blockedAsGrantee) {
+			if (share.ownerUserId !== blockerUserId) continue;
+			await ctx.db.delete(share._id);
+			revoked += 1;
+		}
+		for (const share of blockerAsGrantee) {
+			if (share.ownerUserId !== blockedUserId) continue;
+			await ctx.db.delete(share._id);
+			revoked += 1;
+		}
+		return { blocked: true as const, revoked };
 	},
 });
 

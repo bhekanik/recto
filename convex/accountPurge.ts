@@ -417,6 +417,21 @@ export const purgeData = internalMutation({
 							.take(n),
 					(n) =>
 						ctx.db
+							.query("aiUsage")
+							.withIndex("by_document", (q) => q.eq("documentId", doc._id))
+							.take(n),
+					(n) =>
+						ctx.db
+							.query("aiRuns")
+							.withIndex("by_document", (q) => q.eq("documentId", doc._id))
+							.take(n),
+					(n) =>
+						ctx.db
+							.query("commentReports")
+							.withIndex("by_document", (q) => q.eq("documentId", doc._id))
+							.take(n),
+					(n) =>
+						ctx.db
 							.query("docChunks")
 							.withIndex("by_document", (q) => q.eq("documentId", doc._id))
 							.take(n),
@@ -515,6 +530,47 @@ export const purgeData = internalMutation({
 					ctx.db
 						.query("aiOAuthSessions")
 						.withIndex("by_user", (q) => q.eq("userId", args.userId))
+						.take(n),
+				(n) =>
+					ctx.db
+						.query("aiUsage")
+						.withIndex("by_user_created", (q) => q.eq("userId", args.userId))
+						.take(n),
+				(n) =>
+					ctx.db
+						.query("aiRuns")
+						.withIndex("by_user_created", (q) => q.eq("userId", args.userId))
+						.take(n),
+				(n) =>
+					ctx.db
+						.query("aiDocumentDeletions")
+						.withIndex("by_user", (q) => q.eq("userId", args.userId))
+						.take(n),
+				(n) =>
+					ctx.db
+						.query("commentReports")
+						.withIndex("by_reporter", (q) =>
+							q.eq("reporterUserId", args.userId),
+						)
+						.take(n),
+				(n) =>
+					ctx.db
+						.query("commentReports")
+						.withIndex("by_reported", (q) =>
+							q.eq("reportedUserId", args.userId),
+						)
+						.take(n),
+				(n) =>
+					ctx.db
+						.query("userBlocks")
+						.withIndex("by_blocker_blocked", (q) =>
+							q.eq("blockerUserId", args.userId),
+						)
+						.take(n),
+				(n) =>
+					ctx.db
+						.query("userBlocks")
+						.withIndex("by_blocked", (q) => q.eq("blockedUserId", args.userId))
 						.take(n),
 				// Chunks whose document is already gone (a partial earlier pass can
 				// leave these behind).

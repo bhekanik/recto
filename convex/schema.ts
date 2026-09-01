@@ -150,6 +150,101 @@ export default defineSchema({
 		.index("by_user", ["userId"])
 		.index("by_state_hash", ["stateHash"]),
 
+	aiRuns: defineTable({
+		userId: v.string(),
+		requestId: v.string(),
+		kind: v.union(
+			v.literal("transform"),
+			v.literal("review"),
+			v.literal("embed"),
+		),
+		documentId: v.id("documents"),
+		sourceNodeId: v.string(),
+		sourceHash: v.string(),
+		requestHash: v.string(),
+		model: v.string(),
+		status: v.union(
+			v.literal("reserved"),
+			v.literal("provider_started"),
+			v.literal("succeeded"),
+			v.literal("failed"),
+			v.literal("cancelled"),
+			v.literal("outcome_unknown"),
+		),
+		keySource: v.optional(v.union(v.literal("byok"), v.literal("house"))),
+		output: v.optional(v.string()),
+		errorCode: v.optional(v.string()),
+		langsmithRunId: v.optional(v.string()),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+		providerStartedAt: v.optional(v.number()),
+		completedAt: v.optional(v.number()),
+	})
+		.index("by_user_request", ["userId", "requestId"])
+		.index("by_user_created", ["userId", "createdAt"])
+		.index("by_document", ["documentId"])
+		.index("by_status_updated", ["status", "updatedAt"]),
+
+	// Provider usage is append-only and idempotent on runId. Provider-started
+	// uncertainty has no row because inventing zero cost would undercount spend.
+	aiUsage: defineTable({
+		userId: v.string(),
+		runId: v.id("aiRuns"),
+		kind: v.union(
+			v.literal("transform"),
+			v.literal("review"),
+			v.literal("embed"),
+		),
+		model: v.string(),
+		promptTokens: v.number(),
+		completionTokens: v.number(),
+		reasoningTokens: v.number(),
+		costMicros: v.number(),
+		keySource: v.union(v.literal("byok"), v.literal("house")),
+		latencyMs: v.number(),
+		langsmithRunId: v.optional(v.string()),
+		documentId: v.optional(v.id("documents")),
+		createdAt: v.number(),
+	})
+		.index("by_run", ["runId"])
+		.index("by_user_created", ["userId", "createdAt"])
+		.index("by_document", ["documentId"]),
+
+	// The document row disappears in the user-facing deletion transaction. This
+	// durable job row keeps the bounded AI-ledger cleanup recoverable afterwards.
+	aiDocumentDeletions: defineTable({
+		documentId: v.id("documents"),
+		userId: v.string(),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+	})
+		.index("by_document", ["documentId"])
+		.index("by_user", ["userId"]),
+
+	commentReports: defineTable({
+		commentId: v.id("comments"),
+		documentId: v.id("documents"),
+		reporterUserId: v.string(),
+		reportedUserId: v.string(),
+		reason: v.string(),
+		status: v.union(v.literal("open"), v.literal("resolved")),
+		createdAt: v.number(),
+		resolvedAt: v.optional(v.number()),
+	})
+		.index("by_comment_reporter", ["commentId", "reporterUserId"])
+		.index("by_document", ["documentId"])
+		.index("by_reporter", ["reporterUserId"])
+		.index("by_reported", ["reportedUserId"])
+		.index("by_status_created", ["status", "createdAt"]),
+
+	userBlocks: defineTable({
+		blockerUserId: v.string(),
+		blockedUserId: v.string(),
+		createdAt: v.number(),
+	})
+		.index("by_blocker_blocked", ["blockerUserId", "blockedUserId"])
+		.index("by_blocked", ["blockedUserId"]),
+
 	// Append-only branching undo-tree DAG; nodes are immutable (blueprint 03 §2, 07).
 	docNodes: defineTable({
 		documentId: v.id("documents"),

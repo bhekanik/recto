@@ -10,6 +10,9 @@ import {
 	type QueryCtx,
 	query,
 } from "./_generated/server";
+import { findTombstone } from "./accountGuard";
+import { AI_CONSENT_VERSION } from "./ai/consent";
+import { aiError } from "./ai/errors";
 import { requireOwnedDocument, requireUserId } from "./documents";
 
 /**
@@ -48,6 +51,7 @@ const OPENROUTER_EMBEDDINGS_URL = "https://openrouter.ai/api/v1/embeddings";
 
 /** How many stale documents to embed per scheduled sweep (bounds action time). */
 const SWEEP_DOC_LIMIT = 25;
+const SWEEP_SCAN_LIMIT = 256;
 
 /** Target chunk window in characters — mirrors CHUNK_TARGET_CHARS in lib/ai/chunk.ts. */
 const CHUNK_TARGET_CHARS = 1500;
@@ -168,14 +172,52 @@ export const replaceChunks = mutation({
 	args: {
 		documentId: v.id("documents"),
 		embeddedNodeId: v.string(),
+		expectedMarkdown: v.string(),
 		chunks: v.array(chunkValidator),
 	},
 	handler: async (ctx, args) => {
 		const doc = await requireOwnedDocument(ctx, args.documentId);
+		if (doc.currentNodeId !== args.embeddedNodeId) {
+			aiError("document_changed", "The document changed before indexing.");
+		}
+		if (doc.markdown !== args.expectedMarkdown) {
+			aiError("document_changed", "The draft changed before indexing.");
+		}
+		if (await findTombstone(ctx, doc.userId)) {
+			aiError(
+				"account_deletion_in_progress",
+				"Account deletion is in progress.",
+			);
+		}
+		const deletion = await ctx.db
+			.query("aiDocumentDeletions")
+			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+			.unique();
+		if (deletion) aiError("document_not_found", "Document not found");
+		const consent = await ctx.db
+			.query("aiConsents")
+			.withIndex("by_user", (q) => q.eq("userId", doc.userId))
+			.unique();
+		if (consent?.version !== AI_CONSENT_VERSION) {
+			aiError(
+				"ai_consent_required",
+				"Accept the current AI consent notice first.",
+			);
+		}
+		const share = await ctx.db
+			.query("documentShares")
+			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+			.first();
+		if (share) aiError("document_shared", "AI is disabled on shared documents");
 		const existing = await ctx.db
 			.query("docChunks")
 			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
-			.collect();
+			.take(CHUNK_LIMIT + 1);
+		if (existing.length > CHUNK_LIMIT) {
+			throw new Error(
+				"Document has too many stored embedding chunks to replace safely.",
+			);
+		}
 		for (const row of existing) await ctx.db.delete(row._id);
 
 		const now = Date.now();
@@ -198,23 +240,42 @@ export const replaceChunks = mutation({
 
 /** Internal: load chunk rows by id for an action (actions have no ctx.db). */
 export const chunkRowsByIds = internalQuery({
-	args: { ids: v.array(v.id("docChunks")) },
+	args: { ids: v.array(v.id("docChunks")), userId: v.string() },
 	handler: async (ctx, args) => {
-		const rows = await Promise.all(args.ids.map((id) => ctx.db.get(id)));
-		return rows.filter((r) => r !== null);
-	},
-});
-
-/** Internal: document titles for citations. */
-export const titlesByIds = internalQuery({
-	args: { ids: v.array(v.id("documents")) },
-	handler: async (ctx, args) => {
-		const map: Record<string, string> = {};
-		for (const id of args.ids) {
-			const doc = await ctx.db.get(id);
-			if (doc) map[id] = doc.title;
+		if (await findTombstone(ctx, args.userId)) {
+			aiError(
+				"account_deletion_in_progress",
+				"Account deletion is in progress.",
+			);
 		}
-		return map;
+		const consent = await ctx.db
+			.query("aiConsents")
+			.withIndex("by_user", (q) => q.eq("userId", args.userId))
+			.unique();
+		if (consent?.version !== AI_CONSENT_VERSION) {
+			aiError(
+				"ai_consent_required",
+				"Accept the current AI consent notice first.",
+			);
+		}
+		const rows = await Promise.all(args.ids.map((id) => ctx.db.get(id)));
+		const safe = [];
+		for (const row of rows) {
+			if (!row || row.userId !== args.userId) continue;
+			const document = await ctx.db.get(row.documentId);
+			if (!document || document.userId !== args.userId) continue;
+			const deletion = await ctx.db
+				.query("aiDocumentDeletions")
+				.withIndex("by_document", (q) => q.eq("documentId", row.documentId))
+				.unique();
+			if (deletion) continue;
+			const share = await ctx.db
+				.query("documentShares")
+				.withIndex("by_document", (q) => q.eq("documentId", row.documentId))
+				.first();
+			if (!share) safe.push({ ...row, title: document.title });
+		}
+		return safe;
 	},
 });
 
@@ -261,19 +322,15 @@ export const searchByVector = action({
 
 		const rows = await ctx.runQuery(internal.embeddings.chunkRowsByIds, {
 			ids: results.map((r) => r._id),
+			userId,
 		});
 		const scoreById = new Map(results.map((r) => [r._id, r._score]));
-
-		const docIds = Array.from(new Set(rows.map((r) => r.documentId)));
-		const titles = await ctx.runQuery(internal.embeddings.titlesByIds, {
-			ids: docIds,
-		});
 
 		return rows
 			.filter((r) => r.documentId !== args.excludeDocumentId)
 			.map((r) => ({
 				documentId: r.documentId,
-				title: titles[r.documentId] ?? "Untitled",
+				title: r.title,
 				text: r.text,
 				charStart: r.charStart,
 				charEnd: r.charEnd,
@@ -294,20 +351,48 @@ export const searchByVector = action({
  * rows but zero-chunk markdown stays stale so the sweep can purge the
  * lingering rows (see reindexSweep's zero-chunk guard).
  */
-async function findStaleDocuments(ctx: QueryCtx): Promise<
+async function findStaleDocuments(
+	ctx: QueryCtx,
+	cronSafe = false,
+): Promise<
 	{
 		documentId: Id<"documents">;
 		currentNodeId: string;
 		markdown: string;
 	}[]
 > {
-	const docs = await ctx.db.query("documents").collect();
+	const docs = await ctx.db.query("documents").take(SWEEP_SCAN_LIMIT);
+	const allowlisted = new Set(
+		(process.env.AI_UNMETERED_USER_IDS ?? "")
+			.split(",")
+			.map((value) => value.trim())
+			.filter(Boolean),
+	);
 	const out: {
 		documentId: Id<"documents">;
 		currentNodeId: string;
 		markdown: string;
 	}[] = [];
 	for (const doc of docs) {
+		if (cronSafe) {
+			if (!allowlisted.has(doc.userId)) continue;
+			if (await findTombstone(ctx, doc.userId)) continue;
+			const deletion = await ctx.db
+				.query("aiDocumentDeletions")
+				.withIndex("by_document", (q) => q.eq("documentId", doc._id))
+				.unique();
+			if (deletion) continue;
+			const consent = await ctx.db
+				.query("aiConsents")
+				.withIndex("by_user", (q) => q.eq("userId", doc.userId))
+				.unique();
+			if (consent?.version !== AI_CONSENT_VERSION) continue;
+			const share = await ctx.db
+				.query("documentShares")
+				.withIndex("by_document", (q) => q.eq("documentId", doc._id))
+				.first();
+			if (share) continue;
+		}
 		const first = await ctx.db
 			.query("docChunks")
 			.withIndex("by_document", (q) => q.eq("documentId", doc._id))
@@ -332,7 +417,7 @@ async function findStaleDocuments(ctx: QueryCtx): Promise<
  */
 export const allStaleDocuments = internalQuery({
 	args: {},
-	handler: async (ctx) => findStaleDocuments(ctx),
+	handler: async (ctx) => findStaleDocuments(ctx, true),
 });
 
 /**
@@ -361,15 +446,35 @@ export const replaceChunksInternal = internalMutation({
 	args: {
 		documentId: v.id("documents"),
 		embeddedNodeId: v.string(),
+		expectedMarkdown: v.string(),
 		chunks: v.array(chunkValidator),
 	},
 	handler: async (ctx, args) => {
 		const doc = await ctx.db.get(args.documentId);
 		if (!doc) return { count: 0 };
+		if (doc.currentNodeId !== args.embeddedNodeId) return { count: 0 };
+		if (doc.markdown !== args.expectedMarkdown) return { count: 0 };
+		if (await findTombstone(ctx, doc.userId)) return { count: 0 };
+		const deletion = await ctx.db
+			.query("aiDocumentDeletions")
+			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+			.unique();
+		if (deletion) return { count: 0 };
+		const consent = await ctx.db
+			.query("aiConsents")
+			.withIndex("by_user", (q) => q.eq("userId", doc.userId))
+			.unique();
+		if (consent?.version !== AI_CONSENT_VERSION) return { count: 0 };
+		const share = await ctx.db
+			.query("documentShares")
+			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+			.first();
+		if (share) return { count: 0 };
 		const existing = await ctx.db
 			.query("docChunks")
 			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
-			.collect();
+			.take(CHUNK_LIMIT + 1);
+		if (existing.length > CHUNK_LIMIT) return { count: 0 };
 		for (const row of existing) await ctx.db.delete(row._id);
 		const now = Date.now();
 		const chunks = args.chunks.slice(0, CHUNK_LIMIT);
@@ -430,6 +535,7 @@ export const reindexSweep = internalAction({
 					await ctx.runMutation(internal.embeddings.replaceChunksInternal, {
 						documentId: doc.documentId,
 						embeddedNodeId: doc.currentNodeId,
+						expectedMarkdown: doc.markdown,
 						chunks: [],
 					});
 					continue;
@@ -449,6 +555,7 @@ export const reindexSweep = internalAction({
 				await ctx.runMutation(internal.embeddings.replaceChunksInternal, {
 					documentId: doc.documentId,
 					embeddedNodeId: doc.currentNodeId,
+					expectedMarkdown: doc.markdown,
 					chunks: chunks.map((c, idx) => ({
 						charStart: c.charStart,
 						charEnd: c.charEnd,

@@ -3,6 +3,7 @@ import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internalQuery, mutation, query } from "./_generated/server";
 import { assertNotDeleting } from "./accountGuard";
+import { markDocumentForAiCleanup } from "./ai/runs";
 import { removeBlobReferences, syncBlobReferences } from "./blobReferences";
 
 type QueryCtx = GenericQueryCtx<import("./_generated/dataModel").DataModel>;
@@ -259,7 +260,13 @@ export const create = mutation({
 export const remove = mutation({
 	args: { documentId: v.id("documents") },
 	handler: async (ctx, args) => {
-		await requireOwnedDocument(ctx, args.documentId);
+		const document = await requireOwnedDocument(ctx, args.documentId);
+		// Write the replay fence in the same transaction that hides the document.
+		// AI ledger rows drain later in bounded, scheduler-backed batches.
+		await markDocumentForAiCleanup(ctx, {
+			documentId: args.documentId,
+			userId: document.userId,
+		});
 
 		const nodes = await ctx.db
 			.query("docNodes")
@@ -292,7 +299,14 @@ export const remove = mutation({
 			.query("comments")
 			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
 			.collect();
-		for (const comment of comments) await ctx.db.delete(comment._id);
+		for (const comment of comments) {
+			const reports = await ctx.db
+				.query("commentReports")
+				.withIndex("by_comment_reporter", (q) => q.eq("commentId", comment._id))
+				.collect();
+			for (const report of reports) await ctx.db.delete(report._id);
+			await ctx.db.delete(comment._id);
+		}
 
 		const chunks = await ctx.db
 			.query("docChunks")

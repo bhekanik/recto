@@ -35,7 +35,9 @@ export type EditorHandle = {
 	 * the edit lands as a single reversible undo-tree node and is never
 	 * double-applied. Rich-only; CodeMirror uses the offset splice path.
 	 */
-	replaceSelectionMarkdown?: (replacement: string) => string | null;
+	captureSelectionMarkdownReplacement?: () =>
+		| ((replacement: string) => string | null)
+		| null;
 };
 
 /** Read-only preview — no editing surface. */

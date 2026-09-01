@@ -1,6 +1,9 @@
 import { httpRouter } from "convex/server";
+import { z } from "zod";
 import { internal } from "./_generated/api";
 import { httpAction } from "./_generated/server";
+import { errorMessage, httpStatusForAiError } from "./ai/errors";
+import { executePreparedTransform, prepareTransform } from "./ai/transform";
 import { MAX_UPLOAD_BYTES, UPLOAD_TOO_LARGE_MESSAGE } from "./files";
 
 /**
@@ -122,13 +125,103 @@ const uploadImageLegacy = httpAction(async (ctx, request) => {
 	}
 });
 
+const transformHttpBodySchema = z.object({
+	requestId: z.string(),
+	documentId: z.string(),
+	sourceNodeId: z.string(),
+	sourceHash: z.string(),
+	instruction: z.string(),
+	selection: z.string(),
+	platform: z.string(),
+	traceContent: z.boolean(),
+});
+
+const aiTransform = httpAction(async (ctx, request) => {
+	const origin = request.headers.get("Origin");
+	const identity = await ctx.auth.getUserIdentity();
+	if (!identity) return json({ error: "Unauthenticated" }, 401, origin);
+	let raw: unknown;
+	try {
+		raw = await request.json();
+	} catch {
+		return json({ error: "Invalid JSON" }, 400, origin);
+	}
+	const parsed = transformHttpBodySchema.safeParse(raw);
+	if (!parsed.success)
+		return json({ error: "Invalid AI transform request" }, 400, origin);
+	const body = parsed.data;
+	const documentId = await ctx.runQuery(internal.ai.runs.normalizeDocumentId, {
+		value: body.documentId,
+	});
+	if (!documentId) return json({ error: "Document not found" }, 404, origin);
+
+	let prepared: Awaited<ReturnType<typeof prepareTransform>>;
+	try {
+		prepared = await prepareTransform(ctx, { ...body, documentId });
+	} catch (error) {
+		const failure =
+			error instanceof Error ? error : new Error("AI request failed");
+		return json(
+			{ error: errorMessage(failure) },
+			httpStatusForAiError(failure),
+			origin,
+		);
+	}
+	if (prepared.kind !== "prepared") {
+		return new Response(prepared.output, {
+			headers: {
+				"Content-Type": "text/plain; charset=utf-8",
+				"Cache-Control": "no-store",
+				...corsHeaders(origin),
+			},
+		});
+	}
+	const encoder = new TextEncoder();
+	const stream = new ReadableStream<Uint8Array>({
+		async start(controller) {
+			try {
+				await executePreparedTransform(
+					prepared,
+					(delta) => {
+						controller.enqueue(encoder.encode(delta));
+					},
+					request.signal,
+				);
+				controller.close();
+			} catch (error) {
+				controller.error(error);
+			}
+		},
+	});
+	return new Response(stream, {
+		headers: {
+			"Content-Type": "text/plain; charset=utf-8",
+			"Cache-Control": "no-store",
+			"X-Accel-Buffering": "no",
+			...corsHeaders(origin),
+		},
+	});
+});
+
 const http = httpRouter();
 
 http.route({ path: "/upload-image", method: "POST", handler: uploadImage });
+http.route({ path: "/ai/transform", method: "POST", handler: aiTransform });
 http.route({
 	path: "/upload-image-legacy",
 	method: "POST",
 	handler: uploadImageLegacy,
+});
+http.route({
+	path: "/ai/transform",
+	method: "OPTIONS",
+	handler: httpAction(
+		async (_ctx, request) =>
+			new Response(null, {
+				status: 204,
+				headers: corsHeaders(request.headers.get("Origin")),
+			}),
+	),
 });
 http.route({
 	path: "/upload-image",

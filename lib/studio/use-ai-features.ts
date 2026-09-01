@@ -19,7 +19,11 @@ import type { WorkspaceState } from "@/lib/workspace/types";
 
 type AiPopoverState = {
 	open: boolean;
-	selection: { text: string; range: TransformRange } | null;
+	selection: {
+		text: string;
+		range: TransformRange;
+		richReplace?: (replacement: string) => string | null;
+	} | null;
 };
 
 type UseAiFeaturesArgs = {
@@ -94,6 +98,7 @@ export function useAiFeatures({
 	const aiReview = useAiReview({
 		documentId: activeDocId,
 		getDocMarkdown: getActiveMarkdown,
+		getSourceNodeId: () => getController()?.currentNodeId ?? null,
 	});
 	const [aiReviewOpen, setAiReviewOpen] = useState(false);
 	const [relatedOpen, setRelatedOpen] = useState(false);
@@ -126,14 +131,16 @@ export function useAiFeatures({
 			// offset range is unused on this path (richReplace splices via a PM
 			// transaction at commit time), so carry a placeholder range.
 			const text = handle.getSelectedMarkdown?.() ?? null;
-			if (!text) {
+			const richReplace =
+				handle.captureSelectionMarkdownReplacement?.() ?? null;
+			if (!text || !richReplace) {
 				toast("Select some text first, then summon the AI transform.", "info");
 				return;
 			}
 			aiTransform.reset();
 			setAiPopover({
 				open: true,
-				selection: { text, range: { from: 0, to: 0 } },
+				selection: { text, range: { from: 0, to: 0 }, richReplace },
 			});
 			return;
 		}
@@ -171,18 +178,7 @@ export function useAiFeatures({
 			// Rich lens: hand the transform a closure that splices the AI text into
 			// the live ProseMirror selection and returns the new full canonical
 			// markdown (committed once by the hook). raw/vim use the offset path.
-			const mode = activeMode;
-			const richReplace =
-				mode === "rich"
-					? (aiText: string): string | null => {
-							if (!activeDocId || !workspace) return null;
-							const handle = registry.getPrimaryHandle(
-								activeDocId,
-								workspace.activePaneId,
-							);
-							return handle?.replaceSelectionMarkdown?.(aiText) ?? null;
-						}
-					: undefined;
+			const richReplace = aiPopover.selection?.richReplace;
 			void aiTransform.transform({
 				instruction: req.instruction,
 				instructionLabel: req.instructionLabel,
@@ -191,7 +187,7 @@ export function useAiFeatures({
 				richReplace,
 			});
 		},
-		[aiTransform, activeMode, activeDocId, workspace, registry],
+		[aiPopover.selection, aiTransform],
 	);
 
 	// "Re-index this draft for search" (Phase C) — chunk + embed via the Next
