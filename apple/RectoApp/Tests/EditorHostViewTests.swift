@@ -45,6 +45,25 @@ struct EditorHostViewTests {
         }
     }
 
+    @Observable
+    @MainActor
+    final class ExternalDocumentModel {
+        var document: RectoDocument
+
+        init(markdown: String) {
+            document = RectoDocument(markdown: markdown)
+        }
+    }
+
+    private struct ExternalDocumentHost: View {
+        @Bindable var model: ExternalDocumentModel
+        let storage: RectoTextStorage
+
+        var body: some View {
+            EditorHostView(document: $model.document, storage: storage)
+        }
+    }
+
     private func mount(_ markdown: String, id: String)
         -> (DocumentBox, RectoTextStorage, NSHostingView<EditorHostView>, NSWindow) {
         let document = DocumentBox(markdown)
@@ -467,6 +486,81 @@ struct EditorHostViewTests {
         #expect(storage.markdown == original + "Edited ✅\r\n")
         #expect(document.markdown == storage.markdown)
         #expect(storageSnapshotsAtDocumentWrite == [storage.markdown])
+    }
+
+    @Test(
+        "canonical Unicode editor input reaches the binding and undo history",
+        arguments: [
+            ("😀 café\r\nsecond\n", "😀 cafe\u{301}\r\nsecond\n", "café", "cafe\u{301}"),
+            ("😀 cafe\u{301}\r\nsecond\n", "😀 café\r\nsecond\n", "cafe\u{301}", "café"),
+        ]
+    )
+    func canonicalUnicodeEditorInputReachesBinding(
+        original: String,
+        edited: String,
+        originalWord: String,
+        editedWord: String
+    ) async throws {
+        _ = NSApplication.shared
+        let (document, storage, host, window) = mount(original, id: "canonical-binding")
+        defer { window.close() }
+        host.layoutSubtreeIfNeeded()
+        await drainMainQueue()
+        let textView = try #require(storage.textView.nsTextView)
+        #expect(window.makeFirstResponder(textView))
+
+        textView.insertText(
+            editedWord,
+            replacementRange: (original as NSString).range(of: originalWord)
+        )
+        await drainMainQueue()
+
+        let undoManager = try #require(storage.controller.undoManager)
+        #expect(Array(textView.string.utf16) == Array(edited.utf16))
+        #expect(Array(storage.markdown.utf16) == Array(edited.utf16))
+        #expect(Array(document.value.markdown.utf16) == Array(edited.utf16))
+        #expect(undoManager.canUndo)
+
+        undoManager.undo()
+        #expect(Array(textView.string.utf16) == Array(original.utf16))
+        #expect(Array(storage.markdown.utf16) == Array(original.utf16))
+        #expect(Array(document.value.markdown.utf16) == Array(original.utf16))
+        #expect(undoManager.canRedo)
+
+        undoManager.redo()
+        #expect(Array(textView.string.utf16) == Array(edited.utf16))
+        #expect(Array(storage.markdown.utf16) == Array(edited.utf16))
+        #expect(Array(document.value.markdown.utf16) == Array(edited.utf16))
+    }
+
+    @Test(
+        "canonical Unicode external replacement reaches mounted editor storage",
+        arguments: [
+            ("😀 café\r\nsecond\n", "😀 cafe\u{301}\r\nsecond\n"),
+            ("😀 cafe\u{301}\r\nsecond\n", "😀 café\r\nsecond\n"),
+        ]
+    )
+    func canonicalUnicodeExternalReplacement(original: String, replacement: String) async throws {
+        _ = NSApplication.shared
+        let model = ExternalDocumentModel(markdown: original)
+        let storage = RectoTextStorage(documentId: "canonical-external", markdown: original)
+        let host = NSHostingView(rootView: ExternalDocumentHost(model: model, storage: storage))
+        let window = NSWindow(contentViewController: NSViewController())
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        defer { window.close() }
+        host.layoutSubtreeIfNeeded()
+        await drainMainQueue()
+        let textView = try #require(storage.textView.nsTextView)
+
+        model.document.markdown = replacement
+        await drainMainQueue()
+
+        #expect(Array(textView.string.utf16) == Array(replacement.utf16))
+        #expect(Array(storage.markdown.utf16) == Array(replacement.utf16))
+        let undoManager = try #require(storage.controller.undoManager)
+        #expect(!undoManager.canUndo)
+        #expect(!undoManager.canRedo)
     }
 
     @Test("read-only document configurations mount a non-editable editor")

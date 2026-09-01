@@ -370,7 +370,9 @@ public actor SyncEngine: SyncControlling {
       return
     }
     document.markdown = materialized
-    if remote.markdownHeadNodeId == remote.currentNodeId, remote.markdown != materialized {
+    if remote.markdownHeadNodeId == remote.currentNodeId,
+      !(remote.markdown as NSString).isEqual(to: materialized)
+    {
       document.draftMarkdown = remote.markdown
     }
     try await store.hydrate(

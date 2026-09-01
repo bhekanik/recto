@@ -195,7 +195,8 @@ public actor DocumentSession {
     // recovery draft is on disk but invisible: the editor would show the head and
     // the user's last sentences would look lost.
     let recoveredIngress = document.editorIngressRevision != nil
-    let cleanRecoveredIngress = recoveredIngress && document.draftMarkdown == markdown
+    let cleanRecoveredIngress = recoveredIngress
+      && document.draftMarkdown.map { ($0 as NSString).isEqual(to: markdown) } == true
     if let draft = document.draftMarkdown, !cleanRecoveredIngress {
       restored.restorePendingDraft(
         markdown: draft, selection: document.draftSelection, now: now())
@@ -393,7 +394,7 @@ public actor DocumentSession {
     if let persistedGeneration {
       let stored = try await store.document(localId: documentLocalId)
       guard stored?.draftRevision == persistedGeneration,
-        stored?.displayMarkdown == markdown
+        stored.map({ ($0.displayMarkdown as NSString).isEqual(to: markdown) }) == true
       else {
         try await rebuildControllerFromStore()
         publish()

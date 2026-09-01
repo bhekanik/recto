@@ -51,9 +51,21 @@ struct EditorHostView: View {
         .onDisappear {
             history.detach()
         }
-        .onChange(of: document.markdown) { _, markdown in
-            history.adoptExternal(markdown)
+        .onChange(of: ExactMarkdown(document.markdown)) { _, markdown in
+            history.adoptExternal(markdown.value)
         }
+    }
+}
+
+private struct ExactMarkdown: Equatable {
+    let value: String
+
+    init(_ value: String) {
+        self.value = value
+    }
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        (lhs.value as NSString).isEqual(to: rhs.value)
     }
 }
 
@@ -73,7 +85,7 @@ private final class DocumentUndoHistory: ObservableObject {
         undoManager.levelsOfUndo = Self.snapshotLimit
         currentMarkdown = document.wrappedValue.markdown
         writeDocument = { markdown in
-            guard document.wrappedValue.markdown != markdown else { return }
+            guard !(document.wrappedValue.markdown as NSString).isEqual(to: markdown) else { return }
             var updated = document.wrappedValue
             updated.markdown = markdown
             document.wrappedValue = updated
@@ -99,7 +111,7 @@ private final class DocumentUndoHistory: ObservableObject {
 
     func accept(_ edit: RectoEditorEdit) {
         let markdown = edit.markdown
-        guard markdown != currentMarkdown else { return }
+        guard !(currentMarkdown as NSString).isEqual(to: markdown) else { return }
         let previous = currentMarkdown
         undoManager.registerUndo(withTarget: self) { history in
             history.restore(previous)
@@ -110,10 +122,10 @@ private final class DocumentUndoHistory: ObservableObject {
     }
 
     func adoptExternal(_ markdown: String) {
-        guard markdown != currentMarkdown else { return }
+        guard !(currentMarkdown as NSString).isEqual(to: markdown) else { return }
         undoManager.removeAllActions()
         currentMarkdown = markdown
-        if storage.markdown != markdown {
+        if !(storage.markdown as NSString).isEqual(to: markdown) {
             storage.markdown = markdown
         }
     }
@@ -125,7 +137,7 @@ private final class DocumentUndoHistory: ObservableObject {
         }
         undoManager.setActionName("Edit")
         currentMarkdown = markdown
-        if storage.markdown != markdown {
+        if !(storage.markdown as NSString).isEqual(to: markdown) {
             storage.markdown = markdown
         }
         writeDocument(markdown)

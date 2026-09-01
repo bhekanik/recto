@@ -330,6 +330,68 @@ struct RectoStoreTests {
     #expect(document.displayMarkdown == "typing…")
   }
 
+  @Test(
+    "document authority boundaries preserve canonically equivalent UTF-16",
+    arguments: [("😀 café\r\nnext\n", "😀 cafe\u{301}\r\nnext\n"),
+      ("😀 cafe\u{301}\r\nnext\n", "😀 café\r\nnext\n")]
+  )
+  func exactMarkdownAuthority(original: String, edited: String) async throws {
+    let draftStore = try makeStore()
+    _ = try await seedDocument(draftStore, markdown: original)
+    _ = try await draftStore.saveDraft(
+      documentLocalId: "doc-1", markdown: edited, selection: nil, wordCount: 2, job: nil)
+    #expect(
+      Array(try #require(try await draftStore.document(localId: "doc-1")?.draftMarkdown).utf16)
+        == Array(edited.utf16))
+
+    let ingressStore = try makeStore()
+    _ = try await seedDocument(ingressStore, markdown: original)
+    let ingressGeneration = try ingressStore.saveEditorIngressSynchronously(
+      documentLocalId: "doc-1", markdown: edited, selection: nil, wordCount: 2,
+      clientMutationId: ulid(),
+      draftPayload: "{}")
+    #expect(!(try await ingressStore.finishEditorIngressTitle(
+      documentLocalId: "doc-1", markdown: original,
+      expectedDraftRevision: ingressGeneration, title: "stale",
+      job: OutboxJob(
+        documentLocalId: "doc-1", kind: .draftSave, clientMutationId: ulid(),
+        payload: "{}", createdAt: 0))))
+    try await ingressStore.acknowledgeEditorIngress(
+      documentLocalId: "doc-1", markdown: original, title: "native-spike-test")
+    var ingress = try #require(try await ingressStore.document(localId: "doc-1"))
+    #expect(!ingress.editorIngressAcknowledged)
+    #expect(Array(try #require(ingress.draftMarkdown).utf16) == Array(edited.utf16))
+    try await ingressStore.acknowledgeEditorIngress(
+      documentLocalId: "doc-1", markdown: edited, title: "native-spike-test")
+    ingress = try #require(try await ingressStore.document(localId: "doc-1"))
+    #expect(ingress.editorIngressAcknowledged)
+    #expect(Array(try #require(ingress.draftMarkdown).utf16) == Array(edited.utf16))
+
+    let commitStore = try makeStore()
+    _ = try await seedDocument(commitStore, markdown: original)
+    _ = try commitStore.saveEditorIngressSynchronously(
+      documentLocalId: "doc-1", markdown: edited, selection: nil, wordCount: 2,
+      clientMutationId: ulid(), draftPayload: "{}")
+    _ = try await commitStore.commit(
+      documentLocalId: "doc-1",
+      node: DocNodeRecord(
+        documentLocalId: "doc-1", nodeId: "same-rendering", parentNodeId: "root",
+        patch: computePatch(original, original).encoded, origin: "test", createdAt: 1),
+      markdown: original, wordCount: 2, expectedHeadNodeId: "root", job: nil)
+    #expect(
+      Array(try #require(try await commitStore.document(localId: "doc-1")?.draftMarkdown).utf16)
+        == Array(edited.utf16))
+
+    let remoteStore = try makeStore()
+    _ = try await seedDocument(remoteStore, markdown: original)
+    #expect(try await remoteStore.adoptServerDraft(
+      documentLocalId: "doc-1", markdown: edited, wordCount: 2,
+      stampedHeadNodeId: "root", remoteUpdatedAt: 1))
+    #expect(
+      Array(try #require(try await remoteStore.document(localId: "doc-1")?.draftMarkdown).utf16)
+        == Array(edited.utf16))
+  }
+
   @Test("writing stats are monotonic per day")
   func writingStatsMonotonic() async throws {
     let store = try makeStore()
