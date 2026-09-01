@@ -67,6 +67,40 @@ export function snapshotMatchesCurrent(
 	);
 }
 
+export async function commitTransformAfterAcknowledgement(args: {
+	acknowledge: () => Promise<boolean>;
+	snapshot: AiTransformSnapshot;
+	controller: Pick<HistoryController, "currentNodeId" | "commitProgrammatic">;
+	getMarkdown: () => string;
+	isCurrent: () => boolean;
+	nextMarkdown: string;
+	origin: string;
+}): Promise<
+	| { status: "acknowledgement-failed" }
+	| { status: "source-changed" }
+	| { status: "committed"; nodeId: string | null }
+> {
+	try {
+		if (!(await args.acknowledge())) {
+			return { status: "acknowledgement-failed" };
+		}
+	} catch {
+		return { status: "acknowledgement-failed" };
+	}
+	if (
+		!args.isCurrent() ||
+		!snapshotMatchesCurrent(args.snapshot, args.controller, args.getMarkdown())
+	) {
+		return { status: "source-changed" };
+	}
+	return {
+		status: "committed",
+		nodeId: args.controller.commitProgrammatic(args.nextMarkdown, {
+			origin: args.origin,
+		}),
+	};
+}
+
 type TransformRun = {
 	status:
 		| "reserved"
@@ -432,19 +466,37 @@ export function useAiTransform(args: {
 				);
 			}
 			if (!ownerRef.current.isCurrent(ticket, documentIdRef.current)) return;
-			const committed = controller.commitProgrammatic(nextMarkdown, {
+			const commit = await commitTransformAfterAcknowledgement({
+				acknowledge: async () =>
+					(
+						await acknowledgeRun({
+							requestId: ticket.requestId,
+						})
+					).acknowledged,
+				snapshot: input.snapshot,
+				controller,
+				getMarkdown: getDocMarkdown,
+				isCurrent: () =>
+					ownerRef.current.isCurrent(ticket, documentIdRef.current),
+				nextMarkdown,
 				origin: `ai:${input.instructionLabel}`,
 			});
-			try {
-				const acknowledged = await acknowledgeRun({
-					requestId: ticket.requestId,
-				});
-				if (!acknowledged.acknowledged) throw new Error("not acknowledged");
-			} catch {
+			if (commit.status === "acknowledgement-failed") {
 				ownerRef.current.finish(ticket);
 				setState(unknownOutcome(aiText));
 				return;
 			}
+			if (commit.status === "source-changed") {
+				ownerRef.current.finish(ticket);
+				unresolvedRef.current = null;
+				setState({
+					...INITIAL,
+					status: "error",
+					error: "The document changed. Run the transform again.",
+				});
+				return;
+			}
+			const committed = commit.nodeId;
 			ownerRef.current.finish(ticket);
 			unresolvedRef.current = null;
 			if (!committed) {

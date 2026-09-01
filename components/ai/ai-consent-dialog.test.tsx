@@ -5,9 +5,10 @@ import { AiConsentDialog } from "./ai-consent-dialog";
 
 describe("AiConsentDialog", () => {
 	beforeEach(() => {
-		(
-			globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
-		).IS_REACT_ACT_ENVIRONMENT = true;
+		Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", {
+			value: true,
+			configurable: true,
+		});
 		document.body.innerHTML = "";
 	});
 

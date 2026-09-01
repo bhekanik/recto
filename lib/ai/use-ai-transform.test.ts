@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { HistoryNode } from "@/lib/history/use-document-history";
 import {
 	canRejectAiCommit,
+	commitTransformAfterAcknowledgement,
 	type PendingAiCommit,
 	readAiTransformError,
 	resolveTransformRun,
@@ -155,6 +156,41 @@ describe("AI transform summon snapshot", () => {
 				snapshot.sourceMarkdown,
 			),
 		).toBe(true);
+	});
+});
+
+describe("AI transform acknowledgement boundary", () => {
+	it("does not create an AI node when acknowledgement transport fails", async () => {
+		let markdown = "before selected after";
+		const commits: string[] = [];
+		const snapshot = {
+			sourceNodeId: "source",
+			sourceMarkdown: markdown,
+			range: { from: 7, to: 15 },
+			selection: "selected",
+		};
+		const result = await commitTransformAfterAcknowledgement({
+			acknowledge: async () => {
+				throw new Error("transport failed");
+			},
+			snapshot,
+			controller: {
+				currentNodeId: "source",
+				commitProgrammatic(nextMarkdown) {
+					commits.push(nextMarkdown);
+					markdown = nextMarkdown;
+					return "ai-node";
+				},
+			},
+			getMarkdown: () => markdown,
+			isCurrent: () => true,
+			nextMarkdown: "before replacement after",
+			origin: "ai:tighten",
+		});
+
+		expect(result).toEqual({ status: "acknowledgement-failed" });
+		expect(markdown).toBe(snapshot.sourceMarkdown);
+		expect(commits).toEqual([]);
 	});
 });
 
