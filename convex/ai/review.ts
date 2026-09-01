@@ -96,9 +96,10 @@ const reviewSummarySchema = z.object({
 	branchId: z.string().nullable(),
 });
 
-function parsedToolJson(raw: string) {
+function parseJson<T>(raw: string, schema: z.ZodType<T>): T | null {
 	try {
-		return JSON.parse(raw);
+		const parsed = schema.safeParse(JSON.parse(raw));
+		return parsed.success ? parsed.data : null;
 	} catch {
 		return null;
 	}
@@ -160,23 +161,24 @@ async function reviewWithTools(args: {
 		for (const call of calls) {
 			let acknowledgement = "ignored";
 			if (call.type === "function") {
-				const raw = parsedToolJson(call.function.arguments);
-				const comment = commentToolArgsSchema.safeParse(raw);
-				const suggestion = suggestionToolArgsSchema.safeParse(raw);
-				if (
-					call.function.name === "create_comment" &&
-					comment.success &&
-					comments.length < MAX_REVIEW_ITEMS
-				) {
-					comments.push(comment.data);
-					acknowledgement = "recorded";
-				} else if (
-					call.function.name === "suggest_edit" &&
-					suggestion.success &&
-					suggestions.length < MAX_REVIEW_ITEMS
-				) {
-					suggestions.push(suggestion.data);
-					acknowledgement = "recorded";
+				if (call.function.name === "create_comment") {
+					const comment = parseJson(
+						call.function.arguments,
+						commentToolArgsSchema,
+					);
+					if (comment && comments.length < MAX_REVIEW_ITEMS) {
+						comments.push(comment);
+						acknowledgement = "recorded";
+					}
+				} else if (call.function.name === "suggest_edit") {
+					const suggestion = parseJson(
+						call.function.arguments,
+						suggestionToolArgsSchema,
+					);
+					if (suggestion && suggestions.length < MAX_REVIEW_ITEMS) {
+						suggestions.push(suggestion);
+						acknowledgement = "recorded";
+					}
 				}
 			}
 			messages.push({
@@ -270,24 +272,22 @@ export const run = action({
 		});
 		if (begun.replay) {
 			if (begun.run.status === "succeeded" && begun.run.output) {
-				const value = reviewSummarySchema.safeParse(
-					parsedToolJson(begun.run.output),
-				);
-				if (value.success) {
+				const value = parseJson(begun.run.output, reviewSummarySchema);
+				if (value) {
 					const branchId =
-						value.data.branchId === null
+						value.branchId === null
 							? null
 							: await ctx.runQuery(internal.ai.runs.normalizeReviewBranchId, {
-									value: value.data.branchId,
+									value: value.branchId,
 								});
-					if (value.data.branchId !== null && branchId === null) {
+					if (value.branchId !== null && branchId === null) {
 						aiError(
 							"request_outcome_unknown",
 							"The stored review result is unreadable.",
 						);
 					}
 					return {
-						...value.data,
+						...value,
 						branchId,
 					};
 				}

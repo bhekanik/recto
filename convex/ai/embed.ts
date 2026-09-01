@@ -22,26 +22,28 @@ import {
 
 const MAX_EMBED_INPUTS = 16;
 const MAX_EMBED_INPUT_BYTES = 16_384;
+const embeddingReplaySchema = z.array(
+	z.array(z.number().finite()).length(AI_EMBEDDING_DIM),
+);
+
+function parseJson<T>(raw: string, schema: z.ZodType<T>): T | null {
+	try {
+		const parsed = schema.safeParse(JSON.parse(raw));
+		return parsed.success ? parsed.data : null;
+	} catch {
+		return null;
+	}
+}
 
 function parseReplay(output: string): number[][] {
-	const parsed = z
-		.array(z.array(z.number().finite()).length(AI_EMBEDDING_DIM))
-		.safeParse(parsedToolJson(output));
-	if (!parsed.success) {
+	const parsed = parseJson(output, embeddingReplaySchema);
+	if (!parsed) {
 		aiError(
 			"request_outcome_unknown",
 			"The stored embedding result is unreadable.",
 		);
 	}
-	return parsed.data;
-}
-
-function parsedToolJson(raw: string) {
-	try {
-		return JSON.parse(raw);
-	} catch {
-		return null;
-	}
+	return parsed;
 }
 
 export const run = action({
