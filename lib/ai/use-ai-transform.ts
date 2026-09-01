@@ -113,6 +113,10 @@ type TransformRun = {
 	applicable?: boolean;
 } | null;
 
+type RecoverableTransformRun = NonNullable<TransformRun> & {
+	requestId: string;
+};
+
 export type TransformRunResolution =
 	| { status: "unresolved" }
 	| { status: "retry-safe" }
@@ -149,22 +153,39 @@ export type TransformReconciliationResult =
 
 export async function reconcileTransformRun(args: {
 	requestId: string;
-	query: () => Promise<TransformRun>;
-	cancel: () => Promise<TransformCancellation>;
-	acknowledge: () => Promise<boolean>;
-	isCurrent: () => boolean;
+	query: (requestId: string) => Promise<TransformRun>;
+	recovery?: {
+		latest: () => Promise<RecoverableTransformRun | null>;
+		adopt: (requestId: string, activeRequestId: string) => boolean;
+	};
+	cancel: (requestId: string) => Promise<TransformCancellation>;
+	acknowledge: (requestId: string) => Promise<boolean>;
+	isCurrent: (requestId: string) => boolean;
 }): Promise<TransformReconciliationResult> {
+	let requestId = args.requestId;
 	try {
-		let remoteRun = await args.query();
-		if (!args.isCurrent()) return { status: "stale" };
+		let remoteRun = await args.query(requestId);
+		if (!args.isCurrent(requestId)) return { status: "stale" };
+		if (!remoteRun && args.recovery) {
+			const activeRun = await args.recovery.latest();
+			if (!args.isCurrent(requestId)) return { status: "stale" };
+			if (activeRun?.requestId && activeRun.requestId !== requestId) {
+				if (!args.recovery.adopt(requestId, activeRun.requestId)) {
+					return { status: "stale" };
+				}
+				requestId = activeRun.requestId;
+				if (!args.isCurrent(requestId)) return { status: "stale" };
+			}
+			remoteRun = activeRun;
+		}
 		let resolution = resolveTransformRun(remoteRun);
 		if (remoteRun?.status === "reserved") {
-			const cancelled = await args.cancel();
-			if (!args.isCurrent()) return { status: "stale" };
+			const cancelled = await args.cancel(requestId);
+			if (!args.isCurrent(requestId)) return { status: "stale" };
 			if (cancelled.cancelled) resolution = { status: "retry-safe" };
 			else if (cancelled.reason === "terminal") {
-				remoteRun = await args.query();
-				if (!args.isCurrent()) return { status: "stale" };
+				remoteRun = await args.query(requestId);
+				if (!args.isCurrent(requestId)) return { status: "stale" };
 				resolution = resolveTransformRun(remoteRun);
 			}
 		}
@@ -174,10 +195,13 @@ export async function reconcileTransformRun(args: {
 		) {
 			return resolution;
 		}
-		if (!(await args.acknowledge())) return { status: "unresolved" };
-		return args.isCurrent() ? resolution : { status: "stale" };
+		const acknowledged = await args.acknowledge(requestId);
+		if (!args.isCurrent(requestId)) return { status: "stale" };
+		return acknowledged ? resolution : { status: "unresolved" };
 	} catch {
-		return args.isCurrent() ? { status: "unresolved" } : { status: "stale" };
+		return args.isCurrent(requestId)
+			? { status: "unresolved" }
+			: { status: "stale" };
 	}
 }
 
@@ -223,6 +247,7 @@ export async function readAiTransformError(response: Response): Promise<{
 	message: string;
 	outcomeUnknown: boolean;
 	retrySafe: boolean;
+	requestInProgress: boolean;
 }> {
 	const body = await response
 		.json()
@@ -234,6 +259,9 @@ export async function readAiTransformError(response: Response): Promise<{
 			: `AI request failed (${response.status})`,
 		outcomeUnknown: Boolean(
 			body?.success && body.data.code === "request_outcome_unknown",
+		),
+		requestInProgress: Boolean(
+			body?.success && body.data.code === "request_in_progress",
 		),
 		retrySafe: Boolean(
 			body?.success &&
@@ -463,6 +491,36 @@ export function useAiTransform(args: {
 				if (!ownerRef.current.isCurrent(ticket, documentIdRef.current)) return;
 				if (!response.ok) {
 					const failure = await readAiTransformError(response);
+					if (!ownerRef.current.isCurrent(ticket, documentIdRef.current))
+						return;
+					if (failure.requestInProgress) {
+						const captured = unresolvedRef.current;
+						const activeRun = await convex.query(
+							api.ai.runs.latestRecoverable,
+							{ documentId, kind: "transform" },
+						);
+						if (!ownerRef.current.isCurrent(ticket, documentIdRef.current))
+							return;
+						if (
+							captured &&
+							transformReconciliationIsCurrent(
+								captured,
+								unresolvedRef.current,
+								documentIdRef.current,
+								unresolvedGenerationRef.current,
+							) &&
+							activeRun &&
+							activeRun.requestId !== captured.requestId
+						) {
+							unresolvedGenerationRef.current += 1;
+							unresolvedRef.current = {
+								requestId: activeRun.requestId,
+								documentId: captured.documentId,
+								generation: unresolvedGenerationRef.current,
+								partial: "",
+							};
+						}
+					}
 					retryIsKnownSafe = failure.retrySafe;
 					throw new Error(failure.message);
 				}
@@ -598,28 +656,37 @@ export function useAiTransform(args: {
 				awaitingDecision: mode === "pending",
 			});
 		},
-		[acknowledgeRun, documentId, getController, getDocMarkdown, getToken, mode],
+		[
+			acknowledgeRun,
+			convex,
+			documentId,
+			getController,
+			getDocMarkdown,
+			getToken,
+			mode,
+		],
 	);
 
 	const reconcile = useCallback(async () => {
-		const unresolved = unresolvedRef.current;
+		const initialUnresolved = unresolvedRef.current;
 		if (
-			!unresolved ||
+			!initialUnresolved ||
 			!transformReconciliationIsCurrent(
-				unresolved,
+				initialUnresolved,
 				unresolvedRef.current,
 				documentIdRef.current,
 				unresolvedGenerationRef.current,
 			)
 		)
 			return;
-		const isCurrent = () =>
+		let unresolved: UnresolvedTransform = initialUnresolved;
+		const isCurrent = (requestId = unresolved.requestId) =>
 			transformReconciliationIsCurrent(
 				unresolved,
 				unresolvedRef.current,
 				documentIdRef.current,
 				unresolvedGenerationRef.current,
-			);
+			) && unresolved.requestId === requestId;
 		setState({
 			status: "streaming",
 			partial: unresolved.partial,
@@ -628,15 +695,34 @@ export function useAiTransform(args: {
 		});
 		const resolution = await reconcileTransformRun({
 			requestId: unresolved.requestId,
-			query: async () =>
+			query: async (requestId) =>
 				await convex.query(api.ai.runs.get, {
-					requestId: unresolved.requestId,
+					requestId,
 				}),
-			cancel: async () => await cancelRun({ requestId: unresolved.requestId }),
-			acknowledge: async () =>
+			recovery: {
+				latest: async () =>
+					await convex.query(api.ai.runs.latestRecoverable, {
+						documentId: unresolved.documentId,
+						kind: "transform",
+					}),
+				adopt: (requestId, activeRequestId) => {
+					if (!isCurrent(requestId)) return false;
+					unresolvedGenerationRef.current += 1;
+					unresolved = {
+						requestId: activeRequestId,
+						documentId: unresolved.documentId,
+						generation: unresolvedGenerationRef.current,
+						partial: "",
+					};
+					unresolvedRef.current = unresolved;
+					return true;
+				},
+			},
+			cancel: async (requestId) => await cancelRun({ requestId }),
+			acknowledge: async (requestId) =>
 				(
 					await acknowledgeRun({
-						requestId: unresolved.requestId,
+						requestId,
 					})
 				).acknowledged,
 			isCurrent,

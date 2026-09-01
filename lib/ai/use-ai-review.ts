@@ -47,6 +47,10 @@ type ReviewRun = {
 	applicable?: boolean;
 } | null;
 
+type RecoverableReviewRun = NonNullable<ReviewRun> & {
+	requestId: string;
+};
+
 export type ReviewRunResolution =
 	| { status: "unresolved" }
 	| { status: "retry-safe" }
@@ -84,22 +88,40 @@ export type ReviewReconciliationResult =
 	| { status: "stale" };
 
 export async function reconcileReviewRun(args: {
-	query: () => Promise<ReviewRun>;
-	cancel: () => Promise<ReviewCancellation>;
-	acknowledge: () => Promise<boolean>;
-	isCurrent: () => boolean;
+	requestId: string;
+	query: (requestId: string) => Promise<ReviewRun>;
+	recovery?: {
+		latest: () => Promise<RecoverableReviewRun | null>;
+		adopt: (requestId: string, activeRequestId: string) => boolean;
+	};
+	cancel: (requestId: string) => Promise<ReviewCancellation>;
+	acknowledge: (requestId: string) => Promise<boolean>;
+	isCurrent: (requestId: string) => boolean;
 }): Promise<ReviewReconciliationResult> {
+	let requestId = args.requestId;
 	try {
-		let remoteRun = await args.query();
-		if (!args.isCurrent()) return { status: "stale" };
+		let remoteRun = await args.query(requestId);
+		if (!args.isCurrent(requestId)) return { status: "stale" };
+		if (!remoteRun && args.recovery) {
+			const activeRun = await args.recovery.latest();
+			if (!args.isCurrent(requestId)) return { status: "stale" };
+			if (activeRun?.requestId && activeRun.requestId !== requestId) {
+				if (!args.recovery.adopt(requestId, activeRun.requestId)) {
+					return { status: "stale" };
+				}
+				requestId = activeRun.requestId;
+				if (!args.isCurrent(requestId)) return { status: "stale" };
+			}
+			remoteRun = activeRun;
+		}
 		let resolution = resolveReviewRun(remoteRun);
 		if (remoteRun?.status === "reserved") {
-			const cancelled = await args.cancel();
-			if (!args.isCurrent()) return { status: "stale" };
+			const cancelled = await args.cancel(requestId);
+			if (!args.isCurrent(requestId)) return { status: "stale" };
 			if (cancelled.cancelled) resolution = { status: "retry-safe" };
 			else if (cancelled.reason === "terminal") {
-				remoteRun = await args.query();
-				if (!args.isCurrent()) return { status: "stale" };
+				remoteRun = await args.query(requestId);
+				if (!args.isCurrent(requestId)) return { status: "stale" };
 				resolution = resolveReviewRun(remoteRun);
 			}
 		}
@@ -109,10 +131,13 @@ export async function reconcileReviewRun(args: {
 		) {
 			return resolution;
 		}
-		if (!(await args.acknowledge())) return { status: "unresolved" };
-		return args.isCurrent() ? resolution : { status: "stale" };
+		const acknowledged = await args.acknowledge(requestId);
+		if (!args.isCurrent(requestId)) return { status: "stale" };
+		return acknowledged ? resolution : { status: "unresolved" };
 	} catch {
-		return args.isCurrent() ? { status: "unresolved" } : { status: "stale" };
+		return args.isCurrent(requestId)
+			? { status: "unresolved" }
+			: { status: "stale" };
 	}
 }
 
@@ -325,24 +350,60 @@ export function useAiReview(args: {
 			setState("done");
 		} catch (caught) {
 			if (!isCurrent()) return;
+			let unresolved: UnresolvedReview | null = null;
+			let reconciliationRequestId = ticket.requestId;
+			let reconciliationIsCurrent = (_requestId: string) => isCurrent();
 			let resolution: ReviewReconciliationResult = { status: "retry-safe" };
 			if (ticket.phase === "sent") {
 				resolution = await reconcileReviewRun({
-					query: async () =>
+					requestId: ticket.requestId,
+					query: async (requestId) =>
 						await convex.query(api.ai.runs.get, {
-							requestId: ticket.requestId,
+							requestId,
 						}),
-					cancel: async () => await cancelRun({ requestId: ticket.requestId }),
-					acknowledge: async () =>
+					recovery: {
+						latest: async () =>
+							await convex.query(api.ai.runs.latestRecoverable, {
+								documentId,
+								kind: "review",
+							}),
+						adopt: (requestId, activeRequestId) => {
+							if (!reconciliationIsCurrent(requestId)) return false;
+							reviewGenerationRef.current += 1;
+							unresolved = {
+								requestId: activeRequestId,
+								documentId,
+								generation: reviewGenerationRef.current,
+							};
+							unresolvedRequestRef.current = unresolved;
+							reconciliationRequestId = activeRequestId;
+							reconciliationIsCurrent = (candidateRequestId) =>
+								unresolved !== null &&
+								reviewReconciliationIsCurrent(
+									unresolved,
+									unresolvedRequestRef.current,
+									documentRef.current,
+									reviewGenerationRef.current,
+								) &&
+								unresolved.requestId === candidateRequestId;
+							return true;
+						},
+					},
+					cancel: async (requestId) => await cancelRun({ requestId }),
+					acknowledge: async (requestId) =>
 						(
 							await acknowledgeRun({
-								requestId: ticket.requestId,
+								requestId,
 							})
 						).acknowledged,
-					isCurrent,
+					isCurrent: (requestId) => reconciliationIsCurrent(requestId),
 				});
 			}
-			if (resolution.status === "stale" || !isCurrent()) return;
+			if (
+				resolution.status === "stale" ||
+				!reconciliationIsCurrent(reconciliationRequestId)
+			)
+				return;
 			ownerRef.current.finish(ticket);
 			if (resolution.status === "succeeded") {
 				unresolvedRequestRef.current = null;
@@ -353,12 +414,14 @@ export function useAiReview(args: {
 			}
 			const outcomeUnknown = resolution.status === "unresolved";
 			if (outcomeUnknown) {
-				reviewGenerationRef.current += 1;
-				unresolvedRequestRef.current = {
-					requestId: ticket.requestId,
-					documentId,
-					generation: reviewGenerationRef.current,
-				};
+				if (!unresolved) {
+					reviewGenerationRef.current += 1;
+					unresolvedRequestRef.current = {
+						requestId: ticket.requestId,
+						documentId,
+						generation: reviewGenerationRef.current,
+					};
+				}
 			} else {
 				unresolvedRequestRef.current = null;
 			}
@@ -393,20 +456,48 @@ export function useAiReview(args: {
 			)
 		)
 			return;
-		const { requestId } = unresolved;
-		const isCurrent = () =>
+		let currentUnresolved = unresolved;
+		const isCurrent = (requestId = currentUnresolved.requestId) =>
 			reviewReconciliationIsCurrent(
-				unresolved,
+				currentUnresolved,
 				unresolvedRequestRef.current,
 				documentRef.current,
 				reviewGenerationRef.current,
-			);
+			) && currentUnresolved.requestId === requestId;
 		setState("loading");
 		setError(null);
 		const resolution = await reconcileReviewRun({
-			query: async () => await convex.query(api.ai.runs.get, { requestId }),
-			cancel: async () => await cancelRun({ requestId }),
-			acknowledge: async () =>
+			requestId: currentUnresolved.requestId,
+			query: async (requestId) =>
+				await convex.query(api.ai.runs.get, { requestId }),
+			recovery: {
+				latest: async () => {
+					const currentDocumentId = documentRef.current;
+					if (
+						!currentDocumentId ||
+						currentDocumentId !== currentUnresolved.documentId
+					) {
+						return null;
+					}
+					return await convex.query(api.ai.runs.latestRecoverable, {
+						documentId: currentDocumentId,
+						kind: "review",
+					});
+				},
+				adopt: (requestId, activeRequestId) => {
+					if (!isCurrent(requestId)) return false;
+					reviewGenerationRef.current += 1;
+					currentUnresolved = {
+						...currentUnresolved,
+						requestId: activeRequestId,
+						generation: reviewGenerationRef.current,
+					};
+					unresolvedRequestRef.current = currentUnresolved;
+					return true;
+				},
+			},
+			cancel: async (requestId) => await cancelRun({ requestId }),
+			acknowledge: async (requestId) =>
 				(await acknowledgeRun({ requestId })).acknowledged,
 			isCurrent,
 		});

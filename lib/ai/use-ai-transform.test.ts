@@ -94,6 +94,26 @@ describe("AI transform HTTP errors", () => {
 			message: "This request may already have reached the provider.",
 			outcomeUnknown: true,
 			retrySafe: false,
+			requestInProgress: false,
+		});
+	});
+
+	it("identifies a cross-tab request already in progress", async () => {
+		await expect(
+			readAiTransformError(
+				Response.json(
+					{
+						error: "Another request is already in progress.",
+						code: "request_in_progress",
+					},
+					{ status: 409 },
+				),
+			),
+		).resolves.toEqual({
+			message: "Another request is already in progress.",
+			outcomeUnknown: false,
+			retrySafe: false,
+			requestInProgress: true,
 		});
 	});
 
@@ -109,6 +129,7 @@ describe("AI transform HTTP errors", () => {
 			message: "The document changed.",
 			outcomeUnknown: false,
 			retrySafe: true,
+			requestInProgress: false,
 		});
 	});
 
@@ -119,6 +140,7 @@ describe("AI transform HTTP errors", () => {
 			message: "AI request failed (503)",
 			outcomeUnknown: false,
 			retrySafe: false,
+			requestInProgress: false,
 		});
 	});
 });
@@ -360,6 +382,118 @@ describe("AI transform run recovery", () => {
 		generation = 3;
 		lookup.resolve({ status: "failed" });
 		await expect(result).resolves.toEqual({ status: "stale" });
+	});
+
+	it.each([
+		{
+			name: "reserved",
+			run: { requestId: "request-a", status: "reserved" as const },
+			expected: { status: "retry-safe" as const },
+			expectsAcknowledgement: true,
+		},
+		{
+			name: "provider started",
+			run: { requestId: "request-a", status: "provider_started" as const },
+			expected: { status: "unresolved" as const },
+			expectsAcknowledgement: false,
+		},
+		{
+			name: "outcome unknown",
+			run: { requestId: "request-a", status: "outcome_unknown" as const },
+			expected: { status: "unresolved" as const },
+			expectsAcknowledgement: false,
+		},
+		{
+			name: "applicable success",
+			run: {
+				requestId: "request-a",
+				status: "succeeded" as const,
+				applicable: true,
+				output: "replacement",
+			},
+			expected: { status: "succeeded" as const, output: "replacement" },
+			expectsAcknowledgement: true,
+		},
+	])("adopts cross-tab active A when B is missing: $name", async (attack) => {
+		let current = unresolved("request-b", "doc-a", 1);
+		const adopted: string[] = [];
+		const cancelled: string[] = [];
+		const acknowledged: string[] = [];
+		const result = await reconcileTransformRun({
+			requestId: "request-b",
+			query: async () => null,
+			recovery: {
+				latest: async () => attack.run,
+				adopt: (requestId, activeRequestId) => {
+					if (current.requestId !== requestId) return false;
+					current = unresolved(activeRequestId, "doc-a", 2);
+					adopted.push(activeRequestId);
+					return true;
+				},
+			},
+			cancel: async (requestId) => {
+				cancelled.push(requestId);
+				return { cancelled: true };
+			},
+			acknowledge: async (requestId) => {
+				acknowledged.push(requestId);
+				return true;
+			},
+			isCurrent: (requestId) => current.requestId === requestId,
+		});
+
+		expect(result).toEqual(attack.expected);
+		expect(adopted).toEqual(["request-a"]);
+		expect(cancelled).toEqual(
+			attack.run.status === "reserved" ? ["request-a"] : [],
+		);
+		expect(acknowledged).toEqual(
+			attack.expectsAcknowledgement ? ["request-a"] : [],
+		);
+	});
+
+	it("keeps a missing current ID locked when no recoverable run exists", async () => {
+		await expect(
+			reconcileTransformRun({
+				requestId: "request-b",
+				query: async () => null,
+				recovery: {
+					latest: async () => null,
+					adopt: () => true,
+				},
+				cancel: async () => ({ cancelled: true }),
+				acknowledge: async () => true,
+				isCurrent: () => true,
+			}),
+		).resolves.toEqual({ status: "unresolved" });
+	});
+
+	it("does not adopt A after B is replaced while latest recovery is pending", async () => {
+		let current = unresolved("request-b", "doc-a", 1);
+		const latest = deferred<{
+			requestId: string;
+			status: "provider_started";
+		}>();
+		const adopted: string[] = [];
+		const result = reconcileTransformRun({
+			requestId: "request-b",
+			query: async () => null,
+			recovery: {
+				latest: async () => await latest.promise,
+				adopt: (_requestId, activeRequestId) => {
+					adopted.push(activeRequestId);
+					return true;
+				},
+			},
+			cancel: async () => ({ cancelled: true }),
+			acknowledge: async () => true,
+			isCurrent: (requestId) => current.requestId === requestId,
+		});
+		current = unresolved("new-request-b", "doc-a", 2);
+		latest.resolve({ requestId: "request-a", status: "provider_started" });
+
+		await expect(result).resolves.toEqual({ status: "stale" });
+		expect(adopted).toEqual([]);
 	});
 
 	it("keeps missing and reserved runs locked", () => {

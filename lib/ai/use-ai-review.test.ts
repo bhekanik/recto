@@ -56,6 +56,7 @@ describe("AI review run recovery", () => {
 		let current = true;
 		const lookup = deferred<{ status: "failed" }>();
 		const result = reconcileReviewRun({
+			requestId: "request-a",
 			query: async () => await lookup.promise,
 			cancel: async () => ({ cancelled: true }),
 			acknowledge: async () => true,
@@ -70,6 +71,7 @@ describe("AI review run recovery", () => {
 		let current = true;
 		const cancellation = deferred<{ cancelled: true }>();
 		const result = reconcileReviewRun({
+			requestId: "request-a",
 			query: async () => ({ status: "reserved" }),
 			cancel: async () => await cancellation.promise,
 			acknowledge: async () => true,
@@ -86,6 +88,7 @@ describe("AI review run recovery", () => {
 		let queryCount = 0;
 		const secondLookup = deferred<{ status: "failed" }>();
 		const result = reconcileReviewRun({
+			requestId: "request-a",
 			query: async () => {
 				queryCount += 1;
 				return queryCount === 1
@@ -108,6 +111,7 @@ describe("AI review run recovery", () => {
 			let current = true;
 			const acknowledgement = deferred<void>();
 			const result = reconcileReviewRun({
+				requestId: "request-a",
 				query: async () => ({
 					status: "succeeded",
 					applicable: true,
@@ -142,6 +146,7 @@ describe("AI review run recovery", () => {
 		let generation = 1;
 		const lookup = deferred<{ status: "failed" }>();
 		const result = reconcileReviewRun({
+			requestId: captured.requestId,
 			query: async () => await lookup.promise,
 			cancel: async () => ({ cancelled: true }),
 			acknowledge: async () => true,
@@ -157,6 +162,129 @@ describe("AI review run recovery", () => {
 		generation = 3;
 		lookup.resolve({ status: "failed" });
 		await expect(result).resolves.toEqual({ status: "stale" });
+	});
+
+	const storedSummary = JSON.stringify({
+		commentsPlaced: 1,
+		commentsTotal: 1,
+		commentsDropped: 0,
+		editsPlaced: 0,
+		editsTotal: 0,
+		editsDropped: 0,
+		branchId: null,
+	});
+
+	it.each([
+		{
+			name: "reserved",
+			run: { requestId: "request-a", status: "reserved" as const },
+			expectedStatus: "retry-safe",
+			expectsAcknowledgement: true,
+		},
+		{
+			name: "provider started",
+			run: { requestId: "request-a", status: "provider_started" as const },
+			expectedStatus: "unresolved",
+			expectsAcknowledgement: false,
+		},
+		{
+			name: "outcome unknown",
+			run: { requestId: "request-a", status: "outcome_unknown" as const },
+			expectedStatus: "unresolved",
+			expectsAcknowledgement: false,
+		},
+		{
+			name: "applicable success",
+			run: {
+				requestId: "request-a",
+				status: "succeeded" as const,
+				applicable: true,
+				output: storedSummary,
+			},
+			expectedStatus: "succeeded",
+			expectsAcknowledgement: true,
+		},
+	])("adopts cross-tab active A after Convex rejects B: $name", async (attack) => {
+		let current = unresolved("request-b", "document-a", 1);
+		const adopted: string[] = [];
+		const cancelled: string[] = [];
+		const acknowledged: string[] = [];
+		const result = await reconcileReviewRun({
+			requestId: "request-b",
+			query: async () => null,
+			recovery: {
+				latest: async () => attack.run,
+				adopt: (requestId, activeRequestId) => {
+					if (current.requestId !== requestId) return false;
+					current = unresolved(activeRequestId, "document-a", 2);
+					adopted.push(activeRequestId);
+					return true;
+				},
+			},
+			cancel: async (requestId) => {
+				cancelled.push(requestId);
+				return { cancelled: true };
+			},
+			acknowledge: async (requestId) => {
+				acknowledged.push(requestId);
+				return true;
+			},
+			isCurrent: (requestId) => current.requestId === requestId,
+		});
+
+		expect(result.status).toBe(attack.expectedStatus);
+		expect(adopted).toEqual(["request-a"]);
+		expect(cancelled).toEqual(
+			attack.run.status === "reserved" ? ["request-a"] : [],
+		);
+		expect(acknowledged).toEqual(
+			attack.expectsAcknowledgement ? ["request-a"] : [],
+		);
+	});
+
+	it("keeps a missing review ID locked when latest recovery is empty", async () => {
+		await expect(
+			reconcileReviewRun({
+				requestId: "request-b",
+				query: async () => null,
+				recovery: {
+					latest: async () => null,
+					adopt: () => true,
+				},
+				cancel: async () => ({ cancelled: true }),
+				acknowledge: async () => true,
+				isCurrent: () => true,
+			}),
+		).resolves.toEqual({ status: "unresolved" });
+	});
+
+	it("does not adopt A after a document switch while recovery is pending", async () => {
+		let current = unresolved("request-b", "document-a", 1);
+		const latest = deferred<{
+			requestId: string;
+			status: "provider_started";
+		}>();
+		const adopted: string[] = [];
+		const result = reconcileReviewRun({
+			requestId: "request-b",
+			query: async () => null,
+			recovery: {
+				latest: async () => await latest.promise,
+				adopt: (_requestId, activeRequestId) => {
+					adopted.push(activeRequestId);
+					return true;
+				},
+			},
+			cancel: async () => ({ cancelled: true }),
+			acknowledge: async () => true,
+			isCurrent: (requestId) =>
+				current.requestId === requestId && current.documentId === "document-a",
+		});
+		current = unresolved("request-c", "document-b", 2);
+		latest.resolve({ requestId: "request-a", status: "provider_started" });
+
+		await expect(result).resolves.toEqual({ status: "stale" });
+		expect(adopted).toEqual([]);
 	});
 
 	it("does not treat missing or reserved status as retry-safe", () => {
