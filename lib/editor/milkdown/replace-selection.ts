@@ -30,6 +30,33 @@ function textblockAtSelection(
 	return null;
 }
 
+function completeBlockRange(
+	doc: ProseMirrorNode,
+	selection: Selection,
+): { from: number; to: number } | null {
+	const $from = doc.resolve(selection.from);
+	const $to = doc.resolve(selection.to);
+	let sharedDepth = 0;
+	while (
+		sharedDepth < Math.min($from.depth, $to.depth) &&
+		$from.node(sharedDepth + 1) === $to.node(sharedDepth + 1)
+	) {
+		sharedDepth += 1;
+	}
+	const blockDepth = sharedDepth + 1;
+	if (blockDepth > $from.depth || blockDepth > $to.depth) return null;
+	if (
+		selection.from !== $from.start(blockDepth) ||
+		selection.to !== $to.end(blockDepth)
+	) {
+		return null;
+	}
+	return {
+		from: $from.before(blockDepth),
+		to: $to.after(blockDepth),
+	};
+}
+
 function onlyTextblock(doc: ProseMirrorNode): ProseMirrorNode | null {
 	if (doc.childCount !== 1) return null;
 	const child = doc.child(0);
@@ -133,12 +160,10 @@ export function replaceMarkdownSelection(args: {
 
 	const parsed = parse(replacement);
 	if (!parsed) return null;
+	const range = completeBlockRange(doc, selection);
+	if (!range) return null;
 	try {
-		return doc.replace(
-			selection.from,
-			selection.to,
-			new Slice(parsed.content, 0, 0),
-		);
+		return doc.replace(range.from, range.to, new Slice(parsed.content, 0, 0));
 	} catch {
 		return null;
 	}

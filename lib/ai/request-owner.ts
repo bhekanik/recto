@@ -45,6 +45,10 @@ export class AiRequestOwner {
 		if (this.current === ticket) this.current = null;
 	}
 
+	currentRequestId(): string | null {
+		return this.current?.requestId ?? null;
+	}
+
 	supersedeIfCurrent(ticket: AiRequestTicket): "local" | "sent" | null {
 		return this.current === ticket ? this.supersede() : null;
 	}

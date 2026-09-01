@@ -598,19 +598,15 @@ const MilkdownEditorInner = forwardRef<MilkdownEditorHandle, InnerProps>(
 				const editor = editorRef.current;
 				if (!editor) return null;
 				try {
-					const view = editor.ctx.get(editorViewCtx);
-					const { from, to } = view.state.selection;
+					const { from, to } = editor.ctx.get(editorViewCtx).state.selection;
 					if (to <= from) return null;
-					// getMarkdown serializes the sliced range with Milkdown's own
-					// serializer — no ProseMirror-position → markdown-offset math.
-					const md = editor.action(getMarkdown({ from, to }));
-					const trimmed = md.trim();
-					return trimmed.length > 0 ? trimmed : null;
+					const markdown = editor.action(getMarkdown({ from, to })).trim();
+					return markdown || null;
 				} catch {
 					return null;
 				}
 			},
-			captureSelectionMarkdownReplacement() {
+			captureAiSelection() {
 				const editor = editorRef.current;
 				if (!editor) return null;
 				try {
@@ -618,19 +614,24 @@ const MilkdownEditorInner = forwardRef<MilkdownEditorHandle, InnerProps>(
 					const { doc, selection } = view.state;
 					const { from, to } = selection;
 					if (to <= from) return null;
+					const markdown = editor.action(getMarkdown({ from, to })).trim();
+					if (!markdown) return null;
 					const serializer = editor.ctx.get(serializerCtx);
 					const parse = editor.ctx.get(parserCtx);
 					const meta = metaRef.current;
 					const extra = extraRef.current;
-					return (replacement: string) => {
-						const nextDoc = replaceMarkdownSelection({
-							doc,
-							selection,
-							replacement,
-							parse,
-						});
-						if (!nextDoc) return null;
-						return composeFrontmatter(meta, serializer(nextDoc), extra);
+					return {
+						markdown,
+						replace: (replacement: string) => {
+							const nextDoc = replaceMarkdownSelection({
+								doc,
+								selection,
+								replacement,
+								parse,
+							});
+							if (!nextDoc) return null;
+							return composeFrontmatter(meta, serializer(nextDoc), extra);
+						},
 					};
 				} catch {
 					return null;

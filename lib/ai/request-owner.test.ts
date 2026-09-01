@@ -51,4 +51,14 @@ describe("AiRequestOwner", () => {
 		expect(owner.supersedeIfCurrent(old)).toBeNull();
 		expect(owner.isCurrent(current, "doc-a")).toBe(true);
 	});
+
+	it("retains the request id until the caller records an unresolved send", () => {
+		const owner = new AiRequestOwner();
+		const ticket = owner.begin("doc-a");
+		expect(owner.currentRequestId()).toBe(ticket.requestId);
+		owner.markSent(ticket);
+		expect(owner.currentRequestId()).toBe(ticket.requestId);
+		owner.finish(ticket);
+		expect(owner.currentRequestId()).toBeNull();
+	});
 });

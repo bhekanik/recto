@@ -171,6 +171,7 @@ function StudioWorkspace() {
 	const acceptAiConsent = useMutation(api.ai.consent.accept);
 	const [aiConsentOpen, setAiConsentOpen] = useState(false);
 	const [aiConsentBusy, setAiConsentBusy] = useState(false);
+	const [aiConsentError, setAiConsentError] = useState<string | null>(null);
 	const activeDocShared = activeShareState?.shared ?? false;
 	// The owner can manage sharing; a grantee cannot.
 	const activeDocIsOwned =
@@ -195,10 +196,17 @@ function StudioWorkspace() {
 	const handleAcceptAiConsent = useCallback(async () => {
 		if (!aiConsent) return;
 		setAiConsentBusy(true);
+		setAiConsentError(null);
 		try {
 			await acceptAiConsent({ version: aiConsent.version });
 			settings.setAiEnabled(true);
 			setAiConsentOpen(false);
+		} catch (error) {
+			setAiConsentError(
+				error instanceof Error
+					? error.message
+					: "Could not enable AI. Try again.",
+			);
 		} finally {
 			setAiConsentBusy(false);
 		}
@@ -978,6 +986,7 @@ function StudioWorkspace() {
 							onAccept={aiTransform.accept}
 							onReject={aiTransform.reject}
 							onCancel={aiTransform.cancel}
+							onReconcile={() => void aiTransform.reconcile()}
 						/>
 						<AiReviewPanel
 							open={aiReviewOpen}
@@ -1016,7 +1025,11 @@ function StudioWorkspace() {
 				<AiConsentDialog
 					open={aiConsentOpen}
 					busy={aiConsentBusy}
-					onOpenChange={setAiConsentOpen}
+					error={aiConsentError}
+					onOpenChange={(open) => {
+						setAiConsentOpen(open);
+						if (!open) setAiConsentError(null);
+					}}
 					onAccept={() => void handleAcceptAiConsent()}
 				/>
 			</div>

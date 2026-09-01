@@ -1,5 +1,6 @@
 "use client";
 
+import { Dialog } from "@base-ui/react/dialog";
 import { X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -39,8 +40,18 @@ export function RelatedPassagesPanel({
 	const [status, setStatus] = useState<Status>("idle");
 	const [passages, setPassages] = useState<RelatedPassage[]>([]);
 	const [error, setError] = useState<string | null>(null);
-	const restoreFocusRef = useRef<HTMLElement | null>(null);
 	const abortRef = useRef<AbortController | null>(null);
+	const closeRef = useRef<HTMLButtonElement | null>(null);
+	const restoreFocusRef = useRef<HTMLElement | null>(null);
+	const activeElement = globalThis.document?.activeElement;
+	if (
+		open &&
+		!restoreFocusRef.current &&
+		activeElement &&
+		activeElement instanceof globalThis.HTMLElement
+	) {
+		restoreFocusRef.current = activeElement;
+	}
 
 	const run = useCallback(async () => {
 		abortRef.current?.abort();
@@ -75,7 +86,6 @@ export function RelatedPassagesPanel({
 
 	useEffect(() => {
 		if (open) {
-			restoreFocusRef.current = document.activeElement as HTMLElement | null;
 			void run();
 		} else {
 			abortRef.current?.abort();
@@ -83,103 +93,95 @@ export function RelatedPassagesPanel({
 			setStatus("idle");
 			setPassages([]);
 			setError(null);
-			restoreFocusRef.current?.focus?.();
-			restoreFocusRef.current = null;
 		}
 	}, [open, run]);
 
-	useEffect(() => {
-		if (!open) return;
-		const onKey = (e: KeyboardEvent) => {
-			if (e.key === "Escape") {
-				e.preventDefault();
-				onClose();
-			}
-		};
-		window.addEventListener("keydown", onKey, true);
-		return () => window.removeEventListener("keydown", onKey, true);
-	}, [open, onClose]);
-
-	if (!open) return null;
-
 	return (
-		<div className="fixed inset-y-0 right-0 z-[90] flex">
-			<button
-				type="button"
-				aria-label="Close related passages"
-				className="recto-scrim absolute inset-0 -left-[100vw]"
-				onClick={onClose}
-			/>
-			<aside
-				className="recto-panel relative z-10 flex h-full w-[min(24rem,100vw)] flex-col rounded-none border-y-0 border-r-0 border-l"
-				role="dialog"
-				aria-modal="true"
-				aria-labelledby="recto-related-title"
-			>
-				<header className="flex shrink-0 items-center justify-between border-b border-[var(--color-line)] px-[var(--space-4)] py-[var(--space-3)]">
-					<h2
-						id="recto-related-title"
-						className="text-[length:var(--text-ui-sm)] font-medium text-[var(--color-ink-secondary)]"
-					>
-						Related passages
-					</h2>
-					<button
-						type="button"
-						onClick={onClose}
-						aria-label="Close related passages"
-						className="text-[var(--color-ink-tertiary)] transition-colors hover:text-[var(--color-ink-primary)]"
-					>
-						<X aria-hidden className="size-4" />
-					</button>
-				</header>
+		<Dialog.Root
+			open={open}
+			onOpenChange={(next) => {
+				if (!next) {
+					const restoreFocus = restoreFocusRef.current;
+					onClose();
+					queueMicrotask(() => restoreFocus?.focus());
+				}
+			}}
+			onOpenChangeComplete={(nextOpen) => {
+				if (!nextOpen) restoreFocusRef.current = null;
+			}}
+		>
+			<Dialog.Portal>
+				<Dialog.Backdrop className="recto-scrim fixed inset-0 z-[90]" />
+				<Dialog.Popup
+					className="recto-panel fixed inset-y-0 right-0 z-[91] flex h-full w-[min(24rem,100vw)] flex-col rounded-none border-y-0 border-r-0 border-l outline-none"
+					initialFocus={closeRef}
+					finalFocus={restoreFocusRef}
+				>
+					<header className="flex shrink-0 items-center justify-between border-b border-[var(--color-line)] px-[var(--space-4)] py-[var(--space-3)]">
+						<Dialog.Title
+							id="recto-related-title"
+							className="text-[length:var(--text-ui-sm)] font-medium text-[var(--color-ink-secondary)]"
+						>
+							Related passages
+						</Dialog.Title>
+						<Dialog.Close
+							ref={closeRef}
+							autoFocus
+							aria-label="Close related passages"
+							className="text-[var(--color-ink-tertiary)] transition-colors hover:text-[var(--color-ink-primary)]"
+						>
+							<X aria-hidden className="size-4" />
+						</Dialog.Close>
+					</header>
 
-				<div className="min-h-0 flex-1 overflow-y-auto px-[var(--space-3)] py-[var(--space-3)]">
-					{status === "loading" && (
-						<p className="px-[var(--space-1)] py-[var(--space-4)] text-center text-[length:var(--text-ui-sm)] text-[var(--color-ink-tertiary)]">
-							Searching your past drafts…
-						</p>
-					)}
-					{status === "error" && (
-						<p className="px-[var(--space-1)] py-[var(--space-4)] text-[length:var(--text-ui-sm)] text-[var(--color-ink-secondary)]">
-							{error}
-						</p>
-					)}
-					{status === "ready" && passages.length === 0 && (
-						<p className="px-[var(--space-1)] py-[var(--space-4)] text-center text-[length:var(--text-ui-sm)] text-[var(--color-ink-tertiary)]">
-							No related passages found. Try the “Re-index drafts” command
-							first.
-						</p>
-					)}
-					{status === "ready" && passages.length > 0 && (
-						<ul className="flex flex-col gap-[var(--space-3)]">
-							{passages.map((p) => (
-								<li key={`${p.documentId}-${p.charStart}-${p.charEnd}`}>
-									<button
-										type="button"
-										onClick={() => onOpenPassage(p.documentId, p.charStart)}
-										className="recto-item block w-full rounded-[var(--radius-md)] border border-[var(--color-line)] px-[var(--space-3)] py-[var(--space-2)] text-left"
-									>
-										<span className="flex items-center justify-between gap-[var(--space-2)]">
-											<span className="min-w-0 flex-1 truncate text-[length:var(--text-ui-sm)] font-medium text-[var(--color-ink-primary)]">
-												{p.title}
+					<div className="min-h-0 flex-1 overflow-y-auto px-[var(--space-3)] py-[var(--space-3)]">
+						{status === "loading" && (
+							<p className="px-[var(--space-1)] py-[var(--space-4)] text-center text-[length:var(--text-ui-sm)] text-[var(--color-ink-tertiary)]">
+								Searching your past drafts…
+							</p>
+						)}
+						{status === "error" && (
+							<p className="px-[var(--space-1)] py-[var(--space-4)] text-[length:var(--text-ui-sm)] text-[var(--color-ink-secondary)]">
+								{error}
+							</p>
+						)}
+						{status === "ready" && passages.length === 0 && (
+							<p className="px-[var(--space-1)] py-[var(--space-4)] text-center text-[length:var(--text-ui-sm)] text-[var(--color-ink-tertiary)]">
+								No related passages found. Try the “Re-index drafts” command
+								first.
+							</p>
+						)}
+						{status === "ready" && passages.length > 0 && (
+							<ul className="flex flex-col gap-[var(--space-3)]">
+								{passages.map((p) => (
+									<li key={`${p.documentId}-${p.charStart}-${p.charEnd}`}>
+										<button
+											type="button"
+											onClick={() => onOpenPassage(p.documentId, p.charStart)}
+											className="recto-item block w-full rounded-[var(--radius-md)] border border-[var(--color-line)] px-[var(--space-3)] py-[var(--space-2)] text-left"
+										>
+											<span className="flex items-center justify-between gap-[var(--space-2)]">
+												<span className="min-w-0 flex-1 truncate text-[length:var(--text-ui-sm)] font-medium text-[var(--color-ink-primary)]">
+													{p.title}
+												</span>
+												<span className="shrink-0 text-[0.625rem] text-[var(--color-ink-tertiary)]">
+													{Math.round(p.score * 100)}%
+												</span>
 											</span>
-											<span className="shrink-0 text-[0.625rem] text-[var(--color-ink-tertiary)]">
-												{Math.round(p.score * 100)}%
+											<span className="mt-1 line-clamp-3 block text-[length:var(--text-ui-sm)] leading-[var(--leading-ui)] text-[var(--color-ink-secondary)]">
+												{p.text.trim()}
 											</span>
-										</span>
-										<span className="mt-1 line-clamp-3 block text-[length:var(--text-ui-sm)] leading-[var(--leading-ui)] text-[var(--color-ink-secondary)]">
-											{p.text.trim()}
-										</span>
-									</button>
-								</li>
-							))}
-						</ul>
-					)}
-				</div>
-				<footer className="shrink-0 border-t border-[var(--color-line)] px-[var(--space-4)] py-[var(--space-2)] text-[0.6875rem] text-[var(--color-ink-tertiary)]">
-					Semantic matches from your own drafts · click to jump
-				</footer>
-			</aside>
-		</div>
+										</button>
+									</li>
+								))}
+							</ul>
+						)}
+					</div>
+					<footer className="shrink-0 border-t border-[var(--color-line)] px-[var(--space-4)] py-[var(--space-2)] text-[0.6875rem] text-[var(--color-ink-tertiary)]">
+						Semantic matches from your own drafts · click to jump
+					</footer>
+				</Dialog.Popup>
+			</Dialog.Portal>
+		</Dialog.Root>
 	);
 }

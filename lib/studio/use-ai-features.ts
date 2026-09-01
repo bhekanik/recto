@@ -4,9 +4,9 @@ import { useCallback, useEffect, useState } from "react";
 
 import type { AiTransformRequest } from "@/components/ai/ai-transform-popover";
 import type { Id } from "@/convex/_generated/dataModel";
-import type { TransformRange } from "@/lib/ai/apply-transform";
 import { AI_TRANSFORM_SUMMON_EVENT, setAiEnabledMirror } from "@/lib/ai/summon";
 import { useAiReview } from "@/lib/ai/use-ai-review";
+import type { AiTransformSnapshot } from "@/lib/ai/use-ai-transform";
 import { useAiTransform } from "@/lib/ai/use-ai-transform";
 import { useRag } from "@/lib/ai/use-rag";
 import type { HistoryController } from "@/lib/history/use-document-history";
@@ -19,11 +19,7 @@ import type { WorkspaceState } from "@/lib/workspace/types";
 
 type AiPopoverState = {
 	open: boolean;
-	selection: {
-		text: string;
-		range: TransformRange;
-		richReplace?: (replacement: string) => string | null;
-	} | null;
+	selection: AiTransformSnapshot | null;
 };
 
 type UseAiFeaturesArgs = {
@@ -125,22 +121,30 @@ export function useAiFeatures({
 			workspace.activePaneId,
 		);
 		if (!handle) return;
+		const controller = getController();
+		const sourceNodeId = controller?.currentNodeId;
+		const sourceMarkdown = handle.getCanonicalMarkdown();
+		if (!sourceNodeId || sourceMarkdown !== getActiveMarkdown()) return;
 
 		if (mode === "rich") {
 			// Rich lens: serialize the live selection to canonical markdown. The
 			// offset range is unused on this path (richReplace splices via a PM
 			// transaction at commit time), so carry a placeholder range.
-			const text = handle.getSelectedMarkdown?.() ?? null;
-			const richReplace =
-				handle.captureSelectionMarkdownReplacement?.() ?? null;
-			if (!text || !richReplace) {
+			const captured = handle.captureAiSelection?.() ?? null;
+			if (!captured) {
 				toast("Select some text first, then summon the AI transform.", "info");
 				return;
 			}
 			aiTransform.reset();
 			setAiPopover({
 				open: true,
-				selection: { text, range: { from: 0, to: 0 }, richReplace },
+				selection: {
+					sourceNodeId,
+					sourceMarkdown,
+					selection: captured.markdown,
+					range: { from: 0, to: 0 },
+					richReplace: captured.replace,
+				},
 			});
 			return;
 		}
@@ -152,10 +156,17 @@ export function useAiFeatures({
 			toast("Select some text first, then summon the AI transform.", "info");
 			return;
 		}
-		const doc = handle.getCanonicalMarkdown();
-		const text = doc.slice(from, to);
+		const text = sourceMarkdown.slice(from, to);
 		aiTransform.reset();
-		setAiPopover({ open: true, selection: { text, range: { from, to } } });
+		setAiPopover({
+			open: true,
+			selection: {
+				sourceNodeId,
+				sourceMarkdown,
+				selection: text,
+				range: { from, to },
+			},
+		});
 	}, [
 		effectiveAiEnabled,
 		activeMode,
@@ -163,6 +174,8 @@ export function useAiFeatures({
 		workspace,
 		registry,
 		aiTransform,
+		getActiveMarkdown,
+		getController,
 	]);
 
 	// The selection toolbar's AI button (out of tree) summons via this event.
@@ -178,16 +191,13 @@ export function useAiFeatures({
 			// Rich lens: hand the transform a closure that splices the AI text into
 			// the live ProseMirror selection and returns the new full canonical
 			// markdown (committed once by the hook). raw/vim use the offset path.
-			const richReplace = aiPopover.selection?.richReplace;
 			void aiTransform.transform({
 				instruction: req.instruction,
 				instructionLabel: req.instructionLabel,
-				range: req.range,
-				selection: req.selection,
-				richReplace,
+				snapshot: req.snapshot,
 			});
 		},
-		[aiPopover.selection, aiTransform],
+		[aiTransform],
 	);
 
 	// "Re-index this draft for search" (Phase C) — chunk + embed via the Next

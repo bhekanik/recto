@@ -30,6 +30,20 @@ function paragraph(...content: ProseMirrorNode[]) {
 }
 
 function parser(value: string): ProseMirrorNode {
+	if (value === "complex") {
+		return schema.node("doc", null, [
+			paragraph(schema.text("intro")),
+			schema.node("bullet_list", null, [
+				schema.node("list_item", null, [
+					paragraph(schema.text("outer")),
+					schema.node("bullet_list", null, [
+						schema.node("list_item", null, [paragraph(schema.text("inner"))]),
+					]),
+				]),
+			]),
+			schema.node("code_block", null, schema.text("const x = 1;\n")),
+		]);
+	}
 	if (value.includes("\\\n")) {
 		const [before = "", after = ""] = value.split("\\\n");
 		return schema.node("doc", null, [
@@ -150,6 +164,26 @@ describe("replaceMarkdownSelection", () => {
 				parse: parser,
 			}),
 		).toBeNull();
+	});
+
+	it("replaces complete blocks with a paragraph, nested list, and fenced code", () => {
+		const doc = schema.node("doc", null, [
+			paragraph(schema.text("first")),
+			paragraph(schema.text("second")),
+			paragraph(schema.text("tail")),
+		]);
+		const next = replaceMarkdownSelection({
+			doc,
+			selection: TextSelection.create(doc, 1, 14),
+			replacement: "complex",
+			parse: parser,
+		});
+		expect(next?.childCount).toBe(4);
+		expect(next?.child(0).textContent).toBe("intro");
+		expect(next?.child(1).type.name).toBe("bullet_list");
+		expect(next?.child(1).child(0).child(1).type.name).toBe("bullet_list");
+		expect(next?.child(2).type.name).toBe("code_block");
+		expect(next?.child(3).textContent).toBe("tail");
 	});
 
 	it("keeps boundary spaces for a partial inline selection", () => {

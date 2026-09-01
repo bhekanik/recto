@@ -14,6 +14,7 @@ import {
 export function AiConsentDialog(props: {
 	open: boolean;
 	busy: boolean;
+	error: string | null;
 	onOpenChange: (open: boolean) => void;
 	onAccept: () => void;
 }) {
@@ -30,6 +31,11 @@ export function AiConsentDialog(props: {
 						eligible Recto house key is used. You can turn AI off later.
 					</AlertDialogDescription>
 				</AlertDialogHeader>
+				{props.error && (
+					<p role="alert" className="text-sm text-destructive">
+						{props.error}
+					</p>
+				)}
 				<AlertDialogFooter>
 					<AlertDialogCancel disabled={props.busy}>Decline</AlertDialogCancel>
 					<AlertDialogAction disabled={props.busy} onClick={props.onAccept}>
