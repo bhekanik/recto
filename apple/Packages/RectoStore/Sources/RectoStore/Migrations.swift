@@ -11,6 +11,7 @@ enum Migrations {
   static let v5 = "v5-editor-ingress"
   static let v6 = "v6-title-mode"
   static let v7 = "v7-editor-ingress-acknowledgement"
+  static let v8 = "v8-remote-title-revision"
 
   static func migrator() -> DatabaseMigrator {
     // Deliberately NOT `eraseDatabaseOnSchemaChange`, even in DEBUG: BK
@@ -197,13 +198,24 @@ enum Migrations {
         // Existing names may be user-chosen. Preserve them until the writer
         // explicitly opts into a derived title by creating a new document.
         t.add(column: "titleMode", .text).notNull().defaults(to: TitleMode.manual.rawValue)
-        t.add(column: "remoteTitleUpdatedAt", .double)
       }
     }
 
     migrator.registerMigration(v7) { db in
       try db.alter(table: "documents") { t in
         t.add(column: "editorIngressAcknowledged", .boolean).notNull().defaults(to: false)
+      }
+    }
+
+    migrator.registerMigration(v8) { db in
+      // A prerelease v6 shipped with titleMode only. Migration IDs are
+      // immutable, so repair that recorded-but-partial schema under a new ID.
+      let hasRemoteTitleRevision = try db.columns(in: "documents")
+        .contains { $0.name == "remoteTitleUpdatedAt" }
+      if !hasRemoteTitleRevision {
+        try db.alter(table: "documents") { t in
+          t.add(column: "remoteTitleUpdatedAt", .double)
+        }
       }
     }
 
