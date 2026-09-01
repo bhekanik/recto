@@ -1,3 +1,4 @@
+import Foundation
 import RectoCore
 import RectoHistory
 import RectoStore
@@ -35,7 +36,56 @@ private actor EditGate {
 
 private actor SubmissionRecorder {
     private(set) var markdown: [String] = []
-    func record(_ value: String) { markdown.append(value) }
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func record(_ value: String) {
+        markdown.append(value)
+        waiters.forEach { $0.resume() }
+        waiters.removeAll()
+    }
+
+    func waitForCount(_ expected: Int) async {
+        while markdown.count < expected {
+            await withCheckedContinuation { waiters.append($0) }
+        }
+    }
+}
+
+private final class SessionTitleCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedCount = 0
+
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedCount
+    }
+
+    func derive(_ markdown: String) -> String {
+        lock.lock()
+        storedCount += 1
+        lock.unlock()
+        return markdown
+    }
+}
+
+private final class SessionTestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 1_000.0
+
+    var read: @Sendable () -> Double {
+        { [self] in
+            lock.lock()
+            defer { lock.unlock() }
+            return value
+        }
+    }
+
+    func advance(by milliseconds: Double) {
+        lock.lock()
+        value += milliseconds
+        lock.unlock()
+    }
 }
 
 private actor TitlePublisher {
@@ -82,6 +132,12 @@ private actor TitleGate {
 
 @Suite("ordered editor changes")
 struct OrderedDocumentEditsTests {
+    enum CommitBoundary: CaseIterable {
+        case structural
+        case idle
+        case flush
+    }
+
 #if !DEBUG
     @MainActor
     @Test("release editor ingress stays off the title parser path")
@@ -118,6 +174,125 @@ struct OrderedDocumentEditsTests {
         }
     }
 #endif
+
+    @MainActor
+    @Test("production editor boundaries never rederive a title", arguments: CommitBoundary.allCases)
+    func productionSessionUsesAsyncTitleLane(boundary: CommitBoundary) async throws {
+        let store = try RectoStore.inMemory()
+        let library = DocumentLibrary(store: store, sync: nil, origin: "mac")
+        let document = try await library.createDocument(title: "Before")
+        let sessionDerivations = SessionTitleCounter()
+        let clock = SessionTestClock()
+        let session = DocumentSession(
+            documentLocalId: document.localId,
+            store: store,
+            sync: nil,
+            origin: "mac",
+            deriveTitle: { sessionDerivations.derive($0) },
+            now: clock.read,
+            schedulesTimers: false
+        )
+        try await session.open()
+        let titleGate = TitleGate()
+        let submissions = SubmissionRecorder()
+        let markdown = "# Exact \(String(describing: boundary)) title"
+        let queue = OrderedDocumentEdits(
+            store: store,
+            documentLocalId: document.localId,
+            deriveTitle: { await titleGate.derive($0) }
+        ) { change in
+            try await session.applyPersistedLocalChange(
+                markdown: change.markdown,
+                selection: change.selection,
+                structural: change.structural,
+                generation: change.generation
+            )
+            await submissions.record(change.markdown)
+        }
+
+        #expect(queue.accept(markdown: markdown, structural: boundary == .structural))
+        await titleGate.waitUntilStarted()
+        await submissions.waitForCount(1)
+        switch boundary {
+        case .structural:
+            break
+        case .idle:
+            clock.advance(by: 1_000)
+            try await session.tickIdle()
+        case .flush:
+            try await session.flush()
+        }
+
+        #expect(sessionDerivations.count == 0)
+        let bodyJobs = try await store.pendingJobs(documentLocalId: document.localId)
+        #expect(bodyJobs.contains { $0.kind == .commitEdit })
+
+        await titleGate.release()
+        await queue.waitUntilDrained()
+
+        let settled = try #require(try await store.document(localId: document.localId))
+        #expect(settled.displayMarkdown == markdown)
+        #expect(settled.title == markdown)
+        let jobs = try await store.pendingJobs(documentLocalId: document.localId)
+        let titleRepair = try #require(jobs.last { $0.kind == .draftSave })
+        let payload = try OutboxPayload.decode(titleRepair.payload)
+        #expect(payload.markdown == markdown)
+        #expect(payload.title == markdown)
+        #expect(sessionDerivations.count == 0)
+    }
+
+    @MainActor
+    @Test("a title published before its body commit remains queued after it")
+    func titleBeforeBodyCommitRemainsExact() async throws {
+        let store = try RectoStore.inMemory()
+        let library = DocumentLibrary(store: store, sync: nil, origin: "mac")
+        let document = try await library.createDocument(title: "Before")
+        let sessionDerivations = SessionTitleCounter()
+        let session = DocumentSession(
+            documentLocalId: document.localId,
+            store: store,
+            sync: nil,
+            origin: "mac",
+            deriveTitle: { sessionDerivations.derive($0) },
+            schedulesTimers: false
+        )
+        try await session.open()
+        let bodyGate = EditGate()
+        let titleGate = TitleGate()
+        await titleGate.release()
+        let markdown = "# Title lands first"
+        let queue = OrderedDocumentEdits(
+            store: store,
+            documentLocalId: document.localId,
+            deriveTitle: { await titleGate.derive($0) }
+        ) { change in
+            await bodyGate.suspendFirstWrite()
+            try await session.applyPersistedLocalChange(
+                markdown: change.markdown,
+                selection: change.selection,
+                structural: true,
+                generation: change.generation
+            )
+        }
+
+        #expect(queue.accept(markdown: markdown, structural: true))
+        await bodyGate.waitUntilStarted()
+        for _ in 0..<100 {
+            if try await store.document(localId: document.localId)?.title == markdown { break }
+            await Task.yield()
+        }
+        #expect(try await store.document(localId: document.localId)?.title == markdown)
+
+        await bodyGate.release()
+        await queue.waitUntilDrained()
+
+        let jobs = try await store.pendingJobs(documentLocalId: document.localId)
+        #expect(jobs.map(\.kind) == [.createDocument, .commitEdit, .draftSave])
+        let titlePayload = try OutboxPayload.decode(try #require(jobs.last).payload)
+        #expect(titlePayload.markdown == markdown)
+        #expect(titlePayload.title == markdown)
+        #expect(sessionDerivations.count == 0)
+    }
 
     @MainActor
     @Test("accept returns while title derivation is blocked")
@@ -257,15 +432,35 @@ struct OrderedDocumentEditsTests {
         let store = try RectoStore.inMemory()
         let library = DocumentLibrary(store: store, sync: nil, origin: "mac")
         let document = try await library.createDocument(title: "Same title")
+        let sessionDerivations = SessionTitleCounter()
+        let session = DocumentSession(
+            documentLocalId: document.localId,
+            store: store,
+            sync: nil,
+            origin: "mac",
+            deriveTitle: { sessionDerivations.derive($0) },
+            schedulesTimers: false
+        )
+        try await session.open()
         let gate = TitleGate()
+        let submissions = SubmissionRecorder()
         let queue = OrderedDocumentEdits(
             store: store,
             documentLocalId: document.localId,
             deriveTitle: { await gate.derive($0) }
-        ) { _ in }
+        ) { change in
+            try await session.applyPersistedLocalChange(
+                markdown: change.markdown,
+                selection: change.selection,
+                structural: true,
+                generation: change.generation
+            )
+            await submissions.record(change.markdown)
+        }
 
-        queue.accept(markdown: "would derive")
+        queue.accept(markdown: "would derive", structural: true)
         await gate.waitUntilStarted()
+        await submissions.waitForCount(1)
         _ = try await library.renameDocument(localId: document.localId, title: "Same title")
         await gate.release()
         await queue.waitUntilDrained()
@@ -273,6 +468,7 @@ struct OrderedDocumentEditsTests {
         let settled = try #require(try await store.document(localId: document.localId))
         #expect(settled.title == "Same title")
         #expect(settled.titleMode == .manual)
+        #expect(sessionDerivations.count == 0)
     }
 
     @MainActor

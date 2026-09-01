@@ -186,7 +186,8 @@ struct RootLifecycleAttackTests {
             try await signOut.value
             Issue.record("sign-out discarded an accepted local edit")
         } catch {
-            #expect(error as? RectoAuthError == .unsyncedWork(count: 2))
+            // Create, body commit, then the async title repair.
+            #expect(error as? RectoAuthError == .unsyncedWork(count: 3))
         }
         #expect(try await store.document(localId: document.localId)?.displayMarkdown == expected)
         let afterRefusal = try await library.createDocument(title: "Accepted after refusal")

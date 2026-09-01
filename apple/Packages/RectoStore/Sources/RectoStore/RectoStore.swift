@@ -355,6 +355,7 @@ public actor RectoStore {
     markdown: String,
     wordCount: Int,
     title: String? = nil,
+    preserveQueuedDraftJob: Bool = false,
     expectedHeadNodeId: String,
     expectedDraftRevision: Int? = nil,
     job: OutboxJob?,
@@ -387,12 +388,17 @@ public actor RectoStore {
       let retainedEditorIngress =
         document.editorIngressRevision != nil && document.draftMarkdown != markdown
       var retainedDraftJob: OutboxJob?
-      if retainedEditorIngress, job != nil {
-        retainedDraftJob =
-          try OutboxJob
+      if job != nil {
+        let queuedDraft = try OutboxJob
           .filter(Column("documentLocalId") == documentLocalId)
           .filter(Column("kind") == OutboxKind.draftSave.rawValue)
           .fetchOne(db)
+        // A derived commit with no title delegates title publication to the
+        // editor's async lane. Keep its draft behind the body commit whether
+        // that lane has finished already or still has to replace it.
+        if retainedEditorIngress || preserveQueuedDraftJob {
+          retainedDraftJob = queuedDraft
+        }
       }
 
       document.localHeadNodeId = node.nodeId

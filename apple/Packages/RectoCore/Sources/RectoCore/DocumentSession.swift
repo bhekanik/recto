@@ -96,6 +96,9 @@ public actor DocumentSession {
   private var isFrozen = false
   /// The mirror this session was reading no longer exists. Terminal.
   private var isInvalidated = false
+  /// The app's editor ingress derives this draft's title on its own latest-wins
+  /// lane. Recovery and non-editor callers still derive inside the session.
+  private var editorTitleLaneOwnsDraft = false
 
   /// Tail of the transition queue. Actor isolation does NOT prevent reentrancy:
   /// every `await` is a place another window's keystroke can run a whole edit.
@@ -390,10 +393,12 @@ public actor DocumentSession {
       if stored?.localHeadNodeId != document?.localHeadNodeId {
         try await rebuildControllerFromStore()
       }
+      editorTitleLaneOwnsDraft = true
       generation = persistedGeneration
     } else {
       // Write-ahead: the text is on disk BEFORE any in-memory state moves. A
       // crash between here and the commit loses nothing.
+      editorTitleLaneOwnsDraft = false
       generation = try await store.saveDraft(
         documentLocalId: documentLocalId, markdown: markdown, selection: selection,
         wordCount: countWords(markdown), title: derivedTitle(for: markdown), job: nil,
@@ -412,7 +417,8 @@ public actor DocumentSession {
       var head = document.localHeadNodeId
       for commit in commits {
         let persisted = try await persist(
-          commit, base: head, expectedDraftRevision: expectedGeneration, at: timestamp)
+          commit, base: head, expectedDraftRevision: expectedGeneration,
+          includeDerivedTitle: !editorTitleLaneOwnsDraft, at: timestamp)
         head = persisted.localHeadNodeId
         expectedGeneration = persisted.draftRevision
       }
@@ -434,6 +440,7 @@ public actor DocumentSession {
     }
 
     try await reload()
+    editorTitleLaneOwnsDraft = self.document?.editorIngressRevision != nil
     guard self.document?.draftRevision == expectedGeneration else {
       try await rebuildControllerFromStore()
       publish()
@@ -484,7 +491,8 @@ public actor DocumentSession {
       do {
         _ = try await persist(
           commit, base: document.localHeadNodeId,
-          expectedDraftRevision: document.draftRevision, at: now())
+          expectedDraftRevision: document.draftRevision,
+          includeDerivedTitle: !editorTitleLaneOwnsDraft, at: now())
         controller = staged
       } catch {
         logger.error(
@@ -494,6 +502,7 @@ public actor DocumentSession {
         return
       }
       try await reload()
+      editorTitleLaneOwnsDraft = self.document?.editorIngressRevision != nil
       publish()
       await sync?.requestDrain()
     }
@@ -517,9 +526,11 @@ public actor DocumentSession {
     if let document, let commit = staged?.flush() {
       _ = try await persist(
         commit, base: document.localHeadNodeId,
-        expectedDraftRevision: document.draftRevision, at: now())
+        expectedDraftRevision: document.draftRevision,
+        includeDerivedTitle: !editorTitleLaneOwnsDraft, at: now())
       controller = staged
       try await reload()
+      editorTitleLaneOwnsDraft = self.document?.editorIngressRevision != nil
       publish()
     }
     await sync?.requestDrain()
@@ -529,10 +540,12 @@ public actor DocumentSession {
     _ commit: GroupCommit,
     base: String,
     expectedDraftRevision: Int? = nil,
+    includeDerivedTitle: Bool = true,
     at timestamp: Double
   ) async throws -> DocumentRecord
   {
     let words = countWords(commit.markdown)
+    let title = includeDerivedTitle ? derivedTitle(for: commit.markdown) : nil
     let node = DocNodeRecord(
       documentLocalId: documentLocalId,
       nodeId: commit.nodeId,
@@ -549,13 +562,14 @@ public actor DocumentSession {
       baseHeadNodeId: commit.parentNodeId,
       payload: OutboxPayload.commit(
         commit, origin: origin, createdAt: timestamp, wordCount: words,
-        title: derivedTitle(for: commit.markdown)
+        title: title
       ).encoded,
       createdAt: timestamp)
 
     return try await store.commit(
       documentLocalId: documentLocalId, node: node, markdown: commit.markdown, wordCount: words,
-      title: derivedTitle(for: commit.markdown),
+      title: title,
+      preserveQueuedDraftJob: !includeDerivedTitle,
       expectedHeadNodeId: base, expectedDraftRevision: expectedDraftRevision,
       job: job, now: timestamp)
   }
@@ -608,14 +622,17 @@ public actor DocumentSession {
     if let document, let commit = controller?.flush() {
       _ = try await persist(
         commit, base: document.localHeadNodeId,
-        expectedDraftRevision: document.draftRevision, at: now())
+        expectedDraftRevision: document.draftRevision,
+        includeDerivedTitle: !editorTitleLaneOwnsDraft, at: now())
       try await reload()
+      editorTitleLaneOwnsDraft = self.document?.editorIngressRevision != nil
     }
     guard let base = document?.localHeadNodeId else { return }
 
     let markdown = try await store.materializedMarkdown(
       documentLocalId: documentLocalId, nodeId: nodeId)
     let words = countWords(markdown)
+    let title = derivedTitle(for: markdown)
     let timestamp = now()
     let job = OutboxJob(
       documentLocalId: documentLocalId,
@@ -624,7 +641,7 @@ public actor DocumentSession {
       baseHeadNodeId: nodeId,
       // The event time, so a retry of this move cannot outrank a later one.
       payload: OutboxPayload(
-        title: derivedTitle(for: markdown), nodeId: nodeId, createdAt: timestamp,
+        title: title, nodeId: nodeId, createdAt: timestamp,
         markdown: markdown, wordCount: words
       ).encoded,
       createdAt: timestamp)
@@ -633,7 +650,7 @@ public actor DocumentSession {
     // stale, and applying it would strand the newer node's queued commit.
     _ = try await store.moveHead(
       documentLocalId: documentLocalId, to: nodeId, markdown: markdown, wordCount: words,
-      title: derivedTitle(for: markdown),
+      title: title,
       expectedHeadNodeId: base, job: job, now: timestamp)
     controller?.setCurrent(
       nodeId: nodeId, markdown: markdown,
@@ -714,11 +731,12 @@ public actor DocumentSession {
           patch: patch.encoded, snapshot: nil, selection: nil, origin: origin,
           createdAt: timestamp)
         let words = countWords(localMarkdown)
+        let title = derivedTitle(for: localMarkdown)
         let job = OutboxJob(
           documentLocalId: documentLocalId, kind: .commitEdit, clientMutationId: ulid(),
           baseHeadNodeId: remoteHead,
           payload: OutboxPayload(
-            title: derivedTitle(for: localMarkdown), nodeId: nodeId,
+            title: title, nodeId: nodeId,
             parentNodeId: remoteHead, patch: patch.encoded, snapshot: nil,
             selection: nil, origin: origin, createdAt: timestamp, markdown: localMarkdown,
             wordCount: words
@@ -729,7 +747,7 @@ public actor DocumentSession {
           documentLocalId: documentLocalId, expecting: expectation,
           remoteMarkdown: remoteMarkdown, remoteWordCount: remoteWords,
           rebasedNode: node, rebasedMarkdown: localMarkdown, rebasedWordCount: words,
-          title: derivedTitle(for: localMarkdown),
+          title: title,
           rebasedJob: job, now: timestamp)
       } else {
         try await store.resolveKeepingRemote(
@@ -856,19 +874,20 @@ public actor DocumentSession {
     guard !isFrozen else { return }
     guard let document else { return }
     let words = countWords(markdown)
+    let title = derivedTitle(for: markdown)
     let job = OutboxJob(
       documentLocalId: documentLocalId,
       kind: .draftSave,
       clientMutationId: ulid(),
       baseHeadNodeId: document.localHeadNodeId,
       payload: OutboxPayload(
-        title: derivedTitle(for: markdown), markdown: markdown, wordCount: words
+        title: title, markdown: markdown, wordCount: words
       ).encoded,
       createdAt: now())
     do {
       _ = try await store.saveDraft(
         documentLocalId: documentLocalId, markdown: markdown, selection: selection,
-        wordCount: words, title: derivedTitle(for: markdown), job: job,
+        wordCount: words, title: title, job: job,
         expectedDraftRevision: expectedDraftRevision, now: now())
       try await reload()
     } catch StoreError.staleGeneration {
