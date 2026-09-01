@@ -31,6 +31,7 @@ struct WritingControlsHost: NSViewRepresentable {
         private var selectionPanel: NSPanel?
         private weak var observedTextView: NSTextView?
         private weak var observedWindow: NSWindow?
+        private weak var observedScrollView: NSScrollView?
         private weak var observedClipView: NSClipView?
         private var windowObservers: [NSObjectProtocol] = []
         private var clipObserver: NSObjectProtocol?
@@ -44,7 +45,7 @@ struct WritingControlsHost: NSViewRepresentable {
         init(controller: RectoWritingController) {
             self.controller = controller
             slashPopover.behavior = .semitransient
-            inputPopover.behavior = .transient
+            inputPopover.behavior = .applicationDefined
         }
 
         func install() {
@@ -79,18 +80,30 @@ struct WritingControlsHost: NSViewRepresentable {
 
         private func observe(_ textView: NSTextView?) {
             let window = textView?.window
-            let clipView = textView?.enclosingScrollView?.contentView
-            guard observedTextView !== textView
-                    || observedWindow !== window
-                    || observedClipView !== clipView else { return }
+            let scrollView = textView?.enclosingScrollView
+            let clipView = scrollView?.contentView
+            if observedTextView === textView,
+               observedWindow === window,
+               observedScrollView === scrollView {
+                guard observedClipView !== clipView else { return }
+                replaceClipObservation(with: clipView)
+                return
+            }
             removeLifecycleObservers()
             observedTextView = textView
             observedWindow = window
-            observedClipView = clipView
+            observedScrollView = scrollView
             ownerWindowIsKey = window?.isKeyWindow == true
             let center = NotificationCenter.default
             if let window {
                 windowObservers = [
+                    center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { [weak self] _ in
+                        MainActor.assumeIsolated {
+                            guard let self,
+                                  self.controllerTextView?.window?.isKeyWindow == true else { return }
+                            self.refresh()
+                        }
+                    },
                     center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main) { [weak self, weak window] _ in
                         MainActor.assumeIsolated {
                             guard let self, self.observedWindow === window else { return }
@@ -126,34 +139,75 @@ struct WritingControlsHost: NSViewRepresentable {
                     },
                 ]
             }
-            if let clipView {
-                clipViewOriginallyPostedBoundsChanges = clipView.postsBoundsChangedNotifications
-                clipView.postsBoundsChangedNotifications = true
-                clipObserver = center.addObserver(
-                    forName: NSView.boundsDidChangeNotification,
-                    object: clipView,
-                    queue: .main
-                ) { [weak self, weak clipView] _ in
-                    MainActor.assumeIsolated {
-                        guard let self, let clipView else { return }
-                        self.scheduleGeometryRefresh(for: clipView)
+            windowObservers.append(center.addObserver(
+                forName: NSView.boundsDidChangeNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self,
+                          self.observedClipView !== self.controllerTextView?.enclosingScrollView?.contentView else {
+                        return
                     }
+                    self.refresh()
+                }
+            })
+            if let scrollView {
+                for name in [
+                    NSScrollView.willStartLiveScrollNotification,
+                    NSScrollView.didLiveScrollNotification,
+                    NSScrollView.didEndLiveScrollNotification,
+                ] {
+                    windowObservers.append(center.addObserver(
+                        forName: name,
+                        object: scrollView,
+                        queue: .main
+                    ) { [weak self, weak scrollView] _ in
+                        MainActor.assumeIsolated {
+                            guard let self, let scrollView, self.observedScrollView === scrollView else { return }
+                            self.controller?.refreshSelectionGeometry()
+                        }
+                    })
+                }
+            }
+            replaceClipObservation(with: clipView)
+        }
+
+        private func replaceClipObservation(with clipView: NSClipView?) {
+            removeClipObservation()
+            observedClipView = clipView
+            guard let clipView else { return }
+            clipViewOriginallyPostedBoundsChanges = clipView.postsBoundsChangedNotifications
+            clipView.postsBoundsChangedNotifications = true
+            clipObserver = NotificationCenter.default.addObserver(
+                forName: NSView.boundsDidChangeNotification,
+                object: clipView,
+                queue: .main
+            ) { [weak self, weak clipView] _ in
+                MainActor.assumeIsolated {
+                    guard let self, let clipView else { return }
+                    self.scheduleGeometryRefresh(for: clipView)
                 }
             }
         }
 
-        private func removeLifecycleObservers() {
-            for observer in windowObservers { NotificationCenter.default.removeObserver(observer) }
-            windowObservers.removeAll()
+        private func removeClipObservation() {
             if let clipObserver { NotificationCenter.default.removeObserver(clipObserver) }
             clipObserver = nil
             if let observedClipView {
                 observedClipView.postsBoundsChangedNotifications = clipViewOriginallyPostedBoundsChanges
             }
-            observedTextView = nil
-            observedWindow = nil
             observedClipView = nil
             clipViewOriginallyPostedBoundsChanges = false
+        }
+
+        private func removeLifecycleObservers() {
+            for observer in windowObservers { NotificationCenter.default.removeObserver(observer) }
+            windowObservers.removeAll()
+            removeClipObservation()
+            observedTextView = nil
+            observedWindow = nil
+            observedScrollView = nil
             ownerWindowIsKey = false
         }
 
@@ -161,33 +215,25 @@ struct WritingControlsHost: NSViewRepresentable {
             inputPopover.contentViewController?.view.window?.isKeyWindow == true
         }
 
-        // AppKit posts these notifications before text-to-screen conversion settles.
         private func scheduleGeometryRefresh(for window: NSWindow, recomputingSelection: Bool) {
-            DispatchQueue.main.async { [weak self, weak window] in
-                DispatchQueue.main.async { [weak self, weak window] in
-                    guard let self, let window, self.observedWindow === window else { return }
-                    if recomputingSelection {
-                        self.controller?.refreshSelectionGeometry()
-                    } else {
-                        self.refresh()
-                    }
-                }
+            guard observedWindow === window else { return }
+            window.contentView?.layoutSubtreeIfNeeded()
+            if recomputingSelection {
+                controller?.refreshSelectionGeometry()
+            } else {
+                refresh()
             }
         }
 
         private func scheduleGeometryRefresh(for clipView: NSClipView) {
-            DispatchQueue.main.async { [weak self, weak clipView] in
-                DispatchQueue.main.async { [weak self, weak clipView] in
-                    guard let self, let clipView, self.observedClipView === clipView else { return }
-                    self.refresh()
-                }
-            }
+            guard observedClipView === clipView else { return }
+            controller?.refreshSelectionGeometry()
         }
 
         private func ownerWindowDidResignKey(_ window: NSWindow) {
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.observedWindow === window else { return }
-                if self.inputPopoverWindowIsKey {
+                if self.inputPopover.isShown {
                     self.hideChrome(preservingInput: true)
                 } else {
                     self.hideChrome()
@@ -259,9 +305,16 @@ struct WritingControlsHost: NSViewRepresentable {
             let windowRect = textView.convert(visibleAnchor, to: nil)
             let screenRect = window.convertToScreen(windowRect)
             let size = panel.frame.size
+            let screen = NSScreen.screens.first {
+                $0.frame.contains(NSPoint(x: screenRect.midX, y: screenRect.midY))
+            } ?? window.screen
+            let visibleFrame = screen?.visibleFrame ?? screenRect
+            let above = screenRect.maxY + 8
+            let below = screenRect.minY - size.height - 8
+            let preferredY = above + size.height <= visibleFrame.maxY ? above : below
             panel.setFrameOrigin(NSPoint(
-                x: screenRect.midX - size.width / 2,
-                y: screenRect.maxY + 8
+                x: min(max(screenRect.midX - size.width / 2, visibleFrame.minX), visibleFrame.maxX - size.width),
+                y: min(max(preferredY, visibleFrame.minY), visibleFrame.maxY - size.height)
             ))
             panel.orderFront(nil)
         }

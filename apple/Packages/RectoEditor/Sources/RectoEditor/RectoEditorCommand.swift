@@ -99,6 +99,9 @@ enum RectoCommandTransformer {
         guard selection.location != NSNotFound,
               selection.length >= 0,
               NSMaxRange(selection) <= source.length else { return nil }
+        if RectoMarkdownContext.intersectsFencedCode(in: source, range: selection) {
+            guard case .codeBlock = command else { return nil }
+        }
 
         switch command {
         case .bold:
@@ -211,10 +214,10 @@ enum RectoCommandTransformer {
             (.italic, "_"),
             (.strikethrough, "~~"),
         ].reduce(into: Set<RectoEditorCommand>()) { active, item in
-            if isWrapped(source, selection: selection, delimiter: item.1) {
+            if enclosingDelimiter(in: source, selection: selection, delimiter: item.1) != nil {
                 active.insert(item.0)
             }
-        }.union(codeSpanWrapper(in: source, selection: selection) == nil ? [] : [.inlineCode])
+        }.union(enclosingCodeSpan(in: source, selection: selection) == nil ? [] : [.inlineCode])
     }
 
     private static func inline(
@@ -224,6 +227,9 @@ enum RectoCommandTransformer {
         placeholder: String
     ) -> RectoCommandEdit? {
         let delimiterLength = (delimiter as NSString).length
+        if selection.length > 0,
+           let marker = delimiter.first,
+           markdown.substring(with: selection).contains(marker) { return nil }
         if selection.length > 0, isWrapped(markdown, selection: selection, delimiter: delimiter) {
             let expanded = NSRange(
                 location: selection.location - delimiterLength,
@@ -233,6 +239,31 @@ enum RectoCommandTransformer {
             return RectoCommandEdit(
                 patch: MarkdownTextPatch(range: expanded, replacement: selected),
                 selection: NSRange(location: expanded.location, length: selection.length)
+            )
+        }
+
+        if selection.length > 0,
+           let wrapper = enclosingDelimiter(in: markdown, selection: selection, delimiter: delimiter) {
+            let contentStart = wrapper.location + delimiterLength
+            let contentEnd = NSMaxRange(wrapper) - delimiterLength
+            let prefix = markdown.substring(with: NSRange(
+                location: contentStart,
+                length: selection.location - contentStart
+            ))
+            let selected = markdown.substring(with: selection)
+            let suffix = markdown.substring(with: NSRange(
+                location: NSMaxRange(selection),
+                length: contentEnd - NSMaxRange(selection)
+            ))
+            let fragmentDelimiter = delimiter == "_" ? "*" : delimiter
+            let markedPrefix = prefix.isEmpty ? "" : fragmentDelimiter + prefix + fragmentDelimiter
+            let markedSuffix = suffix.isEmpty ? "" : fragmentDelimiter + suffix + fragmentDelimiter
+            return RectoCommandEdit(
+                patch: MarkdownTextPatch(
+                    range: wrapper,
+                    replacement: markedPrefix + selected + markedSuffix
+                ),
+                selection: NSRange(location: wrapper.location + (markedPrefix as NSString).length, length: selection.length)
             )
         }
 
@@ -272,12 +303,71 @@ enum RectoCommandTransformer {
             && markdown.substring(with: NSRange(location: NSMaxRange(selection), length: length)) == delimiter
     }
 
+    private static func enclosingDelimiter(
+        in markdown: NSString,
+        selection: NSRange,
+        delimiter: String
+    ) -> NSRange? {
+        let delimiterLength = (delimiter as NSString).length
+        guard selection.length > 0 else { return nil }
+        var searchEnd = selection.location
+        while searchEnd >= delimiterLength {
+            let searchRange = NSRange(location: 0, length: searchEnd)
+            let opening = markdown.range(of: delimiter, options: .backwards, range: searchRange)
+            guard opening.location != NSNotFound else { return nil }
+            let contentStart = NSMaxRange(opening)
+            let lineBreak = markdown.range(of: "\n", range: NSRange(
+                location: contentStart,
+                length: selection.location - contentStart
+            ))
+            if lineBreak.location == NSNotFound {
+                let closing = markdown.range(of: delimiter, range: NSRange(
+                    location: NSMaxRange(selection),
+                    length: markdown.length - NSMaxRange(selection)
+                ))
+                if closing.location != NSNotFound,
+                   markdown.range(of: "\n", range: NSRange(
+                    location: NSMaxRange(selection),
+                    length: closing.location - NSMaxRange(selection)
+                   )).location == NSNotFound {
+                    return NSRange(location: opening.location, length: NSMaxRange(closing) - opening.location)
+                }
+            }
+            searchEnd = opening.location
+        }
+        return nil
+    }
+
     private static func codeSpan(markdown: NSString, selection: NSRange) -> RectoCommandEdit {
         if selection.length > 0, let wrapper = codeSpanWrapper(in: markdown, selection: selection) {
             let selected = markdown.substring(with: selection)
             return RectoCommandEdit(
                 patch: MarkdownTextPatch(range: wrapper, replacement: selected),
                 selection: NSRange(location: wrapper.location, length: selection.length)
+            )
+        }
+
+        if selection.length > 0, let enclosure = enclosingCodeSpan(in: markdown, selection: selection) {
+            let prefix = markdown.substring(with: NSRange(
+                location: enclosure.content.location,
+                length: selection.location - enclosure.content.location
+            ))
+            let selected = markdown.substring(with: selection)
+            let suffix = markdown.substring(with: NSRange(
+                location: NSMaxRange(selection),
+                length: NSMaxRange(enclosure.content) - NSMaxRange(selection)
+            ))
+            let markedPrefix = prefix.isEmpty ? "" : codeSpanMarkdown(prefix)
+            let markedSuffix = suffix.isEmpty ? "" : codeSpanMarkdown(suffix)
+            return RectoCommandEdit(
+                patch: MarkdownTextPatch(
+                    range: enclosure.wrapper,
+                    replacement: markedPrefix + selected + markedSuffix
+                ),
+                selection: NSRange(
+                    location: enclosure.wrapper.location + (markedPrefix as NSString).length,
+                    length: selection.length
+                )
             )
         }
 
@@ -295,6 +385,59 @@ enum RectoCommandTransformer {
                 length: (selected as NSString).length
             )
         )
+    }
+
+    private static func codeSpanMarkdown(_ content: String) -> String {
+        let delimiter = String(repeating: "`", count: longestRun(of: "`", in: content) + 1)
+        let hasBoundarySpace = (content.hasPrefix(" ") || content.hasSuffix(" "))
+            && !content.allSatisfy { $0 == " " }
+        let padding = content.hasPrefix("`") || content.hasSuffix("`") || hasBoundarySpace ? " " : ""
+        return delimiter + padding + content + padding + delimiter
+    }
+
+    private static func enclosingCodeSpan(
+        in markdown: NSString,
+        selection: NSRange
+    ) -> (wrapper: NSRange, content: NSRange)? {
+        guard selection.length > 0 else { return nil }
+        var openingEnd = selection.location
+        while openingEnd > 0 {
+            let openingStart = startOfBacktickRun(in: markdown, endingAt: openingEnd)
+            if openingStart < openingEnd {
+                let length = openingEnd - openingStart
+                var closingStart = NSMaxRange(selection)
+                while closingStart < markdown.length {
+                    let found = markdown.range(of: "`", range: NSRange(
+                        location: closingStart,
+                        length: markdown.length - closingStart
+                    ))
+                    guard found.location != NSNotFound else { break }
+                    let closingEnd = endOfBacktickRun(in: markdown, startingAt: found.location)
+                    if closingEnd - found.location == length {
+                        var content = NSRange(
+                            location: openingEnd,
+                            length: found.location - openingEnd
+                        )
+                        if content.length >= 2,
+                           markdown.character(at: content.location) == 32,
+                           markdown.character(at: NSMaxRange(content) - 1) == 32 {
+                            content = NSRange(location: content.location + 1, length: content.length - 2)
+                        }
+                        if selection.location >= content.location,
+                           NSMaxRange(selection) <= NSMaxRange(content) {
+                            return (
+                                NSRange(location: openingStart, length: closingEnd - openingStart),
+                                content
+                            )
+                        }
+                    }
+                    closingStart = closingEnd
+                }
+            }
+            openingEnd -= 1
+            if markdown.character(at: openingEnd) == 10 || markdown.character(at: openingEnd) == 13 { break }
+        }
+        return nil
     }
 
     private static func codeSpanWrapper(in markdown: NSString, selection: NSRange) -> NSRange? {
@@ -401,7 +544,9 @@ enum RectoCommandTransformer {
         let outerQuoteRange: NSRange?
         let containerEnd: Int
         let listRange: NSRange?
+        let listIndentation: String
         let headingRange: NSRange?
+        let isIndentedCode: Bool
     }
 
     private struct PrefixChange {
@@ -437,7 +582,9 @@ enum RectoCommandTransformer {
                 parsePrefix(in: "")
             ))
         }
-        guard lines.allSatisfy({ hasSupportedIndentation($0.contents as NSString) }) else { return nil }
+        guard lines.allSatisfy({
+            hasSupportedIndentation($0.contents as NSString) && !$0.prefix.isIndentedCode
+        }) else { return nil }
 
         let nonEmptyLines = lines.filter { !$0.contents.isEmpty }
         let removesQuote = if case .blockquote = command {
@@ -458,7 +605,7 @@ enum RectoCommandTransformer {
             case let .list(prefix):
                 relative = PrefixChange(
                     range: line.prefix.listRange ?? NSRange(location: line.prefix.containerEnd, length: 0),
-                    replacement: prefix
+                    replacement: prefix + line.prefix.listIndentation
                 )
             case .blockquote:
                 relative = PrefixChange(
@@ -498,12 +645,21 @@ enum RectoCommandTransformer {
         let indentationEnd = index
         let quoteStart = index
         var outerQuoteRange: NSRange?
+        var isIndentedCode = false
         while index < line.length, line.character(at: index) == 62 {
             let markerStart = index
             index += 1
+            let whitespaceStart = index
             index = consumeWhitespace(in: line, from: index)
+            let whitespaceLength = index - whitespaceStart
+            if whitespaceLength >= 4 || (whitespaceLength > 0 && line.character(at: whitespaceStart) == 9) {
+                isIndentedCode = true
+            }
             if outerQuoteRange == nil {
-                outerQuoteRange = NSRange(location: markerStart, length: index - markerStart)
+                outerQuoteRange = NSRange(
+                    location: markerStart,
+                    length: 1 + min(whitespaceLength, 1)
+                )
             }
         }
         let quoteRange = index > quoteStart
@@ -511,6 +667,23 @@ enum RectoCommandTransformer {
             : nil
         let containerEnd = index
         let listRange = listPrefixRange(in: line, at: index)
+        let listIndentation: String
+        if let listRange {
+            var whitespaceStart = NSMaxRange(listRange)
+            while whitespaceStart > listRange.location,
+                  isWhitespace(line.character(at: whitespaceStart - 1)) {
+                whitespaceStart -= 1
+            }
+            let whitespaceLength = NSMaxRange(listRange) - whitespaceStart
+            if whitespaceLength >= 4 || (whitespaceLength > 0 && line.character(at: whitespaceStart) == 9) {
+                isIndentedCode = true
+            }
+            listIndentation = whitespaceLength > 1
+                ? line.substring(with: NSRange(location: whitespaceStart + 1, length: whitespaceLength - 1))
+                : ""
+        } else {
+            listIndentation = ""
+        }
         if let listRange { index = NSMaxRange(listRange) }
         let headingRange = headingPrefixRange(in: line, at: index)
         return LinePrefix(
@@ -519,7 +692,9 @@ enum RectoCommandTransformer {
             outerQuoteRange: outerQuoteRange,
             containerEnd: containerEnd,
             listRange: listRange,
-            headingRange: headingRange
+            listIndentation: listIndentation,
+            headingRange: headingRange,
+            isIndentedCode: isIndentedCode
         )
     }
 

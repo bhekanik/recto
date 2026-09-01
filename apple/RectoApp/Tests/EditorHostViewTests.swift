@@ -574,10 +574,10 @@ struct EditorHostViewTests {
         let movedFrame = try #require(coordinator.selectionPanelFrame)
         #expect(movedFrame != initialFrame)
 
-        window.setContentSize(NSSize(width: 440, height: 260))
-        #expect(await waitUntil {
-            selectionPanelMatchesPosition(coordinator, controller: controller)
-        })
+        for index in 0..<20 {
+            window.setContentSize(NSSize(width: 440 + index % 2, height: 260 + index % 3))
+            #expect(selectionPanelMatchesPosition(coordinator, controller: controller))
+        }
         #expect(coordinator.isSelectionPanelVisible)
 
         let clipView = try #require(textView.enclosingScrollView?.contentView)
@@ -595,6 +595,145 @@ struct EditorHostViewTests {
         ))
         textView.enclosingScrollView?.reflectScrolledClipView(clipView)
         #expect(await waitUntil { !coordinator.isSelectionPanelVisible })
+    }
+
+    @Test("selection chrome rebinds when its window changes")
+    func selectionChromeRebindsWindow() async throws {
+        _ = NSApplication.shared
+        let lines = (0..<40).map { "line \($0) target" }.joined(separator: "\n")
+        let storage = RectoTextStorage(documentId: "selection-rebind", markdown: lines)
+        let controller = RectoWritingController()
+        let host = NSHostingView(rootView: RectoEditorView(
+            storage: storage,
+            styler: MarkdownStyler(presentation: .rich, theme: .twilight),
+            writingController: controller
+        ))
+        let firstWindow = NSWindow(
+            contentRect: NSRect(x: 120, y: 160, width: 620, height: 320),
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        firstWindow.contentView = host
+        firstWindow.makeKeyAndOrderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        await drainMainQueue()
+        let textView = try #require(storage.textView.nsTextView)
+        textView.setSelectedRange((lines as NSString).range(of: "line 3 target"))
+
+        let coordinator = WritingControlsHost.Coordinator(controller: controller)
+        coordinator.install()
+        defer {
+            coordinator.uninstall()
+            Self.retainedTransformWindows.append(firstWindow)
+        }
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: firstWindow)
+        #expect(coordinator.isSelectionPanelVisible)
+
+        let secondWindow = NSWindow(
+            contentRect: NSRect(x: 220, y: 220, width: 620, height: 320),
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        defer { Self.retainedTransformWindows.append(secondWindow) }
+        firstWindow.contentView = nil
+        secondWindow.contentView = host
+        secondWindow.makeKeyAndOrderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: secondWindow)
+        #expect(coordinator.isSelectionPanelVisible)
+        expectSelectionPanelPosition(coordinator, controller: controller)
+    }
+
+    @Test("selection chrome rebinds before a replacement clip scrolls")
+    func selectionChromeRebindsClipView() async throws {
+        _ = NSApplication.shared
+        let lines = (0..<40).map { "line \($0) target" }.joined(separator: "\n")
+        let storage = RectoTextStorage(documentId: "selection-clip", markdown: lines)
+        let controller = RectoWritingController()
+        let host = NSHostingView(rootView: RectoEditorView(
+            storage: storage,
+            styler: MarkdownStyler(presentation: .rich, theme: .twilight),
+            writingController: controller
+        ))
+        let window = NSWindow(
+            contentRect: NSRect(x: 120, y: 160, width: 620, height: 320),
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        await drainMainQueue()
+        let textView = try #require(storage.textView.nsTextView)
+        textView.setSelectedRange((lines as NSString).range(of: "line 3 target"))
+        let coordinator = WritingControlsHost.Coordinator(controller: controller)
+        coordinator.install()
+        defer {
+            coordinator.uninstall()
+            Self.retainedTransformWindows.append(window)
+        }
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
+
+        let scrollView = try #require(textView.enclosingScrollView)
+        let oldClipView = scrollView.contentView
+        let oldClipViewNotificationSetting = oldClipView.postsBoundsChangedNotifications
+        let replacementClipView = NSClipView(frame: oldClipView.frame)
+        scrollView.contentView = replacementClipView
+        scrollView.documentView = textView
+        host.layoutSubtreeIfNeeded()
+        let frameBeforeScroll = try #require(coordinator.selectionPanelFrame)
+        replacementClipView.scroll(to: NSPoint(x: 0, y: 12))
+        scrollView.reflectScrolledClipView(replacementClipView)
+        NotificationCenter.default.post(
+            name: NSView.boundsDidChangeNotification,
+            object: replacementClipView
+        )
+        await drainMainQueue()
+        await drainMainQueue()
+        #expect(oldClipView.postsBoundsChangedNotifications == oldClipViewNotificationSetting)
+        #expect(replacementClipView.postsBoundsChangedNotifications)
+        #expect(await waitUntil {
+            guard let frame = coordinator.selectionPanelFrame else { return false }
+            return abs(frame.origin.y - frameBeforeScroll.origin.y) > 1
+        })
+    }
+
+    @Test("selection chrome stays inside the anchor screen")
+    func selectionChromeClampsToVisibleScreen() async throws {
+        _ = NSApplication.shared
+        let storage = RectoTextStorage(documentId: "selection-screen", markdown: "Select me")
+        let controller = RectoWritingController()
+        let host = NSHostingView(rootView: RectoEditorView(
+            storage: storage,
+            styler: MarkdownStyler(presentation: .rich, theme: .twilight),
+            writingController: controller
+        ))
+        let visibleFrame = try #require(NSScreen.main?.visibleFrame)
+        let window = NSWindow(
+            contentRect: NSRect(x: visibleFrame.minX - 80, y: visibleFrame.maxY - 90, width: 240, height: 80),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        await drainMainQueue()
+        let textView = try #require(storage.textView.nsTextView)
+        textView.setSelectedRange(NSRange(location: 0, length: 6))
+        let coordinator = WritingControlsHost.Coordinator(controller: controller)
+        coordinator.install()
+        defer {
+            coordinator.uninstall()
+            Self.retainedTransformWindows.append(window)
+        }
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
+        let panelFrame = try #require(coordinator.selectionPanelFrame)
+        let anchorScreen = NSScreen.screens.first { $0.frame.intersects(panelFrame) } ?? NSScreen.main
+        #expect(try #require(anchorScreen).visibleFrame.contains(panelFrame))
     }
 
     @Test("old view lifecycle notifications cannot move successor chrome")

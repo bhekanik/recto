@@ -19,6 +19,12 @@ public final class RectoWritingController {
     @ObservationIgnored private var textObserver: NSObjectProtocol?
     @ObservationIgnored private var keyMonitor: Any?
     @ObservationIgnored private var selectedSlashIndex = 0
+    @ObservationIgnored private var dismissedSlashQuery: DismissedSlashQuery?
+
+    private struct DismissedSlashQuery: Equatable {
+        let markdown: String
+        let range: NSRange
+    }
 
     public init() {}
 
@@ -29,6 +35,7 @@ public final class RectoWritingController {
     }
 
     func update(storage: RectoTextStorage, presentation: Presentation) {
+        if self.storage !== storage { dismissedSlashQuery = nil }
         self.storage = storage
         self.presentation = presentation
         refreshState()
@@ -36,6 +43,7 @@ public final class RectoWritingController {
 
     func attach(_ textView: RectoTextView?) {
         removeObservers()
+        dismissedSlashQuery = nil
         self.textView = textView
         guard let nsTextView = textView?.nsTextView else {
             selectionState = RectoEditorSelectionState()
@@ -49,7 +57,13 @@ public final class RectoWritingController {
             object: nsTextView,
             queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refreshState() }
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                if self.textView?.selectedRange != self.selectionState.range {
+                    self.dismissedSlashQuery = nil
+                }
+                self.refreshState()
+            }
         }
         textObserver = NotificationCenter.default.addObserver(
             forName: NSText.didChangeNotification,
@@ -58,6 +72,7 @@ public final class RectoWritingController {
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.selectedSlashIndex = 0
+                self?.dismissedSlashQuery = nil
                 self?.refreshState()
             }
         }
@@ -89,6 +104,9 @@ public final class RectoWritingController {
     }
 
     public func dismissSlashMenu() {
+        if let state = slashMenuState, let storage {
+            dismissedSlashQuery = DismissedSlashQuery(markdown: storage.markdown, range: state.queryRange)
+        }
         slashMenuState = nil
         selectedSlashIndex = 0
         onStateChange?()
@@ -244,7 +262,7 @@ public final class RectoWritingController {
             },
             isEditable: presentation == .rich && nsTextView.isEditable
         )
-        slashMenuState = presentation == .rich && nsTextView.isEditable
+        let slashState = presentation == .rich && nsTextView.isEditable
             ? RectoSlashMenu.state(
                 markdown: storage.markdown,
                 selection: range,
@@ -252,6 +270,15 @@ public final class RectoWritingController {
                 anchorRect: textView.caretRect()
               )
             : nil
+        slashMenuState = if let slashState,
+                            dismissedSlashQuery != DismissedSlashQuery(
+                                markdown: storage.markdown,
+                                range: slashState.queryRange
+                            ) {
+            slashState
+        } else {
+            nil
+        }
         onStateChange?()
     }
 
