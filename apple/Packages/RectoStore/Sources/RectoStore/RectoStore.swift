@@ -387,10 +387,12 @@ public actor RectoStore {
       // the next group. That newer ingress must follow the commit, not vanish.
       let committedAcknowledgedIngress =
         preserveQueuedDraftJob && document.editorIngressRevision != nil
-        && document.editorIngressAcknowledged && document.draftMarkdown == markdown
+        && document.editorIngressAcknowledged
+        && document.draftMarkdown.map { ($0 as NSString).isEqual(to: markdown) } == true
       let retainedEditorIngress =
         document.editorIngressRevision != nil
-        && (document.draftMarkdown != markdown || preserveQueuedDraftJob)
+        && (document.draftMarkdown.map { !($0 as NSString).isEqual(to: markdown) } == true
+          || preserveQueuedDraftJob)
         && !committedAcknowledgedIngress
       var retainedDraftJob: OutboxJob?
       if job != nil {
@@ -531,7 +533,7 @@ public actor RectoStore {
         throw StoreError.staleGeneration(
           expected: expectedDraftRevision, actual: document.draftRevision)
       }
-      document.draftMarkdown = markdown == document.markdown ? nil : markdown
+      document.draftMarkdown = (markdown as NSString).isEqual(to: document.markdown) ? nil : markdown
       document.draftSelectionAnchor = selection?.anchor
       document.draftSelectionHead = selection?.head
       document.wordCount = wordCount
@@ -629,7 +631,7 @@ public actor RectoStore {
       }
       guard document.titleMode == .derived,
         document.draftRevision >= expectedDraftRevision,
-        document.displayMarkdown == markdown
+        (document.displayMarkdown as NSString).isEqual(to: markdown)
       else { return false }
 
       document.title = title
@@ -666,10 +668,10 @@ public actor RectoStore {
     try writer.write { db in
       guard var document = try DocumentRecord.fetchOne(db, key: documentLocalId),
         document.editorIngressRevision != nil,
-        document.draftMarkdown == markdown,
+        document.draftMarkdown.map({ ($0 as NSString).isEqual(to: markdown) }) == true,
         document.titleMode == .manual || (title != nil && document.title == title)
       else { return }
-      guard document.markdown == markdown else {
+      guard (document.markdown as NSString).isEqual(to: markdown) else {
         document.editorIngressAcknowledged = true
         try document.update(db)
         return
@@ -710,7 +712,7 @@ public actor RectoStore {
         remoteUpdatedAt > (document.remoteUpdatedAt ?? -1)
       else { return false }
 
-      document.draftMarkdown = markdown == document.markdown ? nil : markdown
+      document.draftMarkdown = (markdown as NSString).isEqual(to: document.markdown) ? nil : markdown
       document.draftSelectionAnchor = nil
       document.draftSelectionHead = nil
       document.wordCount = wordCount

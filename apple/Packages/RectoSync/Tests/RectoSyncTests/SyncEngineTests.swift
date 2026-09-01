@@ -95,6 +95,32 @@ struct SyncEngineTests {
     #expect(try await store.nodes(documentLocalId: local.localId).count == 2)
   }
 
+  @Test(
+    "hydration preserves a canonically equivalent stamped remote draft",
+    arguments: [("😀 café\r\nnext\n", "😀 cafe\u{301}\r\nnext\n"),
+      ("😀 cafe\u{301}\r\nnext\n", "😀 café\r\nnext\n")]
+  )
+  func hydratesExactRemoteDraft(original: String, edited: String) async throws {
+    let transport = InMemoryTransport()
+    let seeded = await transport.seedDocument(title: "Exact remote draft")
+    _ = try await transport.commitFromOtherClient(
+      documentId: seeded.documentId, parentNodeId: seeded.rootNodeId, markdown: original)
+    let committed = try #require(try await transport.getDocument(documentId: seeded.documentId))
+    let response = try await transport.updateMarkdown(
+      documentId: seeded.documentId, markdown: edited, wordCount: 2,
+      expectedUpdatedAt: committed.updatedAt, expectedHeadNodeId: committed.currentNodeId,
+      title: nil)
+    #expect(!response.stale)
+    #expect(!response.headMoved)
+    let (store, engine) = try makeEngine(transport)
+
+    try await engine.mirrorLibrary(await transport.summaries())
+
+    let local = try #require(try await store.documents().first)
+    #expect(Array(local.markdown.utf16) == Array(original.utf16))
+    #expect(Array(try #require(local.draftMarkdown).utf16) == Array(edited.utf16))
+  }
+
   @Test("a title change from another device lands without re-hydrating")
   func mirrorsTitleChange() async throws {
     let transport = InMemoryTransport()

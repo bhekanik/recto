@@ -385,6 +385,44 @@ struct ApplicationModelTests {
     }
 
     @MainActor
+    @Test(
+        "cloud editing preserves canonically equivalent UTF-16 through persistence and navigation",
+        arguments: [
+            ("😀 café\r\nnext\n", "😀 cafe\u{301}\r\nnext\n"),
+            ("😀 cafe\u{301}\r\nnext\n", "😀 café\r\nnext\n"),
+        ]
+    )
+    func exactCloudMarkdown(original: String, edited: String) async throws {
+        let components = try await makeComponents()
+        let document = try await components.library.createDocument(title: "Exact UTF-16")
+        var model = try await CloudDocumentModel.open(
+            localId: document.localId, registry: components.registry)
+        model.storage.markdown = original
+        model.accept(original)
+        await model.close()
+
+        model = try await CloudDocumentModel.open(
+            localId: document.localId, registry: components.registry)
+        #expect(Array(model.state.markdown.utf16) == Array(original.utf16))
+        model.storage.markdown = edited
+        model.accept(edited)
+        let ingress = try #require(
+            try await components.store.document(localId: document.localId)?.draftMarkdown)
+        #expect(Array(ingress.utf16) == Array(edited.utf16))
+
+        await model.undo()
+        #expect(Array(model.storage.markdown.utf16) == Array(original.utf16))
+        await model.redo()
+        #expect(Array(model.storage.markdown.utf16) == Array(edited.utf16))
+        await model.close()
+
+        model = try await CloudDocumentModel.open(
+            localId: document.localId, registry: components.registry)
+        #expect(Array(model.state.markdown.utf16) == Array(edited.utf16))
+        await model.close()
+    }
+
+    @MainActor
     @Test("a model opened during a lifecycle fence starts read-only")
     func frozenOpen() async throws {
         let components = try await makeComponents()

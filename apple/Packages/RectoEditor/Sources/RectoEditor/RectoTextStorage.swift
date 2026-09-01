@@ -45,7 +45,7 @@ public final class RectoTextStorage {
     /// were. Reads are cheap; the string is the storage.
     public var markdown: String {
         didSet {
-            guard markdown != oldValue else { return }
+            guard !Self.hasSameUTF16(markdown, oldValue) else { return }
             frontmatter = Frontmatter.parse(markdown)
             lineEnding = MarkdownLineEnding(detecting: markdown)
             reconcileEditor()
@@ -77,6 +77,11 @@ public final class RectoTextStorage {
     @ObservationIgnored
     private var acceptedChangeObserver: NSObjectProtocol?
 
+    @ObservationIgnored
+    private var structuralEditDepth = 0
+
+    var currentEditIsStructural: Bool { structuralEditDepth > 0 }
+
     /// `true` while the storage is applying an external change, so a listener
     /// can tell the reader's typing from a patch it caused itself.
     @ObservationIgnored
@@ -91,6 +96,12 @@ public final class RectoTextStorage {
         self.markdown = markdown
         self.lineEnding = lineEnding ?? MarkdownLineEnding(detecting: markdown)
         self.frontmatter = Frontmatter.parse(markdown)
+    }
+
+    func withStructuralEdit<T>(_ body: () -> T) -> T {
+        structuralEditDepth += 1
+        defer { structuralEditDepth -= 1 }
+        return body()
     }
 
     // MARK: - Editing
@@ -122,7 +133,7 @@ public final class RectoTextStorage {
     /// back would be a no-op at best.
     @discardableResult
     func editorDidWriteBack(_ text: String) -> Bool {
-        guard markdown != text else { return false }
+        guard !Self.hasSameUTF16(markdown, text) else { return false }
         let patch = MarkdownTextPatch.diff(from: markdown, to: text)
         return editorDidMutate(MarkdownTextMutation(
             range: patch.range,
@@ -136,13 +147,16 @@ public final class RectoTextStorage {
     @discardableResult
     func editorDidMutate(_ mutation: MarkdownTextMutation) -> Bool {
         guard !isApplyingExternalEdit else { return false }
-        if controller.textView?.string == markdown { return false }
-        guard let normalized = lineEnding.applying(mutation, to: markdown)
+        if editorHasSameUTF16(as: markdown) { return false }
+        let normalized = currentEditIsStructural
+            ? applyingStructuralMutation(mutation, to: markdown)
+            : lineEnding.applying(mutation, to: markdown)
+        guard let normalized
         else { return false }
 
         isApplyingExternalEdit = true
         withoutReconciling { markdown = normalized.markdown }
-        if controller.textView?.string != normalized.markdown {
+        if !editorHasSameUTF16(as: normalized.markdown) {
             controller.applyText(normalized.markdown)
         }
         isApplyingExternalEdit = false
@@ -150,9 +164,24 @@ public final class RectoTextStorage {
         return true
     }
 
+    private func applyingStructuralMutation(
+        _ mutation: MarkdownTextMutation,
+        to markdown: String
+    ) -> (markdown: String, mutation: MarkdownTextMutation)? {
+        let source = markdown as NSString
+        guard mutation.range.location != NSNotFound,
+              mutation.range.location >= 0,
+              mutation.range.length >= 0,
+              NSMaxRange(mutation.range) <= source.length else { return nil }
+        return (
+            source.replacingCharacters(in: mutation.range, with: mutation.replacement),
+            mutation
+        )
+    }
+
     func observeAcceptedChanges(
         in textView: NSTextView?,
-        onTextChange: ((String) -> Void)?
+        onAcceptedEdit: ((String, Bool) -> Void)?
     ) {
         if let acceptedChangeObserver {
             NotificationCenter.default.removeObserver(acceptedChangeObserver)
@@ -168,20 +197,29 @@ public final class RectoTextStorage {
                 guard let self, let textView,
                       self.controller.textView === textView,
                       !textView.hasMarkedText(),
-                      textView.string != self.markdown else { return }
+                      !Self.hasSameUTF16(textView.string, self.markdown) else { return }
                 let patch = MarkdownTextPatch.diff(from: self.markdown, to: textView.string)
                 let mutation = MarkdownTextMutation(
                     range: patch.range,
                     replacement: patch.replacement
                 )
                 if self.editorDidMutate(mutation) {
-                    onTextChange?(self.markdown)
+                    onAcceptedEdit?(self.markdown, self.currentEditIsStructural)
                 }
             }
         }
     }
 
     private var isReconciling = false
+
+    private func editorHasSameUTF16(as markdown: String) -> Bool {
+        guard let editorText = controller.textView?.string else { return false }
+        return Self.hasSameUTF16(editorText, markdown)
+    }
+
+    private static func hasSameUTF16(_ lhs: String, _ rhs: String) -> Bool {
+        (lhs as NSString).isEqual(to: rhs)
+    }
 
     private func withoutReconciling(_ body: () -> Void) {
         isReconciling = true

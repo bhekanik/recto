@@ -236,6 +236,51 @@ struct AcceptanceTests {
     #expect(try await relaunched.store.pendingJobs(documentLocalId: localId).isEmpty)
   }
 
+  @Test(
+    "relaunch restores canonically equivalent editor ingress exactly",
+    arguments: [("😀 café\r\nnext\n", "😀 cafe\u{301}\r\nnext\n"),
+      ("😀 cafe\u{301}\r\nnext\n", "😀 café\r\nnext\n")]
+  )
+  func exactEditorIngressSurvivesRelaunch(original: String, edited: String) async throws {
+    let directory = Harness.makeDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let server = InMemoryTransport()
+    let remote = try await server.createDocument(
+      title: "Exact ingress", documentUuid: "exact-ingress")
+    let localId: String
+
+    do {
+      let first = try Harness(directory: directory, transport: server)
+      localId = try await first.adoptRemoteDocument(remote, localId: "exact-ingress")
+      let session = DocumentSession(
+        documentLocalId: localId, store: first.store, sync: first.sync, origin: "mac",
+        schedulesTimers: false)
+      try await session.open()
+      try await session.applyLocalChange(markdown: original, selection: nil, structural: true)
+      _ = try first.store.saveEditorIngressSynchronously(
+        documentLocalId: localId, markdown: edited, selection: nil, wordCount: 2,
+        clientMutationId: ulid(),
+        draftPayload: OutboxPayload(markdown: edited, wordCount: 2).encoded)
+      try await first.store.closeForTesting()
+    }
+
+    let relaunched = try Harness(directory: directory, transport: server)
+    let reopened = DocumentSession(
+      documentLocalId: localId, store: relaunched.store, sync: relaunched.sync, origin: "mac",
+      schedulesTimers: false)
+    try await reopened.open()
+    let state = try #require(await reopened.currentState)
+    #expect(Array(state.markdown.utf16) == Array(edited.utf16))
+    let persisted = try #require(
+      try await relaunched.store.document(localId: localId)?.displayMarkdown)
+    #expect(Array(persisted.utf16) == Array(edited.utf16))
+    await relaunched.sync.start()
+    await relaunched.sync.drainNow()
+    let published = try #require(
+      try await server.getDocument(documentId: remote.documentId)?.markdown)
+    #expect(Array(published.utf16) == Array(edited.utf16))
+  }
+
   @Test("an open offline session rebases onto the acknowledged server root")
   func openSessionRebasesAfterOfflineRootAdoption() async throws {
     let store = try RectoStore.inMemory()

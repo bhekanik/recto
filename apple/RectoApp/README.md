@@ -18,6 +18,12 @@ The macOS 26 target uses `FileDocument` and
 macOS 27 beta API. Move this boundary when Recto raises its deployment target
 after macOS 27 ships; do not make V1 depend on the beta API.
 
+Rich editors share one native writing-controls path. Typing `/` at a source-line
+command position opens the 17-entry caret popover. A non-empty selection opens
+the floating bold, italic, strikethrough, inline-code and link panel. Standalone
+and synced documents both send those edits through their existing history
+owners as structural boundaries.
+
 `project.yml` is the source of truth. XcodeGen 2.46.0 generated the committed
 `Recto.xcodeproj`; regenerate it after adding or removing project files:
 

@@ -130,6 +130,13 @@ private actor TitleGate {
     var count: Int { started.count }
 }
 
+private actor ChangeLog {
+    private var values: [OrderedDocumentEdits.Change] = []
+
+    func append(_ change: OrderedDocumentEdits.Change) { values.append(change) }
+    var changes: [OrderedDocumentEdits.Change] { values }
+}
+
 @Suite("ordered editor changes")
 struct OrderedDocumentEditsTests {
     enum CommitBoundary: CaseIterable {
@@ -492,6 +499,28 @@ struct OrderedDocumentEditsTests {
         await queue.waitUntilDrained()
 
         #expect(try await store.document(localId: document.localId)?.title == "Original")
+    }
+
+    @MainActor
+    @Test("a writing command stays a structural history boundary")
+    func preservesStructuralBoundary() async throws {
+        let store = try RectoStore.inMemory()
+        let library = DocumentLibrary(store: store, sync: nil, origin: "mac")
+        let document = try await library.createDocument(title: "Formatting")
+        let log = ChangeLog()
+        let queue = OrderedDocumentEdits(
+            store: store,
+            documentLocalId: document.localId
+        ) { change in
+            await log.append(change)
+        }
+
+        #expect(queue.accept(markdown: "**formatted**", structural: true))
+        await queue.waitUntilDrained()
+
+        let change = try #require(await log.changes.first)
+        #expect(change.markdown == "**formatted**")
+        #expect(change.structural)
     }
 
     @MainActor

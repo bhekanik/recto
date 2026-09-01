@@ -115,8 +115,15 @@ final class CloudDocumentModel {
     var editError: String? { edits.lastError ?? edits.lastTitleError ?? errorMessage }
 
     func accept(_ markdown: String) {
-        guard markdown != storage.markdown || markdown != state.markdown else { return }
-        if !edits.accept(markdown: markdown) {
+        accept(RectoEditorEdit(markdown: markdown, structural: false))
+    }
+
+    func accept(_ edit: RectoEditorEdit) {
+        let markdown = edit.markdown
+        guard !(markdown as NSString).isEqual(to: storage.markdown)
+            || !(markdown as NSString).isEqual(to: state.markdown)
+        else { return }
+        if !edits.accept(markdown: markdown, structural: edit.structural) {
             storage.markdown = edits.lastAcceptedMarkdown
         }
     }
@@ -184,6 +191,8 @@ final class CloudDocumentModel {
         state = updated
         guard edits.pendingCount == 0 else { return }
         edits.adoptAuthoritativeMarkdown(updated.markdown)
-        if storage.markdown != updated.markdown { storage.markdown = updated.markdown }
+        if !(storage.markdown as NSString).isEqual(to: updated.markdown) {
+            storage.markdown = updated.markdown
+        }
     }
 }

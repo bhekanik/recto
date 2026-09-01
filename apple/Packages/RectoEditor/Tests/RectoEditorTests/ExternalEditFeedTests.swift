@@ -72,4 +72,39 @@ struct ExternalEditFeedTests {
         #expect(editor.storage.markdown == "alpha!\n")
         #expect(editor.textView.string == "alpha!\n")
     }
+
+    @Test("an exact write-back is ignored")
+    func exactWriteBackIsIgnored() {
+        let (editor, recorded) = harness("alpha\r\nbeta\n")
+
+        #expect(!editor.storage.editorDidWriteBack(editor.textView.string))
+        #expect(recorded().isEmpty)
+        #expect((editor.storage.markdown as NSString).isEqual(to: "alpha\r\nbeta\n"))
+    }
+
+    @Test("canonically equivalent UTF-16 is still a real edit")
+    func canonicallyEquivalentEditIsRecorded() {
+        let (editor, recorded) = harness("caf\u{00E9}\n")
+        let decomposed = "cafe\u{0301}\n"
+        editor.textView.string = decomposed
+
+        #expect(editor.storage.editorDidWriteBack(editor.textView.string))
+        #expect((editor.storage.markdown as NSString).isEqual(to: decomposed))
+        #expect((editor.textView.string as NSString).isEqual(to: decomposed))
+        #expect(recorded().count == 1)
+    }
+
+    @Test("a typed LF is normalized to the document's CRLF")
+    func typedLineFeedUsesDocumentConvention() {
+        let (editor, recorded) = harness("alpha\r\nbeta")
+        let insertion = (editor.textView.string as NSString).length
+        editor.textView.insertText("\ncharlie", replacementRange: NSRange(location: insertion, length: 0))
+
+        #expect((editor.storage.markdown as NSString).isEqual(to: "alpha\r\nbeta\r\ncharlie"))
+        #expect((editor.textView.string as NSString).isEqual(to: "alpha\r\nbeta\r\ncharlie"))
+        #expect(recorded() == [MarkdownTextMutation(
+            range: NSRange(location: insertion, length: 0),
+            replacement: "\r\ncharlie"
+        )])
+    }
 }

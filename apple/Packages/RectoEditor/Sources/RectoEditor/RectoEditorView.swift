@@ -26,6 +26,8 @@ public struct RectoEditorView: View {
 
     private let onAttach: ((RectoTextView?) -> Void)?
     private let onTextChange: ((String) -> Void)?
+    private let onEdit: ((RectoEditorEdit) -> Void)?
+    private let writingController: RectoWritingController?
 
     /// - Parameter onAttach: Called with the AppKit seam when the editor
     ///   appears, and `nil` when it goes — the moment to install find, a vim key
@@ -34,12 +36,16 @@ public struct RectoEditorView: View {
     public init(storage: RectoTextStorage, styler: MarkdownStyler,
                 placeholder: String? = nil,
                 onAttach: ((RectoTextView?) -> Void)? = nil,
-                onTextChange: ((String) -> Void)? = nil) {
+                onTextChange: ((String) -> Void)? = nil,
+                onEdit: ((RectoEditorEdit) -> Void)? = nil,
+                writingController: RectoWritingController? = nil) {
         self.storage = storage
         self.styler = styler
         self.placeholder = placeholder
         self.onAttach = onAttach
         self.onTextChange = onTextChange
+        self.onEdit = onEdit
+        self.writingController = writingController
     }
 
     public var body: some View {
@@ -48,6 +54,12 @@ public struct RectoEditorView: View {
             editor
         }
         .background(Color(nsColor: styler.theme.sheet))
+        .onAppear {
+            writingController?.update(storage: storage, presentation: styler.presentation)
+        }
+        .onChange(of: styler.presentation) { _, presentation in
+            writingController?.update(storage: storage, presentation: presentation)
+        }
     }
 
     /// The frontmatter to render above the sheet, or `nil`.
@@ -72,7 +84,7 @@ public struct RectoEditorView: View {
                 // through onTextMutation.
                 set: { markdown in
                     if storage.editorDidWriteBack(markdown) {
-                        onTextChange?(storage.markdown)
+                        publishAcceptedEdit()
                     }
                 }
             ),
@@ -85,7 +97,7 @@ public struct RectoEditorView: View {
             onAttachmentChange: attachmentObserver,
             onTextMutation: { mutation in
                 if storage.editorDidMutate(mutation) {
-                    onTextChange?(storage.markdown)
+                    publishAcceptedEdit()
                 }
             },
             placeholder: placeholderText
@@ -95,13 +107,28 @@ public struct RectoEditorView: View {
     private var attachmentObserver: (NSTextView?) -> Void {
         let controller = storage.controller
         return { [weak controller] textView in
-            storage.observeAcceptedChanges(in: textView, onTextChange: onTextChange)
+            storage.observeAcceptedChanges(in: textView) { markdown, structural in
+                onTextChange?(markdown)
+                onEdit?(RectoEditorEdit(markdown: markdown, structural: structural))
+            }
             guard let controller, textView != nil else {
+                writingController?.attach(nil)
                 onAttach?(nil)
                 return
             }
-            onAttach?(RectoTextView(controller: controller))
+            let seam = RectoTextView(controller: controller)
+            writingController?.update(storage: storage, presentation: styler.presentation)
+            writingController?.attach(seam)
+            onAttach?(seam)
         }
+    }
+
+    private func publishAcceptedEdit() {
+        onTextChange?(storage.markdown)
+        onEdit?(RectoEditorEdit(
+            markdown: storage.markdown,
+            structural: storage.currentEditIsStructural
+        ))
     }
 
     private var placeholderText: NSAttributedString? {
@@ -110,6 +137,16 @@ public struct RectoEditorView: View {
             .font: styler.typography.bodyFont,
             .foregroundColor: styler.theme.ink3,
         ])
+    }
+}
+
+public struct RectoEditorEdit: Equatable, Sendable {
+    public let markdown: String
+    public let structural: Bool
+
+    public init(markdown: String, structural: Bool) {
+        self.markdown = markdown
+        self.structural = structural
     }
 }
 
