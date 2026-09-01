@@ -8,6 +8,7 @@ struct CloudDocumentView: View {
     let registry: DocumentSessionRegistry
     @State private var model: CloudDocumentModel?
     @State private var openingError: String?
+    @State private var writingController = RectoWritingController()
 
     var body: some View {
         Group {
@@ -50,9 +51,11 @@ struct CloudDocumentView: View {
                     undo: .external
                 ),
                 placeholder: "Start writing…",
-                onTextChange: model.accept
+                onEdit: model.accept,
+                writingController: writingController
             )
             .frame(minWidth: 620, minHeight: 500)
+            .background(WritingControlsHost(controller: writingController))
         }
         .navigationTitle(model.state.title)
         .toolbar {

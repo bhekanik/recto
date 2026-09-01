@@ -6,6 +6,7 @@ struct EditorHostView: View {
     @Binding private var document: RectoDocument
     @State private var storage: RectoTextStorage
     @StateObject private var history: DocumentUndoHistory
+    @State private var writingController = RectoWritingController()
     private let isEditable: Bool
 
     init(document: Binding<RectoDocument>, isEditable: Bool) {
@@ -39,11 +40,11 @@ struct EditorHostView: View {
                 undo: .external
             ),
             placeholder: "Start writing…",
-            onTextChange: { markdown in
-                history.accept(markdown)
-            }
+            onEdit: history.accept,
+            writingController: writingController
         )
         .frame(minWidth: 720, minHeight: 540)
+        .background(WritingControlsHost(controller: writingController))
         .onAppear {
             history.attach(authoritativeMarkdown: document.markdown)
         }
@@ -93,12 +94,17 @@ private final class DocumentUndoHistory: ObservableObject {
     }
 
     func accept(_ markdown: String) {
+        accept(RectoEditorEdit(markdown: markdown, structural: false))
+    }
+
+    func accept(_ edit: RectoEditorEdit) {
+        let markdown = edit.markdown
         guard markdown != currentMarkdown else { return }
         let previous = currentMarkdown
         undoManager.registerUndo(withTarget: self) { history in
             history.restore(previous)
         }
-        undoManager.setActionName("Edit")
+        undoManager.setActionName(edit.structural ? "Format" : "Edit")
         currentMarkdown = markdown
         writeDocument(markdown)
     }

@@ -39,6 +39,31 @@ storage.apply(MarkdownTextPatch(range: range, replacement: text))
 storage.markdown = canonicalised
 ```
 
+### Writing controls
+
+`RectoWritingController` is the typed boundary between editor behavior and Mac
+chrome. Pass one to `RectoEditorView`; it publishes selection and slash-menu
+state, then accepts `RectoEditorCommand` values from the host:
+
+```swift
+let writing = RectoWritingController()
+
+RectoEditorView(
+    storage: storage,
+    styler: styler,
+    onEdit: { edit in history.accept(edit.markdown, structural: edit.structural) },
+    writingController: writing
+)
+
+writing.perform(.bold)
+writing.perform(.link(destination: "https://example.com"))
+```
+
+The package owns command transforms, the 17-entry slash contract, filtering,
+keyboard selection and source-coordinate anchors. The app owns `NSPopover` and
+`NSPanel` presentation. Every command and slash insertion emits one structural
+edit so history commits it as its own node.
+
 ### Two windows on one document
 
 One storage drives one editor view. A second window is a second
@@ -288,7 +313,7 @@ renders them is stage 2; the data it will read is here now, and
 ## What stage 2 (W9b) adds
 
 Images with captions through an `NSTextAttachmentViewProvider`; the code-block
-language tag; the slash menu; the selection format bar; find
+language tag; find
 (`NSTextFinder`); typewriter scrolling with settle passes and the
 `scrollRangeToVisible` override; focus dimming via the fragment transparency
 layer; smart paste (HTML → Markdown); image upload on drop and paste; comment

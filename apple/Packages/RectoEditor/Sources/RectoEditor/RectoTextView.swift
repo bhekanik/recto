@@ -74,8 +74,13 @@ public struct RectoTextView {
     /// Apply an edit through the engine's own edit path: incremental restyle,
     /// caret preserved, reported through `onEdit`.
     @discardableResult
-    public func applyPatch(_ patch: MarkdownTextPatch, registersUndo: Bool = false) -> Bool {
+    public func applyPatch(
+        _ patch: MarkdownTextPatch,
+        actionName: String? = nil,
+        registersUndo: Bool = false
+    ) -> Bool {
         controller.applyPatch(range: patch.range, replacement: patch.replacement,
+                              actionName: actionName,
                               registersUndo: registersUndo)
     }
 
@@ -83,9 +88,14 @@ public struct RectoTextView {
     @discardableResult
     public func applyPatches(
         _ patches: [MarkdownTextPatch],
+        actionName: String? = nil,
         registersUndo: Bool = false
     ) -> Bool {
-        controller.applyPatches(patches, registersUndo: registersUndo)
+        controller.applyPatches(
+            patches,
+            actionName: actionName,
+            registersUndo: registersUndo
+        )
     }
 
     /// Reveal or center a UTF-16 display range through TextKit 2 fragment
@@ -116,8 +126,16 @@ public struct RectoTextView {
                 contentManager.documentRange.location,
                 offsetBy: textView.selectedRange().location)
         else { return nil }
-        guard let fragment = layoutManager.textLayoutFragment(for: location) else { return nil }
-        var rect = fragment.layoutFragmentFrame
+        var rect: CGRect?
+        layoutManager.enumerateTextSegments(
+            in: NSTextRange(location: location),
+            type: .standard,
+            options: [.rangeNotRequired]
+        ) { _, segmentFrame, _, _ in
+            rect = segmentFrame
+            return false
+        }
+        guard var rect else { return nil }
         let origin = textView.textContainerOrigin
         rect.origin.x += origin.x
         rect.origin.y += origin.y

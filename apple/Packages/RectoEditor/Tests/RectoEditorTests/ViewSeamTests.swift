@@ -21,7 +21,10 @@ import Testing
 struct ViewSeamTests {
 
     /// One storage with an editor attached, the way a window would.
-    private func attachedEditor(_ markdown: String) -> (RectoTextStorage, NSTextView) {
+    private func attachedEditor(
+        _ markdown: String,
+        width: CGFloat = 600
+    ) -> (RectoTextStorage, NSTextView) {
         _ = NSApplication.shared
         let storage = RectoTextStorage(documentId: "seam", markdown: markdown)
         let styler = MarkdownStyler(presentation: .rich, theme: .twilight)
@@ -36,10 +39,10 @@ struct ViewSeamTests {
         let coordinator = wrapper.makeCoordinator()
         let layoutManager = NSTextLayoutManager()
         let container = NSTextContainer(
-            size: NSSize(width: 600, height: CGFloat.greatestFiniteMagnitude))
+            size: NSSize(width: width, height: CGFloat.greatestFiniteMagnitude))
         layoutManager.textContainer = container
         storage.controller.textContentStorage.addTextLayoutManager(layoutManager)
-        let view = NSTextView(frame: NSRect(x: 0, y: 0, width: 600, height: 400),
+        let view = NSTextView(frame: NSRect(x: 0, y: 0, width: width, height: 400),
                               textContainer: container)
         view.isEditable = true
         coordinator.adopt(view, text: markdown)
@@ -83,10 +86,26 @@ struct ViewSeamTests {
 
         storage.textView.selectedRange = NSRange(location: 0, length: 0)
         let atStart = try #require(storage.textView.caretRect())
-        storage.textView.selectedRange = NSRange(location: 25, length: 0)
+        storage.textView.selectedRange = NSRange(location: 11, length: 0)
         let atEnd = try #require(storage.textView.caretRect())
 
-        #expect(atStart != atEnd || atStart.height > 0)
+        #expect(atEnd.minX > atStart.maxX)
+        #expect(abs(atEnd.minY - atStart.minY) < 1)
+        #expect(atStart.height > 0)
+    }
+
+    @Test("the caret rect follows soft-wrapped lines")
+    func caretRectFollowsWrappedLines() throws {
+        let markdown = "alpha bravo charlie delta echo foxtrot golf hotel"
+        let (storage, _) = attachedEditor(markdown, width: 120)
+
+        storage.textView.selectedRange = NSRange(location: 0, length: 0)
+        let firstLine = try #require(storage.textView.caretRect())
+        storage.textView.selectedRange = NSRange(location: 35, length: 0)
+        let wrappedLine = try #require(storage.textView.caretRect())
+
+        #expect(wrappedLine.minY > firstLine.minY)
+        #expect(wrappedLine.height > 0)
     }
 
     /// Everything must answer rather than trap with no editor on screen. That

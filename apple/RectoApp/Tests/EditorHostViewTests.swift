@@ -490,11 +490,112 @@ struct EditorHostViewTests {
         #expect(try #require(storage.textView.nsTextView).isEditable == false)
     }
 
+    @Test("selection chrome follows its owning window lifecycle")
+    func selectionChromeWindowLifecycle() async throws {
+        _ = NSApplication.shared
+        let storage = RectoTextStorage(documentId: "selection-window", markdown: "Select me")
+        let controller = RectoWritingController()
+        let host = NSHostingView(rootView: RectoEditorView(
+            storage: storage,
+            styler: MarkdownStyler(presentation: .rich, theme: .twilight),
+            writingController: controller
+        ))
+        let window = NSWindow(contentViewController: NSViewController())
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        await drainMainQueue()
+        let textView = try #require(storage.textView.nsTextView)
+        #expect(window.makeFirstResponder(textView))
+        textView.setSelectedRange(NSRange(location: 0, length: 6))
+
+        let coordinator = WritingControlsHost.Coordinator(controller: controller)
+        coordinator.install()
+        defer {
+            coordinator.uninstall()
+            window.close()
+        }
+        coordinator.refresh()
+
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
+        #expect(coordinator.isSelectionPanelVisible)
+
+        NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: window)
+        await drainMainQueue()
+        #expect(!coordinator.isSelectionPanelVisible)
+
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
+        #expect(coordinator.isSelectionPanelVisible)
+
+        NotificationCenter.default.post(name: NSWindow.willCloseNotification, object: window)
+        #expect(!coordinator.isSelectionPanelVisible)
+    }
+
+    @Test("destination input survives key focus and submits the link")
+    func destinationInputSurvivesKeyFocus() async throws {
+        _ = NSApplication.shared
+        let storage = RectoTextStorage(documentId: "destination-window", markdown: "Recto")
+        let controller = RectoWritingController()
+        let host = NSHostingView(rootView: RectoEditorView(
+            storage: storage,
+            styler: MarkdownStyler(presentation: .rich, theme: .twilight),
+            writingController: controller
+        ))
+        let window = NSWindow(contentViewController: NSViewController())
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        await drainMainQueue()
+        let textView = try #require(storage.textView.nsTextView)
+        textView.setSelectedRange(NSRange(location: 0, length: 5))
+
+        let coordinator = WritingControlsHost.Coordinator(controller: controller)
+        coordinator.install()
+        defer {
+            coordinator.uninstall()
+            window.close()
+        }
+        coordinator.showSelectionLinkInput()
+        await drainMainQueue()
+        let field = try #require(NSApp.windows
+            .flatMap(\.descendantViews)
+            .compactMap { $0 as? NSTextField }
+            .first { $0.placeholderString == "URL or path" })
+        let popoverWindow = try #require(field.window)
+        popoverWindow.makeKey()
+        #expect(popoverWindow.makeFirstResponder(field))
+        NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: window)
+        await drainMainQueue()
+
+        #expect(coordinator.isInputPopoverShown)
+        field.stringValue = "https://recto.example/path"
+        NotificationCenter.default.post(name: NSControl.textDidChangeNotification, object: field)
+        await drainMainQueue()
+        let submitAction = try #require(field.action)
+        #expect(NSApp.sendAction(submitAction, to: field.target, from: field))
+        await drainMainQueue()
+
+        #expect(storage.markdown == "[Recto](https://recto.example/path)")
+    }
+
     private func drainMainQueue() async {
         await withCheckedContinuation { continuation in
             DispatchQueue.main.async {
                 continuation.resume()
             }
         }
+    }
+
+}
+
+private extension NSView {
+    var descendantViews: [NSView] {
+        [self] + subviews.flatMap(\.descendantViews)
+    }
+}
+
+private extension NSWindow {
+    var descendantViews: [NSView] {
+        contentView?.descendantViews ?? []
     }
 }

@@ -77,6 +77,11 @@ public final class RectoTextStorage {
     @ObservationIgnored
     private var acceptedChangeObserver: NSObjectProtocol?
 
+    @ObservationIgnored
+    private var structuralEditDepth = 0
+
+    var currentEditIsStructural: Bool { structuralEditDepth > 0 }
+
     /// `true` while the storage is applying an external change, so a listener
     /// can tell the reader's typing from a patch it caused itself.
     @ObservationIgnored
@@ -91,6 +96,12 @@ public final class RectoTextStorage {
         self.markdown = markdown
         self.lineEnding = lineEnding ?? MarkdownLineEnding(detecting: markdown)
         self.frontmatter = Frontmatter.parse(markdown)
+    }
+
+    func withStructuralEdit<T>(_ body: () -> T) -> T {
+        structuralEditDepth += 1
+        defer { structuralEditDepth -= 1 }
+        return body()
     }
 
     // MARK: - Editing
@@ -152,7 +163,7 @@ public final class RectoTextStorage {
 
     func observeAcceptedChanges(
         in textView: NSTextView?,
-        onTextChange: ((String) -> Void)?
+        onAcceptedEdit: ((String, Bool) -> Void)?
     ) {
         if let acceptedChangeObserver {
             NotificationCenter.default.removeObserver(acceptedChangeObserver)
@@ -175,7 +186,7 @@ public final class RectoTextStorage {
                     replacement: patch.replacement
                 )
                 if self.editorDidMutate(mutation) {
-                    onTextChange?(self.markdown)
+                    onAcceptedEdit?(self.markdown, self.currentEditIsStructural)
                 }
             }
         }
