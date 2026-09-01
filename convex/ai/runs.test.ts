@@ -55,6 +55,7 @@ async function seedRun(
 			documentId,
 			sourceNodeId: "source",
 			sourceHash: "a".repeat(64),
+			sourceMarkdown: "source",
 			requestHash: "b".repeat(64),
 			model: "model",
 			status,
@@ -86,6 +87,174 @@ async function settleRun(
 }
 
 describe("AI run durability", () => {
+	it("uses one active row despite a large acknowledged history", async () => {
+		const t = convexTest(schema, modules);
+		registerRateLimiter(t);
+		const { documentId, runId } = await seedRun(t);
+		await t.run(async (ctx) => {
+			await ctx.db.insert("aiActiveRuns", {
+				userId: USER,
+				documentId,
+				kind: "transform",
+				runId,
+				sourceNodeId: "source",
+				updatedAt: 1,
+			});
+			for (let index = 0; index < 1_000; index += 1) {
+				await ctx.db.insert("aiRuns", {
+					userId: USER,
+					requestId: `history-${index}`,
+					kind: "transform",
+					documentId,
+					sourceNodeId: "source",
+					sourceHash: "a".repeat(64),
+					sourceMarkdown: "source",
+					requestHash: `${index}`.padEnd(64, "h"),
+					model: "model",
+					status: "succeeded",
+					output: "old",
+					applicable: true,
+					acknowledgedAt: index + 2,
+					createdAt: index + 2,
+					updatedAt: index + 2,
+				});
+			}
+		});
+		const owner = t.withIdentity({ subject: USER });
+		await expect(
+			owner.query(api.ai.runs.latestRecoverable, {
+				documentId,
+				kind: "transform",
+			}),
+		).resolves.toMatchObject({ _id: runId });
+		await expect(
+			t.mutation(internal.ai.runs.begin, {
+				userId: USER,
+				requestId: "blocked-by-active",
+				kind: "transform",
+				documentId,
+				sourceNodeId: "source",
+				sourceHash: "a".repeat(64),
+				expectedSourceMarkdown: "source",
+				requestHash: "b".repeat(64),
+				model: "model",
+			}),
+		).rejects.toThrow("earlier AI request");
+		await t.run(async (ctx) => {
+			const active = await ctx.db.query("aiActiveRuns").unique();
+			if (active) await ctx.db.delete(active._id);
+			await ctx.db.patch(runId, {
+				status: "failed",
+				acknowledgedAt: 2_000,
+			});
+		});
+		const begun = await t.mutation(internal.ai.runs.begin, {
+			userId: USER,
+			requestId: "after-large-history",
+			kind: "transform",
+			documentId,
+			sourceNodeId: "source",
+			sourceHash: "a".repeat(64),
+			expectedSourceMarkdown: "source",
+			requestHash: "c".repeat(64),
+			model: "model",
+		});
+		expect(begun.replay).toBe(false);
+		await expect(
+			owner.query(api.ai.runs.latestRecoverable, {
+				documentId,
+				kind: "transform",
+			}),
+		).resolves.toMatchObject({ requestId: "after-large-history" });
+	});
+
+	it("never recovers outputs refused by access or source fences", async () => {
+		for (const fence of ["consent", "share", "delete", "source"] as const) {
+			const t = convexTest(schema, modules);
+			const { documentId, runId } = await seedRun(t);
+			await t.run(async (ctx) => {
+				if (fence === "consent") {
+					const consent = await ctx.db.query("aiConsents").unique();
+					if (consent) await ctx.db.delete(consent._id);
+				} else if (fence === "share") {
+					await ctx.db.insert("documentShares", {
+						documentId,
+						ownerUserId: USER,
+						granteeEmail: "reader@example.com",
+						role: "commenter",
+						createdAt: 2,
+					});
+				} else if (fence === "delete") {
+					await ctx.db.insert("aiDocumentDeletions", {
+						documentId,
+						userId: USER,
+						createdAt: 2,
+						updatedAt: 2,
+					});
+				} else {
+					await ctx.db.patch(documentId, { currentNodeId: "changed" });
+				}
+			});
+			const result = await settleRun(t, runId);
+			expect(result.applicable).toBe(false);
+			expect(
+				await t.run(async (ctx) => (await ctx.db.get(runId))?.applicable),
+			).toBe(false);
+			const owner = t.withIdentity({ subject: USER });
+			await expect(
+				owner.query(api.ai.runs.latestRecoverable, {
+					documentId,
+					kind: "transform",
+				}),
+			).resolves.toBeNull();
+		}
+	});
+
+	it("does not revive a succeeded output after consent is revoked and reaccepted", async () => {
+		const t = convexTest(schema, modules);
+		registerRateLimiter(t);
+		const { documentId, runId } = await seedRun(t);
+		await expect(settleRun(t, runId)).resolves.toMatchObject({
+			applicable: true,
+		});
+		await t.run(async (ctx) => {
+			const consent = await ctx.db.query("aiConsents").unique();
+			if (consent) await ctx.db.delete(consent._id);
+			await ctx.db.insert("aiConsents", {
+				userId: USER,
+				version: 1,
+				acceptedAt: Date.now() + 1,
+			});
+		});
+		const owner = t.withIdentity({ subject: USER });
+		const recovered = await owner.query(api.ai.runs.get, {
+			requestId:
+				(await t.run(async (ctx) => await ctx.db.get(runId)))?.requestId ??
+				"missing",
+		});
+		expect(recovered).toMatchObject({ applicable: false });
+		expect(recovered && "output" in recovered).toBe(false);
+		await expect(
+			owner.query(api.ai.runs.latestRecoverable, {
+				documentId,
+				kind: "transform",
+			}),
+		).resolves.toBeNull();
+		await expect(
+			t.mutation(internal.ai.runs.begin, {
+				userId: USER,
+				requestId: "after-reconsent",
+				kind: "transform",
+				documentId,
+				sourceNodeId: "source",
+				sourceHash: "a".repeat(64),
+				expectedSourceMarkdown: "source",
+				requestHash: "r".repeat(64),
+				model: "model",
+			}),
+		).resolves.toMatchObject({ replay: false });
+	});
+
 	it("serializes random ids across tabs and keeps failed acknowledgement locked", async () => {
 		const t = convexTest(schema, modules);
 		registerRateLimiter(t);
@@ -139,6 +308,7 @@ describe("AI run durability", () => {
 				await ctx.db.patch(runId, {
 					status,
 					output: status === "succeeded" ? "result" : undefined,
+					applicable: status === "succeeded" ? true : undefined,
 					updatedAt: Date.now(),
 				});
 			});

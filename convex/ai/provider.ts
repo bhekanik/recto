@@ -57,6 +57,20 @@ export function providerOutcomeIsUnknown(error: Error): boolean {
 	);
 }
 
+export class ProviderUsageSettlementError extends Error {
+	constructor() {
+		super("A completed provider call could not be recorded.");
+		this.name = "ProviderUsageSettlementError";
+	}
+}
+
+export function completedProviderOutcomeIsUnknown(error: Error): boolean {
+	return (
+		error instanceof ProviderUsageSettlementError ||
+		providerOutcomeIsUnknown(error)
+	);
+}
+
 export type TracedProvider = {
 	client: OpenAI & ReturnType<typeof wrapOpenAI>;
 	langsmithRunId?: string;

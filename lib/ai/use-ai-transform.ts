@@ -110,6 +110,7 @@ type TransformRun = {
 		| "cancelled"
 		| "outcome_unknown";
 	output?: string;
+	applicable?: boolean;
 } | null;
 
 export type TransformRunResolution =
@@ -122,7 +123,14 @@ export function resolveTransformRun(run: TransformRun): TransformRunResolution {
 	if (run.status === "failed" || run.status === "cancelled") {
 		return { status: "retry-safe" };
 	}
-	if (run.status === "succeeded" && run.output !== undefined) {
+	if (run.status === "succeeded" && run.applicable === false) {
+		return { status: "retry-safe" };
+	}
+	if (
+		run.status === "succeeded" &&
+		run.applicable === true &&
+		run.output !== undefined
+	) {
 		return { status: "succeeded", output: run.output };
 	}
 	return { status: "unresolved" };

@@ -8,11 +8,12 @@ import { resolveCredential } from "./credentials";
 import { aiError, errorCode } from "./errors";
 import {
 	AI_CHAT_MODEL,
+	completedProviderOutcomeIsUnknown,
 	createProvider,
 	flushProvider,
 	type ProviderUsage,
+	ProviderUsageSettlementError,
 	parseProviderUsage,
-	providerOutcomeIsUnknown,
 } from "./provider";
 import {
 	MAX_AI_TEXT_BYTES,
@@ -49,18 +50,10 @@ export type ReviewCompletionClient = {
 	};
 };
 
-export class ProviderUsageSettlementError extends Error {
-	constructor() {
-		super("A completed provider call could not be recorded.");
-		this.name = "ProviderUsageSettlementError";
-	}
-}
+export { ProviderUsageSettlementError } from "./provider";
 
 export function reviewOutcomeIsUnknown(error: Error): boolean {
-	return (
-		error instanceof ProviderUsageSettlementError ||
-		providerOutcomeIsUnknown(error)
-	);
+	return completedProviderOutcomeIsUnknown(error);
 }
 
 const MAX_REVIEW_TOKENS = 4_000;
@@ -437,7 +430,7 @@ export const run = action({
 					(applied.branchId ? suggestions.applied : 0),
 				branchId: applied.branchId,
 			};
-			await ctx.runMutation(internal.ai.runs.succeed, {
+			const settled = await ctx.runMutation(internal.ai.runs.succeed, {
 				runId,
 				userId,
 				output: JSON.stringify(summary),
@@ -448,6 +441,12 @@ export const run = action({
 					langsmithRunId: provider.langsmithRunId,
 				},
 			});
+			if (!settled.applicable) {
+				aiError(
+					"document_changed",
+					"The provider completed, but the review is no longer applicable.",
+				);
+			}
 			return summary;
 		} catch (error) {
 			const failure =

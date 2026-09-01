@@ -8,10 +8,11 @@ import { resolveCredential } from "./credentials";
 import { aiError, errorCode } from "./errors";
 import {
 	AI_CHAT_MODEL,
+	completedProviderOutcomeIsUnknown,
 	createProvider,
 	flushProvider,
+	ProviderUsageSettlementError,
 	parseProviderUsage,
-	providerOutcomeIsUnknown,
 } from "./provider";
 import {
 	MAX_AI_TEXT_BYTES,
@@ -53,6 +54,18 @@ export type PreparedTransform = {
 	sourceMarkdown: string;
 };
 
+export async function settleCompletedTransform(args: {
+	output: string;
+	settle: () => Promise<boolean>;
+}): Promise<void> {
+	try {
+		if (!(await args.settle())) throw new Error("usage not recorded");
+	} catch {
+		throw new ProviderUsageSettlementError();
+	}
+	if (args.output.length === 0) throw new Error("The model returned nothing");
+}
+
 function validateInput(input: TransformInput): void {
 	validateRequestIdentity(input.requestId);
 	if (
@@ -72,8 +85,13 @@ function replay(run: {
 	_id: Id<"aiRuns">;
 	status: string;
 	output?: string;
+	applicable?: boolean;
 }): GenerateResult | null {
-	if (run.status === "succeeded" && run.output !== undefined) {
+	if (
+		run.status === "succeeded" &&
+		run.applicable === true &&
+		run.output !== undefined
+	) {
 		return { kind: "replay", output: run.output, runId: run._id };
 	}
 	if (run.status === "provider_started" || run.status === "outcome_unknown") {
@@ -220,7 +238,22 @@ export async function executePreparedTransform(
 			}
 			if (chunk.usage) usage = chunk.usage;
 		}
-		if (output.length === 0) throw new Error("The model returned nothing");
+		await settleCompletedTransform({
+			output,
+			settle: async () => {
+				const settled = await ctx.runMutation(internal.ai.runs.recordUsage, {
+					runId,
+					userId,
+					callIndex: 0,
+					usage: {
+						...parseProviderUsage(usage),
+						latencyMs: Date.now() - startedAt,
+						langsmithRunId: provider.langsmithRunId,
+					},
+				});
+				return settled.recorded;
+			},
+		});
 		const recorded = await ctx.runMutation(internal.ai.runs.succeed, {
 			runId,
 			userId,
@@ -246,7 +279,7 @@ export async function executePreparedTransform(
 			runId,
 			userId,
 			errorCode: errorCode(failure),
-			outcomeUnknown: providerOutcomeIsUnknown(failure),
+			outcomeUnknown: completedProviderOutcomeIsUnknown(failure),
 		});
 		throw error;
 	} finally {

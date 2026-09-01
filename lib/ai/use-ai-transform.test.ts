@@ -213,7 +213,21 @@ describe("AI transform run recovery", () => {
 
 	it("recovers a stored successful output", () => {
 		expect(
-			resolveTransformRun({ status: "succeeded", output: "done" }),
+			resolveTransformRun({
+				status: "succeeded",
+				applicable: true,
+				output: "done",
+			}),
 		).toEqual({ status: "succeeded", output: "done" });
+	});
+
+	it("does not expose a succeeded transform the server marked non-applicable", () => {
+		expect(
+			resolveTransformRun({
+				status: "succeeded",
+				applicable: false,
+				output: "done",
+			}),
+		).toEqual({ status: "retry-safe" });
 	});
 });

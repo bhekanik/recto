@@ -44,6 +44,7 @@ type ReviewRun = {
 		| "cancelled"
 		| "outcome_unknown";
 	output?: string;
+	applicable?: boolean;
 } | null;
 
 export type ReviewRunResolution =
@@ -56,7 +57,10 @@ export function resolveReviewRun(run: ReviewRun): ReviewRunResolution {
 	if (run.status === "failed" || run.status === "cancelled") {
 		return { status: "retry-safe" };
 	}
-	if (run.status !== "succeeded" || !run.output) {
+	if (run.status === "succeeded" && run.applicable === false) {
+		return { status: "retry-safe" };
+	}
+	if (run.status !== "succeeded" || run.applicable !== true || !run.output) {
 		return { status: "unresolved" };
 	}
 	try {
@@ -78,6 +82,18 @@ export function canStartAiReview(
 	return recoveryReady && unresolvedRequestId === null;
 }
 
+type UnresolvedReview = {
+	requestId: string;
+	documentId: string;
+};
+
+export function reviewRequestMatchesDocument(
+	unresolved: UnresolvedReview,
+	documentId: string | null,
+): boolean {
+	return unresolved.documentId === documentId;
+}
+
 export function useAiReview(args: {
 	documentId: Id<"documents"> | null;
 	getDocMarkdown: () => string;
@@ -89,7 +105,7 @@ export function useAiReview(args: {
 	const cancelRun = useMutation(api.ai.runs.cancel);
 	const acknowledgeRun = useMutation(api.ai.runs.acknowledge);
 	const ownerRef = useRef(new AiRequestOwner());
-	const unresolvedRequestRef = useRef<string | null>(null);
+	const unresolvedRequestRef = useRef<UnresolvedReview | null>(null);
 	const documentRef = useRef(documentId);
 	const previousDocumentRef = useRef(documentId);
 	const recoveryReadyRef = useRef(false);
@@ -101,14 +117,11 @@ export function useAiReview(args: {
 	useEffect(() => {
 		if (previousDocumentRef.current === documentId) return;
 		previousDocumentRef.current = documentId;
-		const requestId = ownerRef.current.currentRequestId();
-		const phase = ownerRef.current.supersede();
-		if (phase === "sent") unresolvedRequestRef.current = requestId;
-		const unresolved =
-			phase === "sent" || unresolvedRequestRef.current !== null;
-		setState(unresolved ? "outcome-unknown" : "idle");
+		ownerRef.current.supersede();
+		unresolvedRequestRef.current = null;
+		setState("idle");
 		setSummary(null);
-		setError(unresolved ? UNKNOWN_REVIEW : null);
+		setError(null);
 	}, [documentId]);
 
 	useEffect(
@@ -128,7 +141,10 @@ export function useAiReview(args: {
 			.then((run) => {
 				if (!current || documentRef.current !== documentId) return;
 				if (run) {
-					unresolvedRequestRef.current = run.requestId;
+					unresolvedRequestRef.current = {
+						requestId: run.requestId,
+						documentId,
+					};
 					setState("outcome-unknown");
 					setError(UNKNOWN_REVIEW);
 				} else if (!unresolvedRequestRef.current) {
@@ -152,7 +168,10 @@ export function useAiReview(args: {
 
 	const reset = useCallback(() => {
 		if (
-			!canStartAiReview(recoveryReadyRef.current, unresolvedRequestRef.current)
+			!canStartAiReview(
+				recoveryReadyRef.current,
+				unresolvedRequestRef.current?.requestId ?? null,
+			)
 		) {
 			setState("outcome-unknown");
 			setError(UNKNOWN_REVIEW);
@@ -160,15 +179,20 @@ export function useAiReview(args: {
 		}
 		const requestId = ownerRef.current.currentRequestId();
 		const phase = ownerRef.current.supersede();
-		if (phase === "sent") unresolvedRequestRef.current = requestId;
+		if (phase === "sent" && requestId && documentId) {
+			unresolvedRequestRef.current = { requestId, documentId };
+		}
 		setState(phase === "sent" ? "outcome-unknown" : "idle");
 		setSummary(null);
 		setError(phase === "sent" ? UNKNOWN_REVIEW : null);
-	}, []);
+	}, [documentId]);
 
 	const run = useCallback(async () => {
 		if (
-			!canStartAiReview(recoveryReadyRef.current, unresolvedRequestRef.current)
+			!canStartAiReview(
+				recoveryReadyRef.current,
+				unresolvedRequestRef.current?.requestId ?? null,
+			)
 		) {
 			setState("outcome-unknown");
 			setError(UNKNOWN_REVIEW);
@@ -213,6 +237,7 @@ export function useAiReview(args: {
 			const acknowledged = await acknowledgeRun({
 				requestId: ticket.requestId,
 			});
+			if (!ownerRef.current.isCurrent(ticket, documentRef.current)) return;
 			if (!acknowledged.acknowledged) {
 				throw new Error("The completed review could not be reconciled.");
 			}
@@ -253,7 +278,10 @@ export function useAiReview(args: {
 					});
 					if (!acknowledged.acknowledged) throw new Error("not acknowledged");
 				} catch {
-					unresolvedRequestRef.current = ticket.requestId;
+					unresolvedRequestRef.current = {
+						requestId: ticket.requestId,
+						documentId,
+					};
 					setState("outcome-unknown");
 					setError(UNKNOWN_REVIEW);
 					return;
@@ -265,7 +293,9 @@ export function useAiReview(args: {
 				return;
 			}
 			const outcomeUnknown = resolution.status === "unresolved";
-			unresolvedRequestRef.current = outcomeUnknown ? ticket.requestId : null;
+			unresolvedRequestRef.current = outcomeUnknown
+				? { requestId: ticket.requestId, documentId }
+				: null;
 			setState(outcomeUnknown ? "outcome-unknown" : "error");
 			setError(
 				outcomeUnknown
@@ -286,23 +316,36 @@ export function useAiReview(args: {
 	]);
 
 	const reconcile = useCallback(async () => {
-		const requestId = unresolvedRequestRef.current;
-		if (!requestId) return;
+		const unresolved = unresolvedRequestRef.current;
+		if (
+			!unresolved ||
+			!reviewRequestMatchesDocument(unresolved, documentRef.current)
+		)
+			return;
+		const { requestId } = unresolved;
 		setState("loading");
 		setError(null);
 		try {
 			let remoteRun = await convex.query(api.ai.runs.get, { requestId });
+			if (!reviewRequestMatchesDocument(unresolved, documentRef.current))
+				return;
 			let resolution = resolveReviewRun(remoteRun);
 			if (remoteRun?.status === "reserved") {
 				const cancelled = await cancelRun({ requestId });
+				if (!reviewRequestMatchesDocument(unresolved, documentRef.current))
+					return;
 				if (cancelled.cancelled) resolution = { status: "retry-safe" };
 				else if (cancelled.reason === "terminal") {
 					remoteRun = await convex.query(api.ai.runs.get, { requestId });
+					if (!reviewRequestMatchesDocument(unresolved, documentRef.current))
+						return;
 					resolution = resolveReviewRun(remoteRun);
 				}
 			}
 			if (resolution.status === "succeeded") {
 				const acknowledged = await acknowledgeRun({ requestId });
+				if (!reviewRequestMatchesDocument(unresolved, documentRef.current))
+					return;
 				if (!acknowledged.acknowledged) throw new Error("not acknowledged");
 				unresolvedRequestRef.current = null;
 				setSummary(resolution.summary);
@@ -311,6 +354,8 @@ export function useAiReview(args: {
 			}
 			if (resolution.status === "retry-safe") {
 				const acknowledged = await acknowledgeRun({ requestId });
+				if (!reviewRequestMatchesDocument(unresolved, documentRef.current))
+					return;
 				if (!acknowledged.acknowledged) throw new Error("not acknowledged");
 				unresolvedRequestRef.current = null;
 				setState("error");

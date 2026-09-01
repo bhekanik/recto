@@ -161,6 +161,7 @@ export default defineSchema({
 		documentId: v.id("documents"),
 		sourceNodeId: v.string(),
 		sourceHash: v.string(),
+		sourceMarkdown: v.optional(v.string()),
 		requestHash: v.string(),
 		model: v.string(),
 		status: v.union(
@@ -180,6 +181,7 @@ export default defineSchema({
 		providerStartedAt: v.optional(v.number()),
 		completedAt: v.optional(v.number()),
 		acknowledgedAt: v.optional(v.number()),
+		applicable: v.optional(v.boolean()),
 	})
 		.index("by_user_request", ["userId", "requestId"])
 		.index("by_user_created", ["userId", "createdAt"])
@@ -189,8 +191,32 @@ export default defineSchema({
 			"kind",
 			"updatedAt",
 		])
+		.index("by_user_document_kind_source_updated", [
+			"userId",
+			"documentId",
+			"kind",
+			"sourceNodeId",
+			"updatedAt",
+		])
 		.index("by_document", ["documentId"])
 		.index("by_status_updated", ["status", "updatedAt"]),
+
+	aiActiveRuns: defineTable({
+		userId: v.string(),
+		documentId: v.id("documents"),
+		kind: v.union(v.literal("transform"), v.literal("review")),
+		runId: v.id("aiRuns"),
+		sourceNodeId: v.string(),
+		updatedAt: v.number(),
+	})
+		.index("by_user_document_kind_source", [
+			"userId",
+			"documentId",
+			"kind",
+			"sourceNodeId",
+		])
+		.index("by_document", ["documentId"])
+		.index("by_user", ["userId"]),
 
 	// Provider usage is append-only and idempotent on runId. Provider-started
 	// uncertainty has no row because inventing zero cost would undercount spend.

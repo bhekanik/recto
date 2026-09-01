@@ -8,10 +8,11 @@ import { aiError, errorCode } from "./errors";
 import {
 	AI_EMBEDDING_DIM,
 	AI_EMBEDDING_MODEL,
+	completedProviderOutcomeIsUnknown,
 	createProvider,
 	flushProvider,
+	ProviderUsageSettlementError,
 	parseProviderUsage,
-	providerOutcomeIsUnknown,
 } from "./provider";
 import {
 	requestHash,
@@ -26,6 +27,24 @@ const MAX_EMBED_INPUT_BYTES = 16_384;
 const embeddingReplaySchema = z.array(
 	z.array(z.number().finite()).length(AI_EMBEDDING_DIM),
 );
+
+export async function settleCompletedEmbeddings(args: {
+	embeddings: number[][];
+	expectedCount: number;
+	settle: () => Promise<boolean>;
+}): Promise<void> {
+	try {
+		if (!(await args.settle())) throw new Error("usage not recorded");
+	} catch {
+		throw new ProviderUsageSettlementError();
+	}
+	if (
+		args.embeddings.length !== args.expectedCount ||
+		args.embeddings.some((vector) => vector.length !== AI_EMBEDDING_DIM)
+	) {
+		throw new Error("OpenRouter returned invalid embeddings.");
+	}
+}
 
 function parseJson<T>(raw: string, schema: z.ZodType<T>): T | null {
 	try {
@@ -94,7 +113,11 @@ async function runEmbedding(
 		model: AI_EMBEDDING_MODEL,
 	});
 	if (begun.replay) {
-		if (begun.run.status === "succeeded" && begun.run.output) {
+		if (
+			begun.run.status === "succeeded" &&
+			begun.run.applicable === true &&
+			begun.run.output
+		) {
 			return parseReplay(begun.run.output);
 		}
 		aiError(
@@ -145,12 +168,23 @@ async function runEmbedding(
 			input: args.inputs,
 		});
 		const embeddings = response.data.map((entry) => entry.embedding);
-		if (
-			embeddings.length !== args.inputs.length ||
-			embeddings.some((vector) => vector.length !== AI_EMBEDDING_DIM)
-		) {
-			throw new Error("OpenRouter returned invalid embeddings.");
-		}
+		await settleCompletedEmbeddings({
+			embeddings,
+			expectedCount: args.inputs.length,
+			settle: async () => {
+				const settled = await ctx.runMutation(internal.ai.runs.recordUsage, {
+					runId,
+					userId,
+					callIndex: 0,
+					usage: {
+						...parseProviderUsage(response.usage),
+						latencyMs: Date.now() - startedAt,
+						langsmithRunId: provider.langsmithRunId,
+					},
+				});
+				return settled.recorded;
+			},
+		});
 		const recorded = await ctx.runMutation(internal.ai.runs.succeed, {
 			runId,
 			userId,
@@ -176,7 +210,7 @@ async function runEmbedding(
 			runId,
 			userId,
 			errorCode: errorCode(failure),
-			outcomeUnknown: providerOutcomeIsUnknown(failure),
+			outcomeUnknown: completedProviderOutcomeIsUnknown(failure),
 		});
 		throw error;
 	} finally {

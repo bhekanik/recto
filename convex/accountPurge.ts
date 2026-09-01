@@ -436,6 +436,11 @@ export const purgeData = internalMutation({
 							.take(n),
 					(n) =>
 						ctx.db
+							.query("aiActiveRuns")
+							.withIndex("by_document", (q) => q.eq("documentId", doc._id))
+							.take(n),
+					(n) =>
+						ctx.db
 							.query("aiRuns")
 							.withIndex("by_document", (q) => q.eq("documentId", doc._id))
 							.take(n),
@@ -549,6 +554,11 @@ export const purgeData = internalMutation({
 					ctx.db
 						.query("aiUsage")
 						.withIndex("by_user_created", (q) => q.eq("userId", args.userId))
+						.take(n),
+				(n) =>
+					ctx.db
+						.query("aiActiveRuns")
+						.withIndex("by_user", (q) => q.eq("userId", args.userId))
 						.take(n),
 				(n) =>
 					ctx.db

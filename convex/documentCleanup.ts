@@ -120,6 +120,12 @@ export async function cleanupDocumentBatch(
 	);
 	await drain((n) =>
 		ctx.db
+			.query("aiActiveRuns")
+			.withIndex("by_document", (q) => q.eq("documentId", documentId))
+			.take(n),
+	);
+	await drain((n) =>
+		ctx.db
 			.query("aiRuns")
 			.withIndex("by_document", (q) => q.eq("documentId", documentId))
 			.take(n),

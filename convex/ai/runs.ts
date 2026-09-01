@@ -26,6 +26,78 @@ const kindValidator = v.union(
 	v.literal("embed"),
 );
 const keySourceValidator = v.union(v.literal("byok"), v.literal("house"));
+type DurableRunKind = "transform" | "review";
+
+function isDurableRunKind(
+	kind: "transform" | "review" | "embed",
+): kind is DurableRunKind {
+	return kind !== "embed";
+}
+
+function isRecoverableRun(run: Doc<"aiRuns">): boolean {
+	return (
+		run.acknowledgedAt === undefined &&
+		(run.status === "reserved" ||
+			run.status === "provider_started" ||
+			run.status === "outcome_unknown" ||
+			(run.status === "succeeded" && run.applicable === true))
+	);
+}
+
+async function activeRunRow(
+	ctx: QueryCtx | MutationCtx,
+	args: {
+		userId: string;
+		documentId: Id<"documents">;
+		kind: DurableRunKind;
+		sourceNodeId: string;
+	},
+) {
+	return await ctx.db
+		.query("aiActiveRuns")
+		.withIndex("by_user_document_kind_source", (q) =>
+			q
+				.eq("userId", args.userId)
+				.eq("documentId", args.documentId)
+				.eq("kind", args.kind)
+				.eq("sourceNodeId", args.sourceNodeId),
+		)
+		.unique();
+}
+
+async function clearActiveRun(
+	ctx: MutationCtx,
+	run: Pick<
+		Doc<"aiRuns">,
+		"_id" | "userId" | "documentId" | "kind" | "sourceNodeId"
+	>,
+): Promise<void> {
+	const { kind } = run;
+	if (!isDurableRunKind(kind)) return;
+	const active = await activeRunRow(ctx, { ...run, kind });
+	if (active?.runId === run._id) await ctx.db.delete(active._id);
+}
+
+async function reserveActiveRun(
+	ctx: MutationCtx,
+	run: Pick<
+		Doc<"aiRuns">,
+		"_id" | "userId" | "documentId" | "kind" | "sourceNodeId"
+	>,
+): Promise<void> {
+	const { kind } = run;
+	if (!isDurableRunKind(kind)) return;
+	const active = await activeRunRow(ctx, { ...run, kind });
+	if (active) await ctx.db.delete(active._id);
+	await ctx.db.insert("aiActiveRuns", {
+		userId: run.userId,
+		documentId: run.documentId,
+		kind,
+		runId: run._id,
+		sourceNodeId: run.sourceNodeId,
+		updatedAt: Date.now(),
+	});
+}
 
 async function hasCurrentConsent(
 	ctx: QueryCtx | MutationCtx,
@@ -36,6 +108,47 @@ async function hasCurrentConsent(
 		.withIndex("by_user", (q) => q.eq("userId", userId))
 		.unique();
 	return consent?.version === AI_CONSENT_VERSION;
+}
+
+async function runApplicableNow(
+	ctx: QueryCtx | MutationCtx,
+	run: Doc<"aiRuns">,
+): Promise<boolean> {
+	if (run.applicable !== true || run.sourceMarkdown === undefined) return false;
+	const [deletion, tombstone, consent, document, share, sourceNode] =
+		await Promise.all([
+			ctx.db
+				.query("aiDocumentDeletions")
+				.withIndex("by_document", (q) => q.eq("documentId", run.documentId))
+				.unique(),
+			findTombstone(ctx, run.userId),
+			ctx.db
+				.query("aiConsents")
+				.withIndex("by_user", (q) => q.eq("userId", run.userId))
+				.unique(),
+			ctx.db.get(run.documentId),
+			ctx.db
+				.query("documentShares")
+				.withIndex("by_document", (q) => q.eq("documentId", run.documentId))
+				.first(),
+			ctx.db
+				.query("docNodes")
+				.withIndex("by_document_node", (q) =>
+					q.eq("documentId", run.documentId).eq("nodeId", run.sourceNodeId),
+				)
+				.unique(),
+		]);
+	return (
+		!deletion &&
+		!tombstone &&
+		consent?.version === AI_CONSENT_VERSION &&
+		consent.acceptedAt <= run.createdAt &&
+		!share &&
+		document?.userId === run.userId &&
+		document.currentNodeId === run.sourceNodeId &&
+		document.markdown === run.sourceMarkdown &&
+		sourceNode !== null
+	);
 }
 
 async function assertRunBoundary(
@@ -157,36 +270,52 @@ export const begin = internalMutation({
 				errorCode: undefined,
 				providerStartedAt: undefined,
 				completedAt: undefined,
+				sourceMarkdown: args.expectedSourceMarkdown,
 				updatedAt: now,
 			});
+			await reserveActiveRun(ctx, existing);
 			return {
 				replay: false as const,
 				run: { ...existing, status: "reserved" as const, updatedAt: now },
 			};
 		}
-		if (args.kind !== "embed") {
-			const recoverable = await ctx.db
-				.query("aiRuns")
-				.withIndex("by_user_document_kind_updated", (q) =>
-					q
-						.eq("userId", args.userId)
-						.eq("documentId", args.documentId)
-						.eq("kind", args.kind),
-				)
-				.order("desc")
-				.filter((q) =>
-					q.and(
-						q.eq(q.field("acknowledgedAt"), undefined),
-						q.eq(q.field("sourceNodeId"), args.sourceNodeId),
-						q.or(
-							q.eq(q.field("status"), "reserved"),
-							q.eq(q.field("status"), "provider_started"),
-							q.eq(q.field("status"), "outcome_unknown"),
-							q.eq(q.field("status"), "succeeded"),
-						),
-					),
-				)
-				.first();
+		if (isDurableRunKind(args.kind)) {
+			const kind = args.kind;
+			const active = await activeRunRow(ctx, { ...args, kind });
+			const activeRun = active ? await ctx.db.get(active.runId) : null;
+			const validActiveRun =
+				activeRun &&
+				isRecoverableRun(activeRun) &&
+				(activeRun.status !== "succeeded" ||
+					(await runApplicableNow(ctx, activeRun)))
+					? activeRun
+					: null;
+			if (active && !validActiveRun) {
+				await ctx.db.delete(active._id);
+			}
+			const recent = validActiveRun
+				? []
+				: await ctx.db
+						.query("aiRuns")
+						.withIndex("by_user_document_kind_source_updated", (q) =>
+							q
+								.eq("userId", args.userId)
+								.eq("documentId", args.documentId)
+								.eq("kind", kind)
+								.eq("sourceNodeId", args.sourceNodeId),
+						)
+						.order("desc")
+						.take(32);
+			let recoverable = validActiveRun;
+			for (const run of recent) {
+				if (
+					isRecoverableRun(run) &&
+					(run.status !== "succeeded" || (await runApplicableNow(ctx, run)))
+				) {
+					recoverable = run;
+					break;
+				}
+			}
 			if (recoverable) {
 				aiError(
 					"request_in_progress",
@@ -206,15 +335,17 @@ export const begin = internalMutation({
 			});
 		}
 		const now = Date.now();
-		const { expectedSourceMarkdown: _, ...runInput } = args;
+		const { expectedSourceMarkdown, ...runInput } = args;
 		const runId = await ctx.db.insert("aiRuns", {
 			...runInput,
+			sourceMarkdown: expectedSourceMarkdown,
 			status: "reserved",
 			createdAt: now,
 			updatedAt: now,
 		});
 		const run = await ctx.db.get(runId);
 		if (!run) throw new Error("AI run reservation disappeared");
+		await reserveActiveRun(ctx, run);
 		return { replay: false as const, run };
 	},
 });
@@ -312,7 +443,11 @@ export const succeed = internalMutation({
 		if (!run || run.userId !== args.userId)
 			return { committed: false as const };
 		if (run.status === "succeeded")
-			return { committed: true as const, replay: true as const };
+			return {
+				committed: true as const,
+				replay: true as const,
+				applicable: run.applicable === true,
+			};
 		if (run.status !== "provider_started" || !run.keySource) {
 			return { committed: false as const };
 		}
@@ -334,13 +469,6 @@ export const succeed = internalMutation({
 				createdAt: now,
 			});
 		}
-		await ctx.db.patch(run._id, {
-			status: "succeeded",
-			output: args.output,
-			langsmithRunId: args.usage.langsmithRunId,
-			completedAt: now,
-			updatedAt: now,
-		});
 		const [deletion, tombstone, consentCurrent, document, share, sourceNode] =
 			await Promise.all([
 				ctx.db
@@ -370,6 +498,15 @@ export const succeed = internalMutation({
 			document.currentNodeId === run.sourceNodeId &&
 			document.markdown === args.expectedSourceMarkdown &&
 			sourceNode !== null;
+		await ctx.db.patch(run._id, {
+			status: "succeeded",
+			output: args.output,
+			applicable,
+			langsmithRunId: args.usage.langsmithRunId,
+			completedAt: now,
+			updatedAt: now,
+		});
+		if (!applicable) await clearActiveRun(ctx, run);
 		return {
 			committed: true as const,
 			replay: false as const,
@@ -407,6 +544,7 @@ export const finishError = internalMutation({
 			completedAt: now,
 			updatedAt: now,
 		});
+		if (status === "failed") await clearActiveRun(ctx, run);
 	},
 });
 
@@ -446,12 +584,9 @@ export const get = query({
 			)
 			.unique();
 		if (!run) return null;
-		await requireOwnedDocument(ctx, run.documentId);
-		const share = await ctx.db
-			.query("documentShares")
-			.withIndex("by_document", (q) => q.eq("documentId", run.documentId))
-			.first();
-		if (share) aiError("document_shared", "AI is disabled on shared documents");
+		if (run.status === "succeeded" && !(await runApplicableNow(ctx, run))) {
+			return { ...run, output: undefined, applicable: false as const };
+		}
 		return run;
 	},
 });
@@ -464,31 +599,41 @@ export const latestRecoverable = query({
 	handler: async (ctx, args) => {
 		const userId = await requireUserId(ctx);
 		const document = await requireOwnedDocument(ctx, args.documentId);
-		const run = await ctx.db
+		const active = await activeRunRow(ctx, {
+			userId,
+			...args,
+			sourceNodeId: document.currentNodeId,
+		});
+		const activeRun = active ? await ctx.db.get(active.runId) : null;
+		if (
+			activeRun &&
+			activeRun.sourceNodeId === document.currentNodeId &&
+			isRecoverableRun(activeRun) &&
+			(activeRun.status !== "succeeded" ||
+				(await runApplicableNow(ctx, activeRun)))
+		) {
+			return activeRun;
+		}
+		const recent = await ctx.db
 			.query("aiRuns")
-			.withIndex("by_user_document_kind_updated", (q) =>
+			.withIndex("by_user_document_kind_source_updated", (q) =>
 				q
 					.eq("userId", userId)
 					.eq("documentId", args.documentId)
-					.eq("kind", args.kind),
+					.eq("kind", args.kind)
+					.eq("sourceNodeId", document.currentNodeId),
 			)
 			.order("desc")
-			.filter((q) =>
-				q.and(
-					q.eq(q.field("acknowledgedAt"), undefined),
-					q.or(
-						q.eq(q.field("status"), "reserved"),
-						q.eq(q.field("status"), "provider_started"),
-						q.eq(q.field("status"), "outcome_unknown"),
-						q.eq(q.field("status"), "succeeded"),
-					),
-				),
-			)
-			.first();
-		if (!run || run.sourceNodeId !== document.currentNodeId) {
-			return null;
+			.take(32);
+		for (const run of recent) {
+			if (
+				isRecoverableRun(run) &&
+				(run.status !== "succeeded" || (await runApplicableNow(ctx, run)))
+			) {
+				return run;
+			}
 		}
-		return run;
+		return null;
 	},
 });
 
@@ -503,7 +648,6 @@ export const acknowledge = mutation({
 			)
 			.unique();
 		if (!run) return { acknowledged: false as const };
-		await requireOwnedDocument(ctx, run.documentId);
 		if (
 			run.status === "reserved" ||
 			run.status === "provider_started" ||
@@ -512,6 +656,7 @@ export const acknowledge = mutation({
 			return { acknowledged: false as const };
 		}
 		await ctx.db.patch(run._id, { acknowledgedAt: Date.now() });
+		await clearActiveRun(ctx, run);
 		return { acknowledged: true as const };
 	},
 });
@@ -528,7 +673,6 @@ export const cancel = mutation({
 			.unique();
 		if (!run)
 			return { cancelled: false as const, reason: "not_found" as const };
-		await requireOwnedDocument(ctx, run.documentId);
 		if (run.status === "provider_started" || run.status === "outcome_unknown") {
 			return { cancelled: false as const, reason: "outcome_unknown" as const };
 		}
@@ -541,6 +685,7 @@ export const cancel = mutation({
 			completedAt: now,
 			updatedAt: now,
 		});
+		await clearActiveRun(ctx, run);
 		return { cancelled: true as const };
 	},
 });
