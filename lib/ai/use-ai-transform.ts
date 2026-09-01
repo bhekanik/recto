@@ -33,10 +33,16 @@ const INITIAL: AiTransformState = {
 	awaitingDecision: false,
 };
 
+type AiCommitController = Pick<
+	HistoryController,
+	"commitProgrammatic" | "getHeadNodeId" | "materializeAt" | "navigateTo"
+>;
+
 export type PendingAiCommit = {
 	documentId: string;
-	controller: Pick<HistoryController, "currentNodeId" | "nodes" | "navigateTo">;
+	controller: Pick<HistoryController, "commitProgrammatic" | "getHeadNodeId">;
 	sourceNodeId: string;
+	sourceMarkdown: string;
 	aiNodeId: string;
 };
 
@@ -208,24 +214,28 @@ export async function reconcileTransformRun(args: {
 export function canRejectAiCommit(
 	pending: PendingAiCommit | null,
 	documentId: string | null,
-	controller: Pick<
-		HistoryController,
-		"currentNodeId" | "nodes" | "navigateTo"
-	> | null,
+	controller: AiCommitController | null,
 ): pending is PendingAiCommit {
 	return Boolean(
 		pending &&
 			controller &&
 			documentId === pending.documentId &&
-			controller === pending.controller &&
-			controller.currentNodeId === pending.aiNodeId &&
-			controller.nodes.some(
-				(node) =>
-					node.nodeId === pending.aiNodeId &&
-					node.parentNodeId === pending.sourceNodeId &&
-					node.origin?.startsWith("ai:"),
-			),
+			controller.commitProgrammatic === pending.controller.commitProgrammatic &&
+			controller.getHeadNodeId() === pending.aiNodeId &&
+			controller.materializeAt(pending.sourceNodeId) === pending.sourceMarkdown,
 	);
+}
+
+export function rejectAiCommit(
+	pending: PendingAiCommit | null,
+	documentId: string | null,
+	controller: AiCommitController | null,
+): boolean {
+	if (!controller || !canRejectAiCommit(pending, documentId, controller)) {
+		return false;
+	}
+	controller.navigateTo(pending.sourceNodeId);
+	return true;
 }
 
 function unknownOutcome(partial = ""): AiTransformState {
@@ -647,6 +657,7 @@ export function useAiTransform(args: {
 				documentId,
 				controller,
 				sourceNodeId,
+				sourceMarkdown,
 				aiNodeId: committed,
 			};
 			setState({
@@ -798,6 +809,7 @@ export function useAiTransform(args: {
 					documentId: unresolved.documentId,
 					controller: unresolved.controller,
 					sourceNodeId: unresolved.snapshot.sourceNodeId,
+					sourceMarkdown: unresolved.snapshot.sourceMarkdown,
 					aiNodeId: committed,
 				};
 			}
@@ -819,11 +831,11 @@ export function useAiTransform(args: {
 	}, []);
 
 	const reject = useCallback(() => {
-		const pending = pendingCommitRef.current;
-		const controller = getController();
-		if (canRejectAiCommit(pending, documentIdRef.current, controller)) {
-			pending.controller.navigateTo(pending.sourceNodeId);
-		}
+		rejectAiCommit(
+			pendingCommitRef.current,
+			documentIdRef.current,
+			getController(),
+		);
 		pendingCommitRef.current = null;
 		setState(INITIAL);
 	}, [getController]);

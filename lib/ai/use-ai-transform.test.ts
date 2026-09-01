@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { HistoryNode } from "@/lib/history/use-document-history";
 import {
 	canRejectAiCommit,
 	commitTransformAfterAcknowledgement,
 	type PendingAiCommit,
 	readAiTransformError,
 	reconcileTransformRun,
+	rejectAiCommit,
 	resolveTransformRun,
 	snapshotMatchesCurrent,
 	transformReconciliationIsCurrent,
@@ -14,25 +14,20 @@ import {
 
 const documentId = "doc-a";
 
-function node(
-	nodeId: string,
-	parentNodeId: string | null,
-	origin: string,
-): HistoryNode {
-	return {
-		nodeId,
-		parentNodeId,
-		origin,
-		patch: "",
-		createdAt: 1,
-	};
-}
+const sourceMarkdown = "# Before\n\nCafe\u0301 😀 — unchanged\n";
 
-function controller(
-	currentNodeId: string,
-	nodes: HistoryNode[],
-): PendingAiCommit["controller"] {
-	return { currentNodeId, nodes, navigateTo() {} };
+function controller(args: {
+	headNodeId: string;
+	source?: string | null;
+	commitProgrammatic?: PendingAiCommit["controller"]["commitProgrammatic"];
+	navigateTo?: (nodeId: string) => void;
+}) {
+	return {
+		commitProgrammatic: args.commitProgrammatic ?? (() => "ai-result"),
+		getHeadNodeId: () => args.headNodeId,
+		materializeAt: () => args.source ?? sourceMarkdown,
+		navigateTo: args.navigateTo ?? (() => {}),
+	};
 }
 
 function pending(owner: PendingAiCommit["controller"]): PendingAiCommit {
@@ -40,41 +35,126 @@ function pending(owner: PendingAiCommit["controller"]): PendingAiCommit {
 		documentId,
 		controller: owner,
 		sourceNodeId: "source",
+		sourceMarkdown,
 		aiNodeId: "ai-result",
 	};
 }
 
 describe("AI transform rejection ownership", () => {
-	it("allows only the exact AI child at the current head", () => {
-		const owner = controller("ai-result", [
-			node("ai-result", "source", "ai:tighten"),
-		]);
-		expect(canRejectAiCommit(pending(owner), documentId, owner)).toBe(true);
+	it("allows immediate rejection before rendered history catches up", () => {
+		const commitProgrammatic = () => "ai-result";
+		const staleNavigations: string[] = [];
+		const currentNavigations: string[] = [];
+		const materialized: string[] = [];
+		let displayedMarkdown = "# AI result\n\nRewritten\n";
+		const owner = controller({
+			headNodeId: "ai-result",
+			commitProgrammatic,
+			navigateTo: (nodeId) => staleNavigations.push(nodeId),
+		});
+		const staleRender = {
+			...controller({
+				headNodeId: "ai-result",
+				commitProgrammatic,
+				navigateTo: (nodeId) => currentNavigations.push(nodeId),
+			}),
+			materializeAt(nodeId: string) {
+				materialized.push(nodeId);
+				return sourceMarkdown;
+			},
+			navigateTo(nodeId: string) {
+				currentNavigations.push(nodeId);
+				displayedMarkdown = sourceMarkdown;
+			},
+		};
+
+		expect(rejectAiCommit(pending(owner), documentId, staleRender)).toBe(true);
+		expect(materialized).toEqual(["source"]);
+		expect(currentNavigations).toEqual(["source"]);
+		expect(staleNavigations).toEqual([]);
+		expect(displayedMarkdown).toBe(sourceMarkdown);
+	});
+
+	it("allows rejection after the commit acknowledgement re-renders history", () => {
+		const commitProgrammatic = () => "ai-result";
+		const navigated: string[] = [];
+		const owner = controller({
+			headNodeId: "ai-result",
+			commitProgrammatic,
+		});
+		const acknowledgedRender = controller({
+			headNodeId: "ai-result",
+			commitProgrammatic,
+			navigateTo: (nodeId) => navigated.push(nodeId),
+		});
+
+		expect(rejectAiCommit(pending(owner), documentId, acknowledgedRender)).toBe(
+			true,
+		);
+		expect(navigated).toEqual(["source"]);
 	});
 
 	it("does not undo a later local or remote head", () => {
-		const owner = controller("later-edit", [
-			node("ai-result", "source", "ai:tighten"),
-			node("later-edit", "ai-result", "edit"),
-		]);
-		expect(canRejectAiCommit(pending(owner), documentId, owner)).toBe(false);
+		const navigated: string[] = [];
+		const owner = controller({
+			headNodeId: "later-edit",
+			navigateTo: (nodeId) => navigated.push(nodeId),
+		});
+		expect(rejectAiCommit(pending(owner), documentId, owner)).toBe(false);
+		expect(navigated).toEqual([]);
 	});
 
 	it("does not navigate after a document switch", () => {
-		const owner = controller("ai-result", [
-			node("ai-result", "source", "ai:tighten"),
-		]);
-		expect(canRejectAiCommit(pending(owner), "doc-b", owner)).toBe(false);
+		const navigated: string[] = [];
+		const owner = controller({
+			headNodeId: "ai-result",
+			navigateTo: (nodeId) => navigated.push(nodeId),
+		});
+		expect(rejectAiCommit(pending(owner), "doc-b", owner)).toBe(false);
+		expect(navigated).toEqual([]);
 	});
 
 	it("does not navigate through a replacement history controller", () => {
-		const owner = controller("ai-result", [
-			node("ai-result", "source", "ai:tighten"),
-		]);
-		const replacement = controller("ai-result", owner.nodes);
-		expect(canRejectAiCommit(pending(owner), documentId, replacement)).toBe(
-			false,
-		);
+		const navigated: string[] = [];
+		const owner = controller({ headNodeId: "ai-result" });
+		const replacement = controller({
+			headNodeId: "ai-result",
+			navigateTo: (nodeId) => navigated.push(nodeId),
+		});
+		expect(rejectAiCommit(pending(owner), documentId, replacement)).toBe(false);
+		expect(navigated).toEqual([]);
+	});
+
+	it("does not navigate for a stale result node", () => {
+		const navigated: string[] = [];
+		const owner = controller({
+			headNodeId: "other-ai-result",
+			navigateTo: (nodeId) => navigated.push(nodeId),
+		});
+		expect(rejectAiCommit(pending(owner), documentId, owner)).toBe(false);
+		expect(navigated).toEqual([]);
+	});
+
+	it("requires the source node to restore exact Markdown and Unicode", () => {
+		const navigated: string[] = [];
+		const owner = controller({
+			headNodeId: "ai-result",
+			source: "# Before\n\nCafé 😀 — changed\n",
+			navigateTo: (nodeId) => navigated.push(nodeId),
+		});
+		expect(rejectAiCommit(pending(owner), documentId, owner)).toBe(false);
+		expect(navigated).toEqual([]);
+	});
+
+	it("leaves the AI result in place on Keep", () => {
+		const navigated: string[] = [];
+		const owner = controller({
+			headNodeId: "ai-result",
+			navigateTo: (nodeId) => navigated.push(nodeId),
+		});
+
+		expect(canRejectAiCommit(pending(owner), documentId, owner)).toBe(true);
+		expect(navigated).toEqual([]);
 	});
 });
 
