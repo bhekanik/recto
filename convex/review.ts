@@ -1,9 +1,10 @@
 import type { GenericMutationCtx, GenericQueryCtx } from "convex/server";
-import { v } from "convex/values";
+import { getDocumentSize, v } from "convex/values";
+import { z } from "zod";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internalMutation, mutation, query } from "./_generated/server";
-import { assertNotDeleting } from "./accountGuard";
+import { assertNotDeleting, findTombstone } from "./accountGuard";
 import { AI_CONSENT_VERSION } from "./ai/consent";
 import { aiError } from "./ai/errors";
 import { syncBlobReferences } from "./blobReferences";
@@ -46,6 +47,25 @@ const AI_REVIEWER_AUTHOR_ID = "ai-reviewer";
 const AI_REVIEW_MODEL = "z-ai/glm-5.2";
 /** Origin prefix on AI branch nodes — mirrors `aiReviewOrigin()` in lib/ai/review.ts. */
 const AI_REVIEW_ORIGIN_PREFIX = "ai:review:";
+const MAX_CONVEX_DOCUMENT_BYTES = 1_048_576;
+
+type NewDocNode = Omit<Doc<"docNodes">, "_id" | "_creationTime">;
+
+function assertDocNodeFits(row: NewDocNode): void {
+	if (getDocumentSize(row) > MAX_CONVEX_DOCUMENT_BYTES) {
+		throw new Error(MARKDOWN_TOO_LARGE_MESSAGE);
+	}
+}
+
+const aiReviewSummarySchema = z.object({
+	commentsPlaced: z.number(),
+	commentsTotal: z.number(),
+	commentsDropped: z.number(),
+	editsPlaced: z.number(),
+	editsTotal: z.number(),
+	editsDropped: z.number(),
+	branchId: z.string().nullable(),
+});
 
 /** Role rank for access comparisons. Owner outranks all grantees. */
 const ROLE_RANK = { commenter: 1, suggester: 2, owner: 3 } as const;
@@ -583,6 +603,23 @@ export const aiSuggestBranch = mutation({
 		const currentMarkdown = materialize(doc.currentNodeId, nodes);
 
 		const now = Date.now();
+		const newNodeId = crypto.randomUUID();
+		const patch = JSON.stringify({
+			from: 0,
+			to: currentMarkdown.length,
+			insert: args.branchMarkdown,
+		});
+		const node: NewDocNode = {
+			documentId: args.documentId,
+			nodeId: newNodeId,
+			parentNodeId: doc.currentNodeId,
+			patch,
+			snapshot: args.branchMarkdown,
+			selection: null,
+			origin: `${AI_REVIEW_ORIGIN_PREFIX}${AI_REVIEW_MODEL}`,
+			createdAt: now,
+		};
+		assertDocNodeFits(node);
 
 		// One AI branch per document for v1 — close any prior OPEN AI branch so the
 		// review surface shows only the latest AI suggestion set.
@@ -601,27 +638,9 @@ export const aiSuggestBranch = mutation({
 
 		// Append the AI branch head off the owner's CURRENT node — append-only, never
 		// touches the documents row (the isolation boundary).
-		const newNodeId = crypto.randomUUID();
-		const nodeRowId = await ctx.db.insert("docNodes", {
-			documentId: args.documentId,
-			nodeId: newNodeId,
-			parentNodeId: doc.currentNodeId,
-			patch: JSON.stringify({
-				from: 0,
-				to: currentMarkdown.length,
-				insert: args.branchMarkdown,
-			}),
-			snapshot: args.branchMarkdown,
-			selection: null,
-			origin: `${AI_REVIEW_ORIGIN_PREFIX}${AI_REVIEW_MODEL}`,
-			createdAt: now,
-		});
+		const nodeRowId = await ctx.db.insert("docNodes", node);
 		await syncBlobReferences(ctx, doc.userId, "node", nodeRowId, [
-			JSON.stringify({
-				from: 0,
-				to: currentMarkdown.length,
-				insert: args.branchMarkdown,
-			}),
+			patch,
 			args.branchMarkdown,
 		]);
 
@@ -652,76 +671,151 @@ const aiCommentValidator = v.object({
 /** Atomically materialize one provider review against the exact reserved head. */
 export const applyAiReview = internalMutation({
 	args: {
+		runId: v.id("aiRuns"),
 		userId: v.string(),
 		documentId: v.id("documents"),
 		sourceNodeId: v.string(),
 		sourceText: v.string(),
 		comments: v.array(aiCommentValidator),
+		commentsTotal: v.number(),
 		branchMarkdown: v.optional(v.string()),
+		editsApplied: v.number(),
+		editsTotal: v.number(),
+		langsmithRunId: v.optional(v.string()),
 	},
 	handler: async (ctx, args) => {
-		await assertNotDeleting(ctx, args.userId);
-		const doc = await ctx.db.get(args.documentId);
-		if (!doc || doc.userId !== args.userId) {
-			aiError("document_not_found", "Document not found");
+		const run = await ctx.db.get(args.runId);
+		if (
+			!run ||
+			run.userId !== args.userId ||
+			run.kind !== "review" ||
+			run.documentId !== args.documentId ||
+			run.sourceNodeId !== args.sourceNodeId ||
+			run.sourceMarkdown !== args.sourceText
+		) {
+			aiError("request_conflict", "The AI review request does not match.");
 		}
-		if (doc.currentNodeId !== args.sourceNodeId) {
-			aiError(
-				"document_changed",
-				"The document changed before review application.",
-			);
+		if (run.status === "succeeded" && run.output) {
+			const parsed = aiReviewSummarySchema.safeParse(JSON.parse(run.output));
+			if (!parsed.success) {
+				aiError(
+					"request_outcome_unknown",
+					"The stored AI review is unreadable.",
+				);
+			}
+			const branchId = parsed.data.branchId
+				? await ctx.db.normalizeId("reviewBranches", parsed.data.branchId)
+				: null;
+			return { ...parsed.data, branchId, applicable: run.applicable === true };
 		}
-		if (doc.markdown !== args.sourceText) {
-			aiError(
-				"document_changed",
-				"The draft changed before review application.",
-			);
+		if (run.status !== "provider_started" || !run.keySource) {
+			aiError("request_conflict", "The AI review request is not active.");
 		}
-		const deletion = await ctx.db
-			.query("aiDocumentDeletions")
-			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
-			.unique();
-		if (deletion) aiError("document_not_found", "Document not found");
-		const share = await ctx.db
-			.query("documentShares")
-			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+		const usage = await ctx.db
+			.query("aiUsage")
+			.withIndex("by_run", (q) => q.eq("runId", run._id))
 			.first();
-		if (share) aiError("document_shared", "AI is disabled on shared documents");
-		const consent = await ctx.db
-			.query("aiConsents")
-			.withIndex("by_user", (q) => q.eq("userId", args.userId))
-			.unique();
-		if (consent?.version !== AI_CONSENT_VERSION) {
+		if (!usage) {
 			aiError(
-				"ai_consent_required",
-				"Accept the current AI consent notice first.",
+				"request_outcome_unknown",
+				"The AI review usage has not settled.",
 			);
 		}
-
-		for (const comment of args.comments) {
+		const [doc, deletion, share, consent, sourceNode, tombstone] =
+			await Promise.all([
+				ctx.db.get(args.documentId),
+				ctx.db
+					.query("aiDocumentDeletions")
+					.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+					.unique(),
+				ctx.db
+					.query("documentShares")
+					.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+					.first(),
+				ctx.db
+					.query("aiConsents")
+					.withIndex("by_user", (q) => q.eq("userId", args.userId))
+					.unique(),
+				ctx.db
+					.query("docNodes")
+					.withIndex("by_document_node", (q) =>
+						q.eq("documentId", args.documentId).eq("nodeId", args.sourceNodeId),
+					)
+					.unique(),
+				findTombstone(ctx, args.userId),
+			]);
+		const consentMatches =
+			consent?.version === AI_CONSENT_VERSION &&
+			(run.consentAcceptedAt !== undefined
+				? consent.acceptedAt === run.consentAcceptedAt
+				: consent.acceptedAt <= (run.providerStartedAt ?? run.createdAt));
+		let refusalCode: string | null = tombstone
+			? "account_deletion_in_progress"
+			: deletion || !doc || doc.userId !== args.userId
+				? "document_not_found"
+				: share
+					? "document_shared"
+					: !consentMatches
+						? "ai_consent_required"
+						: doc.currentNodeId !== args.sourceNodeId ||
+								doc.markdown !== args.sourceText ||
+								sourceNode === null
+							? "document_changed"
+							: null;
+		const now = Date.now();
+		const commentRows = args.comments.flatMap((comment) => {
 			const body = comment.body.trim();
-			if (!body) continue;
-			await ctx.db.insert("comments", {
-				documentId: args.documentId,
-				authorUserId: AI_REVIEWER_AUTHOR_ID,
-				authorName: `AI · ${aiModelLabel(AI_REVIEW_MODEL)}`,
-				anchor: comment.anchor,
-				body,
-				resolved: false,
-				createdAt: Date.now(),
-			});
+			return body
+				? [
+						{
+							documentId: args.documentId,
+							authorUserId: AI_REVIEWER_AUTHOR_ID,
+							authorName: `AI · ${aiModelLabel(AI_REVIEW_MODEL)}`,
+							anchor: comment.anchor,
+							body,
+							resolved: false,
+							createdAt: now,
+						},
+					]
+				: [];
+		});
+		if (
+			commentRows.some(
+				(row) => getDocumentSize(row) > MAX_CONVEX_DOCUMENT_BYTES,
+			)
+		) {
+			refusalCode = "output_too_large";
 		}
-
-		let branchId: Id<"reviewBranches"> | null = null;
+		let node: NewDocNode | null = null;
 		if (
 			args.branchMarkdown !== undefined &&
 			args.branchMarkdown !== args.sourceText
 		) {
-			if (utf8Length(args.branchMarkdown) > MAX_MARKDOWN_LENGTH) {
-				throw new Error(MARKDOWN_TOO_LARGE_MESSAGE);
+			const patch = JSON.stringify({
+				from: 0,
+				to: args.sourceText.length,
+				insert: args.branchMarkdown,
+			});
+			node = {
+				documentId: args.documentId,
+				nodeId: crypto.randomUUID(),
+				parentNodeId: args.sourceNodeId,
+				patch,
+				snapshot: args.branchMarkdown,
+				selection: null,
+				origin: `${AI_REVIEW_ORIGIN_PREFIX}${AI_REVIEW_MODEL}`,
+				createdAt: now,
+			};
+			if (
+				utf8Length(args.branchMarkdown) > MAX_MARKDOWN_LENGTH ||
+				getDocumentSize(node) > MAX_CONVEX_DOCUMENT_BYTES
+			) {
+				refusalCode = "output_too_large";
 			}
-			const now = Date.now();
-			const priorOpen = await ctx.db
+		}
+		let priorOpen: Doc<"reviewBranches">[] = [];
+		if (node && !refusalCode) {
+			priorOpen = await ctx.db
 				.query("reviewBranches")
 				.withIndex("by_document_reviewer", (q) =>
 					q
@@ -730,43 +824,69 @@ export const applyAiReview = internalMutation({
 				)
 				.filter((q) => q.eq(q.field("status"), "open"))
 				.take(101);
-			if (priorOpen.length > 100) {
-				throw new Error("Too many open AI review branches.");
+			if (priorOpen.length > 100) refusalCode = "too_many_review_branches";
+		}
+		const finalize = async (
+			commentsPlaced: number,
+			branchId: Id<"reviewBranches"> | null,
+			applicable: boolean,
+		) => {
+			const summary = {
+				commentsPlaced,
+				commentsTotal: args.commentsTotal,
+				commentsDropped: args.commentsTotal - commentsPlaced,
+				editsPlaced: branchId ? args.editsApplied : 0,
+				editsTotal: args.editsTotal,
+				editsDropped: args.editsTotal - (branchId ? args.editsApplied : 0),
+				branchId,
+			};
+			await ctx.db.patch(run._id, {
+				status: "succeeded",
+				output: JSON.stringify(summary),
+				applicable,
+				errorCode: refusalCode ?? undefined,
+				langsmithRunId: args.langsmithRunId,
+				completedAt: now,
+				updatedAt: now,
+			});
+			if (!applicable) {
+				const active = await ctx.db
+					.query("aiActiveRuns")
+					.withIndex("by_user_document_kind_source", (q) =>
+						q
+							.eq("userId", run.userId)
+							.eq("documentId", run.documentId)
+							.eq("kind", "review")
+							.eq("sourceNodeId", run.sourceNodeId),
+					)
+					.unique();
+				if (active?.runId === run._id) await ctx.db.delete(active._id);
 			}
+			return { ...summary, applicable };
+		};
+		if (refusalCode || !doc) return await finalize(0, null, false);
+		for (const row of commentRows) await ctx.db.insert("comments", row);
+		let branchId: Id<"reviewBranches"> | null = null;
+		if (node) {
 			for (const branch of priorOpen) {
 				await ctx.db.patch(branch._id, { status: "rejected", updatedAt: now });
 			}
-			const newNodeId = crypto.randomUUID();
-			const patch = JSON.stringify({
-				from: 0,
-				to: args.sourceText.length,
-				insert: args.branchMarkdown,
-			});
-			const nodeRowId = await ctx.db.insert("docNodes", {
-				documentId: args.documentId,
-				nodeId: newNodeId,
-				parentNodeId: args.sourceNodeId,
-				patch,
-				snapshot: args.branchMarkdown,
-				selection: null,
-				origin: `${AI_REVIEW_ORIGIN_PREFIX}${AI_REVIEW_MODEL}`,
-				createdAt: now,
-			});
+			const nodeRowId = await ctx.db.insert("docNodes", node);
 			await syncBlobReferences(ctx, doc.userId, "node", nodeRowId, [
-				patch,
-				args.branchMarkdown,
+				node.patch,
+				node.snapshot ?? "",
 			]);
 			branchId = await ctx.db.insert("reviewBranches", {
 				documentId: args.documentId,
 				reviewerUserId: AI_REVIEWER_AUTHOR_ID,
 				baseNodeId: args.sourceNodeId,
-				headNodeId: newNodeId,
+				headNodeId: node.nodeId,
 				status: "open",
 				createdAt: now,
 				updatedAt: now,
 			});
 		}
-		return { commentsPlaced: args.comments.length, branchId };
+		return await finalize(commentRows.length, branchId, true);
 	},
 });
 

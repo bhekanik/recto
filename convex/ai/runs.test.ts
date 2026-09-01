@@ -87,6 +87,33 @@ async function settleRun(
 	});
 }
 
+async function seedReviewRun(t: ReturnType<typeof convexTest>) {
+	const seeded = await seedRun(t);
+	await t.run(async (ctx) => {
+		await ctx.db.patch(seeded.runId, {
+			kind: "review",
+			providerStartedAt: 1,
+			consentAcceptedAt: 1,
+		});
+		await ctx.db.insert("aiUsage", {
+			userId: USER,
+			runId: seeded.runId,
+			callIndex: 0,
+			kind: "review",
+			model: "model",
+			promptTokens: 1,
+			completionTokens: 1,
+			reasoningTokens: 0,
+			costMicros: 1,
+			keySource: "house",
+			latencyMs: 1,
+			documentId: seeded.documentId,
+			createdAt: 1,
+		});
+	});
+	return seeded;
+}
+
 describe("AI run durability", () => {
 	it.each([
 		"failed",
@@ -862,8 +889,9 @@ describe("AI run durability", () => {
 
 	it("applies review comments and a branch atomically at the reserved head", async () => {
 		const t = convexTest(schema, modules);
-		const { documentId } = await seedRun(t);
+		const { documentId, runId } = await seedReviewRun(t);
 		const result = await t.mutation(internal.review.applyAiReview, {
+			runId,
 			userId: USER,
 			documentId,
 			sourceNodeId: "source",
@@ -874,7 +902,10 @@ describe("AI run durability", () => {
 					body: "Clarify this.",
 				},
 			],
+			commentsTotal: 1,
 			branchMarkdown: "clear source",
+			editsApplied: 1,
+			editsTotal: 1,
 		});
 		expect(result.commentsPlaced).toBe(1);
 		expect(result.branchId).not.toBeNull();
@@ -892,29 +923,217 @@ describe("AI run durability", () => {
 		expect(rows.branches).toHaveLength(1);
 	});
 
-	it("rejects an AI review branch above the UTF-8 byte ceiling", async () => {
+	it("does not apply an old review after consent is revoked and reaccepted", async () => {
 		const t = convexTest(schema, modules);
-		const { documentId } = await seedRun(t);
+		const { documentId, runId } = await seedReviewRun(t);
+		await t.run(async (ctx) => {
+			const consent = await ctx.db.query("aiConsents").unique();
+			if (consent) await ctx.db.delete(consent._id);
+			await ctx.db.insert("aiConsents", {
+				userId: USER,
+				version: 1,
+				acceptedAt: 10,
+			});
+		});
 		await expect(
 			t.mutation(internal.review.applyAiReview, {
+				runId,
+				userId: USER,
+				documentId,
+				sourceNodeId: "source",
+				sourceText: "source",
+				comments: [
+					{
+						anchor: {
+							quote: "source",
+							prefix: "",
+							suffix: "",
+							offsetHint: 0,
+						},
+						body: "Do not write",
+					},
+				],
+				commentsTotal: 1,
+				branchMarkdown: "changed source",
+				editsApplied: 1,
+				editsTotal: 1,
+			}),
+		).resolves.toMatchObject({ applicable: false, branchId: null });
+		const stored = await t.run(async (ctx) => ({
+			comments: await ctx.db.query("comments").collect(),
+			branches: await ctx.db.query("reviewBranches").collect(),
+			run: await ctx.db.get(runId),
+			usage: await ctx.db
+				.query("aiUsage")
+				.withIndex("by_run", (q) => q.eq("runId", runId))
+				.collect(),
+		}));
+		expect(stored.comments).toEqual([]);
+		expect(stored.branches).toEqual([]);
+		expect(stored.run).toMatchObject({
+			status: "succeeded",
+			applicable: false,
+			errorCode: "ai_consent_required",
+		});
+		expect(stored.usage).toHaveLength(1);
+	});
+
+	it("atomically applies once and replays without duplicate review writes", async () => {
+		const t = convexTest(schema, modules);
+		const { documentId, runId } = await seedReviewRun(t);
+		const args = {
+			runId,
+			userId: USER,
+			documentId,
+			sourceNodeId: "source",
+			sourceText: "source",
+			comments: [
+				{
+					anchor: {
+						quote: "source",
+						prefix: "",
+						suffix: "",
+						offsetHint: 0,
+					},
+					body: "Clarify once",
+				},
+			],
+			commentsTotal: 1,
+			branchMarkdown: "clear source",
+			editsApplied: 1,
+			editsTotal: 1,
+		};
+		const first = await t.mutation(internal.review.applyAiReview, args);
+		await t.run(async (ctx) => {
+			const consent = await ctx.db.query("aiConsents").unique();
+			if (consent) await ctx.db.delete(consent._id);
+		});
+		const replay = await t.mutation(internal.review.applyAiReview, args);
+		expect(replay).toEqual(first);
+		const stored = await t.run(async (ctx) => ({
+			comments: await ctx.db.query("comments").collect(),
+			branches: await ctx.db.query("reviewBranches").collect(),
+			run: await ctx.db.get(runId),
+		}));
+		expect(stored.comments).toHaveLength(1);
+		expect(stored.branches).toHaveLength(1);
+		expect(stored.run).toMatchObject({
+			status: "succeeded",
+			applicable: true,
+		});
+	});
+
+	it("preflights the exact multibyte AI branch row around the Convex limit", async () => {
+		const maximumEmojiCount = (documentId: string) => {
+			let low = 0;
+			let high = 240_000;
+			while (low < high) {
+				const middle = Math.ceil((low + high) / 2);
+				const branchMarkdown = "😀".repeat(middle);
+				const size = getDocumentSize({
+					documentId,
+					nodeId: "00000000-0000-4000-8000-000000000000",
+					parentNodeId: "source",
+					patch: JSON.stringify({
+						from: 0,
+						to: 6,
+						insert: branchMarkdown,
+					}),
+					snapshot: branchMarkdown,
+					selection: null,
+					origin: "ai:review:z-ai/glm-5.2",
+					createdAt: 1,
+				});
+				if (size <= 1_048_576) low = middle;
+				else high = middle - 1;
+			}
+			return low;
+		};
+		for (const delta of [0, 1] as const) {
+			const t = convexTest(schema, modules);
+			const { documentId, runId } = await seedReviewRun(t);
+			const branchMarkdown = "😀".repeat(maximumEmojiCount(documentId) + delta);
+			const result = await t.mutation(internal.review.applyAiReview, {
+				runId,
 				userId: USER,
 				documentId,
 				sourceNodeId: "source",
 				sourceText: "source",
 				comments: [],
-				branchMarkdown: "😀".repeat(240_000),
-			}),
-		).rejects.toThrow("~1 MiB size limit");
+				commentsTotal: 0,
+				branchMarkdown,
+				editsApplied: 1,
+				editsTotal: 1,
+			});
+			expect(result.applicable).toBe(delta === 0);
+			const stored = await t.run(async (ctx) => ({
+				nodes: await ctx.db
+					.query("docNodes")
+					.withIndex("by_document", (q) => q.eq("documentId", documentId))
+					.collect(),
+				run: await ctx.db.get(runId),
+			}));
+			expect(stored.nodes).toHaveLength(delta === 0 ? 2 : 1);
+			if (delta === 0) {
+				const branchNode = stored.nodes[1];
+				if (!branchNode) throw new Error("missing branch node");
+				expect(getDocumentSize(branchNode)).toBeLessThanOrEqual(1_048_576);
+			} else {
+				expect(stored.run).toMatchObject({
+					status: "succeeded",
+					applicable: false,
+					errorCode: "output_too_large",
+				});
+			}
+		}
 	});
 
-	it("refuses all review writes after source movement or sharing", async () => {
-		for (const boundary of ["head", "share"] as const) {
+	it("preflights legacy AI branch rows before replacing the open branch", async () => {
+		const t = convexTest(schema, modules);
+		const { documentId } = await seedRun(t);
+		const owner = t.withIdentity({ subject: USER });
+		const first = await owner.mutation(api.review.aiSuggestBranch, {
+			documentId,
+			branchMarkdown: "small branch",
+		});
+		await expect(
+			owner.mutation(api.review.aiSuggestBranch, {
+				documentId,
+				branchMarkdown: "x".repeat(600_000),
+			}),
+		).rejects.toThrow("~1 MiB size limit");
+		await expect(
+			t.run(async (ctx) => await ctx.db.get(first.branchId)),
+		).resolves.toMatchObject({ status: "open" });
+	});
+
+	it("rejects an AI review branch above the UTF-8 byte ceiling", async () => {
+		const t = convexTest(schema, modules);
+		const { documentId, runId } = await seedReviewRun(t);
+		await expect(
+			t.mutation(internal.review.applyAiReview, {
+				runId,
+				userId: USER,
+				documentId,
+				sourceNodeId: "source",
+				sourceText: "source",
+				comments: [],
+				commentsTotal: 0,
+				branchMarkdown: "😀".repeat(240_000),
+				editsApplied: 1,
+				editsTotal: 1,
+			}),
+		).resolves.toMatchObject({ applicable: false });
+	});
+
+	it("refuses review writes after source, share, or deletion drift", async () => {
+		for (const boundary of ["head", "share", "delete"] as const) {
 			const t = convexTest(schema, modules);
-			const { documentId } = await seedRun(t);
+			const { documentId, runId } = await seedReviewRun(t);
 			await t.run(async (ctx) => {
 				if (boundary === "head") {
 					await ctx.db.patch(documentId, { currentNodeId: "later" });
-				} else {
+				} else if (boundary === "share") {
 					await ctx.db.insert("documentShares", {
 						documentId,
 						ownerUserId: USER,
@@ -922,10 +1141,18 @@ describe("AI run durability", () => {
 						role: "commenter",
 						createdAt: 1,
 					});
+				} else {
+					await ctx.db.insert("aiDocumentDeletions", {
+						documentId,
+						userId: USER,
+						createdAt: 1,
+						updatedAt: 1,
+					});
 				}
 			});
 			await expect(
 				t.mutation(internal.review.applyAiReview, {
+					runId,
 					userId: USER,
 					documentId,
 					sourceNodeId: "source",
@@ -941,9 +1168,12 @@ describe("AI run durability", () => {
 							body: "No write",
 						},
 					],
+					commentsTotal: 1,
 					branchMarkdown: "changed",
+					editsApplied: 1,
+					editsTotal: 1,
 				}),
-			).rejects.toThrow();
+			).resolves.toMatchObject({ applicable: false });
 			const counts = await t.run(async (ctx) => ({
 				comments: (await ctx.db.query("comments").collect()).length,
 				branches: (await ctx.db.query("reviewBranches").collect()).length,
@@ -1130,13 +1360,14 @@ describe("AI run durability", () => {
 
 	it("refuses same-head draft drift for review and vector persistence", async () => {
 		const t = convexTest(schema, modules);
-		const { documentId } = await seedRun(t);
+		const { documentId, runId } = await seedReviewRun(t);
 		await t.run(
 			async (ctx) =>
 				await ctx.db.patch(documentId, { markdown: "draft changed" }),
 		);
 		await expect(
 			t.mutation(internal.review.applyAiReview, {
+				runId,
 				userId: USER,
 				documentId,
 				sourceNodeId: "source",
@@ -1147,8 +1378,11 @@ describe("AI run durability", () => {
 						body: "No",
 					},
 				],
+				commentsTotal: 1,
+				editsApplied: 0,
+				editsTotal: 0,
 			}),
-		).rejects.toThrow("draft changed");
+		).resolves.toMatchObject({ applicable: false });
 		await expect(
 			t.withIdentity({ subject: USER }).mutation(api.embeddings.replaceChunks, {
 				documentId,

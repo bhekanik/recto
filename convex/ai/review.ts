@@ -368,9 +368,8 @@ export const run = action({
 			});
 			throw error;
 		}
-		const startedAt = Date.now();
 		try {
-			const { result, usage } = await reviewWithTools({
+			const { result } = await reviewWithTools({
 				client: provider.client,
 				text: args.text,
 				settle: async (call) => {
@@ -411,37 +410,29 @@ export const run = action({
 			});
 			const suggestions = applySuggestions(args.text, result.suggestions);
 			const applied = await ctx.runMutation(internal.review.applyAiReview, {
+				runId,
 				userId,
 				documentId: args.documentId,
 				sourceNodeId: args.sourceNodeId,
 				sourceText: args.text,
 				comments,
+				commentsTotal: result.comments.length,
 				branchMarkdown:
 					suggestions.text === args.text ? undefined : suggestions.text,
+				editsApplied: suggestions.applied,
+				editsTotal: result.suggestions.length,
+				langsmithRunId: provider.langsmithRunId,
 			});
 			const summary: AiReviewSummary = {
 				commentsPlaced: applied.commentsPlaced,
-				commentsTotal: result.comments.length,
-				commentsDropped: result.comments.length - applied.commentsPlaced,
-				editsPlaced: applied.branchId ? suggestions.applied : 0,
-				editsTotal: result.suggestions.length,
-				editsDropped:
-					result.suggestions.length -
-					(applied.branchId ? suggestions.applied : 0),
+				commentsTotal: applied.commentsTotal,
+				commentsDropped: applied.commentsDropped,
+				editsPlaced: applied.editsPlaced,
+				editsTotal: applied.editsTotal,
+				editsDropped: applied.editsDropped,
 				branchId: applied.branchId,
 			};
-			const settled = await ctx.runMutation(internal.ai.runs.succeed, {
-				runId,
-				userId,
-				output: JSON.stringify(summary),
-				expectedSourceMarkdown: args.text,
-				usage: {
-					...usage,
-					latencyMs: Date.now() - startedAt,
-					langsmithRunId: provider.langsmithRunId,
-				},
-			});
-			if (!settled.applicable) {
+			if (!applied.applicable) {
 				aiError(
 					"document_changed",
 					"The provider completed, but the review is no longer applicable.",
