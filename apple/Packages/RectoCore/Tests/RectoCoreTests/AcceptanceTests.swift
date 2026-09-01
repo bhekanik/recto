@@ -417,6 +417,8 @@ struct AcceptanceTests {
     #expect(attempts == [key, key], "the idempotency key is reused, not regenerated")
     #expect(try await mac.store.pendingJobs(documentLocalId: localId).isEmpty)
     #expect(try await server.getDocument(documentId: seeded.documentId)?.markdown == "committed once")
+    #expect(try await server.getDocument(documentId: seeded.documentId)?.title == "committed once")
+    #expect(try await mac.store.document(localId: localId)?.title == "committed once")
     #expect(try await mac.store.document(localId: localId)?.syncState == .synced)
   }
 

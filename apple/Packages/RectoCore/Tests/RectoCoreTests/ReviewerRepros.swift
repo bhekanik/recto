@@ -36,6 +36,9 @@ struct ReviewerRepros {
       await session.writeDraft(
         markdown: "committed sentence. And the part I would hate to lose",
         selection: NodeSelection(anchor: 52, head: 52))
+      #expect(
+        try await harness.store.document(localId: localId)?.title
+          == "committed sentence. And the part I would hate to lose")
     }
 
     let relaunched = try Harness(directory: directory, transport: InMemoryTransport())
@@ -48,6 +51,7 @@ struct ReviewerRepros {
     // the SESSION showed the head instead.
     let state = try #require(await session.currentState)
     #expect(state.markdown == "committed sentence. And the part I would hate to lose")
+    #expect(state.title == "committed sentence. And the part I would hate to lose")
 
     // And the recovered text commits as one node against the persisted head,
     // not as a retype of the whole document.

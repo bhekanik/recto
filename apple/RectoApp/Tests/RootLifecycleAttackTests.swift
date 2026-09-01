@@ -1,6 +1,7 @@
 import Foundation
 import RectoCore
 import RectoStore
+import RectoSync
 import Testing
 
 @testable import RectoAuth
@@ -141,9 +142,15 @@ struct RootLifecycleAttackTests {
         #expect(await recoveredSession.currentState?.markdown == expected)
         let promoted = try #require(try await reopenedStore.document(localId: document.localId))
         #expect(promoted.displayMarkdown == expected)
+        #expect(promoted.title == expected)
         #expect(promoted.draftMarkdown == nil)
         #expect(promoted.syncState == .pending)
         #expect(try await reopenedStore.pendingJobCount() == 2)
+        let commit = try #require(
+            try await reopenedStore.pendingJobs(documentLocalId: document.localId)
+                .first { $0.kind == .commitEdit }
+        )
+        #expect(try OutboxPayload.decode(commit.payload).title == expected)
     }
 
     @MainActor

@@ -30,6 +30,7 @@ const REFERENCE_SCAN_BYTES = 4 * 1024 * 1024;
 // A source can carry 512 tokens. Four rows keep the aggregate writes below
 // Convex's 16,000-document transaction ceiling even in the worst case.
 const REFERENCE_SCAN_ROWS = 4;
+const TITLE_MODE_BATCH = 64;
 const WALK_BYTES_RESERVE = 1024 * 1024;
 const WALK_QUERY_RESERVE = 16;
 
@@ -79,6 +80,34 @@ async function writeCursor(
 function clampLimit(limit: number | undefined, max: number): number {
 	return Math.max(1, Math.min(limit ?? max, max));
 }
+
+/**
+ * Preserve every title created before title provenance was stored. Guessing
+ * that an old title was derived could overwrite a name the writer chose.
+ */
+export const backfillDocumentTitleModes = internalMutation({
+	args: { limit: v.optional(v.number()) },
+	handler: async (ctx, args) => {
+		const name = "backfillDocumentTitleModes";
+		const limit = clampLimit(args.limit, TITLE_MODE_BATCH);
+		const cursor = await readPageCursor(ctx, name);
+		const result = await ctx.db.query("documents").paginate({
+			numItems: limit,
+			cursor,
+			maximumRowsRead: limit,
+		});
+
+		let updated = 0;
+		for (const document of result.page) {
+			if (document.titleMode !== undefined) continue;
+			await ctx.db.patch(document._id, { titleMode: "manual" });
+			updated += 1;
+		}
+
+		await writeCursor(ctx, name, result.continueCursor, result.isDone);
+		return { scanned: result.page.length, updated, done: result.isDone };
+	},
+});
 
 /**
  * Copy the reviewer id out of `docNodes.origin` into the indexed

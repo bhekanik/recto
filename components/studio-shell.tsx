@@ -92,6 +92,7 @@ function StudioWorkspace() {
 				{
 					_id: crypto.randomUUID() as Id<"documents">,
 					title: "Untitled",
+					titleMode: "derived" as const,
 					wordCount: 0,
 					updatedAt: now,
 					documentUuid: undefined,

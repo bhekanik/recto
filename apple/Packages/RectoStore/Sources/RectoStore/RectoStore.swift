@@ -196,17 +196,43 @@ public actor RectoStore {
   /// A whole-record `save` from a copy read before the edit silently reverts the
   /// draft, head, revision and sync state that a session wrote in between —
   /// `documents.list` only ever tells us about the title.
-  public func updateRemoteTitle(documentLocalId: String, title: String, remoteUpdatedAt: Double?)
-    throws
+  @discardableResult
+  public func updateRemoteTitle(
+    documentLocalId: String, title: String, titleMode: TitleMode = .manual,
+    remoteUpdatedAt: Double?
+  )
+    throws -> Bool
   {
     try writer.write { db in
-      try db.execute(
+      guard var document = try DocumentRecord.fetchOne(db, key: documentLocalId) else {
+        throw StoreError.documentNotFound(documentLocalId)
+      }
+      let renamePending = try OutboxJob
+        .filter(Column("documentLocalId") == documentLocalId)
+        .filter(Column("kind") == OutboxKind.rename.rawValue)
+        .fetchCount(db) > 0
+      let derivedEditCount = try Int.fetchOne(
+        db,
         sql: """
-          UPDATE documents
-          SET title = ?, remoteUpdatedAt = COALESCE(?, remoteUpdatedAt)
-          WHERE localId = ?
+          SELECT COUNT(*) FROM outbox
+          WHERE documentLocalId = ? AND kind IN (?, ?, ?)
           """,
-        arguments: [title, remoteUpdatedAt, documentLocalId])
+        arguments: [
+          documentLocalId, OutboxKind.commitEdit.rawValue, OutboxKind.pointerMove.rawValue,
+          OutboxKind.draftSave.rawValue,
+        ]) ?? 0
+      let derivedEditPending = titleMode == .derived && derivedEditCount > 0
+      guard !renamePending, !derivedEditPending else { return false }
+      if let remoteUpdatedAt, let accepted = document.remoteTitleUpdatedAt,
+        remoteUpdatedAt <= accepted
+      {
+        return false
+      }
+      document.title = title
+      document.titleMode = titleMode
+      if let remoteUpdatedAt { document.remoteTitleUpdatedAt = remoteUpdatedAt }
+      try document.update(db)
+      return true
     }
   }
 
@@ -242,6 +268,30 @@ public actor RectoStore {
 
   public func save(_ document: DocumentRecord) throws {
     try writer.write { try document.save($0) }
+  }
+
+  /// Persist an explicit rename and its outbox row together. The mode changes
+  /// even when the visible string is unchanged.
+  public func renameDocument(
+    documentLocalId: String, title: String, job: OutboxJob,
+    now: Double = Date().timeIntervalSince1970 * 1000
+  ) throws -> DocumentRecord {
+    try localMutationFence.perform {
+      try writer.write { db in
+        guard var document = try DocumentRecord.fetchOne(db, key: documentLocalId) else {
+          throw StoreError.documentNotFound(documentLocalId)
+        }
+        document.title = title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+          ? "Untitled" : title.trimmingCharacters(in: .whitespacesAndNewlines)
+        document.titleMode = .manual
+        document.updatedAt = now
+        if document.syncState != .diverged { document.syncState = .pending }
+        try document.update(db)
+        var queued = job
+        try queued.insert(db)
+        return document
+      }
+    }
   }
 
   /// Insert an offline document, its local root, and its create mutation as one
@@ -304,6 +354,7 @@ public actor RectoStore {
     node: DocNodeRecord,
     markdown: String,
     wordCount: Int,
+    title: String? = nil,
     expectedHeadNodeId: String,
     expectedDraftRevision: Int? = nil,
     job: OutboxJob?,
@@ -346,6 +397,7 @@ public actor RectoStore {
 
       document.localHeadNodeId = node.nodeId
       document.markdown = markdown
+      if document.titleMode == .derived, let title { document.title = title }
       if !retainedEditorIngress {
         document.wordCount = wordCount
         document.draftMarkdown = nil
@@ -392,6 +444,7 @@ public actor RectoStore {
     to nodeId: String,
     markdown: String,
     wordCount: Int,
+    title: String? = nil,
     expectedHeadNodeId: String?,
     job: OutboxJob?,
     clearDivergence: Bool = false,
@@ -418,6 +471,7 @@ public actor RectoStore {
 
       document.localHeadNodeId = nodeId
       document.markdown = markdown
+      if document.titleMode == .derived, let title { document.title = title }
       document.wordCount = wordCount
       document.draftMarkdown = nil
       document.draftSelectionAnchor = nil
@@ -451,6 +505,7 @@ public actor RectoStore {
     markdown: String,
     selection: NodeSelection?,
     wordCount: Int,
+    title: String? = nil,
     job: OutboxJob?,
     expectedDraftRevision: Int? = nil,
     now: Double = Date().timeIntervalSince1970 * 1000
@@ -467,6 +522,7 @@ public actor RectoStore {
       document.draftSelectionAnchor = selection?.anchor
       document.draftSelectionHead = selection?.head
       document.wordCount = wordCount
+      if document.titleMode == .derived, let title { document.title = title }
       document.updatedAt = now
       if document.draftMarkdown != nil,
         document.syncState == .synced || document.syncState == .syncing
@@ -501,6 +557,7 @@ public actor RectoStore {
     markdown: String,
     selection: NodeSelection?,
     wordCount: Int,
+    title: String? = nil,
     clientMutationId: String,
     draftPayload: String,
     now: Double = Date().timeIntervalSince1970 * 1000
@@ -513,6 +570,7 @@ public actor RectoStore {
       document.draftSelectionAnchor = selection?.anchor
       document.draftSelectionHead = selection?.head
       document.wordCount = wordCount
+      if document.titleMode == .derived, let title { document.title = title }
       document.updatedAt = now
       if document.syncState != .diverged { document.syncState = .pending }
       document.draftRevision += 1
@@ -570,6 +628,7 @@ public actor RectoStore {
     documentLocalId: String,
     markdown: String,
     wordCount: Int,
+    title: String? = nil,
     stampedHeadNodeId: String,
     remoteUpdatedAt: Double,
     now: Double = Date().timeIntervalSince1970 * 1000
@@ -588,6 +647,7 @@ public actor RectoStore {
       document.draftSelectionAnchor = nil
       document.draftSelectionHead = nil
       document.wordCount = wordCount
+      if document.titleMode == .derived, let title { document.title = title }
       document.remoteMarkdownHeadNodeId = stampedHeadNodeId
       document.remoteUpdatedAt = remoteUpdatedAt
       document.draftRevision += 1
@@ -762,6 +822,7 @@ public actor RectoStore {
     expecting: ResolutionExpectation,
     markdown: String,
     wordCount: Int,
+    title: String? = nil,
     now: Double = Date().timeIntervalSince1970 * 1000
   ) throws {
     try writer.write { db in
@@ -786,6 +847,7 @@ public actor RectoStore {
       document.localHeadNodeId = remoteHeadNodeId
       document.markdown = markdown
       document.wordCount = wordCount
+      if document.titleMode == .derived, let title { document.title = title }
       document.draftMarkdown = nil
       document.draftSelectionAnchor = nil
       document.draftSelectionHead = nil
@@ -816,6 +878,7 @@ public actor RectoStore {
     rebasedNode: DocNodeRecord,
     rebasedMarkdown: String,
     rebasedWordCount: Int,
+    title: String? = nil,
     rebasedJob: OutboxJob,
     now: Double = Date().timeIntervalSince1970 * 1000
   ) throws {
@@ -852,6 +915,7 @@ public actor RectoStore {
       document.localHeadNodeId = node.nodeId
       document.markdown = rebasedMarkdown
       document.wordCount = rebasedWordCount
+      if document.titleMode == .derived, let title { document.title = title }
       document.draftMarkdown = nil
       document.draftSelectionAnchor = nil
       document.draftSelectionHead = nil

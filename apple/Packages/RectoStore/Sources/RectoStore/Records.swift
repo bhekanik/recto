@@ -17,6 +17,11 @@ public enum SyncState: String, Codable, Sendable, DatabaseValueConvertible {
   case failed
 }
 
+public enum TitleMode: String, Codable, Sendable, DatabaseValueConvertible {
+  case derived
+  case manual
+}
+
 /// The local mirror of a `documents` row plus everything the native client
 /// needs that the server has no column for.
 public struct DocumentRecord: Codable, Sendable, FetchableRecord, PersistableRecord, Equatable {
@@ -27,6 +32,7 @@ public struct DocumentRecord: Codable, Sendable, FetchableRecord, PersistableRec
   /// `Id<"documents">` once the server has seen it.
   public var convexId: String?
   public var title: String
+  public var titleMode: TitleMode
   /// Materialized Markdown at `localHead`.
   public var markdown: String
   /// Latest accepted editor text awaiting history promotion or exact remote
@@ -41,6 +47,8 @@ public struct DocumentRecord: Codable, Sendable, FetchableRecord, PersistableRec
   /// The server's `updatedAt` as last observed — the CAS token `updateMarkdown`
   /// compares against.
   public var remoteUpdatedAt: Double?
+  /// Newest `documents.list` revision whose title metadata was accepted.
+  public var remoteTitleUpdatedAt: Double?
   /// The server's `pointerRevision` as last observed. `updatedAt` is a clock and
   /// two devices disagree about it; the revision is a counter and does not.
   public var remotePointerRevision: Double?
@@ -74,6 +82,7 @@ public struct DocumentRecord: Codable, Sendable, FetchableRecord, PersistableRec
     localId: String,
     convexId: String? = nil,
     title: String,
+    titleMode: TitleMode = .manual,
     markdown: String,
     draftMarkdown: String? = nil,
     draftSelectionAnchor: Int? = nil,
@@ -82,6 +91,7 @@ public struct DocumentRecord: Codable, Sendable, FetchableRecord, PersistableRec
     localHeadNodeId: String,
     remoteHeadNodeId: String? = nil,
     remoteUpdatedAt: Double? = nil,
+    remoteTitleUpdatedAt: Double? = nil,
     remotePointerRevision: Double? = nil,
     remoteMarkdownHeadNodeId: String? = nil,
     queueBlockedReason: String? = nil,
@@ -96,6 +106,7 @@ public struct DocumentRecord: Codable, Sendable, FetchableRecord, PersistableRec
     self.localId = localId
     self.convexId = convexId
     self.title = title
+    self.titleMode = titleMode
     self.markdown = markdown
     self.draftMarkdown = draftMarkdown
     self.draftSelectionAnchor = draftSelectionAnchor
@@ -104,6 +115,7 @@ public struct DocumentRecord: Codable, Sendable, FetchableRecord, PersistableRec
     self.localHeadNodeId = localHeadNodeId
     self.remoteHeadNodeId = remoteHeadNodeId
     self.remoteUpdatedAt = remoteUpdatedAt
+    self.remoteTitleUpdatedAt = remoteTitleUpdatedAt
     self.remotePointerRevision = remotePointerRevision
     self.remoteMarkdownHeadNodeId = remoteMarkdownHeadNodeId
     self.queueBlockedReason = queueBlockedReason

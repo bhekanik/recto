@@ -9,6 +9,7 @@ enum Migrations {
   static let v3 = "v3-draft-provenance"
   static let v4 = "v4-queue-barrier"
   static let v5 = "v5-editor-ingress"
+  static let v6 = "v6-title-mode"
 
   static func migrator() -> DatabaseMigrator {
     // Deliberately NOT `eraseDatabaseOnSchemaChange`, even in DEBUG: BK
@@ -187,6 +188,15 @@ enum Migrations {
     migrator.registerMigration(v5) { db in
       try db.alter(table: "documents") { t in
         t.add(column: "editorIngressRevision", .integer)
+      }
+    }
+
+    migrator.registerMigration(v6) { db in
+      try db.alter(table: "documents") { t in
+        // Existing names may be user-chosen. Preserve them until the writer
+        // explicitly opts into a derived title by creating a new document.
+        t.add(column: "titleMode", .text).notNull().defaults(to: TitleMode.manual.rawValue)
+        t.add(column: "remoteTitleUpdatedAt", .double)
       }
     }
 

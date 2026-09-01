@@ -29,7 +29,7 @@ let package = Package(
     ),
     .target(
       name: "RectoSyncTesting",
-      dependencies: ["RectoSync", "RectoHistory"],
+      dependencies: ["RectoSync", "RectoStore", "RectoHistory"],
       swiftSettings: [.swiftLanguageMode(.v6)]
     ),
     .testTarget(

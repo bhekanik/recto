@@ -18,7 +18,7 @@ public protocol RectoTransport: Actor {
   /// captured its timestamp.
   func updateCurrentNodeId(
     documentId: String, currentNodeId: String, markdown: String, wordCount: Int,
-    updatedAt: Double, expectedPointerRevision: Double?
+    updatedAt: Double, expectedPointerRevision: Double?, title: String?
   ) async throws -> UpdateCurrentNodeResponse
   func updateMarkdown(
     documentId: String, markdown: String, wordCount: Int, expectedUpdatedAt: Double,
@@ -54,13 +54,15 @@ public struct CommitEditRequest: Sendable, Equatable {
   public var createdAt: Double
   public var markdown: String
   public var wordCount: Int
+  public var title: String?
   public var expectedHeadNodeId: String
   public var clientMutationId: String
 
   public init(
     documentId: String, nodeId: String, parentNodeId: String?, patch: String, snapshot: String?,
     selection: NodeSelection?, origin: String, createdAt: Double, markdown: String,
-    wordCount: Int, expectedHeadNodeId: String, clientMutationId: String
+    wordCount: Int, title: String? = nil, expectedHeadNodeId: String,
+    clientMutationId: String
   ) {
     self.documentId = documentId
     self.nodeId = nodeId
@@ -72,6 +74,7 @@ public struct CommitEditRequest: Sendable, Equatable {
     self.createdAt = createdAt
     self.markdown = markdown
     self.wordCount = wordCount
+    self.title = title
     self.expectedHeadNodeId = expectedHeadNodeId
     self.clientMutationId = clientMutationId
   }
@@ -112,7 +115,7 @@ public struct CommitEditRequest: Sendable, Equatable {
     // `v.optional()` means "absent", not "null": sending null fails validation.
     if let snapshot { node["snapshot"] = snapshot }
 
-    return [
+    var args: [String: ConvexEncodable?] = [
       "documentId": documentId,
       "node": node,
       "markdown": markdown,
@@ -120,6 +123,8 @@ public struct CommitEditRequest: Sendable, Equatable {
       "expectedHeadNodeId": expectedHeadNodeId,
       "clientMutationId": clientMutationId,
     ]
+    if let title { args["title"] = title }
+    return args
   }
 }
 
@@ -279,7 +284,7 @@ public actor ConvexTransport: RectoTransport {
 
   public func updateCurrentNodeId(
     documentId: String, currentNodeId: String, markdown: String, wordCount: Int,
-    updatedAt: Double, expectedPointerRevision: Double?
+    updatedAt: Double, expectedPointerRevision: Double?, title: String? = nil
   ) async throws -> UpdateCurrentNodeResponse {
     var args: [String: ConvexEncodable?] = [
       "documentId": documentId,
@@ -291,6 +296,7 @@ public actor ConvexTransport: RectoTransport {
     // `v.optional()` means absent, not null: sending null fails validation, and
     // an absent revision is what puts the server back on the wall-clock rule.
     if let expectedPointerRevision { args["expectedPointerRevision"] = expectedPointerRevision }
+    if let title { args["title"] = title }
     do {
       return try await client.mutation(ConvexFunction.documentsUpdateCurrentNodeId, with: args)
     } catch {

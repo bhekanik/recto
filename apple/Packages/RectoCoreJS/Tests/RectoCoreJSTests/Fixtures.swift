@@ -81,6 +81,16 @@ struct Corpus: Decodable {
     let unicode: [CorpusCase]
 }
 
+struct TitleFixture: Decodable {
+    struct Case: Decodable {
+        let name: String
+        let markdown: String
+        let title: String
+    }
+
+    let cases: [Case]
+}
+
 struct WordCountFixture: Decodable {
     struct Case: Decodable {
         let name: String

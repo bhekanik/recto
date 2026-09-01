@@ -70,27 +70,40 @@ public struct ServerRefusal: Error, Equatable, Sendable {
 public struct RemoteDocumentSummary: Decodable, Sendable, Equatable {
   public let id: String
   public let title: String
+  public let titleMode: TitleMode
   public let wordCount: Double
   public let updatedAt: Double
   public let documentUuid: String?
 
   private enum CodingKeys: String, CodingKey {
     case id = "_id"
-    case title, wordCount, updatedAt, documentUuid
+    case title, titleMode, wordCount, updatedAt, documentUuid
   }
 
   public init(
     id: String,
     title: String,
+    titleMode: TitleMode = .manual,
     wordCount: Double,
     updatedAt: Double,
     documentUuid: String? = nil
   ) {
     self.id = id
     self.title = title
+    self.titleMode = titleMode
     self.wordCount = wordCount
     self.updatedAt = updatedAt
     self.documentUuid = documentUuid
+  }
+
+  public init(from decoder: any Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decode(String.self, forKey: .id)
+    title = try container.decode(String.self, forKey: .title)
+    titleMode = try container.decodeIfPresent(TitleMode.self, forKey: .titleMode) ?? .manual
+    wordCount = try container.decode(Double.self, forKey: .wordCount)
+    updatedAt = try container.decode(Double.self, forKey: .updatedAt)
+    documentUuid = try container.decodeIfPresent(String.self, forKey: .documentUuid)
   }
 }
 
@@ -98,6 +111,7 @@ public struct RemoteDocumentSummary: Decodable, Sendable, Equatable {
 public struct RemoteDocument: Decodable, Sendable, Equatable {
   public let id: String
   public let title: String
+  public let titleMode: TitleMode
   public let markdown: String
   public let wordCount: Double
   public let currentNodeId: String
@@ -116,7 +130,7 @@ public struct RemoteDocument: Decodable, Sendable, Equatable {
 
   private enum CodingKeys: String, CodingKey {
     case id = "_id"
-    case title, markdown, wordCount, currentNodeId, markdownHeadNodeId, pointerRevision
+    case title, titleMode, markdown, wordCount, currentNodeId, markdownHeadNodeId, pointerRevision
     case createdAt, updatedAt
   }
 
@@ -124,6 +138,7 @@ public struct RemoteDocument: Decodable, Sendable, Equatable {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     id = try container.decode(String.self, forKey: .id)
     title = try container.decode(String.self, forKey: .title)
+    titleMode = try container.decodeIfPresent(TitleMode.self, forKey: .titleMode) ?? .manual
     markdown = try container.decode(String.self, forKey: .markdown)
     wordCount = try container.decode(Double.self, forKey: .wordCount)
     currentNodeId = try container.decode(String.self, forKey: .currentNodeId)
@@ -135,12 +150,14 @@ public struct RemoteDocument: Decodable, Sendable, Equatable {
   }
 
   public init(
-    id: String, title: String, markdown: String, wordCount: Double, currentNodeId: String,
+    id: String, title: String, titleMode: TitleMode = .manual, markdown: String,
+    wordCount: Double, currentNodeId: String,
     markdownHeadNodeId: String? = nil, pointerRevision: Double = 0, createdAt: Double,
     updatedAt: Double
   ) {
     self.id = id
     self.title = title
+    self.titleMode = titleMode
     self.markdown = markdown
     self.wordCount = wordCount
     self.currentNodeId = currentNodeId

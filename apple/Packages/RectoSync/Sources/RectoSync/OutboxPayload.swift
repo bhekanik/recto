@@ -127,11 +127,14 @@ public enum OutboxPayloadError: Error, Equatable, Sendable, LocalizedError {
 
 extension OutboxPayload {
   /// The payload for a node the grouping controller just produced.
-  public static func commit(_ commit: GroupCommit, origin: String, createdAt: Double, wordCount: Int)
+  public static func commit(
+    _ commit: GroupCommit, origin: String, createdAt: Double, wordCount: Int,
+    title: String? = nil
+  )
     -> OutboxPayload
   {
     OutboxPayload(
-      nodeId: commit.nodeId, parentNodeId: commit.parentNodeId, patch: commit.patch,
+      title: title, nodeId: commit.nodeId, parentNodeId: commit.parentNodeId, patch: commit.patch,
       snapshot: commit.snapshot, selection: commit.selection, origin: origin,
       createdAt: createdAt, markdown: commit.markdown, wordCount: wordCount)
   }

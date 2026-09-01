@@ -733,6 +733,8 @@ struct MigrationTests {
     #expect(document.remotePointerRevision == 0)
     #expect(document.remoteMarkdownHeadNodeId == nil)
     #expect(document.draftRevision == 0)
+    #expect(document.titleMode == .manual)
+    #expect(document.remoteTitleUpdatedAt == nil)
 
     #expect(try await store.nodes(documentLocalId: "doc-1").count == 3)
 
@@ -818,13 +820,22 @@ struct RemoteFieldUpdateTests {
 
     let updated = try #require(try await store.document(localId: "doc-1"))
     #expect(updated.title == "renamed elsewhere")
-    #expect(updated.remoteUpdatedAt == 99)
+    #expect(updated.remoteUpdatedAt == afterEdit.remoteUpdatedAt)
+    #expect(updated.remoteTitleUpdatedAt == 99)
     // Everything a whole-record save from `stale` would have reverted:
     #expect(updated.draftMarkdown == "typed after the list arrived")
     #expect(updated.draftRevision == afterEdit.draftRevision)
     #expect(updated.syncState == afterEdit.syncState)
     #expect(updated.localHeadNodeId == afterEdit.localHeadNodeId)
     #expect(stale.draftMarkdown == nil, "the stale copy really did predate the edit")
+
+    #expect(
+      try await store.updateRemoteTitle(
+        documentLocalId: "doc-1", title: "renamed elsewhere", remoteUpdatedAt: 100))
+    #expect(
+      try await !store.updateRemoteTitle(
+        documentLocalId: "doc-1", title: "stale rename", remoteUpdatedAt: 99))
+    #expect(try await store.document(localId: "doc-1")?.title == "renamed elsewhere")
   }
 }
 

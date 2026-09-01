@@ -12,12 +12,13 @@ let package = Package(
     .package(path: "../RectoSync"),
     .package(path: "../RectoAuth"),
     .package(path: "../RectoHistory"),
+    .package(path: "../RectoCoreJS"),
     .package(url: "https://github.com/clerk/clerk-ios.git", from: "1.5.0"),
   ],
   targets: [
     .target(
       name: "RectoCore",
-      dependencies: ["RectoStore", "RectoSync", "RectoAuth", "RectoHistory"],
+      dependencies: ["RectoStore", "RectoSync", "RectoAuth", "RectoHistory", "RectoCoreJS"],
       swiftSettings: [.swiftLanguageMode(.v6)]
     ),
     .testTarget(

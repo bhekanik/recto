@@ -27,15 +27,6 @@ export type DocumentEntry = {
 /** In-memory registry keyed by documentId — one canonical model bus per doc. */
 export class DocumentModelRegistry {
 	private entries = new Map<Id<"documents">, DocumentEntry>();
-	private manuallyRenamed = new Set<Id<"documents">>();
-
-	isManuallyRenamed(documentId: Id<"documents">): boolean {
-		return this.manuallyRenamed.has(documentId);
-	}
-
-	markManualRename(documentId: Id<"documents">): void {
-		this.manuallyRenamed.add(documentId);
-	}
 
 	acquire(documentId: Id<"documents">): void {
 		const entry = this.entries.get(documentId);

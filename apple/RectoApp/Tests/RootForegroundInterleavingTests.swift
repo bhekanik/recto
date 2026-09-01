@@ -64,7 +64,7 @@ private actor ForegroundBlockingTransport: RectoTransport {
         -> CommitEditResponse { throw Failure.unexpectedCall }
     func updateCurrentNodeId(
         documentId: String, currentNodeId: String, markdown: String, wordCount: Int,
-        updatedAt: Double, expectedPointerRevision: Double?
+        updatedAt: Double, expectedPointerRevision: Double?, title: String?
     ) async throws -> UpdateCurrentNodeResponse { throw Failure.unexpectedCall }
     func updateMarkdown(
         documentId: String, markdown: String, wordCount: Int, expectedUpdatedAt: Double,

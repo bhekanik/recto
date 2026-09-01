@@ -66,13 +66,17 @@ final class OrderedDocumentEdits: ObservableObject, EditorIngressCoordinating {
         guard isAccepting else { return false }
         do {
             let wordCount = countWords(markdown)
+            let title = RectoDocumentTitle.derive(markdown)
             let generation = try store.saveEditorIngressSynchronously(
                 documentLocalId: documentLocalId,
                 markdown: markdown,
                 selection: selection,
                 wordCount: wordCount,
+                title: title,
                 clientMutationId: ulid(),
-                draftPayload: OutboxPayload(markdown: markdown, wordCount: wordCount).encoded
+                draftPayload: OutboxPayload(
+                    title: title, markdown: markdown, wordCount: wordCount
+                ).encoded
             )
             pendingCount += 1
             lastAcceptedMarkdown = markdown

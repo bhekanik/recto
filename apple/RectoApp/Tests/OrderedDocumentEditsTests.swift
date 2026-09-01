@@ -66,6 +66,7 @@ struct OrderedDocumentEditsTests {
         queue.accept(markdown: second)
         await gate.waitUntilStarted()
         #expect(try await store.document(localId: document.localId)?.displayMarkdown == second)
+        #expect(try await store.document(localId: document.localId)?.title == second)
 
         await gate.release()
         await queue.waitUntilDrained()
@@ -74,6 +75,7 @@ struct OrderedDocumentEditsTests {
         #expect(queue.pendingCount == 0)
         #expect(try await store.document(localId: document.localId)?.displayMarkdown == second)
         #expect(await session.currentState?.markdown == second)
+        #expect(await session.currentState?.title == second)
     }
 
     @MainActor

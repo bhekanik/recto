@@ -1,5 +1,6 @@
 import Foundation
 import RectoHistory
+import RectoStore
 import RectoSync
 
 /// A faithful in-memory stand-in for the deployed Convex functions.
@@ -17,6 +18,7 @@ public actor InMemoryTransport: RectoTransport {
     public var id: String
     public var documentUuid: String?
     public var title: String
+    public var titleMode: TitleMode
     public var markdown: String
     public var wordCount: Double
     public var currentNodeId: String
@@ -180,7 +182,8 @@ public actor InMemoryTransport: RectoTransport {
     let rootNodeId = UUID().uuidString
     let now = tick()
     documents[id] = Document(
-      id: id, documentUuid: documentUuid, title: title, markdown: "", wordCount: 0,
+      id: id, documentUuid: documentUuid, title: title, titleMode: .derived,
+      markdown: "", wordCount: 0,
       currentNodeId: rootNodeId,
       // `documents.create` writes no `markdownHeadNodeId`: the body is empty and
       // its provenance is genuinely unknown until something stamps it.
@@ -334,6 +337,7 @@ public actor InMemoryTransport: RectoTransport {
     document.currentNodeId = request.nodeId
     document.markdown = request.markdown
     document.wordCount = Double(request.wordCount)
+    if document.titleMode == .derived, let title = request.title { document.title = title }
     document.updatedAt = updatedAt
     document.pointerRevision = pointerRevision
     // `commitEdit` writes the body and the head together, so the body's
@@ -373,7 +377,7 @@ public actor InMemoryTransport: RectoTransport {
 
   public func updateCurrentNodeId(
     documentId: String, currentNodeId: String, markdown: String, wordCount: Int,
-    updatedAt: Double, expectedPointerRevision: Double?
+    updatedAt: Double, expectedPointerRevision: Double?, title: String? = nil
   ) async throws -> UpdateCurrentNodeResponse {
     try applyPreFault()
     guard var document = documents[documentId] else { throw TransportFault.documentNotFound }
@@ -403,6 +407,7 @@ public actor InMemoryTransport: RectoTransport {
     document.updatedAt = now
     document.pointerRevision = pointerRevision
     document.markdownHeadNodeId = currentNodeId
+    if document.titleMode == .derived, let title { document.title = title }
     documents[documentId] = document
     notifyDocumentSubscribers()
     return UpdateCurrentNodeResponse(
@@ -434,7 +439,7 @@ public actor InMemoryTransport: RectoTransport {
     // legacy caller has not, so its write CLEARS the stamp rather than leaving a
     // stale one another device could promote into the wrong branch.
     document.markdownHeadNodeId = expectedHeadNodeId
-    if let title { document.title = title }
+    if document.titleMode == .derived, let title { document.title = title }
     documents[documentId] = document
     notifyDocumentSubscribers()
     return UpdateMarkdownResponse(updatedAt: now, stale: false, headMoved: false)
@@ -447,6 +452,7 @@ public actor InMemoryTransport: RectoTransport {
     await awaitGate()
     try applyPreFault()
     documents[documentId]?.title = title
+    documents[documentId]?.titleMode = .manual
     documents[documentId]?.updatedAt = tick()
     renameOrder.append(title)
     notifyDocumentSubscribers()
@@ -482,7 +488,8 @@ public actor InMemoryTransport: RectoTransport {
     await awaitBodyReadGate()
     guard let document = documents[documentId] else { return nil }
     return RemoteDocument(
-      id: document.id, title: document.title, markdown: document.markdown,
+      id: document.id, title: document.title, titleMode: document.titleMode,
+      markdown: document.markdown,
       wordCount: document.wordCount, currentNodeId: document.currentNodeId,
       markdownHeadNodeId: document.markdownHeadNodeId,
       pointerRevision: document.pointerRevision, createdAt: document.createdAt,
@@ -572,7 +579,8 @@ public actor InMemoryTransport: RectoTransport {
     documents.values
       .map {
         RemoteDocumentSummary(
-          id: $0.id, title: $0.title, wordCount: $0.wordCount, updatedAt: $0.updatedAt,
+          id: $0.id, title: $0.title, titleMode: $0.titleMode,
+          wordCount: $0.wordCount, updatedAt: $0.updatedAt,
           documentUuid: $0.documentUuid)
       }
       .sorted { $0.updatedAt > $1.updatedAt }

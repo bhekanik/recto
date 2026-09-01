@@ -1,5 +1,5 @@
 {
-  "originHash" : "0e65f529de64ea0ccb440ac9f4814e7de3cb4e482d645b047d79eddb588933e7",
+  "originHash" : "bc12f0ebc75eeb181a76815259b8dd3e8402c278dddc90ee7d7530607a3a7c08",
   "pins" : [
     {
       "identity" : "clerk-ios",
@@ -52,6 +52,15 @@
       "location" : "https://github.com/bhekanik/swift-markdown-engine",
       "state" : {
         "revision" : "5fd928683c7846fa0e99ae1af3415ab82b360936"
+      }
+    },
+    {
+      "identity" : "yams",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/jpsim/Yams.git",
+      "state" : {
+        "revision" : "a27b21e0c81c5bf42049b897a62aaf387e80f279",
+        "version" : "6.2.2"
       }
     }
   ],
