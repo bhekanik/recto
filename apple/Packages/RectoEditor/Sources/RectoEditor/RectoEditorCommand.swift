@@ -67,6 +67,17 @@ public struct RectoEditorSelectionState: Equatable, Sendable {
 struct RectoCommandEdit: Equatable {
     let patch: MarkdownTextPatch
     let selection: NSRange
+    let generatedLineEndingRanges: [NSRange]
+
+    init(
+        patch: MarkdownTextPatch,
+        selection: NSRange,
+        generatedLineEndingRanges: [NSRange] = []
+    ) {
+        self.patch = patch
+        self.selection = selection
+        self.generatedLineEndingRanges = generatedLineEndingRanges
+    }
 }
 
 enum RectoCommandTransformer {
@@ -124,9 +135,18 @@ enum RectoCommandTransformer {
             let separator = body.hasSuffix("\n") || body.hasSuffix("\r") ? "" : "\n"
             let replacement = "\(opening)\n\(body)\(separator)\(fence)"
             let bodyStart = (opening as NSString).length + 1
-            return RectoCommandEdit(
-                patch: MarkdownTextPatch(range: selection, replacement: replacement),
-                selection: NSRange(location: selection.location + bodyStart, length: (body as NSString).length)
+            return blockEdit(
+                markdown: source,
+                selection: selection,
+                replacement: replacement,
+                innerSelection: NSRange(location: bodyStart, length: (body as NSString).length),
+                generatedLineEndingRanges: [
+                    NSRange(location: 0, length: bodyStart),
+                    NSRange(
+                        location: bodyStart + (body as NSString).length,
+                        length: (separator as NSString).length
+                    ),
+                ]
             )
         case .divider:
             return replaceSelectedLines(markdown: source, selection: selection, replacement: "---")
@@ -137,9 +157,12 @@ enum RectoCommandTransformer {
             let separator = "| " + Array(repeating: "---", count: columns).joined(separator: " | ") + " |"
             let body = Array(repeating: "| " + Array(repeating: "Cell", count: columns).joined(separator: " | ") + " |", count: rows - 1)
             let replacement = ([header, separator] + body).joined(separator: "\n")
-            return RectoCommandEdit(
-                patch: MarkdownTextPatch(range: selection, replacement: replacement),
-                selection: NSRange(location: selection.location + 2, length: 6)
+            return blockEdit(
+                markdown: source,
+                selection: selection,
+                replacement: replacement,
+                innerSelection: NSRange(location: 2, length: 6),
+                generatedLineEndingRanges: [NSRange(location: 0, length: (replacement as NSString).length)]
             )
         case let .link(destination):
             return link(markdown: source, selection: selection, destination: destination, image: false, alt: "")
@@ -152,11 +175,30 @@ enum RectoCommandTransformer {
                   !id.contains("]"), !containsControlCharacter(id) else { return nil }
             let selected = source.substring(with: selection)
             let definition = selected.isEmpty ? "Footnote text" : selected
-            let replacement = "[^\(id)]\n\n[^\(id)]: \(definition)"
-            let definitionOffset = ("[^\(id)]\n\n[^\(id)]: " as NSString).length
+            let reference = "[^\(id)]"
+            let tailRange = NSRange(location: NSMaxRange(selection), length: source.length - NSMaxRange(selection))
+            let tail = source.substring(with: tailRange)
+            let documentAfterReference = source.substring(to: selection.location) + reference + tail
+            let separator = blockSeparator(after: documentAfterReference)
+            let definitionPrefix = "[^\(id)]: "
+            let replacement = reference + tail + separator + definitionPrefix + definition
             return RectoCommandEdit(
-                patch: MarkdownTextPatch(range: selection, replacement: replacement),
-                selection: NSRange(location: selection.location + definitionOffset, length: (definition as NSString).length)
+                patch: MarkdownTextPatch(
+                    range: NSRange(location: selection.location, length: source.length - selection.location),
+                    replacement: replacement
+                ),
+                selection: NSRange(
+                    location: selection.location
+                        + (reference as NSString).length
+                        + (tail as NSString).length
+                        + (separator as NSString).length
+                        + (definitionPrefix as NSString).length,
+                    length: (definition as NSString).length
+                ),
+                generatedLineEndingRanges: [NSRange(
+                    location: (reference as NSString).length + (tail as NSString).length,
+                    length: (separator as NSString).length
+                )]
             )
         }
     }
@@ -180,7 +222,7 @@ enum RectoCommandTransformer {
         selection: NSRange,
         delimiter: String,
         placeholder: String
-    ) -> RectoCommandEdit {
+    ) -> RectoCommandEdit? {
         let delimiterLength = (delimiter as NSString).length
         if selection.length > 0, isWrapped(markdown, selection: selection, delimiter: delimiter) {
             let expanded = NSRange(
@@ -195,12 +237,27 @@ enum RectoCommandTransformer {
         }
 
         let selected = selection.length == 0 ? placeholder : markdown.substring(with: selection)
-        let replacement = delimiter + selected + delimiter
+        let selectedText = selected as NSString
+        guard selectedText.range(of: "\n").location == NSNotFound,
+              selectedText.range(of: "\r").location == NSNotFound else { return nil }
+        var contentStart = 0
+        while contentStart < selectedText.length, isWhitespace(selectedText.character(at: contentStart)) {
+            contentStart += 1
+        }
+        var contentEnd = selectedText.length
+        while contentEnd > contentStart, isWhitespace(selectedText.character(at: contentEnd - 1)) {
+            contentEnd -= 1
+        }
+        guard contentStart < contentEnd else { return nil }
+        let leading = selectedText.substring(to: contentStart)
+        let content = selectedText.substring(with: NSRange(location: contentStart, length: contentEnd - contentStart))
+        let trailing = selectedText.substring(from: contentEnd)
+        let replacement = leading + delimiter + content + delimiter + trailing
         return RectoCommandEdit(
             patch: MarkdownTextPatch(range: selection, replacement: replacement),
             selection: NSRange(
-                location: selection.location + delimiterLength,
-                length: (selected as NSString).length
+                location: selection.location + contentStart + delimiterLength,
+                length: (content as NSString).length
             )
         )
     }
@@ -288,9 +345,10 @@ enum RectoCommandTransformer {
         guard !trimmed.isEmpty,
               (trimmed as NSString).length <= InputLimit.destination,
               !containsControlCharacter(trimmed),
-              !image || (alt as NSString).length <= InputLimit.altText else { return nil }
+              !image || ((alt as NSString).length <= InputLimit.altText && !containsControlCharacter(alt)) else { return nil }
         let selected = markdown.substring(with: selection)
         let label = image ? (alt.isEmpty ? (selected.isEmpty ? "alt" : selected) : alt) : (selected.isEmpty ? "text" : selected)
+        guard !containsControlCharacter(label) else { return nil }
         let prefix = image ? "![" : "["
         let encodedLabel = escapeLinkLabel(label)
         let replacement = "\(prefix)\(encodedLabel)](\(formatLinkDestination(trimmed)))"
@@ -470,7 +528,8 @@ enum RectoCommandTransformer {
             index += 1
         } else if isDigit(first) {
             repeat { index += 1 } while index < line.length && isDigit(line.character(at: index))
-            guard index < line.length,
+            guard index - start <= 9,
+                  index < line.length,
                   line.character(at: index) == 46 || line.character(at: index) == 41 else { return nil }
             index += 1
         } else {
@@ -537,11 +596,92 @@ enum RectoCommandTransformer {
         replacement: String
     ) -> RectoCommandEdit {
         let lineRange = markdown.lineRange(for: selection)
-        let hadNewline = markdown.substring(with: lineRange).hasSuffix("\n")
-        let value = replacement + (hadNewline ? "\n" : "")
+        let selectedLine = markdown.substring(with: lineRange)
+        let lineEnding: String
+        if selectedLine.hasSuffix("\r\n") { lineEnding = "\r\n" }
+        else if selectedLine.hasSuffix("\n") { lineEnding = "\n" }
+        else if selectedLine.hasSuffix("\r") { lineEnding = "\r" }
+        else { lineEnding = "" }
+        let value = replacement + lineEnding
         return RectoCommandEdit(
             patch: MarkdownTextPatch(range: lineRange, replacement: value),
             selection: NSRange(location: lineRange.location + (replacement as NSString).length, length: 0)
         )
+    }
+
+    private static func blockEdit(
+        markdown: NSString,
+        selection: NSRange,
+        replacement: String,
+        innerSelection: NSRange,
+        generatedLineEndingRanges: [NSRange]
+    ) -> RectoCommandEdit {
+        let leadingBoundary = blockBoundary(before: selection.location, in: markdown)
+        let trailingBoundary = blockBoundary(after: NSMaxRange(selection), in: markdown)
+        let leadingLength = (leadingBoundary as NSString).length
+        let replacementLength = (replacement as NSString).length
+        var ranges = generatedLineEndingRanges.map {
+            NSRange(location: leadingLength + $0.location, length: $0.length)
+        }
+        if leadingLength > 0 { ranges.append(NSRange(location: 0, length: leadingLength)) }
+        if !trailingBoundary.isEmpty {
+            ranges.append(NSRange(
+                location: leadingLength + replacementLength,
+                length: (trailingBoundary as NSString).length
+            ))
+        }
+        return RectoCommandEdit(
+            patch: MarkdownTextPatch(
+                range: selection,
+                replacement: leadingBoundary + replacement + trailingBoundary
+            ),
+            selection: NSRange(
+                location: selection.location + leadingLength + innerSelection.location,
+                length: innerSelection.length
+            ),
+            generatedLineEndingRanges: ranges
+        )
+    }
+
+    private static func blockSeparator(after value: String) -> String {
+        let source = value as NSString
+        guard source.length > 0 else { return "" }
+        return blockBoundary(before: source.length, in: source)
+    }
+
+    private static func blockBoundary(before location: Int, in source: NSString) -> String {
+        guard location > 0 else { return "" }
+        var index = location
+        var count = 0
+        while index > 0, count < 2 {
+            if source.character(at: index - 1) == 10 {
+                index -= 1
+                if index > 0, source.character(at: index - 1) == 13 { index -= 1 }
+            } else if source.character(at: index - 1) == 13 {
+                index -= 1
+            } else {
+                break
+            }
+            count += 1
+        }
+        return String(repeating: "\n", count: 2 - count)
+    }
+
+    private static func blockBoundary(after location: Int, in source: NSString) -> String {
+        guard location < source.length else { return "" }
+        var index = location
+        var count = 0
+        while index < source.length, count < 2 {
+            if source.character(at: index) == 13 {
+                index += 1
+                if index < source.length, source.character(at: index) == 10 { index += 1 }
+            } else if source.character(at: index) == 10 {
+                index += 1
+            } else {
+                break
+            }
+            count += 1
+        }
+        return String(repeating: "\n", count: 2 - count)
     }
 }

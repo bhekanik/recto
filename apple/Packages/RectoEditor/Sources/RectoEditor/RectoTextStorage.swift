@@ -148,7 +148,10 @@ public final class RectoTextStorage {
     func editorDidMutate(_ mutation: MarkdownTextMutation) -> Bool {
         guard !isApplyingExternalEdit else { return false }
         if controller.textView?.string == markdown { return false }
-        guard let normalized = lineEnding.applying(mutation, to: markdown)
+        let normalized = currentEditIsStructural
+            ? applyingStructuralMutation(mutation, to: markdown)
+            : lineEnding.applying(mutation, to: markdown)
+        guard let normalized
         else { return false }
 
         isApplyingExternalEdit = true
@@ -159,6 +162,21 @@ public final class RectoTextStorage {
         isApplyingExternalEdit = false
         onEdit?(normalized.mutation)
         return true
+    }
+
+    private func applyingStructuralMutation(
+        _ mutation: MarkdownTextMutation,
+        to markdown: String
+    ) -> (markdown: String, mutation: MarkdownTextMutation)? {
+        let source = markdown as NSString
+        guard mutation.range.location != NSNotFound,
+              mutation.range.location >= 0,
+              mutation.range.length >= 0,
+              NSMaxRange(mutation.range) <= source.length else { return nil }
+        return (
+            source.replacingCharacters(in: mutation.range, with: mutation.replacement),
+            mutation
+        )
     }
 
     func observeAcceptedChanges(

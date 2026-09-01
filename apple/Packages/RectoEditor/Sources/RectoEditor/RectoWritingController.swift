@@ -133,7 +133,8 @@ public final class RectoWritingController {
             selection: NSRange(
                 location: range.location + edit.selection.location,
                 length: edit.selection.length
-            )
+            ),
+            generatedLineEndingRanges: edit.generatedLineEndingRanges
         )
     }
 
@@ -151,8 +152,21 @@ public final class RectoWritingController {
     }
 
     private func normalized(_ edit: RectoCommandEdit, for lineEnding: MarkdownLineEnding) -> RectoCommandEdit {
+        guard !edit.generatedLineEndingRanges.isEmpty else { return edit }
         let replacement = edit.patch.replacement as NSString
-        let normalizedReplacement = lineEnding.normalize(edit.patch.replacement)
+        let ranges = edit.generatedLineEndingRanges.sorted { $0.location < $1.location }
+        var normalizedReplacement = ""
+        var cursor = 0
+        for range in ranges {
+            guard range.location >= cursor, NSMaxRange(range) <= replacement.length else { return edit }
+            normalizedReplacement += replacement.substring(with: NSRange(
+                location: cursor,
+                length: range.location - cursor
+            ))
+            normalizedReplacement += lineEnding.normalize(replacement.substring(with: range))
+            cursor = NSMaxRange(range)
+        }
+        normalizedReplacement += replacement.substring(from: cursor)
         guard normalizedReplacement != edit.patch.replacement else { return edit }
 
         func map(_ position: Int) -> Int {
@@ -161,15 +175,23 @@ public final class RectoWritingController {
             guard relative <= replacement.length else {
                 return position + (normalizedReplacement as NSString).length - replacement.length
             }
-            let prefix = replacement.substring(to: relative)
-            return edit.patch.range.location + (lineEnding.normalize(prefix) as NSString).length
+            var mapped = relative
+            for range in ranges {
+                if relative <= range.location { break }
+                let prefixLength = min(relative, NSMaxRange(range)) - range.location
+                let prefix = replacement.substring(with: NSRange(location: range.location, length: prefixLength))
+                mapped += (lineEnding.normalize(prefix) as NSString).length - prefixLength
+                if relative <= NSMaxRange(range) { break }
+            }
+            return edit.patch.range.location + mapped
         }
 
         let start = map(edit.selection.location)
         let end = map(NSMaxRange(edit.selection))
         return RectoCommandEdit(
             patch: MarkdownTextPatch(range: edit.patch.range, replacement: normalizedReplacement),
-            selection: NSRange(location: start, length: max(0, end - start))
+            selection: NSRange(location: start, length: max(0, end - start)),
+            generatedLineEndingRanges: []
         )
     }
 

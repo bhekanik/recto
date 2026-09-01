@@ -47,6 +47,23 @@ struct WritingControlsTests {
         ))
         #expect(unwrapped.patch.range == (boldMarkdown as NSString).range(of: "**😀**"))
         #expect(unwrapped.patch.replacement == "😀")
+
+        let spaced = " hello "
+        let spacedEdit = try #require(RectoCommandTransformer.edit(
+            command: .bold,
+            markdown: spaced,
+            selection: NSRange(location: 0, length: (spaced as NSString).length)
+        ))
+        #expect(spacedEdit.patch.replacement == " **hello** ")
+        #expect(spacedEdit.selection == NSRange(location: 3, length: 5))
+
+        for unsupported in ["first\n\nsecond", "first\r\n\r\nsecond", " \t "] {
+            #expect(RectoCommandTransformer.edit(
+                command: .bold,
+                markdown: unsupported,
+                selection: NSRange(location: 0, length: (unsupported as NSString).length)
+            ) == nil)
+        }
     }
 
     @Test("block commands replace an existing block prefix")
@@ -83,6 +100,23 @@ struct WritingControlsTests {
         ))
         #expect(firstLineOnly.patch.replacement == "- first\n")
         #expect(firstLineOnly.patch.range == NSRange(location: 0, length: 6))
+
+        let oversizedMarker = "1234567890. keep me"
+        let bullet = try #require(RectoCommandTransformer.edit(
+            command: .bulletList,
+            markdown: oversizedMarker,
+            selection: NSRange(location: 0, length: (oversizedMarker as NSString).length)
+        ))
+        #expect(bullet.patch.replacement == "- 1234567890. keep me")
+
+        let carriageReturns = "first\rsecond\r"
+        let divider = try #require(RectoCommandTransformer.edit(
+            command: .divider,
+            markdown: carriageReturns,
+            selection: NSRange(location: 0, length: 5)
+        ))
+        #expect(divider.patch.replacement == "---\r")
+        #expect(divider.patch.range == NSRange(location: 0, length: 6))
     }
 
     @Test("a heading keeps a collapsed caret at its content")
@@ -300,6 +334,81 @@ struct WritingControlsTests {
             markdown: "",
             selection: NSRange(location: 0, length: 0)
         ) == nil)
+        for alt in ["cover\n![injected]", "cover\tcaption", "cover\u{0000}caption"] {
+            #expect(RectoCommandTransformer.edit(
+                command: .image(source: "image.png", alt: alt),
+                markdown: "",
+                selection: NSRange(location: 0, length: 0)
+            ) == nil)
+        }
+    }
+
+    @Test("inline prose survives commands that generate blocks")
+    func inlineProseSurvivesGeneratedBlocks() throws {
+        let markdown = "before target after"
+        let selected = (markdown as NSString).range(of: "target")
+
+        let footnote = try #require(RectoCommandTransformer.edit(
+            command: .footnote(identifier: "note"),
+            markdown: markdown,
+            selection: selected
+        ))
+        let footnoteResult = (markdown as NSString).replacingCharacters(
+            in: footnote.patch.range,
+            with: footnote.patch.replacement
+        )
+        #expect(footnoteResult == "before [^note] after\n\n[^note]: target")
+        #expect((footnoteResult as NSString).substring(with: footnote.selection) == "target")
+
+        let code = try #require(RectoCommandTransformer.edit(
+            command: .codeBlock(language: "swift"),
+            markdown: markdown,
+            selection: selected
+        ))
+        let codeResult = (markdown as NSString).replacingCharacters(in: code.patch.range, with: code.patch.replacement)
+        #expect(codeResult == "before \n\n```swift\ntarget\n```\n\n after")
+        #expect((codeResult as NSString).substring(with: code.selection) == "target")
+
+        let table = try #require(RectoCommandTransformer.edit(
+            command: .table(rows: 2, columns: 2),
+            markdown: markdown,
+            selection: selected
+        ))
+        let tableResult = (markdown as NSString).replacingCharacters(in: table.patch.range, with: table.patch.replacement)
+        #expect(tableResult == "before \n\n| Header | Header |\n| --- | --- |\n| Cell | Cell |\n\n after")
+        #expect((tableResult as NSString).substring(with: table.selection) == "Header")
+    }
+
+    @Test("mounted block commands preserve surrounding inline prose")
+    func mountedBlockCommandsPreserveInlineProse() throws {
+        let cases: [(RectoEditorCommand, String, String)] = [
+            (.codeBlock(language: "swift"), "before \n\n```swift\ntarget\n```\n\n after", "target"),
+            (
+                .table(rows: 2, columns: 2),
+                "before \n\n| Header | Header |\n| --- | --- |\n| Cell | Cell |\n\n after",
+                "Header"
+            ),
+            (.footnote(identifier: "note"), "before [^note] after\n\n[^note]: target", "target"),
+        ]
+        for (index, item) in cases.enumerated() {
+            let markdown = "before target after"
+            let storage = RectoTextStorage(documentId: "inline-block-\(index)", markdown: markdown)
+            let controller = RectoWritingController()
+            let harness = WindowHarness(
+                RectoEditorView(
+                    storage: storage,
+                    styler: MarkdownStyler(presentation: .rich, theme: .twilight),
+                    writingController: controller
+                )
+            )
+            let textView = try #require(harness.editorTextView)
+            textView.setSelectedRange((markdown as NSString).range(of: "target"))
+
+            #expect(controller.perform(item.0))
+            #expect(textView.string == item.1)
+            #expect((textView.string as NSString).substring(with: textView.selectedRange()) == item.2)
+            harness.tearDown()
+        }
     }
 
     @Test("mounted generated blocks keep exact selections in CRLF documents")
@@ -359,7 +468,7 @@ struct WritingControlsTests {
                 anchorRect: nil
             ))
             #expect(state.query == "hea")
-            #expect(state.entries.map(\.id) == ["h1", "h2", "h3", "link"])
+            #expect(state.entries.map(\.id) == ["h1", "h2", "h3"])
             #expect(state.queryRange == NSRange(location: indentation, length: 4))
         }
 
@@ -371,6 +480,14 @@ struct WritingControlsTests {
                 anchorRect: nil
             ) == nil)
         }
+
+        let noMatch = "/definitely-no-command"
+        #expect(RectoSlashMenu.state(
+            markdown: noMatch,
+            selection: NSRange(location: (noMatch as NSString).length, length: 0),
+            selectedIndex: 0,
+            anchorRect: nil
+        ) == nil)
     }
 
     @Test("mounted slash headings keep valid CommonMark indentation")
@@ -414,6 +531,27 @@ struct WritingControlsTests {
             #expect(textView.string == markdown)
             harness.tearDown()
         }
+    }
+
+    @Test("structural commands preserve retained mixed line endings")
+    func structuralCommandsPreserveMixedLineEndings() throws {
+        let markdown = "first\r\nsecond\nthird"
+        let storage = RectoTextStorage(documentId: "mixed-line-endings", markdown: markdown)
+        let controller = RectoWritingController()
+        let harness = WindowHarness(
+            RectoEditorView(
+                storage: storage,
+                styler: MarkdownStyler(presentation: .rich, theme: .twilight),
+                writingController: controller
+            )
+        )
+        defer { harness.tearDown() }
+        let textView = try #require(harness.editorTextView)
+        textView.setSelectedRange(NSRange(location: 0, length: (markdown as NSString).length))
+
+        #expect(controller.perform(.bulletList))
+        #expect(textView.string == "- first\r\n- second\n- third")
+        #expect(storage.markdown == textView.string)
     }
 
     @Test("slash entries match the generated web fixture")

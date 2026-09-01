@@ -83,7 +83,7 @@ public enum RectoSlashMenu {
         guard !query.isEmpty else { return entries }
         return entries.filter { entry in
             entry.label.lowercased().contains(query)
-                || entry.aliases.contains { $0.contains(query) || query.contains($0) }
+                || entry.aliases.contains { $0.contains(query) }
         }
     }
 
@@ -111,6 +111,7 @@ public enum RectoSlashMenu {
             return nil
         }
         let entries = filteredEntries(query: query)
+        guard !entries.isEmpty else { return nil }
         let slashOffset = (String(beforeSlash) as NSString).length
         let range = NSRange(
             location: prefixRange.location + slashOffset,
@@ -120,7 +121,7 @@ public enum RectoSlashMenu {
             query: query,
             queryRange: range,
             entries: entries,
-            selectedIndex: entries.isEmpty ? 0 : min(selectedIndex, entries.count - 1),
+            selectedIndex: min(selectedIndex, entries.count - 1),
             anchorRect: anchorRect
         )
     }
@@ -178,7 +179,8 @@ public enum RectoSlashMenu {
         }
         return RectoCommandEdit(
             patch: MarkdownTextPatch(range: queryRange, replacement: replacement),
-            selection: NSRange(location: queryRange.location + selectionOffset, length: selectionLength)
+            selection: NSRange(location: queryRange.location + selectionOffset, length: selectionLength),
+            generatedLineEndingRanges: [NSRange(location: 0, length: (replacement as NSString).length)]
         )
     }
 }
