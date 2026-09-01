@@ -1,6 +1,7 @@
 import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
-import { api } from "@/convex/_generated/api";
+import { api, internal } from "@/convex/_generated/api";
+import { scheduledEmbedRequestId } from "@/convex/embeddings";
 import schema from "@/convex/schema";
 
 // Explicit module map for convex-test (keys must include a "_generated" path so
@@ -33,6 +34,26 @@ function docRow(currentNodeId: string, markdown = "Some words.") {
 }
 
 describe("plan 015 — embeddingHealth query", () => {
+	it("keys scheduled batches by source, offset, and exact inputs", async () => {
+		const request = (
+			overrides: Partial<Parameters<typeof scheduledEmbedRequestId>[0]> = {},
+		) =>
+			scheduledEmbedRequestId({
+				documentId: "doc",
+				sourceNodeId: "node-1",
+				sourceHash: "a".repeat(64),
+				offset: 0,
+				inputs: ["first"],
+				...overrides,
+			});
+		const original = await request();
+		expect(await request()).toBe(original);
+		expect(await request({ sourceNodeId: "node-2" })).not.toBe(original);
+		expect(await request({ offset: 16 })).not.toBe(original);
+		expect(await request({ inputs: ["second"] })).not.toBe(original);
+		expect(original.length).toBeLessThanOrEqual(128);
+	});
+
 	it("rejects unauthenticated callers", async () => {
 		const t = convexTest(schema, modules);
 		await expect(t.query(api.embeddings.embeddingHealth, {})).rejects.toThrow(
@@ -119,5 +140,69 @@ describe("plan 015 — embeddingHealth query", () => {
 			.withIdentity(USER)
 			.query(api.embeddings.embeddingHealth, {});
 		expect(health).toEqual({ staleCount: 1 });
+	});
+
+	it("pages past 256 documents and publishes the full-corpus health count", async () => {
+		const previousAllowlist = process.env.AI_UNMETERED_USER_IDS;
+		process.env.AI_UNMETERED_USER_IDS = USER.subject;
+		try {
+			const t = convexTest(schema, modules);
+			await t.run(async (ctx) => {
+				await ctx.db.insert("aiConsents", {
+					userId: USER.subject,
+					version: 1,
+					acceptedAt: 1,
+				});
+				for (let index = 0; index < 300; index += 1) {
+					const nodeId = `node-${index}`;
+					const documentId = await ctx.db.insert(
+						"documents",
+						docRow(nodeId, `draft ${index}`),
+					);
+					await ctx.db.insert("docNodes", {
+						documentId,
+						nodeId,
+						parentNodeId: null,
+						patch: "",
+						snapshot: `draft ${index}`,
+						selection: null,
+						origin: "test",
+						createdAt: index + 1,
+					});
+				}
+			});
+
+			const first = await t.query(internal.embeddings.allStaleDocuments, {
+				cursor: null,
+			});
+			const second = await t.query(internal.embeddings.allStaleDocuments, {
+				cursor: first.continueCursor,
+			});
+			expect(first).toMatchObject({ scanned: 256, isDone: false });
+			expect(second).toMatchObject({ scanned: 44, isDone: true });
+			expect(first.staleCount + second.staleCount).toBe(300);
+			const ids = [...first.stale, ...second.stale].map(
+				(document) => document.documentId,
+			);
+			expect(ids).toHaveLength(300);
+			expect(new Set(ids).size).toBe(300);
+			await expect(
+				t.withIdentity(USER).query(api.embeddings.embeddingHealth, {}),
+			).resolves.toEqual({ staleCount: null });
+
+			await t.mutation(internal.embeddings.recordEmbeddingHealth, {
+				staleCount: ids.length,
+				scannedCount: 300,
+			});
+			await expect(
+				t.withIdentity(USER).query(api.embeddings.embeddingHealth, {}),
+			).resolves.toEqual({ staleCount: 300 });
+		} finally {
+			if (previousAllowlist === undefined) {
+				delete process.env.AI_UNMETERED_USER_IDS;
+			} else {
+				process.env.AI_UNMETERED_USER_IDS = previousAllowlist;
+			}
+		}
 	});
 });

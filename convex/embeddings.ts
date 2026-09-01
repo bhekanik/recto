@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import {
 	action,
 	internalAction,
@@ -13,27 +13,15 @@ import {
 import { findTombstone } from "./accountGuard";
 import { AI_CONSENT_VERSION } from "./ai/consent";
 import { aiError } from "./ai/errors";
+import { sha256 } from "./ai/request";
 import { requireOwnedDocument, requireUserId } from "./documents";
 
 /**
  * RAG over the writer's own drafts via Convex vector search (plan 009, Phase C).
  *
- * Embedding GENERATION happens in two places; the provider key
- * (`OPENROUTER_API_KEY`) lives in BOTH server envs — the Next server env and
- * the Convex deployment env (see app/api/ai/embed/route.ts). Either way the
- * key stays server-side.
- *
- * On-demand path: the *client* orchestrates re-indexing:
- *   1. read the doc markdown + chunk it (lib/ai/chunk.ts),
- *   2. POST the chunk texts to /api/ai/embed → vectors (Next server env key),
- *   3. call `embeddings.replaceChunks` (mutation) to persist them.
- * Query-time search mirrors that: the client embeds the query text via the Next
- * route, then calls `embeddings.searchByVector` (action) with the vector.
- *
- * The scheduled cron path (`reindexSweep`) generates embeddings directly from
- * inside the Convex action via a `fetch` to OpenRouter, using the
- * `OPENROUTER_API_KEY` in the Convex deployment env. It mirrors the
- * request/response shape of the Next route.
+ * Both interactive and scheduled generation use `ai.embed.run`'s durable run
+ * protocol. The client or cron chunks text, embeds at most 16 chunks per run,
+ * then persists only while the exact source and access fences still match.
  */
 
 const CHUNK_LIMIT = 256; // safety cap on chunks per document
@@ -45,18 +33,33 @@ const VECTOR_RESULTS = 8;
  * imported because app `lib/` code isn't on the Convex bundle/path-alias graph
  * (the embedding request/server helpers pull in `server-only`/Clerk).
  */
-const AI_EMBEDDING_MODEL = "openai/text-embedding-3-small";
 const AI_EMBEDDING_DIM = 1536;
-const OPENROUTER_EMBEDDINGS_URL = "https://openrouter.ai/api/v1/embeddings";
 
 /** How many stale documents to embed per scheduled sweep (bounds action time). */
 const SWEEP_DOC_LIMIT = 25;
 const SWEEP_SCAN_LIMIT = 256;
+const EMBED_BATCH = 16;
 
 /** Target chunk window in characters — mirrors CHUNK_TARGET_CHARS in lib/ai/chunk.ts. */
 const CHUNK_TARGET_CHARS = 1500;
 
 type CronChunk = { charStart: number; charEnd: number; text: string };
+type StaleDocument = {
+	documentId: Id<"documents">;
+	userId: string;
+	currentNodeId: string;
+	markdown: string;
+};
+
+export async function scheduledEmbedRequestId(args: {
+	documentId: string;
+	sourceNodeId: string;
+	sourceHash: string;
+	offset: number;
+	inputs: string[];
+}): Promise<string> {
+	return `embed:cron:${await sha256(JSON.stringify(args))}`;
+}
 
 /**
  * Paragraph-windowed chunking — a self-contained copy of lib/ai/chunk.ts's
@@ -114,45 +117,6 @@ function chunkMarkdown(markdown: string): CronChunk[] {
 		p = j - 1 > p ? j - 1 : j;
 	}
 	return chunks;
-}
-
-/** OpenRouter embeddings response shape (OpenAI-compatible). */
-type EmbeddingsResponse = { data?: { embedding: number[] }[] };
-
-/**
- * Embed a batch of texts via OpenRouter's OpenAI-compatible `/embeddings`
- * endpoint. Mirrors the Next route's request (`{ model, input }`) and response
- * (`{ data: [{ embedding }] }`) handling. Empty strings are dropped (the API
- * rejects them); order is preserved so callers can zip vectors back to chunks.
- */
-async function embedTexts(
-	apiKey: string,
-	texts: string[],
-): Promise<number[][]> {
-	const input = texts.map((s) => s.trim()).filter((s) => s.length > 0);
-	if (input.length === 0) return [];
-	const res = await fetch(OPENROUTER_EMBEDDINGS_URL, {
-		method: "POST",
-		headers: {
-			Authorization: `Bearer ${apiKey}`,
-			"Content-Type": "application/json",
-			"X-Title": "Recto",
-		},
-		body: JSON.stringify({ model: AI_EMBEDDING_MODEL, input }),
-	});
-	if (!res.ok) {
-		throw new Error(`OpenRouter embeddings failed: ${res.status}`);
-	}
-	const json = (await res.json()) as EmbeddingsResponse;
-	const vectors = (json.data ?? []).map((d) => d.embedding);
-	for (const vec of vectors) {
-		if (vec.length !== AI_EMBEDDING_DIM) {
-			throw new Error(
-				`OpenRouter embeddings returned dim ${vec.length}, expected ${AI_EMBEDDING_DIM}`,
-			);
-		}
-	}
-	return vectors;
 }
 
 /** One chunk in the client → Convex upsert payload. */
@@ -353,26 +317,16 @@ export const searchByVector = action({
  */
 async function findStaleDocuments(
 	ctx: QueryCtx,
+	docs: Doc<"documents">[],
 	cronSafe = false,
-): Promise<
-	{
-		documentId: Id<"documents">;
-		currentNodeId: string;
-		markdown: string;
-	}[]
-> {
-	const docs = await ctx.db.query("documents").take(SWEEP_SCAN_LIMIT);
+): Promise<StaleDocument[]> {
 	const allowlisted = new Set(
 		(process.env.AI_UNMETERED_USER_IDS ?? "")
 			.split(",")
 			.map((value) => value.trim())
 			.filter(Boolean),
 	);
-	const out: {
-		documentId: Id<"documents">;
-		currentNodeId: string;
-		markdown: string;
-	}[] = [];
+	const out: StaleDocument[] = [];
 	for (const doc of docs) {
 		if (cronSafe) {
 			if (!allowlisted.has(doc.userId)) continue;
@@ -404,6 +358,7 @@ async function findStaleDocuments(
 		}
 		out.push({
 			documentId: doc._id,
+			userId: doc.userId,
 			currentNodeId: doc.currentNodeId,
 			markdown: doc.markdown,
 		});
@@ -416,8 +371,21 @@ async function findStaleDocuments(
  * all users since the cron has no caller identity.
  */
 export const allStaleDocuments = internalQuery({
-	args: {},
-	handler: async (ctx) => findStaleDocuments(ctx, true),
+	args: { cursor: v.union(v.string(), v.null()) },
+	handler: async (ctx, args) => {
+		const result = await ctx.db.query("documents").order("asc").paginate({
+			cursor: args.cursor,
+			numItems: SWEEP_SCAN_LIMIT,
+			maximumRowsRead: SWEEP_SCAN_LIMIT,
+		});
+		return {
+			stale: await findStaleDocuments(ctx, result.page, true),
+			staleCount: (await findStaleDocuments(ctx, result.page)).length,
+			continueCursor: result.continueCursor,
+			isDone: result.isDone,
+			scanned: result.page.length,
+		};
+	},
 });
 
 /**
@@ -431,10 +399,34 @@ export const allStaleDocuments = internalQuery({
  */
 export const embeddingHealth = query({
 	args: {},
-	handler: async (ctx): Promise<{ staleCount: number }> => {
+	handler: async (ctx): Promise<{ staleCount: number | null }> => {
 		await requireUserId(ctx);
-		const stale = await findStaleDocuments(ctx);
+		const state = await ctx.db
+			.query("embeddingHealthState")
+			.withIndex("by_name", (q) => q.eq("name", "global"))
+			.unique();
+		if (state) return { staleCount: state.staleCount };
+		const firstPage = await ctx.db
+			.query("documents")
+			.order("asc")
+			.take(SWEEP_SCAN_LIMIT + 1);
+		if (firstPage.length > SWEEP_SCAN_LIMIT) return { staleCount: null };
+		const stale = await findStaleDocuments(ctx, firstPage);
 		return { staleCount: stale.length };
+	},
+});
+
+export const recordEmbeddingHealth = internalMutation({
+	args: { staleCount: v.number(), scannedCount: v.number() },
+	handler: async (ctx, args) => {
+		const existing = await ctx.db
+			.query("embeddingHealthState")
+			.withIndex("by_name", (q) => q.eq("name", "global"))
+			.unique();
+		const value = { ...args, updatedAt: Date.now() };
+		if (existing) await ctx.db.patch(existing._id, value);
+		else
+			await ctx.db.insert("embeddingHealthState", { name: "global", ...value });
 	},
 });
 
@@ -451,30 +443,35 @@ export const replaceChunksInternal = internalMutation({
 	},
 	handler: async (ctx, args) => {
 		const doc = await ctx.db.get(args.documentId);
-		if (!doc) return { count: 0 };
-		if (doc.currentNodeId !== args.embeddedNodeId) return { count: 0 };
-		if (doc.markdown !== args.expectedMarkdown) return { count: 0 };
-		if (await findTombstone(ctx, doc.userId)) return { count: 0 };
+		if (!doc) return { applied: false as const, count: 0 };
+		if (doc.currentNodeId !== args.embeddedNodeId)
+			return { applied: false as const, count: 0 };
+		if (doc.markdown !== args.expectedMarkdown)
+			return { applied: false as const, count: 0 };
+		if (await findTombstone(ctx, doc.userId))
+			return { applied: false as const, count: 0 };
 		const deletion = await ctx.db
 			.query("aiDocumentDeletions")
 			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
 			.unique();
-		if (deletion) return { count: 0 };
+		if (deletion) return { applied: false as const, count: 0 };
 		const consent = await ctx.db
 			.query("aiConsents")
 			.withIndex("by_user", (q) => q.eq("userId", doc.userId))
 			.unique();
-		if (consent?.version !== AI_CONSENT_VERSION) return { count: 0 };
+		if (consent?.version !== AI_CONSENT_VERSION)
+			return { applied: false as const, count: 0 };
 		const share = await ctx.db
 			.query("documentShares")
 			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
 			.first();
-		if (share) return { count: 0 };
+		if (share) return { applied: false as const, count: 0 };
 		const existing = await ctx.db
 			.query("docChunks")
 			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
 			.take(CHUNK_LIMIT + 1);
-		if (existing.length > CHUNK_LIMIT) return { count: 0 };
+		if (existing.length > CHUNK_LIMIT)
+			return { applied: false as const, count: 0 };
 		for (const row of existing) await ctx.db.delete(row._id);
 		const now = Date.now();
 		const chunks = args.chunks.slice(0, CHUNK_LIMIT);
@@ -490,7 +487,7 @@ export const replaceChunksInternal = internalMutation({
 				updatedAt: now,
 			});
 		}
-		return { count: chunks.length };
+		return { applied: true as const, count: chunks.length };
 	},
 });
 
@@ -511,18 +508,41 @@ export const replaceChunksInternal = internalMutation({
 export const reindexSweep = internalAction({
 	args: {},
 	handler: async (ctx): Promise<{ scanned: number; embedded: number }> => {
-		const stale = await ctx.runQuery(internal.embeddings.allStaleDocuments, {});
+		let cursor: string | null = null;
+		let scanned = 0;
+		let staleCount = 0;
+		const stale: StaleDocument[] = [];
+		do {
+			const page: {
+				stale: StaleDocument[];
+				continueCursor: string;
+				staleCount: number;
+				isDone: boolean;
+				scanned: number;
+			} = await ctx.runQuery(internal.embeddings.allStaleDocuments, { cursor });
+			scanned += page.scanned;
+			staleCount += page.staleCount;
+			for (const document of page.stale) {
+				if (stale.length < SWEEP_DOC_LIMIT) stale.push(document);
+			}
+			cursor = page.isDone ? null : page.continueCursor;
+			if (page.isDone) break;
+		} while (cursor !== null);
 
-		const apiKey = process.env.OPENROUTER_API_KEY;
-		if (!apiKey) {
+		if (!process.env.OPENROUTER_API_KEY?.trim()) {
 			console.warn(
 				"reindexSweep: OPENROUTER_API_KEY not set in Convex env — skipping embedding generation",
 			);
-			return { scanned: stale.length, embedded: 0 };
+			await ctx.runMutation(internal.embeddings.recordEmbeddingHealth, {
+				staleCount,
+				scannedCount: scanned,
+			});
+			return { scanned, embedded: 0 };
 		}
 
 		let embedded = 0;
-		for (const doc of stale.slice(0, SWEEP_DOC_LIMIT)) {
+		let purged = 0;
+		for (const doc of stale) {
 			try {
 				const chunks = chunkMarkdown(doc.markdown).slice(0, CHUNK_LIMIT);
 				if (chunks.length === 0) {
@@ -532,19 +552,43 @@ export const reindexSweep = internalAction({
 					// excludes zero-chunk docs with no rows, so this can't loop: purge
 					// the rows here and the next scan skips the doc. Nothing is embedded,
 					// so the counter is untouched.
-					await ctx.runMutation(internal.embeddings.replaceChunksInternal, {
-						documentId: doc.documentId,
-						embeddedNodeId: doc.currentNodeId,
-						expectedMarkdown: doc.markdown,
-						chunks: [],
-					});
+					const result = await ctx.runMutation(
+						internal.embeddings.replaceChunksInternal,
+						{
+							documentId: doc.documentId,
+							embeddedNodeId: doc.currentNodeId,
+							expectedMarkdown: doc.markdown,
+							chunks: [],
+						},
+					);
+					if (result.applied) purged += 1;
 					continue;
 				}
 
-				const vectors = await embedTexts(
-					apiKey,
-					chunks.map((c) => c.text),
-				);
+				const sourceHash = await sha256(doc.markdown);
+				const vectors: number[][] = [];
+				for (let offset = 0; offset < chunks.length; offset += EMBED_BATCH) {
+					const inputs = chunks
+						.slice(offset, offset + EMBED_BATCH)
+						.map((chunk) => chunk.text);
+					const requestId = await scheduledEmbedRequestId({
+						documentId: doc.documentId,
+						sourceNodeId: doc.currentNodeId,
+						sourceHash,
+						offset,
+						inputs,
+					});
+					vectors.push(
+						...(await ctx.runAction(internal.ai.embed.runScheduled, {
+							userId: doc.userId,
+							requestId,
+							documentId: doc.documentId,
+							sourceNodeId: doc.currentNodeId,
+							sourceHash,
+							inputs,
+						})),
+					);
+				}
 				if (vectors.length !== chunks.length) {
 					console.warn(
 						`reindexSweep: vector/chunk count mismatch for ${doc.documentId} (${vectors.length} vs ${chunks.length}) — skipping`,
@@ -552,18 +596,26 @@ export const reindexSweep = internalAction({
 					continue;
 				}
 
-				await ctx.runMutation(internal.embeddings.replaceChunksInternal, {
-					documentId: doc.documentId,
-					embeddedNodeId: doc.currentNodeId,
-					expectedMarkdown: doc.markdown,
-					chunks: chunks.map((c, idx) => ({
-						charStart: c.charStart,
-						charEnd: c.charEnd,
-						text: c.text,
-						embedding: vectors[idx] as number[],
-					})),
+				const persistedChunks = chunks.map((chunk, index) => {
+					const embedding = vectors[index];
+					if (!embedding) throw new Error("Missing embedding vector.");
+					return {
+						charStart: chunk.charStart,
+						charEnd: chunk.charEnd,
+						text: chunk.text,
+						embedding,
+					};
 				});
-				embedded++;
+				const replaced = await ctx.runMutation(
+					internal.embeddings.replaceChunksInternal,
+					{
+						documentId: doc.documentId,
+						embeddedNodeId: doc.currentNodeId,
+						expectedMarkdown: doc.markdown,
+						chunks: persistedChunks,
+					},
+				);
+				if (replaced.applied && replaced.count === chunks.length) embedded += 1;
 			} catch (err) {
 				console.error(
 					`reindexSweep: failed to re-embed ${doc.documentId}:`,
@@ -572,6 +624,10 @@ export const reindexSweep = internalAction({
 			}
 		}
 
-		return { scanned: stale.length, embedded };
+		await ctx.runMutation(internal.embeddings.recordEmbeddingHealth, {
+			staleCount: Math.max(0, staleCount - embedded - purged),
+			scannedCount: scanned,
+		});
+		return { scanned, embedded };
 	},
 });

@@ -27,6 +27,7 @@ import type * as blobReferences from "../blobReferences.js";
 import type * as crons from "../crons.js";
 import type * as docNodes from "../docNodes.js";
 import type * as documents from "../documents.js";
+import type * as documentCleanup from "../documentCleanup.js";
 import type * as embeddings from "../embeddings.js";
 import type * as export_ from "../export.js";
 import type * as files from "../files.js";
@@ -67,6 +68,7 @@ declare const fullApi: ApiFromModules<{
   crons: typeof crons;
   docNodes: typeof docNodes;
   documents: typeof documents;
+  documentCleanup: typeof documentCleanup;
   embeddings: typeof embeddings;
   export: typeof export_;
   files: typeof files;

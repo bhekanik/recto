@@ -9,6 +9,7 @@ import {
 	removeBlobReferenceSourcesForOwner,
 	removeBlobReferences,
 } from "./blobReferences";
+import { cleanupDocumentBatch } from "./documentCleanup";
 import { storageFileTokens } from "./storageTokens";
 
 type MutationCtx = GenericMutationCtx<DataModel>;
@@ -362,6 +363,19 @@ export const purgeData = internalMutation({
 		limit: v.optional(v.number()),
 	},
 	handler: async (ctx, args) => {
+		// Finish a document deletion before the account purge can remove the job
+		// that locates rows whose document is already gone.
+		const documentCleanup = await ctx.db
+			.query("aiDocumentDeletions")
+			.withIndex("by_user", (q) => q.eq("userId", args.userId))
+			.first();
+		if (documentCleanup) {
+			const result = await cleanupDocumentBatch(
+				ctx,
+				documentCleanup.documentId,
+			);
+			return { deleted: Math.max(1, result.deleted), done: false };
+		}
 		const state: Budget = {
 			budget: Math.max(1, Math.min(args.limit ?? PURGE_BATCH, PURGE_BATCH)),
 			deleted: 0,
@@ -540,11 +554,6 @@ export const purgeData = internalMutation({
 					ctx.db
 						.query("aiRuns")
 						.withIndex("by_user_created", (q) => q.eq("userId", args.userId))
-						.take(n),
-				(n) =>
-					ctx.db
-						.query("aiDocumentDeletions")
-						.withIndex("by_user", (q) => q.eq("userId", args.userId))
 						.take(n),
 				(n) =>
 					ctx.db

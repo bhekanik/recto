@@ -6,10 +6,19 @@ import { useCallback, useRef } from "react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import type { RelatedPassage } from "@/convex/embeddings";
-import { chunk } from "./chunk";
+import { type Chunk, chunk } from "./chunk";
 import { AiRequestOwner, sha256Text } from "./request-owner";
 
 const EMBED_BATCH = 16;
+export const MAX_DOCUMENT_CHUNKS = 256;
+
+export function throwIfAborted(signal?: AbortSignal): void {
+	if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+}
+
+export function chunksForIndex(markdown: string): Chunk[] {
+	return chunk(markdown).slice(0, MAX_DOCUMENT_CHUNKS);
+}
 
 export async function embedBatchRequestId(input: {
 	purpose: "query" | "reindex";
@@ -38,6 +47,7 @@ export function useRag() {
 			texts: string[];
 			signal?: AbortSignal;
 		}): Promise<number[][]> => {
+			throwIfAborted(input.signal);
 			const ticket = ownerRef.current.begin(input.documentId);
 			const onAbort = () => ownerRef.current.supersedeIfCurrent(ticket);
 			input.signal?.addEventListener("abort", onAbort, { once: true });
@@ -97,7 +107,8 @@ export function useRag() {
 			markdown: string;
 			signal?: AbortSignal;
 		}): Promise<number> => {
-			const chunks = chunk(input.markdown);
+			throwIfAborted(input.signal);
+			const chunks = chunksForIndex(input.markdown);
 			if (chunks.length === 0) {
 				await replaceChunks({
 					documentId: input.documentId,
@@ -140,6 +151,7 @@ export function useRag() {
 			queryText: string;
 			signal?: AbortSignal;
 		}): Promise<RelatedPassage[]> => {
+			throwIfAborted(input.signal);
 			const queryText = input.queryText.trim();
 			if (!queryText) return [];
 			if (!input.documentId || !input.sourceNodeId) {

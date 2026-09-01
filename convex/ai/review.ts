@@ -36,6 +36,18 @@ type AiReviewSummary = {
 	branchId: Id<"reviewBranches"> | null;
 };
 type AppliedSuggestions = { text: string; applied: number };
+export type ReviewCompletionClient = {
+	chat: {
+		completions: {
+			create: (
+				body: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming,
+				options?: { signal?: AbortSignal },
+			) => Promise<
+				Pick<OpenAI.Chat.Completions.ChatCompletion, "choices" | "usage">
+			>;
+		};
+	};
+};
 
 const MAX_REVIEW_TOKENS = 4_000;
 const MAX_REVIEW_ITERATIONS = 8;
@@ -116,14 +128,15 @@ function addUsage(
 	total.costMicros += next.costMicros;
 }
 
-async function reviewWithTools(args: {
-	client: ReturnType<typeof createProvider> extends Promise<infer P>
-		? P extends { client: infer C }
-			? C
-			: never
-		: never;
+export async function reviewWithTools(args: {
+	client: ReviewCompletionClient;
 	text: string;
 	signal?: AbortSignal;
+	settle: (args: {
+		callIndex: number;
+		usage: ProviderUsage;
+		latencyMs: number;
+	}) => Promise<void>;
 }): Promise<{ result: ReviewResult; usage: ProviderUsage }> {
 	const comments: Comment[] = [];
 	const suggestions: Suggestion[] = [];
@@ -143,6 +156,7 @@ async function reviewWithTools(args: {
 	];
 	for (let iteration = 0; iteration < MAX_REVIEW_ITERATIONS; iteration += 1) {
 		if (args.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+		const callStartedAt = Date.now();
 		const completion = await args.client.chat.completions.create(
 			{
 				model: AI_CHAT_MODEL,
@@ -153,7 +167,13 @@ async function reviewWithTools(args: {
 			},
 			{ signal: args.signal },
 		);
+		const callUsage = parseProviderUsage(completion.usage);
 		addUsage(usage, completion.usage);
+		await args.settle({
+			callIndex: iteration,
+			usage: callUsage,
+			latencyMs: Date.now() - callStartedAt,
+		});
 		const message = completion.choices[0]?.message;
 		const calls = message?.tool_calls ?? [];
 		if (!message || calls.length === 0) break;
@@ -342,6 +362,21 @@ export const run = action({
 			const { result, usage } = await reviewWithTools({
 				client: provider.client,
 				text: args.text,
+				settle: async (call) => {
+					const recorded = await ctx.runMutation(internal.ai.runs.recordUsage, {
+						runId,
+						userId,
+						callIndex: call.callIndex,
+						usage: {
+							...call.usage,
+							latencyMs: call.latencyMs,
+							langsmithRunId: provider.langsmithRunId,
+						},
+					});
+					if (!recorded.recorded) {
+						aiError("request_conflict", "The AI request was superseded.");
+					}
+				},
 			});
 			const comments = result.comments.flatMap((comment) => {
 				const offset = uniqueQuoteOffset(args.text, comment.quote);
@@ -364,21 +399,6 @@ export const run = action({
 				];
 			});
 			const suggestions = applySuggestions(args.text, result.suggestions);
-			const recordedUsage = await ctx.runMutation(
-				internal.ai.runs.recordUsage,
-				{
-					runId,
-					userId,
-					usage: {
-						...usage,
-						latencyMs: Date.now() - startedAt,
-						langsmithRunId: provider.langsmithRunId,
-					},
-				},
-			);
-			if (!recordedUsage.recorded) {
-				aiError("request_conflict", "The AI request was superseded.");
-			}
 			const applied = await ctx.runMutation(internal.review.applyAiReview, {
 				userId,
 				documentId: args.documentId,

@@ -1,6 +1,5 @@
 import type { GenericMutationCtx, GenericQueryCtx } from "convex/server";
 import { ConvexError, v } from "convex/values";
-import { internal } from "../_generated/api";
 import type { DataModel, Doc, Id } from "../_generated/dataModel";
 import {
 	internalMutation,
@@ -9,6 +8,10 @@ import {
 	query,
 } from "../_generated/server";
 import { findTombstone } from "../accountGuard";
+import {
+	cleanupDocumentBatch,
+	startDocumentCleanup as enqueueDocumentCleanup,
+} from "../documentCleanup";
 import { requireOwnedDocument, requireUserId } from "../documents";
 import { AI_CONSENT_VERSION } from "./consent";
 import { aiError } from "./errors";
@@ -23,7 +26,6 @@ const kindValidator = v.union(
 	v.literal("embed"),
 );
 const keySourceValidator = v.union(v.literal("byok"), v.literal("house"));
-const CLEANUP_BATCH = 128;
 
 async function hasCurrentConsent(
 	ctx: QueryCtx | MutationCtx,
@@ -130,7 +132,7 @@ export const begin = internalMutation({
 			const existingUsage = await ctx.db
 				.query("aiUsage")
 				.withIndex("by_run", (q) => q.eq("runId", existing._id))
-				.unique();
+				.first();
 			if (
 				existingUsage ||
 				(existing.status !== "failed" && existing.status !== "cancelled")
@@ -229,6 +231,7 @@ export const recordUsage = internalMutation({
 	args: {
 		runId: v.id("aiRuns"),
 		userId: v.string(),
+		callIndex: v.number(),
 		usage: usageValidator,
 	},
 	handler: async (ctx, args) => {
@@ -240,14 +243,20 @@ export const recordUsage = internalMutation({
 			!run.keySource
 		)
 			return { recorded: false as const };
-		const existing = await ctx.db
-			.query("aiUsage")
-			.withIndex("by_run", (q) => q.eq("runId", run._id))
-			.unique();
+		if (!Number.isInteger(args.callIndex) || args.callIndex < 0) {
+			return { recorded: false as const };
+		}
+		const existing = (
+			await ctx.db
+				.query("aiUsage")
+				.withIndex("by_run", (q) => q.eq("runId", run._id))
+				.take(16)
+		).find((row) => (row.callIndex ?? 0) === args.callIndex);
 		if (!existing) {
 			await ctx.db.insert("aiUsage", {
 				userId: run.userId,
 				runId: run._id,
+				callIndex: args.callIndex,
 				kind: run.kind,
 				model: run.model,
 				...args.usage,
@@ -280,12 +289,13 @@ export const succeed = internalMutation({
 		const existingUsage = await ctx.db
 			.query("aiUsage")
 			.withIndex("by_run", (q) => q.eq("runId", run._id))
-			.unique();
+			.first();
 		const now = Date.now();
 		if (!existingUsage) {
 			await ctx.db.insert("aiUsage", {
 				userId: run.userId,
 				runId: run._id,
+				callIndex: 0,
 				kind: run.kind,
 				model: run.model,
 				...args.usage,
@@ -349,10 +359,15 @@ export const finishError = internalMutation({
 		const run = await ctx.db.get(args.runId);
 		if (!run || run.userId !== args.userId) return;
 		if (run.status === "succeeded" || run.status === "outcome_unknown") return;
+		const recordedUsage = await ctx.db
+			.query("aiUsage")
+			.withIndex("by_run", (q) => q.eq("runId", run._id))
+			.first();
 		// Once the provider may have accepted work, aborts, timeouts and network
 		// failures cannot be converted into a retry-safe terminal state.
 		const status =
-			run.status === "provider_started" && args.outcomeUnknown
+			run.status === "provider_started" &&
+			(args.outcomeUnknown || recordedUsage !== null)
 				? "outcome_unknown"
 				: "failed";
 		const now = Date.now();
@@ -459,13 +474,23 @@ export const usageSummary = query({
 			embed: { requests: 0, costMicros: 0 },
 		};
 		let costMicros = 0;
+		const requestIds = new Set<string>();
+		const requestIdsByKind = {
+			transform: new Set<string>(),
+			review: new Set<string>(),
+			embed: new Set<string>(),
+		};
 		for (const row of rows) {
-			byKind[row.kind].requests += 1;
+			requestIds.add(row.runId);
+			requestIdsByKind[row.kind].add(row.runId);
 			byKind[row.kind].costMicros += row.costMicros;
 			costMicros += row.costMicros;
 		}
+		for (const kind of ["transform", "review", "embed"] as const) {
+			byKind[kind].requests = requestIdsByKind[kind].size;
+		}
 		return {
-			requests: rows.length,
+			requests: requestIds.size,
 			costMicros,
 			byKind,
 			truncated: rows.length === 2_000,
@@ -475,63 +500,11 @@ export const usageSummary = query({
 
 export const startDocumentCleanup = internalMutation({
 	args: { documentId: v.id("documents"), userId: v.string() },
-	handler: async (ctx, args) => await markDocumentForAiCleanup(ctx, args),
+	handler: async (ctx, args) => await enqueueDocumentCleanup(ctx, args),
 });
-
-export async function markDocumentForAiCleanup(
-	ctx: MutationCtx,
-	args: { documentId: Id<"documents">; userId: string },
-): Promise<void> {
-	const existing = await ctx.db
-		.query("aiDocumentDeletions")
-		.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
-		.unique();
-	const now = Date.now();
-	if (existing) await ctx.db.patch(existing._id, { updatedAt: now });
-	else {
-		await ctx.db.insert("aiDocumentDeletions", {
-			...args,
-			createdAt: now,
-			updatedAt: now,
-		});
-	}
-	await ctx.scheduler.runAfter(0, internal.ai.runs.cleanupDeletedDocument, {
-		documentId: args.documentId,
-	});
-}
 
 export const cleanupDeletedDocument = internalMutation({
 	args: { documentId: v.id("documents") },
-	handler: async (ctx, args): Promise<{ done: boolean; deleted: number }> => {
-		const job = await ctx.db
-			.query("aiDocumentDeletions")
-			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
-			.unique();
-		if (!job) return { done: true, deleted: 0 };
-		const usage = await ctx.db
-			.query("aiUsage")
-			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
-			.take(CLEANUP_BATCH);
-		for (const row of usage) await ctx.db.delete(row._id);
-		let deleted = usage.length;
-		if (deleted < CLEANUP_BATCH) {
-			const runs = await ctx.db
-				.query("aiRuns")
-				.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
-				.take(CLEANUP_BATCH - deleted);
-			for (const row of runs) await ctx.db.delete(row._id);
-			deleted += runs.length;
-		}
-		if (deleted === 0) {
-			await ctx.db.delete(job._id);
-			return { done: true, deleted: 0 };
-		}
-		await ctx.db.patch(job._id, { updatedAt: Date.now() });
-		await ctx.scheduler.runAfter(
-			0,
-			internal.ai.runs.cleanupDeletedDocument,
-			args,
-		);
-		return { done: false, deleted };
-	},
+	handler: async (ctx, args) =>
+		await cleanupDocumentBatch(ctx, args.documentId),
 });

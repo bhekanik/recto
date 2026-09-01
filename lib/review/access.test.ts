@@ -1,6 +1,6 @@
 import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
-import { api } from "@/convex/_generated/api";
+import { api, internal } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import schema from "@/convex/schema";
 import { diffRuns } from "@/lib/history/diff";
@@ -16,6 +16,11 @@ const modules: Record<string, () => Promise<unknown>> = {
 	"../../convex/versions.ts": () => import("@/convex/versions"),
 	"../../convex/history.ts": () => import("@/convex/history"),
 	"../../convex/review.ts": () => import("@/convex/review"),
+	"../../convex/documentCleanup.ts": () => import("@/convex/documentCleanup"),
+	"../../convex/ai/runs.ts": () => import("@/convex/ai/runs"),
+	"../../convex/ai/limits.ts": () => import("@/convex/ai/limits"),
+	"../../convex/accountGuard.ts": () => import("@/convex/accountGuard"),
+	"../../convex/blobReferences.ts": () => import("@/convex/blobReferences"),
 	"../../convex/_generated/api.js": () => import("@/convex/_generated/api"),
 	"../../convex/_generated/server.js": () =>
 		import("@/convex/_generated/server"),
@@ -559,6 +564,13 @@ describe("plan 010 PHASE A — sharing / ACL", () => {
 		expect(before.comments).toBe(1);
 
 		await owner.mutation(api.documents.remove, { documentId });
+		let cleanup = await t.mutation(internal.documentCleanup.run, {
+			documentId,
+		});
+		for (let attempt = 0; attempt < 8 && !cleanup.done; attempt += 1) {
+			cleanup = await t.mutation(internal.documentCleanup.run, { documentId });
+		}
+		expect(cleanup.done).toBe(true);
 
 		const after = await t.run(async (ctx) => ({
 			doc: await ctx.db.get(documentId),

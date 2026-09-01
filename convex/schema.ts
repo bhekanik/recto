@@ -190,6 +190,9 @@ export default defineSchema({
 	aiUsage: defineTable({
 		userId: v.string(),
 		runId: v.id("aiRuns"),
+		// One review run can make several provider calls. Optional keeps deployed
+		// rows readable; missing means the original single call at index zero.
+		callIndex: v.optional(v.number()),
 		kind: v.union(
 			v.literal("transform"),
 			v.literal("review"),
@@ -207,11 +210,19 @@ export default defineSchema({
 		createdAt: v.number(),
 	})
 		.index("by_run", ["runId"])
+		.index("by_run_call", ["runId", "callIndex"])
 		.index("by_user_created", ["userId", "createdAt"])
 		.index("by_document", ["documentId"]),
 
+	embeddingHealthState: defineTable({
+		name: v.literal("global"),
+		staleCount: v.number(),
+		scannedCount: v.number(),
+		updatedAt: v.number(),
+	}).index("by_name", ["name"]),
+
 	// The document row disappears in the user-facing deletion transaction. This
-	// durable job row keeps the bounded AI-ledger cleanup recoverable afterwards.
+	// durable job row keeps the bounded dependent-row cleanup recoverable.
 	aiDocumentDeletions: defineTable({
 		documentId: v.id("documents"),
 		userId: v.string(),

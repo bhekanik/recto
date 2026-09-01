@@ -11,6 +11,13 @@ import schema from "./schema";
 const modules: Record<string, () => Promise<unknown>> = {
 	"./schema.ts": () => import("./schema"),
 	"./documents.ts": () => import("./documents"),
+	"./documentCleanup.ts": () => import("./documentCleanup"),
+	"./ai/runs.ts": () => import("./ai/runs"),
+	"./ai/limits.ts": () => import("./ai/limits"),
+	"./accountGuard.ts": () => import("./accountGuard"),
+	"./accountPurge.ts": () => import("./accountPurge"),
+	"./blobReferences.ts": () => import("./blobReferences"),
+	"./storageTokens.ts": () => import("./storageTokens"),
 	"./files.ts": () => import("./files"),
 	"./_generated/api.js": () => import("./_generated/api"),
 	"./_generated/server.js": () => import("./_generated/server"),
@@ -68,13 +75,143 @@ describe("plan 013 — document delete GC", () => {
 
 		await owner.mutation(api.documents.remove, { documentId });
 
-		const remaining = await t.run(async (ctx) =>
-			ctx.db
+		let cleanup = await t.mutation(internal.documentCleanup.run, {
+			documentId,
+		});
+		for (let attempt = 0; attempt < 4 && !cleanup.done; attempt += 1) {
+			cleanup = await t.mutation(internal.documentCleanup.run, { documentId });
+		}
+		const remaining = await t.run(async (ctx) => ({
+			chunks: await ctx.db
 				.query("docChunks")
 				.withIndex("by_document", (q) => q.eq("documentId", documentId))
 				.collect(),
-		);
-		expect(remaining).toHaveLength(0);
+			job: await ctx.db
+				.query("aiDocumentDeletions")
+				.withIndex("by_document", (q) => q.eq("documentId", documentId))
+				.unique(),
+		}));
+		expect(remaining).toEqual({ chunks: [], job: null });
+	});
+
+	it("hides a large document first and drains its graph in bounded passes", async () => {
+		const t = convexTest(schema, modules);
+		const owner = t.withIdentity(OWNER);
+		const { documentId } = await owner.mutation(api.documents.create, {
+			title: "Large draft",
+		});
+		await t.run(async (ctx) => {
+			for (let index = 0; index < 130; index += 1) {
+				await ctx.db.insert("versions", {
+					documentId,
+					nodeId: `node-${index}`,
+					label: `Version ${index}`,
+					kind: "auto",
+					createdAt: index + 1,
+				});
+				await ctx.db.insert("docChunks", {
+					userId: OWNER.subject,
+					documentId,
+					charStart: index,
+					charEnd: index + 1,
+					text: `${index}`,
+					embedding: new Array(1536).fill(0),
+					embeddedNodeId: "old",
+					updatedAt: index + 1,
+				});
+			}
+		});
+
+		await owner.mutation(api.documents.remove, { documentId });
+		const hidden = await t.run(async (ctx) => ({
+			document: await ctx.db.get(documentId),
+			job: await ctx.db
+				.query("aiDocumentDeletions")
+				.withIndex("by_document", (q) => q.eq("documentId", documentId))
+				.unique(),
+			versions: await ctx.db
+				.query("versions")
+				.withIndex("by_document", (q) => q.eq("documentId", documentId))
+				.collect(),
+		}));
+		expect(hidden.document).toBeNull();
+		expect(hidden.job).not.toBeNull();
+		expect(hidden.versions).toHaveLength(130);
+
+		const first = await t.mutation(internal.documentCleanup.run, {
+			documentId,
+		});
+		expect(first).toEqual({ done: false, deleted: 1 });
+		const second = await t.mutation(internal.documentCleanup.run, {
+			documentId,
+		});
+		expect(second).toEqual({ done: false, deleted: 64 });
+
+		let result = second;
+		for (let attempt = 0; attempt < 10 && !result.done; attempt += 1) {
+			result = await t.mutation(internal.documentCleanup.run, { documentId });
+		}
+		expect(result.done).toBe(true);
+		const remaining = await t.run(async (ctx) => ({
+			versions: await ctx.db
+				.query("versions")
+				.withIndex("by_document", (q) => q.eq("documentId", documentId))
+				.collect(),
+			chunks: await ctx.db
+				.query("docChunks")
+				.withIndex("by_document", (q) => q.eq("documentId", documentId))
+				.collect(),
+			job: await ctx.db
+				.query("aiDocumentDeletions")
+				.withIndex("by_document", (q) => q.eq("documentId", documentId))
+				.unique(),
+		}));
+		expect(remaining).toEqual({ versions: [], chunks: [], job: null });
+	});
+
+	it("account deletion finishes an already-hidden document cleanup job", async () => {
+		const t = convexTest(schema, modules);
+		const owner = t.withIdentity(OWNER);
+		const { documentId } = await owner.mutation(api.documents.create, {
+			title: "Delete twice",
+		});
+		await t.run(async (ctx) => {
+			for (let index = 0; index < 70; index += 1) {
+				await ctx.db.insert("docChunks", {
+					userId: OWNER.subject,
+					documentId,
+					charStart: index,
+					charEnd: index + 1,
+					text: `${index}`,
+					embedding: new Array(1536).fill(0),
+					embeddedNodeId: "old",
+					updatedAt: index + 1,
+				});
+			}
+		});
+		await owner.mutation(api.documents.remove, { documentId });
+
+		let purge = await t.mutation(internal.accountPurge.purgeData, {
+			userId: OWNER.subject,
+		});
+		expect(purge.deleted).toBeGreaterThan(0);
+		expect(purge.done).toBe(false);
+		for (let attempt = 0; attempt < 8 && !purge.done; attempt += 1) {
+			purge = await t.mutation(internal.accountPurge.purgeData, {
+				userId: OWNER.subject,
+			});
+		}
+		const remaining = await t.run(async (ctx) => ({
+			chunks: await ctx.db
+				.query("docChunks")
+				.withIndex("by_document", (q) => q.eq("documentId", documentId))
+				.collect(),
+			job: await ctx.db
+				.query("aiDocumentDeletions")
+				.withIndex("by_document", (q) => q.eq("documentId", documentId))
+				.unique(),
+		}));
+		expect(remaining).toEqual({ chunks: [], job: null });
 	});
 
 	it("orphanSweep keeps a blob referenced in live document markdown", async () => {

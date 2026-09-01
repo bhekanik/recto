@@ -9,6 +9,7 @@ const modules = {
 	"./documents.ts": () => import("../documents"),
 	"./review.ts": () => import("../review"),
 	"./embeddings.ts": () => import("../embeddings"),
+	"./documentCleanup.ts": () => import("../documentCleanup"),
 	"./blobReferences.ts": () => import("../blobReferences"),
 	"./accountGuard.ts": () => import("../accountGuard"),
 	"./_generated/api.js": () => import("../_generated/api"),
@@ -274,6 +275,41 @@ describe("AI run durability", () => {
 		expect(run?.status).toBe("failed");
 	});
 
+	it("makes a partially billed multi-call run non-retryable", async () => {
+		const t = convexTest(schema, modules);
+		const { runId } = await seedRun(t);
+		for (const callIndex of [0, 1]) {
+			await t.mutation(internal.ai.runs.recordUsage, {
+				runId,
+				userId: USER,
+				callIndex,
+				usage: {
+					promptTokens: 10 + callIndex,
+					completionTokens: 2,
+					reasoningTokens: 0,
+					costMicros: 20 + callIndex,
+					latencyMs: 5,
+				},
+			});
+		}
+		await t.mutation(internal.ai.runs.finishError, {
+			runId,
+			userId: USER,
+			errorCode: "ai_provider_rejected",
+			outcomeUnknown: false,
+		});
+		const snapshot = await t.run(async (ctx) => ({
+			run: await ctx.db.get(runId),
+			usage: await ctx.db
+				.query("aiUsage")
+				.withIndex("by_run", (q) => q.eq("runId", runId))
+				.collect(),
+		}));
+		expect(snapshot.run?.status).toBe("outcome_unknown");
+		expect(snapshot.usage.map((row) => row.callIndex)).toEqual([0, 1]);
+		expect(snapshot.usage.map((row) => row.costMicros)).toEqual([20, 21]);
+	});
+
 	it("records charged usage before refusing a stale result", async () => {
 		const t = convexTest(schema, modules);
 		const { documentId, runId } = await seedRun(t);
@@ -460,9 +496,9 @@ describe("AI run durability", () => {
 		const first = await t.mutation(internal.ai.runs.cleanupDeletedDocument, {
 			documentId,
 		});
-		expect(first).toEqual({ done: false, deleted: 128 });
+		expect(first).toEqual({ done: false, deleted: 1 });
 		let result = first;
-		for (let attempt = 0; attempt < 5 && !result.done; attempt += 1) {
+		for (let attempt = 0; attempt < 10 && !result.done; attempt += 1) {
 			result = await t.mutation(internal.ai.runs.cleanupDeletedDocument, {
 				documentId,
 			});
