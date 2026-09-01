@@ -735,6 +735,7 @@ struct MigrationTests {
     #expect(document.draftRevision == 0)
     #expect(document.titleMode == .manual)
     #expect(document.remoteTitleUpdatedAt == nil)
+    #expect(!document.editorIngressAcknowledged)
 
     #expect(try await store.nodes(documentLocalId: "doc-1").count == 3)
 

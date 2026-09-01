@@ -385,8 +385,13 @@ public actor RectoStore {
 
       // Grouping can commit the previous body while the current callback starts
       // the next group. That newer ingress must follow the commit, not vanish.
+      let committedAcknowledgedIngress =
+        preserveQueuedDraftJob && document.editorIngressRevision != nil
+        && document.editorIngressAcknowledged && document.draftMarkdown == markdown
       let retainedEditorIngress =
-        document.editorIngressRevision != nil && document.draftMarkdown != markdown
+        document.editorIngressRevision != nil
+        && (document.draftMarkdown != markdown || preserveQueuedDraftJob)
+        && !committedAcknowledgedIngress
       var retainedDraftJob: OutboxJob?
       if job != nil {
         let queuedDraft = try OutboxJob
@@ -410,6 +415,7 @@ public actor RectoStore {
         document.draftSelectionAnchor = nil
         document.draftSelectionHead = nil
         document.editorIngressRevision = nil
+        document.editorIngressAcknowledged = false
       }
       document.updatedAt = now
       document.draftRevision += 1
@@ -483,6 +489,7 @@ public actor RectoStore {
       document.draftSelectionAnchor = nil
       document.draftSelectionHead = nil
       document.editorIngressRevision = nil
+      document.editorIngressAcknowledged = false
       document.updatedAt = now
       document.draftRevision += 1
       if clearDivergence {
@@ -537,6 +544,7 @@ public actor RectoStore {
       }
       document.draftRevision += 1
       document.editorIngressRevision = document.draftMarkdown == nil ? nil : document.draftRevision
+      document.editorIngressAcknowledged = false
       if document.draftMarkdown == nil,
         document.syncState == .pending,
         document.queueBlockedReason == nil,
@@ -581,6 +589,7 @@ public actor RectoStore {
       if document.syncState != .diverged { document.syncState = .pending }
       document.draftRevision += 1
       document.editorIngressRevision = document.draftRevision
+      document.editorIngressAcknowledged = false
       try document.update(db)
 
       // Draft bodies are mutable full snapshots. The newest accepted snapshot
@@ -646,22 +655,30 @@ public actor RectoStore {
     }
   }
 
-  /// Clear a clean-head ingress only after the server accepted that exact body.
-  /// A non-clean draft still needs its local row until history commits it.
+  /// Clear a clean-head ingress only after the server accepted its exact body
+  /// and, in derived mode, its exact title. A body-only acknowledgement leaves
+  /// the marker for relaunch recovery if the async title worker dies.
   public func acknowledgeEditorIngress(
     documentLocalId: String,
-    markdown: String
+    markdown: String,
+    title: String?
   ) throws {
     try writer.write { db in
       guard var document = try DocumentRecord.fetchOne(db, key: documentLocalId),
         document.editorIngressRevision != nil,
         document.draftMarkdown == markdown,
-        document.markdown == markdown
+        document.titleMode == .manual || (title != nil && document.title == title)
       else { return }
+      guard document.markdown == markdown else {
+        document.editorIngressAcknowledged = true
+        try document.update(db)
+        return
+      }
       document.draftMarkdown = nil
       document.draftSelectionAnchor = nil
       document.draftSelectionHead = nil
       document.editorIngressRevision = nil
+      document.editorIngressAcknowledged = false
       document.draftRevision += 1
       try document.update(db)
     }
@@ -902,6 +919,7 @@ public actor RectoStore {
       document.draftSelectionAnchor = nil
       document.draftSelectionHead = nil
       document.editorIngressRevision = nil
+      document.editorIngressAcknowledged = false
       document.divergedRemoteHeadNodeId = nil
       document.queueBlockedReason = nil
       document.draftRevision += 1
@@ -970,6 +988,7 @@ public actor RectoStore {
       document.draftSelectionAnchor = nil
       document.draftSelectionHead = nil
       document.editorIngressRevision = nil
+      document.editorIngressAcknowledged = false
       document.divergedRemoteHeadNodeId = nil
       document.queueBlockedReason = nil
       document.draftRevision += 1

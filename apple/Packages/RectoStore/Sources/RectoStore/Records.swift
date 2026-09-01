@@ -70,6 +70,9 @@ public struct DocumentRecord: Codable, Sendable, FetchableRecord, PersistableRec
   /// Revision written synchronously by the editor callback and not yet promoted
   /// into history or acknowledged remotely. Server drafts leave this nil.
   public var editorIngressRevision: Int?
+  /// The server accepted the current ingress snapshot before its history commit.
+  /// The commit can then clear recovery state even when no draft job remains.
+  public var editorIngressAcknowledged: Bool
   public var syncState: SyncState
   /// Set when `syncState == .diverged`: the remote head we refused to adopt.
   public var divergedRemoteHeadNodeId: String?
@@ -97,6 +100,7 @@ public struct DocumentRecord: Codable, Sendable, FetchableRecord, PersistableRec
     queueBlockedReason: String? = nil,
     draftRevision: Int = 0,
     editorIngressRevision: Int? = nil,
+    editorIngressAcknowledged: Bool = false,
     syncState: SyncState = .pending,
     divergedRemoteHeadNodeId: String? = nil,
     updatedAt: Double,
@@ -121,6 +125,7 @@ public struct DocumentRecord: Codable, Sendable, FetchableRecord, PersistableRec
     self.queueBlockedReason = queueBlockedReason
     self.draftRevision = draftRevision
     self.editorIngressRevision = editorIngressRevision
+    self.editorIngressAcknowledged = editorIngressAcknowledged
     self.syncState = syncState
     self.divergedRemoteHeadNodeId = divergedRemoteHeadNodeId
     self.updatedAt = updatedAt

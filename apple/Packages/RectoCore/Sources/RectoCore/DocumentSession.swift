@@ -195,19 +195,28 @@ public actor DocumentSession {
     // recovery draft is on disk but invisible: the editor would show the head and
     // the user's last sentences would look lost.
     let recoveredIngress = document.editorIngressRevision != nil
-    if let draft = document.draftMarkdown {
+    let cleanRecoveredIngress = recoveredIngress && document.draftMarkdown == markdown
+    if let draft = document.draftMarkdown, !cleanRecoveredIngress {
       restored.restorePendingDraft(
         markdown: draft, selection: document.draftSelection, now: now())
     }
     controller = restored
+    var repairedRecoveredTitle = false
 
     // A synchronous editor ingress can survive a kill before its async worker
     // runs. Promote that recovered draft to a node/outbox job during open so a
     // read-only relaunch will still sync it after connectivity returns.
-    if recoveredIngress { try await performFlush() }
+    if cleanRecoveredIngress {
+      repairedRecoveredTitle = try await repairRecoveredEditorTitle(
+        markdown: markdown, revision: document.draftRevision)
+      try await reload()
+    } else if recoveredIngress {
+      try await performFlush()
+    }
 
     if let sync {
       await sync.openDocument(localId: documentLocalId)
+      if repairedRecoveredTitle { await sync.requestDrain() }
       eventTask = Task { [weak self] in
         for await event in await sync.events {
           guard let self else { break }
@@ -819,6 +828,25 @@ public actor DocumentSession {
   private func derivedTitle(for markdown: String) -> String? {
     guard document?.titleMode == .derived else { return nil }
     return deriveTitle(markdown)
+  }
+
+  private func repairRecoveredEditorTitle(markdown: String, revision: Int) async throws -> Bool {
+    guard let title = derivedTitle(for: markdown) else { return false }
+    let timestamp = now()
+    let job = OutboxJob(
+      documentLocalId: documentLocalId,
+      kind: .draftSave,
+      clientMutationId: ulid(),
+      payload: OutboxPayload(
+        title: title, markdown: markdown, wordCount: countWords(markdown)
+      ).encoded,
+      createdAt: timestamp)
+    return try await store.finishEditorIngressTitle(
+      documentLocalId: documentLocalId,
+      markdown: markdown,
+      expectedDraftRevision: revision,
+      title: title,
+      job: job)
   }
 
   private func children(of nodeId: String) -> [String] {

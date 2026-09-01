@@ -352,14 +352,15 @@ struct OrderedDocumentEditsTests {
         ) { change in
             try await store.acknowledgeEditorIngress(
                 documentLocalId: document.localId,
-                markdown: change.markdown
+                markdown: change.markdown,
+                title: nil
             )
         }
 
         queue.accept(markdown: "")
         await gate.waitUntilStarted()
         for _ in 0..<20 { await Task.yield() }
-        #expect(try await store.document(localId: document.localId)?.editorIngressRevision == nil)
+        #expect(try await store.document(localId: document.localId)?.editorIngressRevision != nil)
         await gate.release()
         await queue.waitUntilDrained()
 

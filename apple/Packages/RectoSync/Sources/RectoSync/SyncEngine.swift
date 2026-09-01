@@ -1052,7 +1052,8 @@ public actor SyncEngine: SyncControlling {
       }
       try await store.acknowledgeEditorIngress(
         documentLocalId: document.localId,
-        markdown: payload.markdown ?? document.displayMarkdown)
+        markdown: payload.markdown ?? document.displayMarkdown,
+        title: payload.title)
       return .completed
 
     case .rename:
