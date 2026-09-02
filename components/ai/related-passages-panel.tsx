@@ -3,6 +3,12 @@
 import { X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import {
+	Dialog,
+	DialogClose,
+	DialogContent,
+	DialogTitle,
+} from "@/components/ui/dialog";
 import type { Id } from "@/convex/_generated/dataModel";
 import type { RelatedPassage } from "@/convex/embeddings";
 import { useRag } from "@/lib/ai/use-rag";
@@ -13,6 +19,7 @@ type Props = {
 	activeDocumentId: Id<"documents"> | null;
 	/** Reads the current section/document markdown to use as the query. */
 	getQueryText: () => string;
+	getSourceNodeId: () => string | null;
 	/** Open a cited passage: switch to that doc and scroll to charStart. */
 	onOpenPassage: (documentId: Id<"documents">, charStart: number) => void;
 	onClose: () => void;
@@ -30,6 +37,7 @@ export function RelatedPassagesPanel({
 	open,
 	activeDocumentId,
 	getQueryText,
+	getSourceNodeId,
 	onOpenPassage,
 	onClose,
 }: Props) {
@@ -37,14 +45,25 @@ export function RelatedPassagesPanel({
 	const [status, setStatus] = useState<Status>("idle");
 	const [passages, setPassages] = useState<RelatedPassage[]>([]);
 	const [error, setError] = useState<string | null>(null);
-	const restoreFocusRef = useRef<HTMLElement | null>(null);
 	const abortRef = useRef<AbortController | null>(null);
+	const closeRef = useRef<HTMLButtonElement | null>(null);
+	const restoreFocusRef = useRef<HTMLElement | null>(null);
+	const activeElement = globalThis.document?.activeElement;
+	if (
+		open &&
+		!restoreFocusRef.current &&
+		activeElement &&
+		activeElement instanceof globalThis.HTMLElement
+	) {
+		restoreFocusRef.current = activeElement;
+	}
 
 	const run = useCallback(async () => {
 		abortRef.current?.abort();
 		const ac = new AbortController();
 		abortRef.current = ac;
-		const text = getQueryText().trim();
+		const sourceMarkdown = getQueryText();
+		const text = sourceMarkdown.trim();
 		if (!text) {
 			setStatus("error");
 			setError("Nothing to match — the document is empty.");
@@ -55,6 +74,8 @@ export function RelatedPassagesPanel({
 		try {
 			const results = await findRelated({
 				documentId: activeDocumentId,
+				sourceNodeId: getSourceNodeId(),
+				sourceMarkdown,
 				queryText: text,
 				signal: ac.signal,
 			});
@@ -62,15 +83,14 @@ export function RelatedPassagesPanel({
 			setPassages(results);
 			setStatus("ready");
 		} catch (err) {
-			if ((err as Error)?.name === "AbortError") return;
+			if (err instanceof Error && err.name === "AbortError") return;
 			setStatus("error");
-			setError((err as Error).message || "Search failed");
+			setError(err instanceof Error ? err.message : "Search failed");
 		}
-	}, [findRelated, getQueryText, activeDocumentId]);
+	}, [findRelated, getQueryText, getSourceNodeId, activeDocumentId]);
 
 	useEffect(() => {
 		if (open) {
-			restoreFocusRef.current = document.activeElement as HTMLElement | null;
 			void run();
 		} else {
 			abortRef.current?.abort();
@@ -78,54 +98,45 @@ export function RelatedPassagesPanel({
 			setStatus("idle");
 			setPassages([]);
 			setError(null);
-			restoreFocusRef.current?.focus?.();
-			restoreFocusRef.current = null;
 		}
 	}, [open, run]);
 
-	useEffect(() => {
-		if (!open) return;
-		const onKey = (e: KeyboardEvent) => {
-			if (e.key === "Escape") {
-				e.preventDefault();
-				onClose();
-			}
-		};
-		window.addEventListener("keydown", onKey, true);
-		return () => window.removeEventListener("keydown", onKey, true);
-	}, [open, onClose]);
-
-	if (!open) return null;
-
 	return (
-		<div className="fixed inset-y-0 right-0 z-[90] flex">
-			<button
-				type="button"
-				aria-label="Close related passages"
-				className="recto-scrim absolute inset-0 -left-[100vw]"
-				onClick={onClose}
-			/>
-			<aside
-				className="recto-panel relative z-10 flex h-full w-[min(24rem,100vw)] flex-col rounded-none border-y-0 border-r-0 border-l"
-				role="dialog"
-				aria-modal="true"
-				aria-labelledby="recto-related-title"
+		<Dialog
+			open={open}
+			onOpenChange={(next) => {
+				if (!next) {
+					const restoreFocus = restoreFocusRef.current;
+					onClose();
+					queueMicrotask(() => restoreFocus?.focus());
+				}
+			}}
+			onOpenChangeComplete={(nextOpen) => {
+				if (!nextOpen) restoreFocusRef.current = null;
+			}}
+		>
+			<DialogContent
+				showCloseButton={false}
+				overlayClassName="z-[90]"
+				className="recto-panel fixed inset-y-0 right-0 z-[91] flex h-full w-[min(24rem,100vw)] flex-col rounded-none border-y-0 border-r-0 border-l outline-none"
+				initialFocus={closeRef}
+				finalFocus={restoreFocusRef}
 			>
 				<header className="flex shrink-0 items-center justify-between border-b border-[var(--color-line)] px-[var(--space-4)] py-[var(--space-3)]">
-					<h2
+					<DialogTitle
 						id="recto-related-title"
 						className="text-[length:var(--text-ui-sm)] font-medium text-[var(--color-ink-secondary)]"
 					>
 						Related passages
-					</h2>
-					<button
-						type="button"
-						onClick={onClose}
+					</DialogTitle>
+					<DialogClose
+						ref={closeRef}
+						autoFocus
 						aria-label="Close related passages"
 						className="text-[var(--color-ink-tertiary)] transition-colors hover:text-[var(--color-ink-primary)]"
 					>
 						<X aria-hidden className="size-4" />
-					</button>
+					</DialogClose>
 				</header>
 
 				<div className="min-h-0 flex-1 overflow-y-auto px-[var(--space-3)] py-[var(--space-3)]">
@@ -174,7 +185,7 @@ export function RelatedPassagesPanel({
 				<footer className="shrink-0 border-t border-[var(--color-line)] px-[var(--space-4)] py-[var(--space-2)] text-[0.6875rem] text-[var(--color-ink-tertiary)]">
 					Semantic matches from your own drafts · click to jump
 				</footer>
-			</aside>
-		</div>
+			</DialogContent>
+		</Dialog>
 	);
 }

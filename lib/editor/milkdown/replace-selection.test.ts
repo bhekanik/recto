@@ -1,0 +1,248 @@
+import { type Node as ProseMirrorNode, Schema } from "prosemirror-model";
+import { TextSelection } from "prosemirror-state";
+import { describe, expect, it } from "vitest";
+import { replaceMarkdownSelection } from "./replace-selection";
+
+const schema = new Schema({
+	nodes: {
+		doc: { content: "block+" },
+		paragraph: { content: "inline*", group: "block" },
+		heading: {
+			content: "inline*",
+			group: "block",
+			attrs: { level: { default: 2 } },
+		},
+		blockquote: { content: "block+", group: "block" },
+		bullet_list: { content: "list_item+", group: "block" },
+		list_item: { content: "paragraph block*" },
+		code_block: { content: "text*", group: "block", code: true },
+		text: { group: "inline" },
+		hard_break: { inline: true, group: "inline", selectable: false },
+	},
+	marks: {
+		strong: {},
+		em: {},
+	},
+});
+
+function paragraph(...content: ProseMirrorNode[]) {
+	return schema.node("paragraph", null, content);
+}
+
+function parser(value: string): ProseMirrorNode {
+	if (value === "complex") {
+		return schema.node("doc", null, [
+			paragraph(schema.text("intro")),
+			schema.node("bullet_list", null, [
+				schema.node("list_item", null, [
+					paragraph(schema.text("outer")),
+					schema.node("bullet_list", null, [
+						schema.node("list_item", null, [paragraph(schema.text("inner"))]),
+					]),
+				]),
+			]),
+			schema.node("code_block", null, schema.text("const x = 1;\n")),
+		]);
+	}
+	if (value.includes("\\\n")) {
+		const [before = "", after = ""] = value.split("\\\n");
+		return schema.node("doc", null, [
+			paragraph(
+				schema.text(before),
+				schema.node("hard_break"),
+				schema.text(after),
+			),
+		]);
+	}
+	return schema.node(
+		"doc",
+		null,
+		value.split("\n\n").map((block) => paragraph(schema.text(block))),
+	);
+}
+
+function replaceWholeTextblock(
+	doc: ProseMirrorNode,
+	start: number,
+	end: number,
+) {
+	return replaceMarkdownSelection({
+		doc,
+		selection: TextSelection.create(doc, start, end),
+		replacement: "replacement",
+		parse: parser,
+	});
+}
+
+describe("replaceMarkdownSelection", () => {
+	it("keeps a heading node for a full heading selection", () => {
+		const doc = schema.node("doc", null, [
+			schema.node("heading", { level: 2 }, schema.text("heading")),
+		]);
+		const next = replaceWholeTextblock(doc, 1, 8);
+		expect(next?.child(0).type.name).toBe("heading");
+		expect(next?.child(0).attrs.level).toBe(2);
+		expect(next?.child(0).textContent).toBe("replacement");
+	});
+
+	it("keeps code, list and blockquote containers", () => {
+		const code = schema.node("doc", null, [
+			schema.node("code_block", null, schema.text("code")),
+		]);
+		expect(replaceWholeTextblock(code, 1, 5)?.child(0).type.name).toBe(
+			"code_block",
+		);
+
+		const quote = schema.node("doc", null, [
+			schema.node("blockquote", null, [paragraph(schema.text("quote"))]),
+		]);
+		const quoted = replaceWholeTextblock(quote, 2, 7);
+		expect(quoted?.child(0).type.name).toBe("blockquote");
+		expect(quoted?.child(0).child(0).textContent).toBe("replacement");
+
+		const list = schema.node("doc", null, [
+			schema.node("bullet_list", null, [
+				schema.node("list_item", null, [paragraph(schema.text("item"))]),
+			]),
+		]);
+		const listed = replaceWholeTextblock(list, 3, 7);
+		expect(listed?.child(0).type.name).toBe("bullet_list");
+		expect(listed?.child(0).child(0).child(0).textContent).toBe("replacement");
+	});
+
+	it("keeps every block in a full textblock replacement", () => {
+		for (const [doc, from, to] of [
+			[schema.node("doc", null, [paragraph(schema.text("old"))]), 1, 4],
+			[
+				schema.node("doc", null, [
+					schema.node("heading", { level: 2 }, schema.text("old")),
+				]),
+				1,
+				4,
+			],
+			[
+				schema.node("doc", null, [
+					schema.node("code_block", null, schema.text("old")),
+				]),
+				1,
+				4,
+			],
+		] as const) {
+			const next = replaceMarkdownSelection({
+				doc,
+				selection: TextSelection.create(doc, from, to),
+				replacement: "first\n\nsecond",
+				parse: parser,
+			});
+			expect(next?.childCount).toBe(2);
+			expect(next?.textContent).toBe("firstsecond");
+		}
+
+		const list = schema.node("doc", null, [
+			schema.node("bullet_list", null, [
+				schema.node("list_item", null, [paragraph(schema.text("old"))]),
+			]),
+		]);
+		const listed = replaceMarkdownSelection({
+			doc: list,
+			selection: TextSelection.create(list, 3, 6),
+			replacement: "first\n\nsecond",
+			parse: parser,
+		});
+		expect(listed?.child(0).type.name).toBe("bullet_list");
+		expect(listed?.child(0).child(0).childCount).toBe(2);
+		expect(listed?.textContent).toBe("firstsecond");
+	});
+
+	it("refuses multi-block output for a partial inline selection", () => {
+		const doc = schema.node("doc", null, [paragraph(schema.text("old text"))]);
+		expect(
+			replaceMarkdownSelection({
+				doc,
+				selection: TextSelection.create(doc, 2, 4),
+				replacement: "first\n\nsecond",
+				parse: parser,
+			}),
+		).toBeNull();
+	});
+
+	it("replaces complete blocks with a paragraph, nested list, and fenced code", () => {
+		const doc = schema.node("doc", null, [
+			paragraph(schema.text("first")),
+			paragraph(schema.text("second")),
+			paragraph(schema.text("tail")),
+		]);
+		const next = replaceMarkdownSelection({
+			doc,
+			selection: TextSelection.create(doc, 1, 14),
+			replacement: "complex",
+			parse: parser,
+		});
+		expect(next?.childCount).toBe(4);
+		expect(next?.child(0).textContent).toBe("intro");
+		expect(next?.child(1).type.name).toBe("bullet_list");
+		expect(next?.child(1).child(0).child(1).type.name).toBe("bullet_list");
+		expect(next?.child(2).type.name).toBe("code_block");
+		expect(next?.child(3).textContent).toBe("tail");
+	});
+
+	it("keeps boundary spaces for a partial inline selection", () => {
+		const doc = schema.node("doc", null, [
+			paragraph(schema.text("one old two")),
+		]);
+		const next = replaceMarkdownSelection({
+			doc,
+			selection: TextSelection.create(doc, 5, 8),
+			replacement: " new ",
+			parse: parser,
+		});
+		expect(next?.textContent).toBe("one  new  two");
+	});
+
+	it("inherits surrounding marks and retains parsed hard breaks", () => {
+		const strong = schema.mark("strong");
+		const doc = schema.node("doc", null, [
+			paragraph(schema.text("old text", [strong])),
+		]);
+		const marked = replaceMarkdownSelection({
+			doc,
+			selection: TextSelection.create(doc, 2, 4),
+			replacement: "new",
+			parse: parser,
+		});
+		expect(
+			marked
+				?.child(0)
+				.child(0)
+				.marks.map((mark) => mark.type.name),
+		).toContain("strong");
+
+		const breaks = replaceMarkdownSelection({
+			doc: schema.node("doc", null, [paragraph(schema.text("old text"))]),
+			selection: TextSelection.create(
+				schema.node("doc", null, [paragraph(schema.text("old text"))]),
+				2,
+				4,
+			),
+			replacement: "a\\\nb",
+			parse: parser,
+		});
+		expect(breaks?.child(0).childCount).toBe(3);
+		expect(breaks?.child(0).child(1).type.name).toBe("hard_break");
+	});
+
+	it("uses the captured selection when the live selection later moves", () => {
+		const doc = schema.node("doc", null, [
+			paragraph(schema.text("old and old")),
+		]);
+		const captured = TextSelection.create(doc, 9, 12);
+		TextSelection.create(doc, 1, 4);
+		const next = replaceMarkdownSelection({
+			doc,
+			selection: captured,
+			replacement: "new",
+			parse: parser,
+		});
+		expect(next?.textContent).toBe("old and new");
+	});
+});

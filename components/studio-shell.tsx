@@ -5,6 +5,7 @@ import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import { Command as CommandIcon, GitBranch } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AiConsentDialog } from "@/components/ai/ai-consent-dialog";
 import { AiReviewPanel } from "@/components/ai/ai-review-panel";
 import { AiTransformPopover } from "@/components/ai/ai-transform-popover";
 import { RelatedPassagesPanel } from "@/components/ai/related-passages-panel";
@@ -166,13 +167,50 @@ function StudioWorkspace() {
 		api.review.documentShareState,
 		activeDocId ? { documentId: activeDocId } : "skip",
 	);
+	const aiConsent = useQuery(api.ai.consent.get, {});
+	const acceptAiConsent = useMutation(api.ai.consent.accept);
+	const [aiConsentOpen, setAiConsentOpen] = useState(false);
+	const [aiConsentBusy, setAiConsentBusy] = useState(false);
+	const [aiConsentError, setAiConsentError] = useState<string | null>(null);
 	const activeDocShared = activeShareState?.shared ?? false;
 	// The owner can manage sharing; a grantee cannot.
 	const activeDocIsOwned =
 		activeShareState === undefined || activeShareState === null
 			? true
 			: activeShareState.role === "owner";
-	const effectiveAiEnabled = settings.aiEnabled && !activeDocShared;
+	const hasCurrentAiConsent =
+		aiConsent?.acceptedAt !== null && aiConsent !== undefined;
+	const effectiveAiEnabled =
+		settings.aiEnabled && hasCurrentAiConsent && !activeDocShared;
+	const toggleAiEnabled = useCallback(() => {
+		if (settings.aiEnabled) {
+			settings.setAiEnabled(false);
+			return;
+		}
+		if (hasCurrentAiConsent) {
+			settings.setAiEnabled(true);
+			return;
+		}
+		setAiConsentOpen(true);
+	}, [hasCurrentAiConsent, settings]);
+	const handleAcceptAiConsent = useCallback(async () => {
+		if (!aiConsent) return;
+		setAiConsentBusy(true);
+		setAiConsentError(null);
+		try {
+			await acceptAiConsent({ version: aiConsent.version });
+			settings.setAiEnabled(true);
+			setAiConsentOpen(false);
+		} catch (error) {
+			setAiConsentError(
+				error instanceof Error
+					? error.message
+					: "Could not enable AI. Try again.",
+			);
+		} finally {
+			setAiConsentBusy(false);
+		}
+	}, [acceptAiConsent, aiConsent, settings]);
 	const [shareDialogOpen, setShareDialogOpen] = useState(false);
 
 	// Comments (plan 010 Phase B). Available whenever the caller can see the active
@@ -412,6 +450,7 @@ function StudioWorkspace() {
 				setStatusVisible,
 				setZen,
 				setGoalConfigOpen,
+				toggleAiEnabled,
 			}),
 		[
 			actions,
@@ -433,6 +472,7 @@ function StudioWorkspace() {
 			setZen,
 			setAiReviewOpen,
 			setRelatedOpen,
+			toggleAiEnabled,
 		],
 	);
 
@@ -946,6 +986,7 @@ function StudioWorkspace() {
 							onAccept={aiTransform.accept}
 							onReject={aiTransform.reject}
 							onCancel={aiTransform.cancel}
+							onReconcile={() => void aiTransform.reconcile()}
 						/>
 						<AiReviewPanel
 							open={aiReviewOpen}
@@ -968,6 +1009,9 @@ function StudioWorkspace() {
 							open={relatedOpen}
 							activeDocumentId={activeDocId}
 							getQueryText={getActiveMarkdown}
+							getSourceNodeId={() =>
+								activeHistoryRef.current?.currentNodeId ?? null
+							}
 							onOpenPassage={openRelatedPassage}
 							onClose={() => {
 								setRelatedOpen(false);
@@ -978,6 +1022,16 @@ function StudioWorkspace() {
 				)}
 
 				<Toaster />
+				<AiConsentDialog
+					open={aiConsentOpen}
+					busy={aiConsentBusy}
+					error={aiConsentError}
+					onOpenChange={(open) => {
+						setAiConsentOpen(open);
+						if (!open) setAiConsentError(null);
+					}}
+					onAccept={() => void handleAcceptAiConsent()}
+				/>
 			</div>
 		</StudioSettingsProvider>
 	);

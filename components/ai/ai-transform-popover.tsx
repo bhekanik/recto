@@ -1,10 +1,19 @@
 "use client";
 
 import { Command } from "cmdk";
+import { X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { TransformRange } from "@/lib/ai/apply-transform";
+import {
+	Dialog,
+	DialogClose,
+	DialogContent,
+	DialogTitle,
+} from "@/components/ui/dialog";
 import { instructionLabel, TRANSFORM_PRESETS } from "@/lib/ai/instructions";
-import type { AiTransformState } from "@/lib/ai/use-ai-transform";
+import type {
+	AiTransformSnapshot,
+	AiTransformState,
+} from "@/lib/ai/use-ai-transform";
 
 const HEADING =
 	"[&_[cmdk-group-heading]]:px-[var(--space-2)] [&_[cmdk-group-heading]]:pt-[var(--space-3)] [&_[cmdk-group-heading]]:pb-[var(--space-1)] [&_[cmdk-group-heading]]:text-[0.6875rem] [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-[0.08em] [&_[cmdk-group-heading]]:text-[var(--color-ink-tertiary)]";
@@ -15,20 +24,20 @@ const ITEM =
 export type AiTransformRequest = {
 	instruction: string;
 	instructionLabel: string;
-	range: TransformRange;
-	selection: string;
+	snapshot: AiTransformSnapshot;
 };
 
 type Props = {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	/** The selected span + its offsets, captured when the popover opened. */
-	selection: { text: string; range: TransformRange } | null;
+	selection: AiTransformSnapshot | null;
 	state: AiTransformState;
 	onRun: (req: AiTransformRequest) => void;
 	onAccept: () => void;
 	onReject: () => void;
 	onCancel: () => void;
+	onReconcile: () => void;
 };
 
 /**
@@ -47,9 +56,21 @@ export function AiTransformPopover({
 	onAccept,
 	onReject,
 	onCancel,
+	onReconcile,
 }: Props) {
 	const [query, setQuery] = useState("");
+	const popupRef = useRef<HTMLDivElement | null>(null);
+	const closeRef = useRef<HTMLButtonElement | null>(null);
 	const restoreFocusRef = useRef<HTMLElement | null>(null);
+	const activeElement = globalThis.document?.activeElement;
+	if (
+		open &&
+		!restoreFocusRef.current &&
+		activeElement &&
+		activeElement instanceof globalThis.HTMLElement
+	) {
+		restoreFocusRef.current = activeElement;
+	}
 
 	const close = useCallback(() => onOpenChange(false), [onOpenChange]);
 
@@ -58,39 +79,20 @@ export function AiTransformPopover({
 		if (open) setQuery("");
 	}, [open]);
 
-	// Escape: cancel a stream / dismiss; restore focus on close.
-	useEffect(() => {
-		if (open) {
-			restoreFocusRef.current = document.activeElement as HTMLElement | null;
-		} else if (restoreFocusRef.current) {
-			restoreFocusRef.current.focus?.();
-			restoreFocusRef.current = null;
-		}
-	}, [open]);
+	const dismiss = useCallback(() => {
+		if (state.status === "streaming") onCancel();
+		else if (state.awaitingDecision) onReject();
+		close();
+	}, [close, onCancel, onReject, state.awaitingDecision, state.status]);
 
-	useEffect(() => {
-		if (!open) return;
-		const onKey = (event: KeyboardEvent) => {
-			if (event.key === "Escape") {
-				event.preventDefault();
-				if (state.status === "streaming") onCancel();
-				else if (state.awaitingDecision) onReject();
-				else close();
-			}
-		};
-		window.addEventListener("keydown", onKey, true);
-		return () => window.removeEventListener("keydown", onKey, true);
-	}, [open, close, onCancel, onReject, state.status, state.awaitingDecision]);
-
-	if (!open || !selection) return null;
+	if (!selection) return null;
 
 	const run = (instruction: string, label: string) => {
 		if (!instruction.trim()) return;
 		onRun({
 			instruction,
 			instructionLabel: label,
-			range: selection.range,
-			selection: selection.text,
+			snapshot: selection,
 		});
 	};
 
@@ -98,27 +100,45 @@ export function AiTransformPopover({
 	const showPicker = state.status === "idle";
 
 	return (
-		<div
-			className="fixed inset-0 z-[100] flex items-start justify-center px-4 pt-[min(18vh,7rem)]"
-			role="dialog"
-			aria-modal="true"
-			aria-label="AI transform"
+		<Dialog
+			open={open}
+			onOpenChangeComplete={(nextOpen) => {
+				if (!nextOpen) restoreFocusRef.current = null;
+			}}
+			onOpenChange={(nextOpen) => {
+				if (!nextOpen) {
+					const restoreFocus = restoreFocusRef.current;
+					dismiss();
+					queueMicrotask(() => restoreFocus?.focus());
+				}
+			}}
 		>
-			<button
-				type="button"
-				className="recto-scrim absolute inset-0"
-				aria-label="Close AI transform"
-				onClick={() => {
-					if (streaming) onCancel();
-					else if (state.awaitingDecision) onReject();
-					else close();
-				}}
-			/>
-			<div className="recto-panel relative z-10 w-full max-w-lg overflow-hidden">
+			<DialogContent
+				showCloseButton={false}
+				overlayClassName="z-[100]"
+				ref={popupRef}
+				className="recto-panel fixed top-[min(18vh,7rem)] left-1/2 z-[101] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 overflow-hidden outline-none"
+				initialFocus={() =>
+					popupRef.current?.querySelector<HTMLElement>(
+						"[data-ai-initial-focus]",
+					) ?? closeRef.current
+				}
+				finalFocus={restoreFocusRef}
+			>
+				<DialogTitle className="sr-only">AI transform</DialogTitle>
+				<DialogClose
+					ref={closeRef}
+					autoFocus
+					aria-label="Close AI transform"
+					className="absolute top-3 right-3 z-20 text-[var(--color-ink-tertiary)] hover:text-[var(--color-ink-primary)]"
+				>
+					<X aria-hidden className="size-4" />
+				</DialogClose>
 				{showPicker ? (
 					<Command className="w-full" loop>
 						<div className="border-b border-[var(--color-line)] px-[var(--space-4)]">
 							<Command.Input
+								data-ai-initial-focus
 								value={query}
 								onValueChange={setQuery}
 								placeholder="Transform selection… (or pick a preset)"
@@ -172,7 +192,7 @@ export function AiTransformPopover({
 							)}
 						</Command.List>
 						<div className="border-t border-[var(--color-line)] px-[var(--space-4)] py-[var(--space-2)] text-[0.6875rem] text-[var(--color-ink-tertiary)]">
-							{selection.text.length} chars selected · reversible — undo to
+							{selection.selection.length} chars selected · reversible — undo to
 							reject
 						</div>
 					</Command>
@@ -182,13 +202,16 @@ export function AiTransformPopover({
 							<span className="text-[length:var(--text-ui-sm)] font-medium text-[var(--color-ink-secondary)]">
 								{streaming
 									? "Transforming…"
-									: state.status === "error"
-										? "AI error"
-										: "AI suggestion"}
+									: state.status === "outcome-unknown"
+										? "Transform status unknown"
+										: state.status === "error"
+											? "AI error"
+											: "AI suggestion"}
 							</span>
 						</div>
 						<div className="max-h-[22rem] overflow-y-auto px-[var(--space-4)] py-[var(--space-3)]">
-							{state.status === "error" ? (
+							{state.status === "error" ||
+							state.status === "outcome-unknown" ? (
 								<p className="text-[length:var(--text-ui-sm)] text-[var(--color-ink-secondary)]">
 									{state.error}
 								</p>
@@ -201,6 +224,7 @@ export function AiTransformPopover({
 						<div className="flex items-center justify-end gap-[var(--space-2)] border-t border-[var(--color-line)] px-[var(--space-4)] py-[var(--space-2)]">
 							{streaming && (
 								<button
+									data-ai-initial-focus
 									type="button"
 									onClick={onCancel}
 									className="recto-item rounded-[var(--radius-sm)] px-[var(--space-3)] py-1.5 text-[length:var(--text-ui-sm)] text-[var(--color-ink-secondary)]"
@@ -241,6 +265,15 @@ export function AiTransformPopover({
 									Close
 								</button>
 							)}
+							{state.status === "outcome-unknown" && (
+								<button
+									type="button"
+									onClick={onReconcile}
+									className="recto-item rounded-[var(--radius-sm)] bg-[var(--color-bg-hover)] px-[var(--space-3)] py-1.5 text-[length:var(--text-ui-sm)] font-medium text-[var(--color-ink-primary)]"
+								>
+									Check status
+								</button>
+							)}
 							{state.status === "committed" && !state.awaitingDecision && (
 								<button
 									type="button"
@@ -253,7 +286,7 @@ export function AiTransformPopover({
 						</div>
 					</div>
 				)}
-			</div>
-		</div>
+			</DialogContent>
+		</Dialog>
 	);
 }

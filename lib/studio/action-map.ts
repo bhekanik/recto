@@ -51,6 +51,7 @@ export type ActionMapDeps = {
 	setStatusVisible: (updater: (v: boolean) => boolean) => void;
 	setZen: (updater: (v: boolean) => boolean) => void;
 	setGoalConfigOpen: (open: boolean) => void;
+	toggleAiEnabled?: () => void;
 };
 
 /**
@@ -140,7 +141,7 @@ export function createActionMap(
 		"add-comment": () => {
 			if (canComment) summonAddComment();
 		},
-		"toggle-ai": () => settings.toggleAiEnabled(),
+		"toggle-ai": () => (deps.toggleAiEnabled ?? settings.toggleAiEnabled)(),
 		"toggle-transform-mode": () => settings.toggleAiTransformMode(),
 		"ai-transform": () => {
 			if (effectiveAiEnabled) summonAiTransform();

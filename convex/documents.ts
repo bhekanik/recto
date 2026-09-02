@@ -4,6 +4,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { internalQuery, mutation, query } from "./_generated/server";
 import { assertNotDeleting } from "./accountGuard";
 import { removeBlobReferences, syncBlobReferences } from "./blobReferences";
+import { startDocumentCleanup } from "./documentCleanup";
 
 type QueryCtx = GenericQueryCtx<import("./_generated/dataModel").DataModel>;
 type MutationCtx = GenericMutationCtx<
@@ -259,46 +260,13 @@ export const create = mutation({
 export const remove = mutation({
 	args: { documentId: v.id("documents") },
 	handler: async (ctx, args) => {
-		await requireOwnedDocument(ctx, args.documentId);
-
-		const nodes = await ctx.db
-			.query("docNodes")
-			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
-			.collect();
-		for (const node of nodes) {
-			await removeBlobReferences(ctx, "node", node._id);
-			await ctx.db.delete(node._id);
-		}
-
-		const versions = await ctx.db
-			.query("versions")
-			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
-			.collect();
-		for (const version of versions) await ctx.db.delete(version._id);
-
-		const shares = await ctx.db
-			.query("documentShares")
-			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
-			.collect();
-		for (const share of shares) await ctx.db.delete(share._id);
-
-		const branches = await ctx.db
-			.query("reviewBranches")
-			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
-			.collect();
-		for (const branch of branches) await ctx.db.delete(branch._id);
-
-		const comments = await ctx.db
-			.query("comments")
-			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
-			.collect();
-		for (const comment of comments) await ctx.db.delete(comment._id);
-
-		const chunks = await ctx.db
-			.query("docChunks")
-			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
-			.collect();
-		for (const chunk of chunks) await ctx.db.delete(chunk._id);
+		const document = await requireOwnedDocument(ctx, args.documentId);
+		// Write the replay fence in the same transaction that hides the document.
+		// Dependent rows drain later in bounded, scheduler-backed batches.
+		await startDocumentCleanup(ctx, {
+			documentId: args.documentId,
+			userId: document.userId,
+		});
 
 		await removeBlobReferences(ctx, "document", args.documentId);
 		await ctx.db.delete(args.documentId);

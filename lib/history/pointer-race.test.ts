@@ -419,7 +419,10 @@ type ServerDoc = {
  * who may flush, who is allowed to clear the draft — is what these tests are
  * about. Exercising either hook alone proves nothing about it.
  */
-function mountStudio(handle: ReturnType<typeof fakeHandle>) {
+function mountStudio(
+	handle: ReturnType<typeof fakeHandle>,
+	options?: { isHandleReady: () => boolean },
+) {
 	const container = document.createElement("div");
 	document.body.appendChild(container);
 	let root: Root;
@@ -432,6 +435,8 @@ function mountStudio(handle: ReturnType<typeof fakeHandle>) {
 	const projectionLog: string[] = [];
 	let onEditorChange: () => void = () => {};
 	const pointerLog: Array<string | null> = [];
+	const getEditorHandle = () =>
+		options?.isHandleReady() === false ? null : handle;
 
 	function Harness(props: { server: ServerDoc | undefined }) {
 		const { server } = props;
@@ -451,7 +456,7 @@ function mountStudio(handle: ReturnType<typeof fakeHandle>) {
 
 		const syncHook = useDocumentSync({
 			documentId: DOC_ID,
-			getEditorHandle: () => handle,
+			getEditorHandle,
 			serverMarkdown: server?.markdown,
 			serverUpdatedAt: server?.updatedAt,
 			serverCurrentNodeId: server?.currentNodeId,
@@ -464,7 +469,7 @@ function mountStudio(handle: ReturnType<typeof fakeHandle>) {
 
 		const h = useDocumentHistory({
 			documentId: DOC_ID,
-			getEditorHandle: () => handle,
+			getEditorHandle,
 			serverCurrentNodeId: server?.currentNodeId,
 			serverMarkdown: server?.markdown,
 			serverUpdatedAt: server?.updatedAt,
@@ -798,6 +803,28 @@ describe("studio sync + history contract", () => {
 		const saves = callsTo(NAMES.updateMarkdown);
 		expect(saves.length).toBeGreaterThan(0);
 		expect(saves[0]?.args.expectedHeadNodeId).toBe(ROOT);
+		s.unmount();
+	});
+
+	it("R1: does not replace a saved document with empty text while its editor mounts", async () => {
+		const handle = fakeHandle();
+		dagRows = [rootNode(), localNode()];
+		const s = mountStudio(handle, { isHandleReady: () => false });
+
+		s.render({
+			currentNodeId: LOCAL_NODE,
+			markdown: LOCAL_TEXT,
+			updatedAt: 2_000,
+			pointerRevision: 2,
+			markdownHeadNodeId: LOCAL_NODE,
+		});
+		await settle(0);
+
+		// History can hydrate before Milkdown registers its handle. The automatic
+		// post-hydration flush must wait for a real source, not invent an empty draft
+		// from the temporarily missing handle.
+		expect(s.projectedMarkdown).toBe(LOCAL_TEXT);
+		expect(callsTo(NAMES.updateMarkdown)).toEqual([]);
 		s.unmount();
 	});
 

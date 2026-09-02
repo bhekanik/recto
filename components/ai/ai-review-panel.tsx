@@ -1,8 +1,14 @@
 "use client";
 
 import { X } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useEffectEvent, useRef } from "react";
 
+import {
+	Dialog,
+	DialogClose,
+	DialogContent,
+	DialogTitle,
+} from "@/components/ui/dialog";
 import type { useAiReview } from "@/lib/ai/use-ai-review";
 
 type Props = {
@@ -23,64 +29,67 @@ type Props = {
  * recto-panel, scrim, Escape-to-close, focus restore.
  */
 export function AiReviewPanel({ open, review, onClose, onOpenReview }: Props) {
-	const { state, summary, error, run, reset } = review;
+	const { state, summary, error, run, reset, reconcile } = review;
+	const closeRef = useRef<HTMLButtonElement | null>(null);
 	const restoreFocusRef = useRef<HTMLElement | null>(null);
+	const previousOpenRef = useRef(false);
+	const startReview = useEffectEvent(() => void run());
+	const resetReview = useEffectEvent(reset);
+	const activeElement = globalThis.document?.activeElement;
+	if (
+		open &&
+		!restoreFocusRef.current &&
+		activeElement &&
+		activeElement instanceof globalThis.HTMLElement
+	) {
+		restoreFocusRef.current = activeElement;
+	}
 
-	// Kick off the review when the panel opens; reset (aborts in-flight) on close.
+	// Callback identities change as the review advances. Only panel transitions
+	// may start or reset provider work.
 	useEffect(() => {
-		if (open) {
-			restoreFocusRef.current = document.activeElement as HTMLElement | null;
-			void run();
-		} else {
-			reset();
-			restoreFocusRef.current?.focus?.();
-			restoreFocusRef.current = null;
-		}
-	}, [open, run, reset]);
-
-	useEffect(() => {
-		if (!open) return;
-		const onKey = (e: KeyboardEvent) => {
-			if (e.key === "Escape") {
-				e.preventDefault();
-				onClose();
-			}
-		};
-		window.addEventListener("keydown", onKey, true);
-		return () => window.removeEventListener("keydown", onKey, true);
-	}, [open, onClose]);
-
-	if (!open) return null;
+		if (previousOpenRef.current === open) return;
+		previousOpenRef.current = open;
+		if (open) startReview();
+		else resetReview();
+	}, [open]);
 
 	return (
-		<div className="fixed inset-y-0 right-0 z-[90] flex">
-			<button
-				type="button"
-				aria-label="Close AI review"
-				className="recto-scrim absolute inset-0 -left-[100vw]"
-				onClick={onClose}
-			/>
-			<aside
-				className="recto-panel relative z-10 flex h-full w-[min(22rem,100vw)] flex-col rounded-none border-y-0 border-r-0 border-l"
-				role="dialog"
-				aria-modal="true"
-				aria-labelledby="recto-ai-review-title"
+		<Dialog
+			open={open}
+			onOpenChange={(next) => {
+				if (!next) {
+					const restoreFocus = restoreFocusRef.current;
+					onClose();
+					queueMicrotask(() => restoreFocus?.focus());
+				}
+			}}
+			onOpenChangeComplete={(nextOpen) => {
+				if (!nextOpen) restoreFocusRef.current = null;
+			}}
+		>
+			<DialogContent
+				showCloseButton={false}
+				overlayClassName="z-[90]"
+				className="recto-panel fixed inset-y-0 right-0 z-[91] flex h-full w-[min(22rem,100vw)] flex-col rounded-none border-y-0 border-r-0 border-l outline-none"
+				initialFocus={closeRef}
+				finalFocus={restoreFocusRef}
 			>
 				<header className="flex shrink-0 items-center justify-between border-b border-[var(--color-line)] px-[var(--space-4)] py-[var(--space-3)]">
-					<h2
+					<DialogTitle
 						id="recto-ai-review-title"
 						className="text-[length:var(--text-ui-sm)] font-medium text-[var(--color-ink-secondary)]"
 					>
 						AI review
-					</h2>
-					<button
-						type="button"
-						onClick={onClose}
+					</DialogTitle>
+					<DialogClose
+						ref={closeRef}
+						autoFocus
 						aria-label="Close AI review"
 						className="text-[var(--color-ink-tertiary)] transition-colors hover:text-[var(--color-ink-primary)]"
 					>
 						<X aria-hidden className="size-4" />
-					</button>
+					</DialogClose>
 				</header>
 
 				<div className="min-h-0 flex-1 overflow-y-auto px-[var(--space-3)] py-[var(--space-3)]">
@@ -93,6 +102,20 @@ export function AiReviewPanel({ open, review, onClose, onOpenReview }: Props) {
 						<p className="px-[var(--space-1)] py-[var(--space-4)] text-[length:var(--text-ui-sm)] text-[var(--color-ink-secondary)]">
 							{error}
 						</p>
+					)}
+					{state === "outcome-unknown" && (
+						<div className="flex flex-col gap-[var(--space-3)] px-[var(--space-1)] py-[var(--space-4)]">
+							<p className="text-[length:var(--text-ui-sm)] text-[var(--color-ink-secondary)]">
+								{error}
+							</p>
+							<button
+								type="button"
+								onClick={() => void reconcile()}
+								className="self-start rounded-[var(--radius-md)] border border-[var(--color-line)] px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--text-ui-sm)] text-[var(--color-ink-secondary)] hover:text-[var(--color-ink-primary)]"
+							>
+								Check status
+							</button>
+						</div>
 					)}
 					{state === "done" && summary && (
 						<div className="flex flex-col gap-[var(--space-3)] px-[var(--space-1)] py-[var(--space-2)]">
@@ -143,7 +166,7 @@ export function AiReviewPanel({ open, review, onClose, onOpenReview }: Props) {
 					AI comments appear in the comments panel; AI edits land on a review
 					branch — review them like a human reviewer's.
 				</footer>
-			</aside>
-		</div>
+			</DialogContent>
+		</Dialog>
 	);
 }

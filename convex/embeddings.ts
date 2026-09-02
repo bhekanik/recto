@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import {
 	action,
 	internalAction,
@@ -10,27 +10,18 @@ import {
 	type QueryCtx,
 	query,
 } from "./_generated/server";
+import { findTombstone } from "./accountGuard";
+import { AI_CONSENT_VERSION } from "./ai/consent";
+import { aiError } from "./ai/errors";
+import { sha256 } from "./ai/request";
 import { requireOwnedDocument, requireUserId } from "./documents";
 
 /**
  * RAG over the writer's own drafts via Convex vector search (plan 009, Phase C).
  *
- * Embedding GENERATION happens in two places; the provider key
- * (`OPENROUTER_API_KEY`) lives in BOTH server envs — the Next server env and
- * the Convex deployment env (see app/api/ai/embed/route.ts). Either way the
- * key stays server-side.
- *
- * On-demand path: the *client* orchestrates re-indexing:
- *   1. read the doc markdown + chunk it (lib/ai/chunk.ts),
- *   2. POST the chunk texts to /api/ai/embed → vectors (Next server env key),
- *   3. call `embeddings.replaceChunks` (mutation) to persist them.
- * Query-time search mirrors that: the client embeds the query text via the Next
- * route, then calls `embeddings.searchByVector` (action) with the vector.
- *
- * The scheduled cron path (`reindexSweep`) generates embeddings directly from
- * inside the Convex action via a `fetch` to OpenRouter, using the
- * `OPENROUTER_API_KEY` in the Convex deployment env. It mirrors the
- * request/response shape of the Next route.
+ * Both interactive and scheduled generation use `ai.embed.run`'s durable run
+ * protocol. The client or cron chunks text, embeds at most 16 chunks per run,
+ * then persists only while the exact source and access fences still match.
  */
 
 const CHUNK_LIMIT = 256; // safety cap on chunks per document
@@ -42,17 +33,33 @@ const VECTOR_RESULTS = 8;
  * imported because app `lib/` code isn't on the Convex bundle/path-alias graph
  * (the embedding request/server helpers pull in `server-only`/Clerk).
  */
-const AI_EMBEDDING_MODEL = "openai/text-embedding-3-small";
 const AI_EMBEDDING_DIM = 1536;
-const OPENROUTER_EMBEDDINGS_URL = "https://openrouter.ai/api/v1/embeddings";
 
 /** How many stale documents to embed per scheduled sweep (bounds action time). */
 const SWEEP_DOC_LIMIT = 25;
+const SWEEP_SCAN_LIMIT = SWEEP_DOC_LIMIT;
+const EMBED_BATCH = 16;
 
 /** Target chunk window in characters — mirrors CHUNK_TARGET_CHARS in lib/ai/chunk.ts. */
 const CHUNK_TARGET_CHARS = 1500;
 
 type CronChunk = { charStart: number; charEnd: number; text: string };
+type StaleDocument = {
+	documentId: Id<"documents">;
+	userId: string;
+	currentNodeId: string;
+	markdown: string;
+};
+
+export async function scheduledEmbedRequestId(args: {
+	documentId: string;
+	sourceNodeId: string;
+	sourceHash: string;
+	offset: number;
+	inputs: string[];
+}): Promise<string> {
+	return `embed:cron:${await sha256(JSON.stringify(args))}`;
+}
 
 /**
  * Paragraph-windowed chunking — a self-contained copy of lib/ai/chunk.ts's
@@ -112,45 +119,6 @@ function chunkMarkdown(markdown: string): CronChunk[] {
 	return chunks;
 }
 
-/** OpenRouter embeddings response shape (OpenAI-compatible). */
-type EmbeddingsResponse = { data?: { embedding: number[] }[] };
-
-/**
- * Embed a batch of texts via OpenRouter's OpenAI-compatible `/embeddings`
- * endpoint. Mirrors the Next route's request (`{ model, input }`) and response
- * (`{ data: [{ embedding }] }`) handling. Empty strings are dropped (the API
- * rejects them); order is preserved so callers can zip vectors back to chunks.
- */
-async function embedTexts(
-	apiKey: string,
-	texts: string[],
-): Promise<number[][]> {
-	const input = texts.map((s) => s.trim()).filter((s) => s.length > 0);
-	if (input.length === 0) return [];
-	const res = await fetch(OPENROUTER_EMBEDDINGS_URL, {
-		method: "POST",
-		headers: {
-			Authorization: `Bearer ${apiKey}`,
-			"Content-Type": "application/json",
-			"X-Title": "Recto",
-		},
-		body: JSON.stringify({ model: AI_EMBEDDING_MODEL, input }),
-	});
-	if (!res.ok) {
-		throw new Error(`OpenRouter embeddings failed: ${res.status}`);
-	}
-	const json = (await res.json()) as EmbeddingsResponse;
-	const vectors = (json.data ?? []).map((d) => d.embedding);
-	for (const vec of vectors) {
-		if (vec.length !== AI_EMBEDDING_DIM) {
-			throw new Error(
-				`OpenRouter embeddings returned dim ${vec.length}, expected ${AI_EMBEDDING_DIM}`,
-			);
-		}
-	}
-	return vectors;
-}
-
 /** One chunk in the client → Convex upsert payload. */
 const chunkValidator = v.object({
 	charStart: v.number(),
@@ -168,14 +136,52 @@ export const replaceChunks = mutation({
 	args: {
 		documentId: v.id("documents"),
 		embeddedNodeId: v.string(),
+		expectedMarkdown: v.string(),
 		chunks: v.array(chunkValidator),
 	},
 	handler: async (ctx, args) => {
 		const doc = await requireOwnedDocument(ctx, args.documentId);
+		if (doc.currentNodeId !== args.embeddedNodeId) {
+			aiError("document_changed", "The document changed before indexing.");
+		}
+		if (doc.markdown !== args.expectedMarkdown) {
+			aiError("document_changed", "The draft changed before indexing.");
+		}
+		if (await findTombstone(ctx, doc.userId)) {
+			aiError(
+				"account_deletion_in_progress",
+				"Account deletion is in progress.",
+			);
+		}
+		const deletion = await ctx.db
+			.query("aiDocumentDeletions")
+			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+			.unique();
+		if (deletion) aiError("document_not_found", "Document not found");
+		const consent = await ctx.db
+			.query("aiConsents")
+			.withIndex("by_user", (q) => q.eq("userId", doc.userId))
+			.unique();
+		if (consent?.version !== AI_CONSENT_VERSION) {
+			aiError(
+				"ai_consent_required",
+				"Accept the current AI consent notice first.",
+			);
+		}
+		const share = await ctx.db
+			.query("documentShares")
+			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+			.first();
+		if (share) aiError("document_shared", "AI is disabled on shared documents");
 		const existing = await ctx.db
 			.query("docChunks")
 			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
-			.collect();
+			.take(CHUNK_LIMIT + 1);
+		if (existing.length > CHUNK_LIMIT) {
+			throw new Error(
+				"Document has too many stored embedding chunks to replace safely.",
+			);
+		}
 		for (const row of existing) await ctx.db.delete(row._id);
 
 		const now = Date.now();
@@ -198,23 +204,42 @@ export const replaceChunks = mutation({
 
 /** Internal: load chunk rows by id for an action (actions have no ctx.db). */
 export const chunkRowsByIds = internalQuery({
-	args: { ids: v.array(v.id("docChunks")) },
+	args: { ids: v.array(v.id("docChunks")), userId: v.string() },
 	handler: async (ctx, args) => {
-		const rows = await Promise.all(args.ids.map((id) => ctx.db.get(id)));
-		return rows.filter((r) => r !== null);
-	},
-});
-
-/** Internal: document titles for citations. */
-export const titlesByIds = internalQuery({
-	args: { ids: v.array(v.id("documents")) },
-	handler: async (ctx, args) => {
-		const map: Record<string, string> = {};
-		for (const id of args.ids) {
-			const doc = await ctx.db.get(id);
-			if (doc) map[id] = doc.title;
+		if (await findTombstone(ctx, args.userId)) {
+			aiError(
+				"account_deletion_in_progress",
+				"Account deletion is in progress.",
+			);
 		}
-		return map;
+		const consent = await ctx.db
+			.query("aiConsents")
+			.withIndex("by_user", (q) => q.eq("userId", args.userId))
+			.unique();
+		if (consent?.version !== AI_CONSENT_VERSION) {
+			aiError(
+				"ai_consent_required",
+				"Accept the current AI consent notice first.",
+			);
+		}
+		const rows = await Promise.all(args.ids.map((id) => ctx.db.get(id)));
+		const safe = [];
+		for (const row of rows) {
+			if (!row || row.userId !== args.userId) continue;
+			const document = await ctx.db.get(row.documentId);
+			if (!document || document.userId !== args.userId) continue;
+			const deletion = await ctx.db
+				.query("aiDocumentDeletions")
+				.withIndex("by_document", (q) => q.eq("documentId", row.documentId))
+				.unique();
+			if (deletion) continue;
+			const share = await ctx.db
+				.query("documentShares")
+				.withIndex("by_document", (q) => q.eq("documentId", row.documentId))
+				.first();
+			if (!share) safe.push({ ...row, title: document.title });
+		}
+		return safe;
 	},
 });
 
@@ -261,19 +286,15 @@ export const searchByVector = action({
 
 		const rows = await ctx.runQuery(internal.embeddings.chunkRowsByIds, {
 			ids: results.map((r) => r._id),
+			userId,
 		});
 		const scoreById = new Map(results.map((r) => [r._id, r._score]));
-
-		const docIds = Array.from(new Set(rows.map((r) => r.documentId)));
-		const titles = await ctx.runQuery(internal.embeddings.titlesByIds, {
-			ids: docIds,
-		});
 
 		return rows
 			.filter((r) => r.documentId !== args.excludeDocumentId)
 			.map((r) => ({
 				documentId: r.documentId,
-				title: titles[r.documentId] ?? "Untitled",
+				title: r.title,
 				text: r.text,
 				charStart: r.charStart,
 				charEnd: r.charEnd,
@@ -294,20 +315,38 @@ export const searchByVector = action({
  * rows but zero-chunk markdown stays stale so the sweep can purge the
  * lingering rows (see reindexSweep's zero-chunk guard).
  */
-async function findStaleDocuments(ctx: QueryCtx): Promise<
-	{
-		documentId: Id<"documents">;
-		currentNodeId: string;
-		markdown: string;
-	}[]
-> {
-	const docs = await ctx.db.query("documents").collect();
-	const out: {
-		documentId: Id<"documents">;
-		currentNodeId: string;
-		markdown: string;
-	}[] = [];
+async function findStaleDocuments(
+	ctx: QueryCtx,
+	docs: Doc<"documents">[],
+	cronSafe = false,
+): Promise<StaleDocument[]> {
+	const allowlisted = new Set(
+		(process.env.AI_UNMETERED_USER_IDS ?? "")
+			.split(",")
+			.map((value) => value.trim())
+			.filter(Boolean),
+	);
+	const out: StaleDocument[] = [];
 	for (const doc of docs) {
+		if (cronSafe) {
+			if (!allowlisted.has(doc.userId)) continue;
+			if (await findTombstone(ctx, doc.userId)) continue;
+			const deletion = await ctx.db
+				.query("aiDocumentDeletions")
+				.withIndex("by_document", (q) => q.eq("documentId", doc._id))
+				.unique();
+			if (deletion) continue;
+			const consent = await ctx.db
+				.query("aiConsents")
+				.withIndex("by_user", (q) => q.eq("userId", doc.userId))
+				.unique();
+			if (consent?.version !== AI_CONSENT_VERSION) continue;
+			const share = await ctx.db
+				.query("documentShares")
+				.withIndex("by_document", (q) => q.eq("documentId", doc._id))
+				.first();
+			if (share) continue;
+		}
 		const first = await ctx.db
 			.query("docChunks")
 			.withIndex("by_document", (q) => q.eq("documentId", doc._id))
@@ -319,6 +358,7 @@ async function findStaleDocuments(ctx: QueryCtx): Promise<
 		}
 		out.push({
 			documentId: doc._id,
+			userId: doc.userId,
 			currentNodeId: doc.currentNodeId,
 			markdown: doc.markdown,
 		});
@@ -331,8 +371,32 @@ async function findStaleDocuments(ctx: QueryCtx): Promise<
  * all users since the cron has no caller identity.
  */
 export const allStaleDocuments = internalQuery({
-	args: {},
-	handler: async (ctx) => findStaleDocuments(ctx),
+	args: { cursor: v.optional(v.union(v.string(), v.null())) },
+	handler: async (ctx, args) => {
+		const state = await ctx.db
+			.query("embeddingHealthState")
+			.withIndex("by_name", (q) => q.eq("name", "global"))
+			.unique();
+		const cursor =
+			args.cursor === undefined ? (state?.sweepCursor ?? null) : args.cursor;
+		const result = await ctx.db.query("documents").order("asc").paginate({
+			cursor,
+			numItems: SWEEP_SCAN_LIMIT,
+			maximumRowsRead: SWEEP_SCAN_LIMIT,
+		});
+		const [cronStale, allStale] = await Promise.all([
+			findStaleDocuments(ctx, result.page, true),
+			findStaleDocuments(ctx, result.page),
+		]);
+		return {
+			startedAtBeginning: cursor === null,
+			stale: cronStale,
+			staleCount: allStale.length,
+			continueCursor: result.continueCursor,
+			isDone: result.isDone,
+			scanned: result.page.length,
+		};
+	},
 });
 
 /**
@@ -346,10 +410,95 @@ export const allStaleDocuments = internalQuery({
  */
 export const embeddingHealth = query({
 	args: {},
-	handler: async (ctx): Promise<{ staleCount: number }> => {
+	handler: async (ctx): Promise<{ staleCount: number | null }> => {
 		await requireUserId(ctx);
-		const stale = await findStaleDocuments(ctx);
+		const state = await ctx.db
+			.query("embeddingHealthState")
+			.withIndex("by_name", (q) => q.eq("name", "global"))
+			.unique();
+		if (state)
+			return {
+				staleCount: state.hasCompletedSweep === false ? null : state.staleCount,
+			};
+		const firstPage = await ctx.db
+			.query("documents")
+			.order("asc")
+			.take(SWEEP_SCAN_LIMIT + 1);
+		if (firstPage.length > SWEEP_SCAN_LIMIT) return { staleCount: null };
+		const stale = await findStaleDocuments(ctx, firstPage);
 		return { staleCount: stale.length };
+	},
+});
+
+export type EmbeddingSweepProgress = {
+	staleCount: number;
+	scannedCount: number;
+	pendingStaleCount?: number;
+	pendingScannedCount?: number;
+	sweepCursor?: string;
+	hasCompletedSweep?: boolean;
+};
+
+export function nextEmbeddingSweepProgress(args: {
+	previous?: EmbeddingSweepProgress;
+	startedAtBeginning: boolean;
+	isDone: boolean;
+	continueCursor: string;
+	pageStaleCount: number;
+	pageScannedCount: number;
+	resolvedCount: number;
+}): EmbeddingSweepProgress {
+	const pendingStaleCount =
+		(args.startedAtBeginning ? 0 : (args.previous?.pendingStaleCount ?? 0)) +
+		args.pageStaleCount -
+		args.resolvedCount;
+	const pendingScannedCount =
+		(args.startedAtBeginning ? 0 : (args.previous?.pendingScannedCount ?? 0)) +
+		args.pageScannedCount;
+	if (args.isDone) {
+		return {
+			staleCount: Math.max(0, pendingStaleCount),
+			scannedCount: pendingScannedCount,
+			pendingStaleCount: undefined,
+			pendingScannedCount: undefined,
+			sweepCursor: undefined,
+			hasCompletedSweep: true,
+		};
+	}
+	return {
+		staleCount: args.previous?.staleCount ?? 0,
+		scannedCount: args.previous?.scannedCount ?? 0,
+		pendingStaleCount,
+		pendingScannedCount,
+		sweepCursor: args.continueCursor,
+		hasCompletedSweep: args.previous?.hasCompletedSweep ?? false,
+	};
+}
+
+export const recordEmbeddingSweepPage = internalMutation({
+	args: {
+		startedAtBeginning: v.boolean(),
+		isDone: v.boolean(),
+		continueCursor: v.string(),
+		pageStaleCount: v.number(),
+		pageScannedCount: v.number(),
+		resolvedCount: v.number(),
+	},
+	handler: async (ctx, args) => {
+		const existing = await ctx.db
+			.query("embeddingHealthState")
+			.withIndex("by_name", (q) => q.eq("name", "global"))
+			.unique();
+		const value = {
+			...nextEmbeddingSweepProgress({
+				previous: existing ?? undefined,
+				...args,
+			}),
+			updatedAt: Date.now(),
+		};
+		if (existing) await ctx.db.patch(existing._id, value);
+		else
+			await ctx.db.insert("embeddingHealthState", { name: "global", ...value });
 	},
 });
 
@@ -361,15 +510,40 @@ export const replaceChunksInternal = internalMutation({
 	args: {
 		documentId: v.id("documents"),
 		embeddedNodeId: v.string(),
+		expectedMarkdown: v.string(),
 		chunks: v.array(chunkValidator),
 	},
 	handler: async (ctx, args) => {
 		const doc = await ctx.db.get(args.documentId);
-		if (!doc) return { count: 0 };
+		if (!doc) return { applied: false as const, count: 0 };
+		if (doc.currentNodeId !== args.embeddedNodeId)
+			return { applied: false as const, count: 0 };
+		if (doc.markdown !== args.expectedMarkdown)
+			return { applied: false as const, count: 0 };
+		if (await findTombstone(ctx, doc.userId))
+			return { applied: false as const, count: 0 };
+		const deletion = await ctx.db
+			.query("aiDocumentDeletions")
+			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+			.unique();
+		if (deletion) return { applied: false as const, count: 0 };
+		const consent = await ctx.db
+			.query("aiConsents")
+			.withIndex("by_user", (q) => q.eq("userId", doc.userId))
+			.unique();
+		if (consent?.version !== AI_CONSENT_VERSION)
+			return { applied: false as const, count: 0 };
+		const share = await ctx.db
+			.query("documentShares")
+			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+			.first();
+		if (share) return { applied: false as const, count: 0 };
 		const existing = await ctx.db
 			.query("docChunks")
 			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
-			.collect();
+			.take(CHUNK_LIMIT + 1);
+		if (existing.length > CHUNK_LIMIT)
+			return { applied: false as const, count: 0 };
 		for (const row of existing) await ctx.db.delete(row._id);
 		const now = Date.now();
 		const chunks = args.chunks.slice(0, CHUNK_LIMIT);
@@ -385,7 +559,7 @@ export const replaceChunksInternal = internalMutation({
 				updatedAt: now,
 			});
 		}
-		return { count: chunks.length };
+		return { applied: true as const, count: chunks.length };
 	},
 });
 
@@ -397,8 +571,8 @@ export const replaceChunksInternal = internalMutation({
  * Convex-side `OPENROUTER_API_KEY`, then persist via `replaceChunksInternal` and
  * advance `embeddedNodeId` to the current node so it isn't re-embedded next sweep.
  *
- * Bounded to `SWEEP_DOC_LIMIT` documents per run to respect Convex action limits;
- * remaining stale docs are picked up on the next daily run. If the key is missing
+ * Each run advances one persisted `SWEEP_DOC_LIMIT` page, even when every provider
+ * call fails, so bad early documents cannot starve the rest of the corpus. If the key is missing
  * the sweep logs and returns gracefully (it does NOT throw — a cron failure would
  * just retry forever). Per-document errors are logged and skipped so one bad doc
  * doesn't abort the whole sweep.
@@ -406,18 +580,31 @@ export const replaceChunksInternal = internalMutation({
 export const reindexSweep = internalAction({
 	args: {},
 	handler: async (ctx): Promise<{ scanned: number; embedded: number }> => {
-		const stale = await ctx.runQuery(internal.embeddings.allStaleDocuments, {});
+		const page: {
+			stale: StaleDocument[];
+			continueCursor: string;
+			staleCount: number;
+			isDone: boolean;
+			scanned: number;
+			startedAtBeginning: boolean;
+		} = await ctx.runQuery(internal.embeddings.allStaleDocuments, {});
 
-		const apiKey = process.env.OPENROUTER_API_KEY;
-		if (!apiKey) {
+		if (!process.env.OPENROUTER_API_KEY?.trim()) {
 			console.warn(
 				"reindexSweep: OPENROUTER_API_KEY not set in Convex env — skipping embedding generation",
 			);
-			return { scanned: stale.length, embedded: 0 };
+			await ctx.runMutation(internal.embeddings.recordEmbeddingSweepPage, {
+				...page,
+				pageStaleCount: page.staleCount,
+				pageScannedCount: page.scanned,
+				resolvedCount: 0,
+			});
+			return { scanned: page.scanned, embedded: 0 };
 		}
 
 		let embedded = 0;
-		for (const doc of stale.slice(0, SWEEP_DOC_LIMIT)) {
+		let purged = 0;
+		for (const doc of page.stale) {
 			try {
 				const chunks = chunkMarkdown(doc.markdown).slice(0, CHUNK_LIMIT);
 				if (chunks.length === 0) {
@@ -427,18 +614,43 @@ export const reindexSweep = internalAction({
 					// excludes zero-chunk docs with no rows, so this can't loop: purge
 					// the rows here and the next scan skips the doc. Nothing is embedded,
 					// so the counter is untouched.
-					await ctx.runMutation(internal.embeddings.replaceChunksInternal, {
-						documentId: doc.documentId,
-						embeddedNodeId: doc.currentNodeId,
-						chunks: [],
-					});
+					const result = await ctx.runMutation(
+						internal.embeddings.replaceChunksInternal,
+						{
+							documentId: doc.documentId,
+							embeddedNodeId: doc.currentNodeId,
+							expectedMarkdown: doc.markdown,
+							chunks: [],
+						},
+					);
+					if (result.applied) purged += 1;
 					continue;
 				}
 
-				const vectors = await embedTexts(
-					apiKey,
-					chunks.map((c) => c.text),
-				);
+				const sourceHash = await sha256(doc.markdown);
+				const vectors: number[][] = [];
+				for (let offset = 0; offset < chunks.length; offset += EMBED_BATCH) {
+					const inputs = chunks
+						.slice(offset, offset + EMBED_BATCH)
+						.map((chunk) => chunk.text);
+					const requestId = await scheduledEmbedRequestId({
+						documentId: doc.documentId,
+						sourceNodeId: doc.currentNodeId,
+						sourceHash,
+						offset,
+						inputs,
+					});
+					vectors.push(
+						...(await ctx.runAction(internal.ai.embed.runScheduled, {
+							userId: doc.userId,
+							requestId,
+							documentId: doc.documentId,
+							sourceNodeId: doc.currentNodeId,
+							sourceHash,
+							inputs,
+						})),
+					);
+				}
 				if (vectors.length !== chunks.length) {
 					console.warn(
 						`reindexSweep: vector/chunk count mismatch for ${doc.documentId} (${vectors.length} vs ${chunks.length}) — skipping`,
@@ -446,17 +658,26 @@ export const reindexSweep = internalAction({
 					continue;
 				}
 
-				await ctx.runMutation(internal.embeddings.replaceChunksInternal, {
-					documentId: doc.documentId,
-					embeddedNodeId: doc.currentNodeId,
-					chunks: chunks.map((c, idx) => ({
-						charStart: c.charStart,
-						charEnd: c.charEnd,
-						text: c.text,
-						embedding: vectors[idx] as number[],
-					})),
+				const persistedChunks = chunks.map((chunk, index) => {
+					const embedding = vectors[index];
+					if (!embedding) throw new Error("Missing embedding vector.");
+					return {
+						charStart: chunk.charStart,
+						charEnd: chunk.charEnd,
+						text: chunk.text,
+						embedding,
+					};
 				});
-				embedded++;
+				const replaced = await ctx.runMutation(
+					internal.embeddings.replaceChunksInternal,
+					{
+						documentId: doc.documentId,
+						embeddedNodeId: doc.currentNodeId,
+						expectedMarkdown: doc.markdown,
+						chunks: persistedChunks,
+					},
+				);
+				if (replaced.applied && replaced.count === chunks.length) embedded += 1;
 			} catch (err) {
 				console.error(
 					`reindexSweep: failed to re-embed ${doc.documentId}:`,
@@ -465,6 +686,12 @@ export const reindexSweep = internalAction({
 			}
 		}
 
-		return { scanned: stale.length, embedded };
+		await ctx.runMutation(internal.embeddings.recordEmbeddingSweepPage, {
+			...page,
+			pageStaleCount: page.staleCount,
+			pageScannedCount: page.scanned,
+			resolvedCount: embedded + purged,
+		});
+		return { scanned: page.scanned, embedded };
 	},
 });

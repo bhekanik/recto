@@ -26,16 +26,11 @@ export type EditorHandle = {
 	 * may omit it.
 	 */
 	getSelectedMarkdown?: () => string | null;
-	/**
-	 * Compute the full canonical Markdown with the current selection replaced by
-	 * `replacement` (an arbitrary Markdown string), WITHOUT mutating the live
-	 * editor — the replacement is fitted into a throwaway ProseMirror transaction
-	 * and the result serialized. Returns `null` when there is no usable selection.
-	 * The caller commits the returned markdown once via `commitProgrammatic`, so
-	 * the edit lands as a single reversible undo-tree node and is never
-	 * double-applied. Rich-only; CodeMirror uses the offset splice path.
-	 */
-	replaceSelectionMarkdown?: (replacement: string) => string | null;
+	/** Capture selected Markdown and its replacement transaction from one editor state. */
+	captureAiSelection?: () => {
+		markdown: string;
+		replace: (replacement: string) => string | null;
+	} | null;
 };
 
 /** Read-only preview — no editing surface. */

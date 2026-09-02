@@ -150,6 +150,150 @@ export default defineSchema({
 		.index("by_user", ["userId"])
 		.index("by_state_hash", ["stateHash"]),
 
+	aiRuns: defineTable({
+		userId: v.string(),
+		requestId: v.string(),
+		kind: v.union(
+			v.literal("transform"),
+			v.literal("review"),
+			v.literal("embed"),
+		),
+		documentId: v.id("documents"),
+		sourceNodeId: v.string(),
+		sourceHash: v.string(),
+		sourceMarkdown: v.optional(v.string()),
+		requestHash: v.string(),
+		model: v.string(),
+		status: v.union(
+			v.literal("reserved"),
+			v.literal("provider_started"),
+			v.literal("succeeded"),
+			v.literal("failed"),
+			v.literal("cancelled"),
+			v.literal("outcome_unknown"),
+		),
+		keySource: v.optional(v.union(v.literal("byok"), v.literal("house"))),
+		output: v.optional(v.string()),
+		errorCode: v.optional(v.string()),
+		langsmithRunId: v.optional(v.string()),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+		providerStartedAt: v.optional(v.number()),
+		consentAcceptedAt: v.optional(v.number()),
+		completedAt: v.optional(v.number()),
+		acknowledgedAt: v.optional(v.number()),
+		applicable: v.optional(v.boolean()),
+	})
+		.index("by_user_request", ["userId", "requestId"])
+		.index("by_user_created", ["userId", "createdAt"])
+		.index("by_user_document_kind_updated", [
+			"userId",
+			"documentId",
+			"kind",
+			"updatedAt",
+		])
+		.index("by_user_document_kind_source_updated", [
+			"userId",
+			"documentId",
+			"kind",
+			"sourceNodeId",
+			"updatedAt",
+		])
+		.index("by_document", ["documentId"])
+		.index("by_status_updated", ["status", "updatedAt"]),
+
+	aiActiveRuns: defineTable({
+		userId: v.string(),
+		documentId: v.id("documents"),
+		kind: v.union(v.literal("transform"), v.literal("review")),
+		runId: v.id("aiRuns"),
+		sourceNodeId: v.string(),
+		updatedAt: v.number(),
+	})
+		.index("by_user_document_kind_source", [
+			"userId",
+			"documentId",
+			"kind",
+			"sourceNodeId",
+		])
+		.index("by_document", ["documentId"])
+		.index("by_user", ["userId"]),
+
+	// Provider usage is append-only and idempotent on runId. Provider-started
+	// uncertainty has no row because inventing zero cost would undercount spend.
+	aiUsage: defineTable({
+		userId: v.string(),
+		runId: v.id("aiRuns"),
+		// One review run can make several provider calls. Optional keeps deployed
+		// rows readable; missing means the original single call at index zero.
+		callIndex: v.optional(v.number()),
+		kind: v.union(
+			v.literal("transform"),
+			v.literal("review"),
+			v.literal("embed"),
+		),
+		model: v.string(),
+		promptTokens: v.number(),
+		completionTokens: v.number(),
+		reasoningTokens: v.number(),
+		costMicros: v.number(),
+		keySource: v.union(v.literal("byok"), v.literal("house")),
+		latencyMs: v.number(),
+		langsmithRunId: v.optional(v.string()),
+		documentId: v.optional(v.id("documents")),
+		createdAt: v.number(),
+	})
+		.index("by_run", ["runId"])
+		.index("by_run_call", ["runId", "callIndex"])
+		.index("by_user_created", ["userId", "createdAt"])
+		.index("by_document", ["documentId"]),
+
+	embeddingHealthState: defineTable({
+		name: v.literal("global"),
+		staleCount: v.number(),
+		scannedCount: v.number(),
+		sweepCursor: v.optional(v.string()),
+		pendingStaleCount: v.optional(v.number()),
+		pendingScannedCount: v.optional(v.number()),
+		hasCompletedSweep: v.optional(v.boolean()),
+		updatedAt: v.number(),
+	}).index("by_name", ["name"]),
+
+	// The document row disappears in the user-facing deletion transaction. This
+	// durable job row keeps the bounded dependent-row cleanup recoverable.
+	aiDocumentDeletions: defineTable({
+		documentId: v.id("documents"),
+		userId: v.string(),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+	})
+		.index("by_document", ["documentId"])
+		.index("by_user", ["userId"]),
+
+	commentReports: defineTable({
+		commentId: v.id("comments"),
+		documentId: v.id("documents"),
+		reporterUserId: v.string(),
+		reportedUserId: v.string(),
+		reason: v.string(),
+		status: v.union(v.literal("open"), v.literal("resolved")),
+		createdAt: v.number(),
+		resolvedAt: v.optional(v.number()),
+	})
+		.index("by_comment_reporter", ["commentId", "reporterUserId"])
+		.index("by_document", ["documentId"])
+		.index("by_reporter", ["reporterUserId"])
+		.index("by_reported", ["reportedUserId"])
+		.index("by_status_created", ["status", "createdAt"]),
+
+	userBlocks: defineTable({
+		blockerUserId: v.string(),
+		blockedUserId: v.string(),
+		createdAt: v.number(),
+	})
+		.index("by_blocker_blocked", ["blockerUserId", "blockedUserId"])
+		.index("by_blocked", ["blockedUserId"]),
+
 	// Append-only branching undo-tree DAG; nodes are immutable (blueprint 03 §2, 07).
 	docNodes: defineTable({
 		documentId: v.id("documents"),
@@ -201,7 +345,8 @@ export default defineSchema({
 	})
 		.index("by_document", ["documentId"])
 		.index("by_grantee_email", ["granteeEmail"])
-		.index("by_grantee_user", ["granteeUserId"]),
+		.index("by_grantee_user", ["granteeUserId"])
+		.index("by_owner_grantee_user", ["ownerUserId", "granteeUserId"]),
 
 	// A reviewer's shadow suggestion branch off the owner's tree (plan 010).
 	// headNodeId advances as the reviewer appends; status drives the review surface.

@@ -1,0 +1,252 @@
+import { v } from "convex/values";
+import { z } from "zod";
+import { internal } from "../_generated/api";
+import type { ActionCtx } from "../_generated/server";
+import { action, internalAction } from "../_generated/server";
+import { resolveCredential } from "./credentials";
+import { aiError, errorCode } from "./errors";
+import {
+	AI_EMBEDDING_DIM,
+	AI_EMBEDDING_MODEL,
+	completedProviderOutcomeIsUnknown,
+	createProvider,
+	flushProvider,
+	ProviderUsageSettlementError,
+	parseProviderUsage,
+} from "./provider";
+import {
+	requestHash,
+	requireActionUserId,
+	utf8Length,
+	validateRequestIdentity,
+	verifySource,
+} from "./request";
+
+const MAX_EMBED_INPUTS = 16;
+const MAX_EMBED_INPUT_BYTES = 16_384;
+const embeddingReplaySchema = z.array(
+	z.array(z.number().finite()).length(AI_EMBEDDING_DIM),
+);
+
+export async function settleCompletedEmbeddings(args: {
+	embeddings: number[][];
+	expectedCount: number;
+	settle: () => Promise<boolean>;
+}): Promise<void> {
+	try {
+		if (!(await args.settle())) throw new Error("usage not recorded");
+	} catch {
+		throw new ProviderUsageSettlementError();
+	}
+	if (
+		args.embeddings.length !== args.expectedCount ||
+		args.embeddings.some((vector) => vector.length !== AI_EMBEDDING_DIM)
+	) {
+		throw new Error("OpenRouter returned invalid embeddings.");
+	}
+}
+
+function parseJson<T>(raw: string, schema: z.ZodType<T>): T | null {
+	try {
+		const parsed = schema.safeParse(JSON.parse(raw));
+		return parsed.success ? parsed.data : null;
+	} catch {
+		return null;
+	}
+}
+
+function parseReplay(output: string): number[][] {
+	const parsed = parseJson(output, embeddingReplaySchema);
+	if (!parsed) {
+		aiError(
+			"request_outcome_unknown",
+			"The stored embedding result is unreadable.",
+		);
+	}
+	return parsed;
+}
+
+type EmbeddingRunArgs = {
+	requestId: string;
+	documentId: import("../_generated/dataModel").Id<"documents">;
+	sourceNodeId: string;
+	sourceHash: string;
+	inputs: string[];
+	platform: string;
+	traceContent: boolean;
+};
+
+async function runEmbedding(
+	ctx: ActionCtx,
+	args: EmbeddingRunArgs,
+	userId: string,
+): Promise<number[][]> {
+	validateRequestIdentity(args.requestId);
+	if (
+		args.inputs.length === 0 ||
+		args.inputs.length > MAX_EMBED_INPUTS ||
+		args.inputs.some(
+			(input) =>
+				input.trim().length === 0 || utf8Length(input) > MAX_EMBED_INPUT_BYTES,
+		) ||
+		args.sourceHash.length !== 64
+	) {
+		aiError("invalid_argument", "Invalid embedding request.");
+	}
+	const sourceMarkdown = await verifySource(ctx, { ...args, userId });
+	const hash = await requestHash({
+		kind: "embed",
+		documentId: args.documentId,
+		sourceNodeId: args.sourceNodeId,
+		sourceHash: args.sourceHash,
+		inputs: args.inputs,
+	});
+	const begun = await ctx.runMutation(internal.ai.runs.begin, {
+		userId,
+		requestId: args.requestId,
+		kind: "embed",
+		documentId: args.documentId,
+		sourceNodeId: args.sourceNodeId,
+		sourceHash: args.sourceHash,
+		expectedSourceMarkdown: sourceMarkdown,
+		requestHash: hash,
+		model: AI_EMBEDDING_MODEL,
+	});
+	if (begun.replay) {
+		if (
+			begun.run.status === "succeeded" &&
+			begun.run.applicable === true &&
+			begun.run.output
+		) {
+			return parseReplay(begun.run.output);
+		}
+		aiError(
+			"request_outcome_unknown",
+			"This embedding request may already have reached the provider.",
+		);
+	}
+	const runId = begun.run._id;
+	let provider: Awaited<ReturnType<typeof createProvider>>;
+	try {
+		const credential = await resolveCredential(ctx, userId);
+		provider = await createProvider({
+			apiKey: credential.apiKey,
+			userId,
+			kind: "embed",
+			keySource: credential.source,
+			documentId: args.documentId,
+			platform: args.platform,
+			traceContent: args.traceContent,
+		});
+		const started = await ctx.runMutation(
+			internal.ai.runs.markProviderStarted,
+			{
+				runId,
+				userId,
+				keySource: credential.source,
+				expectedSourceMarkdown: sourceMarkdown,
+			},
+		);
+		if (!started.started) {
+			aiError("request_conflict", "The AI request was superseded.");
+		}
+	} catch (error) {
+		const failure =
+			error instanceof Error ? error : new Error("AI setup failed");
+		await ctx.runMutation(internal.ai.runs.finishError, {
+			runId,
+			userId,
+			errorCode: errorCode(failure),
+			outcomeUnknown: false,
+		});
+		throw error;
+	}
+	const startedAt = Date.now();
+	try {
+		const response = await provider.client.embeddings.create({
+			model: AI_EMBEDDING_MODEL,
+			input: args.inputs,
+		});
+		const embeddings = response.data.map((entry) => entry.embedding);
+		await settleCompletedEmbeddings({
+			embeddings,
+			expectedCount: args.inputs.length,
+			settle: async () => {
+				const settled = await ctx.runMutation(internal.ai.runs.recordUsage, {
+					runId,
+					userId,
+					callIndex: 0,
+					usage: {
+						...parseProviderUsage(response.usage),
+						latencyMs: Date.now() - startedAt,
+						langsmithRunId: provider.langsmithRunId,
+					},
+				});
+				return settled.recorded;
+			},
+		});
+		const recorded = await ctx.runMutation(internal.ai.runs.succeed, {
+			runId,
+			userId,
+			output: JSON.stringify(embeddings),
+			expectedSourceMarkdown: sourceMarkdown,
+			usage: {
+				...parseProviderUsage(response.usage),
+				latencyMs: Date.now() - startedAt,
+				langsmithRunId: provider.langsmithRunId,
+			},
+		});
+		if (!recorded.applicable) {
+			aiError(
+				"document_changed",
+				"The provider completed, but the document changed before application.",
+			);
+		}
+		return embeddings;
+	} catch (error) {
+		const failure =
+			error instanceof Error ? error : new Error("Embedding failed");
+		await ctx.runMutation(internal.ai.runs.finishError, {
+			runId,
+			userId,
+			errorCode: errorCode(failure),
+			outcomeUnknown: completedProviderOutcomeIsUnknown(failure),
+		});
+		throw error;
+	} finally {
+		await flushProvider(provider);
+	}
+}
+
+export const run = action({
+	args: {
+		requestId: v.string(),
+		documentId: v.id("documents"),
+		sourceNodeId: v.string(),
+		sourceHash: v.string(),
+		inputs: v.array(v.string()),
+		platform: v.string(),
+		traceContent: v.boolean(),
+	},
+	handler: async (ctx, args): Promise<number[][]> => {
+		const userId = await requireActionUserId(ctx);
+		return await runEmbedding(ctx, args, userId);
+	},
+});
+
+export const runScheduled = internalAction({
+	args: {
+		userId: v.string(),
+		requestId: v.string(),
+		documentId: v.id("documents"),
+		sourceNodeId: v.string(),
+		sourceHash: v.string(),
+		inputs: v.array(v.string()),
+	},
+	handler: async (ctx, args): Promise<number[][]> =>
+		await runEmbedding(
+			ctx,
+			{ ...args, platform: "cron", traceContent: false },
+			args.userId,
+		),
+});

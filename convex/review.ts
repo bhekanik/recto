@@ -1,14 +1,19 @@
 import type { GenericMutationCtx, GenericQueryCtx } from "convex/server";
-import { v } from "convex/values";
+import { getDocumentSize, v } from "convex/values";
+import { z } from "zod";
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { mutation, query } from "./_generated/server";
-import { assertNotDeleting } from "./accountGuard";
+import { internalMutation, mutation, query } from "./_generated/server";
+import { assertNotDeleting, findTombstone } from "./accountGuard";
+import { AI_CONSENT_VERSION } from "./ai/consent";
+import { aiError } from "./ai/errors";
 import { syncBlobReferences } from "./blobReferences";
 import {
 	MARKDOWN_TOO_LARGE_MESSAGE,
 	MAX_MARKDOWN_LENGTH,
 	requireOwnedDocument,
 	requireUserId,
+	utf8Length,
 } from "./documents";
 import {
 	applyAcceptedHunks,
@@ -42,11 +47,53 @@ const AI_REVIEWER_AUTHOR_ID = "ai-reviewer";
 const AI_REVIEW_MODEL = "z-ai/glm-5.2";
 /** Origin prefix on AI branch nodes — mirrors `aiReviewOrigin()` in lib/ai/review.ts. */
 const AI_REVIEW_ORIGIN_PREFIX = "ai:review:";
+const MAX_CONVEX_DOCUMENT_BYTES = 1_048_576;
+
+type NewDocNode = Omit<Doc<"docNodes">, "_id" | "_creationTime">;
+
+function assertDocNodeFits(row: NewDocNode): void {
+	if (getDocumentSize(row) > MAX_CONVEX_DOCUMENT_BYTES) {
+		throw new Error(MARKDOWN_TOO_LARGE_MESSAGE);
+	}
+}
+
+const aiReviewSummarySchema = z.object({
+	commentsPlaced: z.number(),
+	commentsTotal: z.number(),
+	commentsDropped: z.number(),
+	editsPlaced: z.number(),
+	editsTotal: z.number(),
+	editsDropped: z.number(),
+	branchId: z.string().nullable(),
+});
 
 /** Role rank for access comparisons. Owner outranks all grantees. */
 const ROLE_RANK = { commenter: 1, suggester: 2, owner: 3 } as const;
 type AccessRole = keyof typeof ROLE_RANK;
 type GranteeRole = "commenter" | "suggester";
+
+async function usersAreBlocked(
+	ctx: QueryCtx | MutationCtx,
+	left: string,
+	right: string,
+): Promise<boolean> {
+	if (left === right || right === AI_REVIEWER_AUTHOR_ID) return false;
+	const [leftBlocks, rightBlocks] = await Promise.all([
+		ctx.db
+			.query("userBlocks")
+			.withIndex("by_blocker_blocked", (q) =>
+				q.eq("blockerUserId", left).eq("blockedUserId", right),
+			)
+			.unique(),
+		ctx.db
+			.query("userBlocks")
+			.withIndex("by_blocker_blocked", (q) =>
+				q.eq("blockerUserId", right).eq("blockedUserId", left),
+			)
+			.unique(),
+	]);
+	return leftBlocks !== null || rightBlocks !== null;
+}
 
 function toServerNode(row: Doc<"docNodes">): ServerNode {
 	return {
@@ -138,6 +185,9 @@ export async function requireDocumentAccess(
 	}
 
 	if (!share) throw new Error("Document not found");
+	if (await usersAreBlocked(ctx, userId, doc.userId)) {
+		throw new Error("Document not found");
+	}
 
 	const role: GranteeRole = share.role;
 	if (ROLE_RANK[role] < ROLE_RANK[minRole]) {
@@ -274,6 +324,7 @@ export const listSharedWithMe = query({
 			if (seen.has(s._id)) continue;
 			// Don't surface the caller's own documents as "shared with me".
 			if (s.ownerUserId === userId) continue;
+			if (await usersAreBlocked(ctx, userId, s.ownerUserId)) continue;
 			seen.add(s._id);
 			shares.push(s);
 		}
@@ -330,10 +381,20 @@ export const documentShareState = query({
 				.query("documentShares")
 				.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
 				.collect();
+			const visibleShares: typeof shares = [];
+			for (const share of shares) {
+				if (
+					share.granteeUserId &&
+					(await usersAreBlocked(ctx, userId, share.granteeUserId))
+				) {
+					continue;
+				}
+				visibleShares.push(share);
+			}
 			return {
 				role: "owner" as const,
-				shareCount: shares.length,
-				shared: shares.length > 0,
+				shareCount: visibleShares.length,
+				shared: visibleShares.length > 0,
 			};
 		}
 
@@ -342,15 +403,17 @@ export const documentShareState = query({
 			.query("documentShares")
 			.withIndex("by_grantee_user", (q) => q.eq("granteeUserId", userId))
 			.filter((q) => q.eq(q.field("documentId"), args.documentId))
-			.unique();
+			.first();
 		if (!share && email) {
 			share = await ctx.db
 				.query("documentShares")
 				.withIndex("by_grantee_email", (q) => q.eq("granteeEmail", email))
 				.filter((q) => q.eq(q.field("documentId"), args.documentId))
-				.unique();
+				.first();
 		}
-		if (!share) return null;
+		if (!share || (await usersAreBlocked(ctx, userId, share.ownerUserId))) {
+			return null;
+		}
 		return { role: share.role, shareCount: 1, shared: true };
 	},
 });
@@ -403,12 +466,12 @@ export const reviewerAppend = mutation({
 			if (!parent) throw new Error("Parent node not found");
 
 			// (c) Bound patch + snapshot length (same cap as documents.updateMarkdown).
-			if (args.patch.length > MAX_MARKDOWN_LENGTH) {
+			if (utf8Length(args.patch) > MAX_MARKDOWN_LENGTH) {
 				throw new Error(MARKDOWN_TOO_LARGE_MESSAGE);
 			}
 			if (
 				args.snapshot !== undefined &&
-				args.snapshot.length > MAX_MARKDOWN_LENGTH
+				utf8Length(args.snapshot) > MAX_MARKDOWN_LENGTH
 			) {
 				throw new Error(MARKDOWN_TOO_LARGE_MESSAGE);
 			}
@@ -528,7 +591,7 @@ export const aiSuggestBranch = mutation({
 
 		// Bound the AI branch head like documents.updateMarkdown — it is written to
 		// docNodes.snapshot and guards the same Convex ~1 MiB per-value ceiling.
-		if (args.branchMarkdown.length > MAX_MARKDOWN_LENGTH) {
+		if (utf8Length(args.branchMarkdown) > MAX_MARKDOWN_LENGTH) {
 			throw new Error(MARKDOWN_TOO_LARGE_MESSAGE);
 		}
 
@@ -540,6 +603,23 @@ export const aiSuggestBranch = mutation({
 		const currentMarkdown = materialize(doc.currentNodeId, nodes);
 
 		const now = Date.now();
+		const newNodeId = crypto.randomUUID();
+		const patch = JSON.stringify({
+			from: 0,
+			to: currentMarkdown.length,
+			insert: args.branchMarkdown,
+		});
+		const node: NewDocNode = {
+			documentId: args.documentId,
+			nodeId: newNodeId,
+			parentNodeId: doc.currentNodeId,
+			patch,
+			snapshot: args.branchMarkdown,
+			selection: null,
+			origin: `${AI_REVIEW_ORIGIN_PREFIX}${AI_REVIEW_MODEL}`,
+			createdAt: now,
+		};
+		assertDocNodeFits(node);
 
 		// One AI branch per document for v1 — close any prior OPEN AI branch so the
 		// review surface shows only the latest AI suggestion set.
@@ -558,27 +638,9 @@ export const aiSuggestBranch = mutation({
 
 		// Append the AI branch head off the owner's CURRENT node — append-only, never
 		// touches the documents row (the isolation boundary).
-		const newNodeId = crypto.randomUUID();
-		const nodeRowId = await ctx.db.insert("docNodes", {
-			documentId: args.documentId,
-			nodeId: newNodeId,
-			parentNodeId: doc.currentNodeId,
-			patch: JSON.stringify({
-				from: 0,
-				to: currentMarkdown.length,
-				insert: args.branchMarkdown,
-			}),
-			snapshot: args.branchMarkdown,
-			selection: null,
-			origin: `${AI_REVIEW_ORIGIN_PREFIX}${AI_REVIEW_MODEL}`,
-			createdAt: now,
-		});
+		const nodeRowId = await ctx.db.insert("docNodes", node);
 		await syncBlobReferences(ctx, doc.userId, "node", nodeRowId, [
-			JSON.stringify({
-				from: 0,
-				to: currentMarkdown.length,
-				insert: args.branchMarkdown,
-			}),
+			patch,
 			args.branchMarkdown,
 		]);
 
@@ -593,6 +655,238 @@ export const aiSuggestBranch = mutation({
 		});
 
 		return { branchId, nodeId: newNodeId };
+	},
+});
+
+const aiCommentValidator = v.object({
+	anchor: v.object({
+		quote: v.string(),
+		prefix: v.string(),
+		suffix: v.string(),
+		offsetHint: v.number(),
+	}),
+	body: v.string(),
+});
+
+/** Atomically materialize one provider review against the exact reserved head. */
+export const applyAiReview = internalMutation({
+	args: {
+		runId: v.id("aiRuns"),
+		userId: v.string(),
+		documentId: v.id("documents"),
+		sourceNodeId: v.string(),
+		sourceText: v.string(),
+		comments: v.array(aiCommentValidator),
+		commentsTotal: v.number(),
+		branchMarkdown: v.optional(v.string()),
+		editsApplied: v.number(),
+		editsTotal: v.number(),
+		langsmithRunId: v.optional(v.string()),
+	},
+	handler: async (ctx, args) => {
+		const run = await ctx.db.get(args.runId);
+		if (
+			!run ||
+			run.userId !== args.userId ||
+			run.kind !== "review" ||
+			run.documentId !== args.documentId ||
+			run.sourceNodeId !== args.sourceNodeId ||
+			run.sourceMarkdown !== args.sourceText
+		) {
+			aiError("request_conflict", "The AI review request does not match.");
+		}
+		if (run.status === "succeeded" && run.output) {
+			const parsed = aiReviewSummarySchema.safeParse(JSON.parse(run.output));
+			if (!parsed.success) {
+				aiError(
+					"request_outcome_unknown",
+					"The stored AI review is unreadable.",
+				);
+			}
+			const branchId = parsed.data.branchId
+				? await ctx.db.normalizeId("reviewBranches", parsed.data.branchId)
+				: null;
+			return { ...parsed.data, branchId, applicable: run.applicable === true };
+		}
+		if (run.status !== "provider_started" || !run.keySource) {
+			aiError("request_conflict", "The AI review request is not active.");
+		}
+		const usage = await ctx.db
+			.query("aiUsage")
+			.withIndex("by_run", (q) => q.eq("runId", run._id))
+			.first();
+		if (!usage) {
+			aiError(
+				"request_outcome_unknown",
+				"The AI review usage has not settled.",
+			);
+		}
+		const [doc, deletion, share, consent, sourceNode, tombstone] =
+			await Promise.all([
+				ctx.db.get(args.documentId),
+				ctx.db
+					.query("aiDocumentDeletions")
+					.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+					.unique(),
+				ctx.db
+					.query("documentShares")
+					.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+					.first(),
+				ctx.db
+					.query("aiConsents")
+					.withIndex("by_user", (q) => q.eq("userId", args.userId))
+					.unique(),
+				ctx.db
+					.query("docNodes")
+					.withIndex("by_document_node", (q) =>
+						q.eq("documentId", args.documentId).eq("nodeId", args.sourceNodeId),
+					)
+					.unique(),
+				findTombstone(ctx, args.userId),
+			]);
+		const consentMatches =
+			consent?.version === AI_CONSENT_VERSION &&
+			(run.consentAcceptedAt !== undefined
+				? consent.acceptedAt === run.consentAcceptedAt
+				: consent.acceptedAt <= (run.providerStartedAt ?? run.createdAt));
+		let refusalCode: string | null = tombstone
+			? "account_deletion_in_progress"
+			: deletion || !doc || doc.userId !== args.userId
+				? "document_not_found"
+				: share
+					? "document_shared"
+					: !consentMatches
+						? "ai_consent_required"
+						: doc.currentNodeId !== args.sourceNodeId ||
+								doc.markdown !== args.sourceText ||
+								sourceNode === null
+							? "document_changed"
+							: null;
+		const now = Date.now();
+		const commentRows = args.comments.flatMap((comment) => {
+			const body = comment.body.trim();
+			return body
+				? [
+						{
+							documentId: args.documentId,
+							authorUserId: AI_REVIEWER_AUTHOR_ID,
+							authorName: `AI · ${aiModelLabel(AI_REVIEW_MODEL)}`,
+							anchor: comment.anchor,
+							body,
+							resolved: false,
+							createdAt: now,
+						},
+					]
+				: [];
+		});
+		if (
+			commentRows.some(
+				(row) => getDocumentSize(row) > MAX_CONVEX_DOCUMENT_BYTES,
+			)
+		) {
+			refusalCode = "output_too_large";
+		}
+		let node: NewDocNode | null = null;
+		if (
+			args.branchMarkdown !== undefined &&
+			args.branchMarkdown !== args.sourceText
+		) {
+			const patch = JSON.stringify({
+				from: 0,
+				to: args.sourceText.length,
+				insert: args.branchMarkdown,
+			});
+			node = {
+				documentId: args.documentId,
+				nodeId: crypto.randomUUID(),
+				parentNodeId: args.sourceNodeId,
+				patch,
+				snapshot: args.branchMarkdown,
+				selection: null,
+				origin: `${AI_REVIEW_ORIGIN_PREFIX}${AI_REVIEW_MODEL}`,
+				createdAt: now,
+			};
+			if (
+				utf8Length(args.branchMarkdown) > MAX_MARKDOWN_LENGTH ||
+				getDocumentSize(node) > MAX_CONVEX_DOCUMENT_BYTES
+			) {
+				refusalCode = "output_too_large";
+			}
+		}
+		let priorOpen: Doc<"reviewBranches">[] = [];
+		if (node && !refusalCode) {
+			priorOpen = await ctx.db
+				.query("reviewBranches")
+				.withIndex("by_document_reviewer", (q) =>
+					q
+						.eq("documentId", args.documentId)
+						.eq("reviewerUserId", AI_REVIEWER_AUTHOR_ID),
+				)
+				.filter((q) => q.eq(q.field("status"), "open"))
+				.take(101);
+			if (priorOpen.length > 100) refusalCode = "too_many_review_branches";
+		}
+		const finalize = async (
+			commentsPlaced: number,
+			branchId: Id<"reviewBranches"> | null,
+			applicable: boolean,
+		) => {
+			const summary = {
+				commentsPlaced,
+				commentsTotal: args.commentsTotal,
+				commentsDropped: args.commentsTotal - commentsPlaced,
+				editsPlaced: branchId ? args.editsApplied : 0,
+				editsTotal: args.editsTotal,
+				editsDropped: args.editsTotal - (branchId ? args.editsApplied : 0),
+				branchId,
+			};
+			await ctx.db.patch(run._id, {
+				status: "succeeded",
+				output: JSON.stringify(summary),
+				applicable,
+				errorCode: refusalCode ?? undefined,
+				langsmithRunId: args.langsmithRunId,
+				completedAt: now,
+				updatedAt: now,
+			});
+			if (!applicable) {
+				const active = await ctx.db
+					.query("aiActiveRuns")
+					.withIndex("by_user_document_kind_source", (q) =>
+						q
+							.eq("userId", run.userId)
+							.eq("documentId", run.documentId)
+							.eq("kind", "review")
+							.eq("sourceNodeId", run.sourceNodeId),
+					)
+					.unique();
+				if (active?.runId === run._id) await ctx.db.delete(active._id);
+			}
+			return { ...summary, applicable };
+		};
+		if (refusalCode || !doc) return await finalize(0, null, false);
+		for (const row of commentRows) await ctx.db.insert("comments", row);
+		let branchId: Id<"reviewBranches"> | null = null;
+		if (node) {
+			for (const branch of priorOpen) {
+				await ctx.db.patch(branch._id, { status: "rejected", updatedAt: now });
+			}
+			const nodeRowId = await ctx.db.insert("docNodes", node);
+			await syncBlobReferences(ctx, doc.userId, "node", nodeRowId, [
+				node.patch,
+				node.snapshot ?? "",
+			]);
+			branchId = await ctx.db.insert("reviewBranches", {
+				documentId: args.documentId,
+				reviewerUserId: AI_REVIEWER_AUTHOR_ID,
+				baseNodeId: args.sourceNodeId,
+				headNodeId: node.nodeId,
+				status: "open",
+				createdAt: now,
+				updatedAt: now,
+			});
+		}
+		return await finalize(commentRows.length, branchId, true);
 	},
 });
 
@@ -779,7 +1073,7 @@ export const acceptHunks = mutation({
 		const merged = applyAcceptedHunks(runs, args.acceptedHunks);
 
 		// Same ~1 MiB cap as every other write into the owner's doc.
-		if (merged.length > MAX_MARKDOWN_LENGTH) {
+		if (utf8Length(merged) > MAX_MARKDOWN_LENGTH) {
 			throw new Error(MARKDOWN_TOO_LARGE_MESSAGE);
 		}
 
@@ -1100,13 +1394,23 @@ export const addComment = mutation({
 export const listComments = query({
 	args: { documentId: v.id("documents") },
 	handler: async (ctx, args) => {
-		await requireDocumentAccess(ctx, args.documentId, "commenter");
+		const { userId } = await requireDocumentAccess(
+			ctx,
+			args.documentId,
+			"commenter",
+		);
 		const rows = await ctx.db
 			.query("comments")
 			.withIndex("by_document", (q) => q.eq("documentId", args.documentId))
 			.collect();
-		rows.sort((a, b) => a.createdAt - b.createdAt);
-		return rows.map((c) => ({
+		const visible = [];
+		for (const row of rows) {
+			if (!(await usersAreBlocked(ctx, userId, row.authorUserId))) {
+				visible.push(row);
+			}
+		}
+		visible.sort((a, b) => a.createdAt - b.createdAt);
+		return visible.map((c) => ({
 			_id: c._id,
 			authorUserId: c.authorUserId,
 			authorName: c.authorName,
@@ -1116,6 +1420,127 @@ export const listComments = query({
 			resolved: c.resolved,
 			createdAt: c.createdAt,
 		}));
+	},
+});
+
+export const reportComment = mutation({
+	args: { commentId: v.id("comments"), reason: v.string() },
+	handler: async (ctx, args) => {
+		const comment = await ctx.db.get(args.commentId);
+		if (!comment) throw new Error("Comment not found");
+		const { userId } = await requireDocumentAccess(
+			ctx,
+			comment.documentId,
+			"commenter",
+		);
+		if (comment.authorUserId === userId) {
+			throw new Error("You cannot report your own comment.");
+		}
+		const reason = args.reason.trim();
+		if (!reason || reason.length > 2_000) {
+			throw new Error("A report reason is required.");
+		}
+		const existing = await ctx.db
+			.query("commentReports")
+			.withIndex("by_comment_reporter", (q) =>
+				q.eq("commentId", args.commentId).eq("reporterUserId", userId),
+			)
+			.unique();
+		if (existing) return { reportId: existing._id, duplicate: true as const };
+		const reportId = await ctx.db.insert("commentReports", {
+			commentId: args.commentId,
+			documentId: comment.documentId,
+			reporterUserId: userId,
+			reportedUserId: comment.authorUserId,
+			reason,
+			status: "open",
+			createdAt: Date.now(),
+		});
+		return { reportId, duplicate: false as const };
+	},
+});
+
+const BLOCKED_SHARE_CLEANUP_BATCH = 128;
+
+export const cleanupBlockedShares = internalMutation({
+	args: { blockerUserId: v.string(), blockedUserId: v.string() },
+	handler: async (ctx, args) => {
+		const block = await ctx.db
+			.query("userBlocks")
+			.withIndex("by_blocker_blocked", (q) =>
+				q
+					.eq("blockerUserId", args.blockerUserId)
+					.eq("blockedUserId", args.blockedUserId),
+			)
+			.unique();
+		if (!block) return { revoked: 0, complete: true as const };
+		const [blockedAsGrantee, blockerAsGrantee] = await Promise.all([
+			ctx.db
+				.query("documentShares")
+				.withIndex("by_owner_grantee_user", (q) =>
+					q
+						.eq("ownerUserId", args.blockerUserId)
+						.eq("granteeUserId", args.blockedUserId),
+				)
+				.take(BLOCKED_SHARE_CLEANUP_BATCH + 1),
+			ctx.db
+				.query("documentShares")
+				.withIndex("by_owner_grantee_user", (q) =>
+					q
+						.eq("ownerUserId", args.blockedUserId)
+						.eq("granteeUserId", args.blockerUserId),
+				)
+				.take(BLOCKED_SHARE_CLEANUP_BATCH + 1),
+		]);
+		const shares = [
+			...blockedAsGrantee.slice(0, BLOCKED_SHARE_CLEANUP_BATCH),
+			...blockerAsGrantee.slice(0, BLOCKED_SHARE_CLEANUP_BATCH),
+		];
+		for (const share of shares) await ctx.db.delete(share._id);
+		const complete =
+			blockedAsGrantee.length <= BLOCKED_SHARE_CLEANUP_BATCH &&
+			blockerAsGrantee.length <= BLOCKED_SHARE_CLEANUP_BATCH;
+		if (!complete) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.review.cleanupBlockedShares,
+				args,
+			);
+		}
+		return { revoked: shares.length, complete };
+	},
+});
+
+export const blockUser = mutation({
+	args: { userId: v.string() },
+	handler: async (ctx, args) => {
+		const blockerUserId = await requireUserId(ctx);
+		const blockedUserId = args.userId.trim();
+		if (
+			!blockedUserId ||
+			blockedUserId === blockerUserId ||
+			blockedUserId === AI_REVIEWER_AUTHOR_ID
+		) {
+			throw new Error("Invalid user to block.");
+		}
+		const existing = await ctx.db
+			.query("userBlocks")
+			.withIndex("by_blocker_blocked", (q) =>
+				q.eq("blockerUserId", blockerUserId).eq("blockedUserId", blockedUserId),
+			)
+			.unique();
+		if (!existing) {
+			await ctx.db.insert("userBlocks", {
+				blockerUserId,
+				blockedUserId,
+				createdAt: Date.now(),
+			});
+		}
+		await ctx.scheduler.runAfter(0, internal.review.cleanupBlockedShares, {
+			blockerUserId,
+			blockedUserId,
+		});
+		return { blocked: true as const };
 	},
 });
 

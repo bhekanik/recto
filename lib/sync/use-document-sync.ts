@@ -298,8 +298,12 @@ export function useDocumentSync({
 			const markdown =
 				markdownOverride ??
 				getEditorHandleRef.current()?.getCanonicalMarkdown() ??
-				pendingMarkdownRef.current ??
-				"";
+				pendingMarkdownRef.current;
+			// History can publish the saved projection before Milkdown registers its
+			// handle. No source means there is nothing to save; treating it as an empty
+			// editor erased the document during reload. An intentional empty draft is
+			// still represented by either the handle or pendingMarkdownRef as "".
+			if (markdown === null) return "skipped";
 			const words = countWords(markdown);
 			setWordCount(words);
 			pendingMarkdownRef.current = markdown;

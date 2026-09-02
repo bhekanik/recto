@@ -1,12 +1,18 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import {
+	useCallback,
+	useEffect,
+	useEffectEvent,
+	useRef,
+	useState,
+} from "react";
 
 import type { AiTransformRequest } from "@/components/ai/ai-transform-popover";
 import type { Id } from "@/convex/_generated/dataModel";
-import type { TransformRange } from "@/lib/ai/apply-transform";
 import { AI_TRANSFORM_SUMMON_EVENT, setAiEnabledMirror } from "@/lib/ai/summon";
 import { useAiReview } from "@/lib/ai/use-ai-review";
+import type { AiTransformSnapshot } from "@/lib/ai/use-ai-transform";
 import { useAiTransform } from "@/lib/ai/use-ai-transform";
 import { useRag } from "@/lib/ai/use-rag";
 import type { HistoryController } from "@/lib/history/use-document-history";
@@ -19,7 +25,7 @@ import type { WorkspaceState } from "@/lib/workspace/types";
 
 type AiPopoverState = {
 	open: boolean;
-	selection: { text: string; range: TransformRange } | null;
+	selection: AiTransformSnapshot | null;
 };
 
 type UseAiFeaturesArgs = {
@@ -52,6 +58,24 @@ export type UseAiFeaturesResult = {
 	handleReindex: () => Promise<void>;
 	openRelatedPassage: (documentId: Id<"documents">, charStart: number) => void;
 };
+
+export function useAiReviewGate(
+	effectiveAiEnabled: boolean,
+	resetReview: () => void,
+	closeReview: () => void,
+): void {
+	const previousAiEnabledRef = useRef(true);
+	const disableAiReview = useEffectEvent(() => {
+		resetReview();
+		closeReview();
+	});
+
+	useEffect(() => {
+		if (previousAiEnabledRef.current === effectiveAiEnabled) return;
+		previousAiEnabledRef.current = effectiveAiEnabled;
+		if (!effectiveAiEnabled) disableAiReview();
+	}, [effectiveAiEnabled]);
+}
 
 /**
  * AI features (plan 009 transform + RAG, plan 011 reviewer). Gated behind the
@@ -94,9 +118,16 @@ export function useAiFeatures({
 	const aiReview = useAiReview({
 		documentId: activeDocId,
 		getDocMarkdown: getActiveMarkdown,
+		getSourceNodeId: () => getController()?.currentNodeId ?? null,
 	});
 	const [aiReviewOpen, setAiReviewOpen] = useState(false);
 	const [relatedOpen, setRelatedOpen] = useState(false);
+
+	// The feature gate owns review shutdown because it removes the panel while the
+	// review hook remains mounted. Record sent uncertainty before a later remount.
+	useAiReviewGate(effectiveAiEnabled, aiReview.reset, () =>
+		setAiReviewOpen(false),
+	);
 
 	const { reindexDocument } = useRag();
 
@@ -120,20 +151,30 @@ export function useAiFeatures({
 			workspace.activePaneId,
 		);
 		if (!handle) return;
+		const controller = getController();
+		const sourceNodeId = controller?.currentNodeId;
+		const sourceMarkdown = handle.getCanonicalMarkdown();
+		if (!sourceNodeId || sourceMarkdown !== getActiveMarkdown()) return;
 
 		if (mode === "rich") {
 			// Rich lens: serialize the live selection to canonical markdown. The
 			// offset range is unused on this path (richReplace splices via a PM
 			// transaction at commit time), so carry a placeholder range.
-			const text = handle.getSelectedMarkdown?.() ?? null;
-			if (!text) {
+			const captured = handle.captureAiSelection?.() ?? null;
+			if (!captured) {
 				toast("Select some text first, then summon the AI transform.", "info");
 				return;
 			}
 			aiTransform.reset();
 			setAiPopover({
 				open: true,
-				selection: { text, range: { from: 0, to: 0 } },
+				selection: {
+					sourceNodeId,
+					sourceMarkdown,
+					selection: captured.markdown,
+					range: { from: 0, to: 0 },
+					richReplace: captured.replace,
+				},
 			});
 			return;
 		}
@@ -145,10 +186,17 @@ export function useAiFeatures({
 			toast("Select some text first, then summon the AI transform.", "info");
 			return;
 		}
-		const doc = handle.getCanonicalMarkdown();
-		const text = doc.slice(from, to);
+		const text = sourceMarkdown.slice(from, to);
 		aiTransform.reset();
-		setAiPopover({ open: true, selection: { text, range: { from, to } } });
+		setAiPopover({
+			open: true,
+			selection: {
+				sourceNodeId,
+				sourceMarkdown,
+				selection: text,
+				range: { from, to },
+			},
+		});
 	}, [
 		effectiveAiEnabled,
 		activeMode,
@@ -156,6 +204,8 @@ export function useAiFeatures({
 		workspace,
 		registry,
 		aiTransform,
+		getActiveMarkdown,
+		getController,
 	]);
 
 	// The selection toolbar's AI button (out of tree) summons via this event.
@@ -171,27 +221,13 @@ export function useAiFeatures({
 			// Rich lens: hand the transform a closure that splices the AI text into
 			// the live ProseMirror selection and returns the new full canonical
 			// markdown (committed once by the hook). raw/vim use the offset path.
-			const mode = activeMode;
-			const richReplace =
-				mode === "rich"
-					? (aiText: string): string | null => {
-							if (!activeDocId || !workspace) return null;
-							const handle = registry.getPrimaryHandle(
-								activeDocId,
-								workspace.activePaneId,
-							);
-							return handle?.replaceSelectionMarkdown?.(aiText) ?? null;
-						}
-					: undefined;
 			void aiTransform.transform({
 				instruction: req.instruction,
 				instructionLabel: req.instructionLabel,
-				range: req.range,
-				selection: req.selection,
-				richReplace,
+				snapshot: req.snapshot,
 			});
 		},
-		[aiTransform, activeMode, activeDocId, workspace, registry],
+		[aiTransform],
 	);
 
 	// "Re-index this draft for search" (Phase C) — chunk + embed via the Next
