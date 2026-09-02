@@ -60,11 +60,10 @@ final class StudioSettings {
     static let readingScaleStep = 0.1
     static let readingScaleDefault = 1.0
 
-    static let shared: StudioSettings = {
-        let settings = StudioSettings()
-        settings.followApplicationAppearance()
-        return settings
-    }()
+    /// Created from `RectoApp`'s stored properties, which run before
+    /// `NSApplication.shared` exists, so nothing here can observe the app yet;
+    /// each window root arms that through ``followApplicationAppearance()``.
+    static let shared = StudioSettings()
 
     var appearance: Appearance {
         didSet { defaults.set(appearance.rawValue, forKey: Key.appearance) }
@@ -169,12 +168,19 @@ final class StudioSettings {
         return appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? .dark : .light
     }
 
-    private func followApplicationAppearance() {
-        guard let application = NSApp else { return }
+    /// Start tracking the OS appearance through `NSApp.effectiveAppearance`.
+    /// Idempotent, and a no-op until the application object exists, so a root
+    /// view can call it on every appearance. Also re-reads the OS at once: the
+    /// value taken at init may predate the application.
+    func followApplicationAppearance() {
+        guard appearanceObservation == nil, let application = NSApp else { return }
         appearanceObservation = application.observe(\.effectiveAppearance) { [weak self] _, _ in
             MainActor.assumeIsolated { self?.refreshSystemAppearance() }
         }
+        refreshSystemAppearance()
     }
+
+    var isFollowingApplicationAppearance: Bool { appearanceObservation != nil }
 
     // MARK: - Text size
 

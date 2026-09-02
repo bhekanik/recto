@@ -1,5 +1,6 @@
 import AppKit
 import RectoEditor
+import SwiftUI
 
 /// What one editor host owns around the text: the writing controls, find,
 /// typewriter scrolling, the settings that live on the text view itself, and
@@ -49,16 +50,23 @@ final class EditorHostController {
         typewriter.isEnabled = settings.typewriter
         guard let textView = seam?.nsTextView else { return }
         // The engine reads its spellcheck policy once, when it builds the view,
-        // and from then on trusts NSTextView's own toggle actions: it snapshots
-        // them so that a caret leaving a code span restores the writer's choice
-        // rather than the launch default. Going through the same actions keeps
-        // that snapshot right.
-        if textView.isContinuousSpellCheckingEnabled != settings.spellcheck {
+        // and from then on keeps a snapshot it takes after each of NSTextView's
+        // toggle actions; a caret leaving a code span restores that snapshot,
+        // not the launch default. The view's live value is not the snapshot —
+        // inside a span the engine has forced it off — so the toggles run
+        // whether or not the view already agrees: twice when it does, which
+        // leaves the view as it was and the snapshot equal to the setting.
+        Self.drive(textView.isContinuousSpellCheckingEnabled, to: settings.spellcheck) {
             textView.toggleContinuousSpellChecking(nil)
         }
-        if textView.isGrammarCheckingEnabled != settings.spellcheck {
+        Self.drive(textView.isGrammarCheckingEnabled, to: settings.spellcheck) {
             textView.toggleGrammarChecking(nil)
         }
+    }
+
+    private static func drive(_ current: Bool, to wanted: Bool, toggle: () -> Void) {
+        toggle()
+        if current == wanted { toggle() }
     }
 
     /// A toolbar button. Link needs a destination, so it opens the same
@@ -109,5 +117,56 @@ final class EditorHostRegistry {
     func controller(in window: NSWindow?) -> EditorHostController? {
         guard let window else { return nil }
         return controllers.allObjects.first { $0.window === window }
+    }
+
+    /// The window `Window("Recto", id: "cloud-library")` is on screen in, for
+    /// surfaces that need a home when the key window has no editor.
+    weak var libraryWindow: NSWindow?
+
+    /// The View menu's mode chords: switch the lens of the editor in `window`.
+    func choosePresentation(_ presentation: Presentation, in window: NSWindow?) {
+        controller(in: window)?.choosePresentation(presentation)
+    }
+
+    /// The window an app-wide surface should sit over when `keyWindow` is key:
+    /// the window itself when it holds an editor; its host when it is a child
+    /// (the link-input popover, the selection bar); else the library window;
+    /// else nothing.
+    func surfaceWindow(for keyWindow: NSWindow?) -> NSWindow? {
+        var candidate = keyWindow
+        while let window = candidate {
+            if controller(in: window) != nil { return window }
+            candidate = window.parent
+        }
+        return libraryWindow
+    }
+}
+
+/// Records the window the library root lands in, for
+/// ``EditorHostRegistry/libraryWindow``.
+struct LibraryWindowAnchor: NSViewRepresentable {
+    let editors: EditorHostRegistry
+
+    func makeNSView(context: Context) -> AnchorView {
+        AnchorView(editors: editors)
+    }
+
+    func updateNSView(_ nsView: AnchorView, context: Context) {}
+
+    final class AnchorView: NSView {
+        private let editors: EditorHostRegistry
+
+        init(editors: EditorHostRegistry) {
+            self.editors = editors
+            super.init(frame: .zero)
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let window { editors.libraryWindow = window }
+        }
     }
 }

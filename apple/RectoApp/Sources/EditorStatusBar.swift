@@ -130,6 +130,9 @@ private struct StudioControls: View {
                 isOn: settings.spellcheck,
                 action: settings.toggleSpellcheck
             )
+
+            StatusDivider(theme: theme)
+
             iconButton(
                 "arrow.up.and.down.text.horizontal",
                 help: "Typewriter scrolling: \(settings.typewriter ? "On" : "Off")",
@@ -298,6 +301,9 @@ private struct ModeSwitcher: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(!isEditable)
+                // In-window, so the chord reaches this window's lens whichever
+                // window is key; the View menu carries the same chords for
+                // when the bar is hidden.
                 .keyboardShortcut(mode.shortcut)
                 .help(mode.help)
                 .accessibilityLabel(mode.label)
@@ -344,7 +350,7 @@ private extension Presentation {
         }
     }
 
-    /// Tooltip. Names the chord because there is no menu item to learn it from.
+    /// Tooltip. Names the chord.
     var help: String {
         switch self {
         case .rich: "Rich text (⌃⇧R)"

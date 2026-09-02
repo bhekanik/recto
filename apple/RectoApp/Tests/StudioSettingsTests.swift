@@ -149,6 +149,42 @@ struct StudioSettingsTests {
         #expect(!configuration.spellChecking.grammarChecking)
     }
 
+    /// P2-1: `.shared` is created before `NSApplication.shared` exists, so the
+    /// scene roots arm the observation on appear. The test host is the real app,
+    /// so by the time any test runs a root has appeared: asserting the arming
+    /// here, without arming by hand, is what pins the `onAppear` wiring — the
+    /// line that was missing when "System" never followed the OS.
+    @Test("the shared settings follow the application's appearance once armed")
+    func sharedFollowsApplication() async {
+        _ = NSApplication.shared
+        let previous = NSApp.appearance
+        defer { NSApp.appearance = previous }
+        let settings = StudioSettings.shared
+        #expect(settings.isFollowingApplicationAppearance)
+
+        NSApp.appearance = NSAppearance(named: .aqua)
+        await drainMainQueue()
+        #expect(settings.systemAppearance == .light)
+
+        NSApp.appearance = NSAppearance(named: .darkAqua)
+        await drainMainQueue()
+        #expect(settings.systemAppearance == .dark)
+    }
+
+    @Test("following is a no-op until armed")
+    func notFollowingUntilArmed() {
+        let settings = settings()
+        #expect(!settings.isFollowingApplicationAppearance)
+        settings.followApplicationAppearance()
+        #expect(settings.isFollowingApplicationAppearance)
+    }
+
+    private func drainMainQueue() async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+    }
+
     @Test("every SF Symbol the status bar names exists", arguments: StudioSettings.Appearance.allCases)
     func appearanceSymbolsResolve(appearance: StudioSettings.Appearance) {
         #expect(NSImage(systemSymbolName: appearance.symbol, accessibilityDescription: nil) != nil)

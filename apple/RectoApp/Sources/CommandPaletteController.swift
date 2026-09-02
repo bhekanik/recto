@@ -48,10 +48,13 @@ final class CommandPaletteController {
     var isOpen: Bool { panel != nil }
     var panelWindow: NSWindow? { panel }
 
-    /// Show the palette over `window` (the key window, normally). A second ⌘K
-    /// while it is up leaves it up, like the web.
-    func open(over window: NSWindow? = NSApp.keyWindow, library: PaletteLibrary) {
-        guard !isOpen, let window else { return }
+    /// Show the palette over the window ⌘K was pressed in — or over the window
+    /// that hosts it when the key window is a popover, or over the library when
+    /// the key window has no editor at all (Settings). A second ⌘K while it is
+    /// up leaves it up, like the web.
+    func open(over keyWindow: NSWindow? = NSApp.keyWindow, library: PaletteLibrary) {
+        guard !isOpen, let window = editors.surfaceWindow(for: keyWindow) else { return }
+        if window !== keyWindow { window.makeKeyAndOrderFront(nil) }
         let editor = editors.controller(in: window)
         let model = PaletteModel(
             sections: Self.sections(settings: settings, library: library),
@@ -69,17 +72,28 @@ final class CommandPaletteController {
         observe(panel: panel, parent: window)
     }
 
-    /// Take the palette down and hand the keyboard back to the window it came
-    /// from. That window's first responder was never changed, so the editor
-    /// resumes where it was.
+    /// Esc, Return, the scrim: take the palette down and hand the keyboard
+    /// back to the window it came from. That window's first responder was
+    /// never changed, so the editor resumes where it was.
     func close() {
+        tearDown(restoringKey: true)
+    }
+
+    /// The panel lost key status. To another window: the writer chose that
+    /// window, and it keeps the keyboard. To nothing (the app deactivated): the
+    /// parent takes it back, so the app returns where it was.
+    func paletteDidResignKey(to keyWindow: NSWindow?) {
+        tearDown(restoringKey: keyWindow == nil || keyWindow === panel)
+    }
+
+    private func tearDown(restoringKey: Bool) {
         guard let panel else { return }
         self.panel = nil
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
         observers.removeAll()
         parent?.removeChildWindow(panel)
         panel.orderOut(nil)
-        parent?.makeKey()
+        if restoringKey { parent?.makeKey() }
         parent = nil
     }
 
@@ -186,7 +200,7 @@ final class CommandPaletteController {
         let center = NotificationCenter.default
         observers = [
             center.addObserver(forName: NSWindow.didResignKeyNotification, object: panel, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.close() }
+                MainActor.assumeIsolated { self?.paletteDidResignKey(to: NSApp.keyWindow) }
             },
             center.addObserver(forName: NSWindow.willCloseNotification, object: parent, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.close() }

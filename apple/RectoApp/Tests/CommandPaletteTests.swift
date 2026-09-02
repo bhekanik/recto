@@ -306,6 +306,107 @@ struct CommandPaletteControllerTests {
         controller.close()
     }
 
+    /// P2-3: when the palette closes because another window took the
+    /// keyboard, that window keeps it; the parent gets it back only when the
+    /// palette closed on its own or the app went away. Key status is not real
+    /// in the test host (the app is not active), so the decision is driven
+    /// through the resign-key entry point with a window that counts `makeKey`.
+    @Test("closing because another window took key leaves that window key")
+    func otherWindowKeepsKey() async throws {
+        let mounted = try await mount("hello", id: "palette-other-window")
+        defer { mounted.window.close() }
+        let parent = mounted.window
+        let other = NSWindow(contentViewController: NSViewController())
+        other.isReleasedWhenClosed = false
+        defer { other.close() }
+        let controller = CommandPaletteController(
+            settings: mounted.settings, editors: mounted.registry, pasteboard: pasteboard
+        )
+
+        controller.open(over: parent, library: PaletteLibrary())
+        parent.makeKeyCalls = 0
+        controller.paletteDidResignKey(to: other)
+        #expect(!controller.isOpen, "losing key is the dismissal")
+        #expect(parent.makeKeyCalls == 0, "the parent must not take key back from the window the writer chose")
+
+        controller.open(over: parent, library: PaletteLibrary())
+        let panel = try #require(controller.panelWindow)
+        parent.makeKeyCalls = 0
+        controller.paletteDidResignKey(to: panel)
+        #expect(!controller.isOpen)
+        #expect(parent.makeKeyCalls == 1)
+
+        controller.open(over: parent, library: PaletteLibrary())
+        parent.makeKeyCalls = 0
+        controller.paletteDidResignKey(to: nil)
+        #expect(!controller.isOpen)
+        #expect(parent.makeKeyCalls == 1, "the app deactivated: the parent is where it comes back to")
+
+        controller.open(over: parent, library: PaletteLibrary())
+        parent.makeKeyCalls = 0
+        controller.close()
+        #expect(parent.makeKeyCalls == 1, "Esc/Return/scrim hand the keyboard back")
+    }
+
+    /// P3: ⌘K in a popover or in Settings must not size the palette to that
+    /// window; it goes over the editor's host, or over the library.
+    @Test("the palette targets the editor's window, its popover's host, or the library")
+    func surfaceWindow() async throws {
+        let mounted = try await mount("hello", id: "palette-surface")
+        defer { mounted.window.close() }
+        let registry = mounted.registry
+        #expect(registry.surfaceWindow(for: mounted.window) === mounted.window)
+
+        let popover = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 100, height: 50), styleMask: [.borderless],
+                               backing: .buffered, defer: false)
+        popover.isReleasedWhenClosed = false
+        mounted.window.addChildWindow(popover, ordered: .above)
+        defer { mounted.window.removeChildWindow(popover); popover.close() }
+        #expect(registry.surfaceWindow(for: popover) === mounted.window, "a popover's host holds the editor")
+
+        let settingsWindow = NSWindow(contentViewController: NSViewController())
+        settingsWindow.isReleasedWhenClosed = false
+        defer { settingsWindow.close() }
+        #expect(registry.surfaceWindow(for: settingsWindow) == nil, "no editor, no library: nowhere to go")
+        #expect(registry.surfaceWindow(for: nil) == nil)
+
+        let library = NSWindow(contentViewController: NSViewController())
+        library.isReleasedWhenClosed = false
+        library.setContentSize(NSSize(width: 400, height: 300))
+        library.orderFront(nil)
+        defer { library.close() }
+        registry.libraryWindow = library
+        #expect(registry.surfaceWindow(for: settingsWindow) === library)
+
+        let controller = CommandPaletteController(settings: mounted.settings, editors: registry, pasteboard: pasteboard)
+        controller.open(over: settingsWindow, library: PaletteLibrary())
+        defer { controller.close() }
+        #expect(controller.panelWindow?.parent === library, "over Settings the palette opens on the library")
+    }
+
+    /// P2-4: the mode chords live in the View menu, so they dispatch through
+    /// the registry to whichever editor is in the key window — status bar or not.
+    @Test("mode chords reach the key window's editor when the status bar is hidden")
+    func modeChordsWithoutStatusBar() async throws {
+        let mounted = try await mount("hello", id: "palette-mode-chords")
+        defer { mounted.window.close() }
+        mounted.settings.toggleStatusBar()
+        #expect(!mounted.settings.showStatusBar)
+        var chosen: [Presentation] = []
+        mounted.chrome.choosePresentation = { chosen.append($0) }
+
+        mounted.registry.choosePresentation(.raw, in: mounted.window)
+        mounted.registry.choosePresentation(.rich, in: mounted.window)
+        #expect(chosen == [.raw, .rich])
+
+        let other = NSWindow(contentViewController: NSViewController())
+        other.isReleasedWhenClosed = false
+        defer { other.close() }
+        mounted.registry.choosePresentation(.raw, in: other)
+        mounted.registry.choosePresentation(.raw, in: nil)
+        #expect(chosen == [.raw, .rich], "a window without an editor gets nothing")
+    }
+
     @Test("closing the parent window closes the palette")
     func parentCloseClosesPalette() async throws {
         let mounted = try await mount("hello", id: "palette-parent-close")
@@ -325,7 +426,18 @@ struct CommandPaletteControllerTests {
         let registry: EditorHostRegistry
         let chrome: EditorHostController
         let textView: NSTextView
-        let window: NSWindow
+        let window: KeySpyWindow
+    }
+
+    /// Counts `makeKey()`: in the test host no window is ever really key, so
+    /// the call is the only evidence of who was handed the keyboard.
+    private final class KeySpyWindow: NSWindow {
+        var makeKeyCalls = 0
+
+        override func makeKey() {
+            makeKeyCalls += 1
+            super.makeKey()
+        }
     }
 
     private struct Host: View {
@@ -351,7 +463,7 @@ struct CommandPaletteControllerTests {
         let chrome = EditorHostController(settings: settings, registry: registry)
         let storage = RectoTextStorage(documentId: id, markdown: markdown)
         let host = NSHostingView(rootView: Host(settings: settings, chrome: chrome, storage: storage))
-        let window = NSWindow(contentViewController: NSViewController())
+        let window = KeySpyWindow(contentViewController: NSViewController())
         window.isReleasedWhenClosed = false
         window.contentView = host
         window.makeKeyAndOrderFront(nil)

@@ -141,6 +141,40 @@ struct TopFormatToolbarTests {
         #expect(textView.isContinuousSpellCheckingEnabled)
     }
 
+    /// P2-2: inside a code span the engine forces the squiggles off, so the
+    /// view's live value is not the writer's choice; the setting must still
+    /// reach the engine's snapshot, or leaving the span brings spellcheck back.
+    @Test("spellcheck turned off inside a code span stays off after leaving it")
+    func spellcheckOffInsideCodeSpanSticks() async throws {
+        let markdown = "word `code` word"
+        let mounted = try await mount(markdown, presentation: .rich, id: "toolbar-spellcheck-code")
+        defer { mounted.window.close() }
+        let textView = mounted.textView
+        #expect(mounted.window.makeFirstResponder(textView))
+        textView.setSelectedRange(NSRange(location: 7, length: 0))
+        await drainMainQueue()
+        #expect(!textView.isContinuousSpellCheckingEnabled, "the engine suppresses spelling inside a code span")
+
+        mounted.settings.toggleSpellcheck()
+        mounted.chrome.applySettings()
+        #expect(!textView.isContinuousSpellCheckingEnabled)
+
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        await drainMainQueue()
+        #expect(!textView.isContinuousSpellCheckingEnabled, "off is the writer's choice, not the span's")
+        #expect(!textView.isGrammarCheckingEnabled)
+
+        mounted.settings.toggleSpellcheck()
+        mounted.chrome.applySettings()
+        #expect(textView.isContinuousSpellCheckingEnabled)
+        textView.setSelectedRange(NSRange(location: 7, length: 0))
+        await drainMainQueue()
+        #expect(!textView.isContinuousSpellCheckingEnabled, "the span still suppresses")
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        await drainMainQueue()
+        #expect(textView.isContinuousSpellCheckingEnabled, "and on comes back outside it")
+    }
+
     // MARK: - Harness
 
     private struct Mounted {

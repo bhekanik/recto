@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 @main
@@ -11,6 +12,7 @@ struct RectoApp: App {
         Window("Recto", id: "cloud-library") {
             StudioAppearance(settings: settings) {
                 RectoCloudRootView(model: model)
+                    .background(LibraryWindowAnchor(editors: .shared))
                     .onChange(of: scenePhase) { _, phase in
                         Task {
                             if phase == .active {
@@ -24,7 +26,7 @@ struct RectoApp: App {
         }
         .defaultSize(width: 1_100, height: 760)
         .windowResizability(.contentMinSize)
-        .commands { StudioCommands(settings: settings, palette: palette, model: model) }
+        .commands { StudioCommands(settings: settings, palette: palette, model: model, editors: .shared) }
 
         DocumentGroup(newDocument: RectoDocument()) { configuration in
             StudioAppearance(settings: settings) {
@@ -54,6 +56,7 @@ private struct StudioAppearance<Content: View>: View {
     var body: some View {
         content()
             .preferredColorScheme(settings.preferredColorScheme)
+            .onAppear(perform: settings.followApplicationAppearance)
     }
 }
 
@@ -65,6 +68,7 @@ private struct StudioCommands: Commands {
     let settings: StudioSettings
     let palette: CommandPaletteController
     let model: RectoApplicationModel
+    let editors: EditorHostRegistry
     @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
@@ -73,6 +77,13 @@ private struct StudioCommands: Commands {
                 palette.open(library: library)
             }
             .keyboardShortcut("k")
+            Divider()
+            // The ring's buttons carry these chords in-window; with the bar
+            // hidden the ring is gone, and the menu is what answers them.
+            Button("Switch to Rich text") { editors.choosePresentation(.rich, in: NSApp.keyWindow) }
+                .keyboardShortcut("r", modifiers: [.control, .shift])
+            Button("Switch to Raw Markdown") { editors.choosePresentation(.raw, in: NSApp.keyWindow) }
+                .keyboardShortcut("m", modifiers: [.control, .shift])
             Divider()
             Button("Toggle formatting toolbar", action: settings.toggleToolbar)
             Button("Toggle word count / status bar", action: settings.toggleStatusBar)
