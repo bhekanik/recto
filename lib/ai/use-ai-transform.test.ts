@@ -399,6 +399,43 @@ describe("AI transform acknowledgement boundary", () => {
 	});
 
 	it.each([
+		"same-text branch navigation",
+		"idle auto-flush",
+	])("rejects a stale rendered source after %s", async () => {
+		const markdown = "# Draft\n\nCafe\u0301 😀 — unchanged bytes\n";
+		let flushes = 0;
+		let commits = 0;
+		const result = await commitTransformAfterAcknowledgement({
+			acknowledge: async () => true,
+			snapshot: {
+				sourceNodeId: "node-a",
+				sourceMarkdown: markdown,
+				range: { from: 9, to: 14 },
+				selection: "Cafe\u0301",
+			},
+			controller: {
+				currentNodeId: "node-a",
+				flush() {
+					flushes += 1;
+				},
+				getHeadNodeId: () => "node-b",
+				commitProgrammatic: () => {
+					commits += 1;
+					return "node-c";
+				},
+			},
+			getMarkdown: () => markdown,
+			isCurrent: () => true,
+			nextMarkdown: "# AI result\n",
+			origin: "ai:tighten",
+		});
+
+		expect(result).toEqual({ status: "source-changed" });
+		expect(flushes).toBe(0);
+		expect(commits).toBe(0);
+	});
+
+	it.each([
 		"immediate",
 		"post-rerender",
 	])("rejects a %s AI commit back to its flushed draft parent byte-for-byte", async (timing) => {

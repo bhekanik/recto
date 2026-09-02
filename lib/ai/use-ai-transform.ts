@@ -95,10 +95,14 @@ type TransformCommitResult =
 function commitTransformAtCurrentSource(args: {
 	controller: TransformCommitController;
 	getMarkdown: () => string;
+	expectedSourceNodeId: string;
 	sourceMarkdown: string;
 	nextMarkdown: string;
 	origin: string;
 }): TransformCommitResult {
+	if (args.controller.getHeadNodeId() !== args.expectedSourceNodeId) {
+		return { status: "source-changed" };
+	}
 	args.controller.flush();
 	const sourceNodeId = args.controller.getHeadNodeId();
 	if (!sourceNodeId || args.getMarkdown() !== args.sourceMarkdown) {
@@ -141,6 +145,7 @@ export async function commitTransformAfterAcknowledgement(args: {
 	return commitTransformAtCurrentSource({
 		controller: args.controller,
 		getMarkdown: args.getMarkdown,
+		expectedSourceNodeId: args.snapshot.sourceNodeId,
 		sourceMarkdown: args.snapshot.sourceMarkdown,
 		nextMarkdown: args.nextMarkdown,
 		origin: args.origin,
@@ -851,6 +856,7 @@ export function useAiTransform(args: {
 			const commit = commitTransformAtCurrentSource({
 				controller: unresolved.controller,
 				getMarkdown: getDocMarkdown,
+				expectedSourceNodeId: unresolved.snapshot.sourceNodeId,
 				sourceMarkdown: unresolved.snapshot.sourceMarkdown,
 				nextMarkdown,
 				origin: `ai:${unresolved.instructionLabel}`,
