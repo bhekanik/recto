@@ -71,6 +71,142 @@ struct StylerTests {
         #expect(!raw.lists.autoClosePairsEnabled)
     }
 
+    @Test("fenced Swift code receives token colours without changing its text")
+    func codeSyntaxHighlighting() throws {
+        let code = "let greeting = \"Hello, Ω\""
+        let highlighter = MarkdownStyler(theme: .twilight)
+            .engineConfiguration().services.syntaxHighlighter
+        let highlighted = try #require(highlighter.highlight(code: code, language: "swift"))
+
+        #expect(highlighted.string == code)
+        #expect(highlighted.length == (code as NSString).length)
+
+        var colors = Set<NSColor>()
+        highlighted.enumerateAttribute(
+            .foregroundColor,
+            in: NSRange(location: 0, length: highlighted.length)
+        ) { color, _, _ in
+            if let color = color as? NSColor { colors.insert(color) }
+        }
+        #expect(colors.count > 1)
+    }
+
+    @Test("code token colours follow the editor's light or dark palette")
+    func codeSyntaxTheme() throws {
+        let code = "struct Note { let text = \"Hello\" }"
+        func colors(in theme: RectoEditorTheme) throws -> Set<NSColor> {
+            let highlighter = MarkdownStyler(theme: theme)
+                .engineConfiguration().services.syntaxHighlighter
+            let highlighted = try #require(
+                highlighter.highlight(code: code, language: "swift")
+            )
+            var colors = Set<NSColor>()
+            highlighted.enumerateAttribute(
+                .foregroundColor,
+                in: NSRange(location: 0, length: highlighted.length)
+            ) { color, _, _ in
+                if let color = color as? NSColor { colors.insert(color) }
+            }
+            return colors
+        }
+
+        let dark = try colors(in: .twilight)
+        let light = try colors(in: .paper)
+        #expect(dark.count > 1)
+        #expect(light.count > 1)
+        #expect(dark != light)
+    }
+
+    @Test("an unknown fenced language stays plain")
+    func unknownCodeLanguageStaysPlain() {
+        let highlighter = MarkdownStyler()
+            .engineConfiguration().services.syntaxHighlighter
+
+        #expect(highlighter.highlight(
+            code: "const emoji = \"😀\"",
+            language: "not-a-real-language"
+        ) == nil)
+    }
+
+    @Test("a fence without a language stays plain instead of guessing a grammar")
+    func bareFenceStaysPlain() {
+        let code = "2026-09-02 INFO server started\n$ bun test\n160 tests passed\n"
+        let highlighter = MarkdownStyler()
+            .engineConfiguration().services.syntaxHighlighter
+
+        #expect(highlighter.highlight(code: code, language: nil) == nil)
+        #expect(highlighter.highlight(code: code, language: "") == nil)
+        #expect(highlighter.highlight(code: code, language: "   ") == nil)
+    }
+
+    @Test("only the first word of the info string names the language")
+    func infoStringAttributesAreIgnored() throws {
+        let code = "let answer = 42"
+        let highlighter = MarkdownStyler()
+            .engineConfiguration().services.syntaxHighlighter
+        let plain = try #require(highlighter.highlight(code: code, language: "swift"))
+
+        for infoString in ["swift {.numberLines}", "swift title=\"a\"", "  Swift  ", "swift\tstartFrom=3"] {
+            let highlighted = try #require(highlighter.highlight(code: code, language: infoString))
+            #expect(highlighted.isEqual(to: plain), "\(infoString.debugDescription)")
+        }
+        #expect(highlighter.highlight(code: code, language: "{.numberLines} swift") == nil)
+    }
+
+    @Test("Highlight.js aliases highlight even though the language list omits them")
+    func languageAliasesHighlight() throws {
+        let highlighter = MarkdownStyler()
+            .engineConfiguration().services.syntaxHighlighter
+        for alias in ["js", "py", "sh", "ts", "yml", "c++", "objc"] {
+            let highlighted = try #require(
+                highlighter.highlight(code: "x = 1 // note", language: alias), "\(alias)"
+            )
+            #expect(highlighted.string == "x = 1 // note")
+        }
+    }
+
+    @Test("code-highlight cache keys cannot collide across language and source")
+    func codeHighlightCacheKeyIsUnambiguous() throws {
+        let highlighter = MarkdownStyler()
+            .engineConfiguration().services.syntaxHighlighter
+        // "# hello" is a comment in Python and a heading in Markdown.
+        let python = try #require(highlighter.highlight(code: "# hello\nx = 1\n", language: "python"))
+        let markdown = try #require(highlighter.highlight(code: "# hello\nx = 1\n", language: "markdown"))
+
+        #expect(!python.isEqual(to: markdown))
+    }
+
+    @Test("huge and many unknown language tags stay plain")
+    func adversarialLanguageTagsStayBounded() {
+        let code = "let emoji = \"😀\""
+        let highlighter = MarkdownStyler()
+            .engineConfiguration().services.syntaxHighlighter
+        #expect(highlighter.highlight(
+            code: code,
+            language: String(repeating: "x", count: 1_000_000)
+        ) == nil)
+        #expect(highlighter.highlight(
+            code: code,
+            language: "swift " + String(repeating: "x", count: 1_000_000)
+        ) != nil)
+
+        for index in 0..<300 {
+            #expect(highlighter.highlight(
+                code: "\(code) // \(index)",
+                language: "unknown-\(index)"
+            ) == nil)
+        }
+    }
+
+    @Test("large code blocks stay plain instead of blocking the editor")
+    func largeCodeBlockSkipsHighlighting() {
+        let code = String(repeating: "let value = 1\n", count: 120)
+        let highlighter = MarkdownStyler()
+            .engineConfiguration().services.syntaxHighlighter
+
+        #expect(highlighter.highlight(code: code, language: "swift") == nil)
+    }
+
     @Test("preview is not editable; rich and raw are")
     func editability() {
         #expect(Presentation.rich.isEditable)

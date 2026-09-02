@@ -1,5 +1,5 @@
 {
-  "originHash" : "fe7696cfba88c12d70865f8a6123b8e61724a12661fb3dc47d046fdac6b44c2e",
+  "originHash" : "7b8d1415596f3154920bdcde467c1baa221703d410c7365e7b1350546e468316",
   "pins" : [
     {
       "identity" : "clerk-ios",
@@ -29,6 +29,15 @@
       }
     },
     {
+      "identity" : "highlighterswift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/smittytone/HighlighterSwift",
+      "state" : {
+        "revision" : "fe7aae9c9b31d3b296fd3d2dd575e1a207bb29e0",
+        "version" : "3.1.0"
+      }
+    },
+    {
       "identity" : "nuke",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/kean/Nuke.git",
@@ -51,7 +60,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/bhekanik/swift-markdown-engine",
       "state" : {
-        "revision" : "14aadf54ffc2b460c49811f5483696ca43c56911"
+        "revision" : "a24901182d658590f83af337e768326e7f0ac923"
       }
     }
   ],

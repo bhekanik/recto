@@ -1,12 +1,21 @@
 {
-  "originHash" : "5c86dc906272585b86fc6af9683bf869570c47918019be42961c3de5e9bcf68a",
+  "originHash" : "f825ae4ab0b0cd6b7454808064abc9bc7d91f70391653f18dbf68201c3a4f0c7",
   "pins" : [
+    {
+      "identity" : "highlighterswift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/smittytone/HighlighterSwift",
+      "state" : {
+        "revision" : "fe7aae9c9b31d3b296fd3d2dd575e1a207bb29e0",
+        "version" : "3.1.0"
+      }
+    },
     {
       "identity" : "swift-markdown-engine",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/bhekanik/swift-markdown-engine",
       "state" : {
-        "revision" : "14aadf54ffc2b460c49811f5483696ca43c56911"
+        "revision" : "a24901182d658590f83af337e768326e7f0ac923"
       }
     }
   ],

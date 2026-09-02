@@ -110,21 +110,3 @@ public struct MarkdownStyler: Sendable, Equatable {
         )
     }
 }
-
-/// Code-block face and fill. No syntax highlighting yet — language colouring
-/// is stage 2 (W9b), along with the language tag in the block's top-right.
-struct RectoCodeStyle: SyntaxHighlighter {
-    let theme: RectoEditorTheme
-
-    func codeFont(size: CGFloat) -> NSFont {
-        RectoFonts.register()
-        return NSFont(name: RectoFonts.sourceFamily, size: size)
-            ?? .monospacedSystemFont(ofSize: size, weight: .regular)
-    }
-
-    func backgroundColor() -> NSColor { theme.raised }
-
-    func highlight(code: String, language: String?) -> NSAttributedString? { nil }
-
-    var appearanceDidChangeNotification: Notification.Name? { nil }
-}
