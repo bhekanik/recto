@@ -29,5 +29,9 @@ struct RectoApp: App {
         }
         .defaultSize(width: 1_000, height: 720)
         .windowResizability(.contentMinSize)
+
+        Settings {
+            RectoSettingsView()
+        }
     }
 }
