@@ -1,6 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import {
+	useCallback,
+	useEffect,
+	useEffectEvent,
+	useRef,
+	useState,
+} from "react";
 
 import type { AiTransformRequest } from "@/components/ai/ai-transform-popover";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -53,6 +59,24 @@ export type UseAiFeaturesResult = {
 	openRelatedPassage: (documentId: Id<"documents">, charStart: number) => void;
 };
 
+export function useAiReviewGate(
+	effectiveAiEnabled: boolean,
+	resetReview: () => void,
+	closeReview: () => void,
+): void {
+	const previousAiEnabledRef = useRef(true);
+	const disableAiReview = useEffectEvent(() => {
+		resetReview();
+		closeReview();
+	});
+
+	useEffect(() => {
+		if (previousAiEnabledRef.current === effectiveAiEnabled) return;
+		previousAiEnabledRef.current = effectiveAiEnabled;
+		if (!effectiveAiEnabled) disableAiReview();
+	}, [effectiveAiEnabled]);
+}
+
 /**
  * AI features (plan 009 transform + RAG, plan 011 reviewer). Gated behind the
  * EFFECTIVE AI flag (settings.aiEnabled AND the active doc not being shared for
@@ -98,6 +122,12 @@ export function useAiFeatures({
 	});
 	const [aiReviewOpen, setAiReviewOpen] = useState(false);
 	const [relatedOpen, setRelatedOpen] = useState(false);
+
+	// The feature gate owns review shutdown because it removes the panel while the
+	// review hook remains mounted. Record sent uncertainty before a later remount.
+	useAiReviewGate(effectiveAiEnabled, aiReview.reset, () =>
+		setAiReviewOpen(false),
+	);
 
 	const { reindexDocument } = useRag();
 
