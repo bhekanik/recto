@@ -15,17 +15,25 @@ import {
 const documentId = "doc-a";
 
 const sourceMarkdown = "# Before\n\nCafe\u0301 😀 — unchanged\n";
+const aiMarkdown = "# AI result\n\nRewritten 📚\n";
 
 function controller(args: {
-	headNodeId: string;
+	headNodeId: string | null;
 	source?: string | null;
+	hasPendingDraft?: boolean;
 	commitProgrammatic?: PendingAiCommit["controller"]["commitProgrammatic"];
 	navigateTo?: (nodeId: string) => void;
 }) {
 	return {
 		commitProgrammatic: args.commitProgrammatic ?? (() => "ai-result"),
 		getHeadNodeId: () => args.headNodeId,
-		materializeAt: () => args.source ?? sourceMarkdown,
+		hasPendingDraft: () => args.hasPendingDraft ?? false,
+		materializeAt: (nodeId: string) => {
+			if (nodeId === "source") {
+				return "source" in args ? (args.source ?? null) : sourceMarkdown;
+			}
+			return null;
+		},
 		navigateTo: args.navigateTo ?? (() => {}),
 	};
 }
@@ -37,6 +45,7 @@ function pending(owner: PendingAiCommit["controller"]): PendingAiCommit {
 		sourceNodeId: "source",
 		sourceMarkdown,
 		aiNodeId: "ai-result",
+		aiMarkdown,
 	};
 }
 
@@ -46,7 +55,7 @@ describe("AI transform rejection ownership", () => {
 		const staleNavigations: string[] = [];
 		const currentNavigations: string[] = [];
 		const materialized: string[] = [];
-		let displayedMarkdown = "# AI result\n\nRewritten\n";
+		let displayedMarkdown = aiMarkdown;
 		const owner = controller({
 			headNodeId: "ai-result",
 			commitProgrammatic,
@@ -60,7 +69,7 @@ describe("AI transform rejection ownership", () => {
 			}),
 			materializeAt(nodeId: string) {
 				materialized.push(nodeId);
-				return sourceMarkdown;
+				return nodeId === "source" ? sourceMarkdown : aiMarkdown;
 			},
 			navigateTo(nodeId: string) {
 				currentNavigations.push(nodeId);
@@ -68,16 +77,27 @@ describe("AI transform rejection ownership", () => {
 			},
 		};
 
-		expect(rejectAiCommit(pending(owner), documentId, staleRender)).toBe(true);
+		expect(
+			rejectAiCommit(
+				pending(owner),
+				documentId,
+				staleRender,
+				displayedMarkdown,
+			),
+		).toBe(true);
 		expect(materialized).toEqual(["source"]);
 		expect(currentNavigations).toEqual(["source"]);
 		expect(staleNavigations).toEqual([]);
 		expect(displayedMarkdown).toBe(sourceMarkdown);
 	});
 
-	it("allows rejection after the commit acknowledgement re-renders history", () => {
+	it.each([
+		"normal",
+		"reconciled",
+	])("allows rejection after a %s AI commit re-renders history", () => {
 		const commitProgrammatic = () => "ai-result";
 		const navigated: string[] = [];
+		let displayedMarkdown = aiMarkdown;
 		const owner = controller({
 			headNodeId: "ai-result",
 			commitProgrammatic,
@@ -85,22 +105,74 @@ describe("AI transform rejection ownership", () => {
 		const acknowledgedRender = controller({
 			headNodeId: "ai-result",
 			commitProgrammatic,
-			navigateTo: (nodeId) => navigated.push(nodeId),
+			navigateTo: (nodeId) => {
+				navigated.push(nodeId);
+				displayedMarkdown = sourceMarkdown;
+			},
 		});
 
-		expect(rejectAiCommit(pending(owner), documentId, acknowledgedRender)).toBe(
-			true,
-		);
+		expect(
+			rejectAiCommit(
+				pending(owner),
+				documentId,
+				acknowledgedRender,
+				displayedMarkdown,
+			),
+		).toBe(true);
 		expect(navigated).toEqual(["source"]);
+		expect(displayedMarkdown).toBe(sourceMarkdown);
 	});
 
-	it("does not undo a later local or remote head", () => {
+	it("does not undo a later edit flushed as an AI child", () => {
 		const navigated: string[] = [];
 		const owner = controller({
 			headNodeId: "later-edit",
 			navigateTo: (nodeId) => navigated.push(nodeId),
 		});
-		expect(rejectAiCommit(pending(owner), documentId, owner)).toBe(false);
+		expect(
+			rejectAiCommit(pending(owner), documentId, owner, "post-AI edit"),
+		).toBe(false);
+		expect(navigated).toEqual([]);
+	});
+
+	it("does not undo when visible Markdown changed before history recorded it", () => {
+		const navigated: string[] = [];
+		const owner = controller({
+			headNodeId: "ai-result",
+			navigateTo: (nodeId) => navigated.push(nodeId),
+		});
+
+		expect(
+			rejectAiCommit(pending(owner), documentId, owner, `${aiMarkdown}draft`),
+		).toBe(false);
+		expect(navigated).toEqual([]);
+	});
+
+	it("does not undo a grouped pending draft", () => {
+		const navigated: string[] = [];
+		const owner = controller({
+			headNodeId: "ai-result",
+			hasPendingDraft: true,
+			navigateTo: (nodeId) => navigated.push(nodeId),
+		});
+
+		expect(
+			rejectAiCommit(pending(owner), documentId, owner, `${aiMarkdown}draft`),
+		).toBe(false);
+		expect(navigated).toEqual([]);
+	});
+
+	it("does not undo a pending draft even when visible text matches the AI node", () => {
+		const navigated: string[] = [];
+		const owner = controller({
+			headNodeId: "ai-result",
+			hasPendingDraft: true,
+			navigateTo: (nodeId) => navigated.push(nodeId),
+		});
+
+		expect(rejectAiCommit(pending(owner), documentId, owner, aiMarkdown)).toBe(
+			false,
+		);
 		expect(navigated).toEqual([]);
 	});
 
@@ -110,7 +182,9 @@ describe("AI transform rejection ownership", () => {
 			headNodeId: "ai-result",
 			navigateTo: (nodeId) => navigated.push(nodeId),
 		});
-		expect(rejectAiCommit(pending(owner), "doc-b", owner)).toBe(false);
+		expect(rejectAiCommit(pending(owner), "doc-b", owner, aiMarkdown)).toBe(
+			false,
+		);
 		expect(navigated).toEqual([]);
 	});
 
@@ -121,7 +195,9 @@ describe("AI transform rejection ownership", () => {
 			headNodeId: "ai-result",
 			navigateTo: (nodeId) => navigated.push(nodeId),
 		});
-		expect(rejectAiCommit(pending(owner), documentId, replacement)).toBe(false);
+		expect(
+			rejectAiCommit(pending(owner), documentId, replacement, aiMarkdown),
+		).toBe(false);
 		expect(navigated).toEqual([]);
 	});
 
@@ -131,18 +207,38 @@ describe("AI transform rejection ownership", () => {
 			headNodeId: "other-ai-result",
 			navigateTo: (nodeId) => navigated.push(nodeId),
 		});
-		expect(rejectAiCommit(pending(owner), documentId, owner)).toBe(false);
+		expect(rejectAiCommit(pending(owner), documentId, owner, aiMarkdown)).toBe(
+			false,
+		);
 		expect(navigated).toEqual([]);
 	});
 
-	it("requires the source node to restore exact Markdown and Unicode", () => {
+	it("does not navigate while a remote head is queued", () => {
+		const navigated: string[] = [];
+		const owner = controller({
+			headNodeId: null,
+			navigateTo: (nodeId) => navigated.push(nodeId),
+		});
+
+		expect(rejectAiCommit(pending(owner), documentId, owner, aiMarkdown)).toBe(
+			false,
+		);
+		expect(navigated).toEqual([]);
+	});
+
+	it.each([
+		null,
+		"# Before\n\nCafé 😀 — changed\n",
+	])("requires the source node to retain exact Markdown and Unicode (%s)", (source) => {
 		const navigated: string[] = [];
 		const owner = controller({
 			headNodeId: "ai-result",
-			source: "# Before\n\nCafé 😀 — changed\n",
+			source,
 			navigateTo: (nodeId) => navigated.push(nodeId),
 		});
-		expect(rejectAiCommit(pending(owner), documentId, owner)).toBe(false);
+		expect(rejectAiCommit(pending(owner), documentId, owner, aiMarkdown)).toBe(
+			false,
+		);
 		expect(navigated).toEqual([]);
 	});
 
@@ -153,7 +249,9 @@ describe("AI transform rejection ownership", () => {
 			navigateTo: (nodeId) => navigated.push(nodeId),
 		});
 
-		expect(canRejectAiCommit(pending(owner), documentId, owner)).toBe(true);
+		expect(
+			canRejectAiCommit(pending(owner), documentId, owner, aiMarkdown),
+		).toBe(true);
 		expect(navigated).toEqual([]);
 	});
 });
@@ -281,6 +379,8 @@ describe("AI transform acknowledgement boundary", () => {
 			snapshot,
 			controller: {
 				currentNodeId: "source",
+				flush() {},
+				getHeadNodeId: () => "source",
 				commitProgrammatic(nextMarkdown) {
 					commits.push(nextMarkdown);
 					markdown = nextMarkdown;
@@ -296,6 +396,85 @@ describe("AI transform acknowledgement boundary", () => {
 		expect(result).toEqual({ status: "acknowledgement-failed" });
 		expect(markdown).toBe(snapshot.sourceMarkdown);
 		expect(commits).toEqual([]);
+	});
+
+	it.each([
+		"immediate",
+		"post-rerender",
+	])("rejects a %s AI commit back to its flushed draft parent byte-for-byte", async (timing) => {
+		const draftMarkdown = "# Draft\n\nCafe\u0301 😀 — writer text\n";
+		const resultMarkdown = "# AI result\n\nCafe\u0301 😀 — rewritten\n";
+		const materialized = new Map([
+			["node-a", "# Older node\n"],
+			["node-b", draftMarkdown],
+			["node-c", resultMarkdown],
+		]);
+		let headNodeId = "node-a";
+		let displayedMarkdown = draftMarkdown;
+		const navigated: string[] = [];
+		const commitProgrammatic = (markdown: string) => {
+			headNodeId = "node-c";
+			displayedMarkdown = markdown;
+			return headNodeId;
+		};
+		const owner = {
+			currentNodeId: "node-a",
+			flush() {
+				headNodeId = "node-b";
+			},
+			getHeadNodeId: () => headNodeId,
+			commitProgrammatic,
+			hasPendingDraft: () => false,
+			materializeAt: (nodeId: string) => materialized.get(nodeId) ?? null,
+			navigateTo(nodeId: string) {
+				navigated.push(nodeId);
+				displayedMarkdown = materialized.get(nodeId) ?? displayedMarkdown;
+			},
+		};
+		const commit = await commitTransformAfterAcknowledgement({
+			acknowledge: async () => true,
+			snapshot: {
+				sourceNodeId: "node-a",
+				sourceMarkdown: draftMarkdown,
+				range: { from: 9, to: 14 },
+				selection: "Cafe\u0301",
+			},
+			controller: owner,
+			getMarkdown: () => displayedMarkdown,
+			isCurrent: () => true,
+			nextMarkdown: resultMarkdown,
+			origin: "ai:tighten",
+		});
+
+		expect(commit).toEqual({
+			status: "committed",
+			nodeId: "node-c",
+			sourceNodeId: "node-b",
+			aiMarkdown: resultMarkdown,
+		});
+		if (commit.status !== "committed" || !commit.nodeId) {
+			throw new Error("Expected an AI commit");
+		}
+		const pendingCommit: PendingAiCommit = {
+			documentId,
+			controller: owner,
+			sourceNodeId: commit.sourceNodeId,
+			sourceMarkdown: draftMarkdown,
+			aiNodeId: commit.nodeId,
+			aiMarkdown: commit.aiMarkdown,
+		};
+		const currentController = timing === "immediate" ? owner : { ...owner };
+
+		expect(
+			rejectAiCommit(
+				pendingCommit,
+				documentId,
+				currentController,
+				displayedMarkdown,
+			),
+		).toBe(true);
+		expect(navigated).toEqual(["node-b"]);
+		expect(displayedMarkdown).toBe(draftMarkdown);
 	});
 });
 

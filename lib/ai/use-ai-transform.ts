@@ -35,7 +35,11 @@ const INITIAL: AiTransformState = {
 
 type AiCommitController = Pick<
 	HistoryController,
-	"commitProgrammatic" | "getHeadNodeId" | "materializeAt" | "navigateTo"
+	| "commitProgrammatic"
+	| "getHeadNodeId"
+	| "hasPendingDraft"
+	| "materializeAt"
+	| "navigateTo"
 >;
 
 export type PendingAiCommit = {
@@ -44,6 +48,7 @@ export type PendingAiCommit = {
 	sourceNodeId: string;
 	sourceMarkdown: string;
 	aiNodeId: string;
+	aiMarkdown: string;
 };
 
 export type AiTransformSnapshot = {
@@ -73,19 +78,53 @@ export function snapshotMatchesCurrent(
 	);
 }
 
+type TransformCommitController = Pick<
+	HistoryController,
+	"commitProgrammatic" | "flush" | "getHeadNodeId"
+>;
+
+type TransformCommitResult =
+	| { status: "source-changed" }
+	| {
+			status: "committed";
+			nodeId: string | null;
+			sourceNodeId: string;
+			aiMarkdown: string;
+	  };
+
+function commitTransformAtCurrentSource(args: {
+	controller: TransformCommitController;
+	getMarkdown: () => string;
+	sourceMarkdown: string;
+	nextMarkdown: string;
+	origin: string;
+}): TransformCommitResult {
+	args.controller.flush();
+	const sourceNodeId = args.controller.getHeadNodeId();
+	if (!sourceNodeId || args.getMarkdown() !== args.sourceMarkdown) {
+		return { status: "source-changed" };
+	}
+	const nodeId = args.controller.commitProgrammatic(args.nextMarkdown, {
+		origin: args.origin,
+	});
+	return {
+		status: "committed",
+		nodeId,
+		sourceNodeId,
+		aiMarkdown: args.getMarkdown(),
+	};
+}
+
 export async function commitTransformAfterAcknowledgement(args: {
 	acknowledge: () => Promise<boolean>;
 	snapshot: AiTransformSnapshot;
-	controller: Pick<HistoryController, "currentNodeId" | "commitProgrammatic">;
+	controller: Pick<HistoryController, "currentNodeId"> &
+		TransformCommitController;
 	getMarkdown: () => string;
 	isCurrent: () => boolean;
 	nextMarkdown: string;
 	origin: string;
-}): Promise<
-	| { status: "acknowledgement-failed" }
-	| { status: "source-changed" }
-	| { status: "committed"; nodeId: string | null }
-> {
+}): Promise<TransformCommitResult | { status: "acknowledgement-failed" }> {
 	try {
 		if (!(await args.acknowledge())) {
 			return { status: "acknowledgement-failed" };
@@ -99,12 +138,13 @@ export async function commitTransformAfterAcknowledgement(args: {
 	) {
 		return { status: "source-changed" };
 	}
-	return {
-		status: "committed",
-		nodeId: args.controller.commitProgrammatic(args.nextMarkdown, {
-			origin: args.origin,
-		}),
-	};
+	return commitTransformAtCurrentSource({
+		controller: args.controller,
+		getMarkdown: args.getMarkdown,
+		sourceMarkdown: args.snapshot.sourceMarkdown,
+		nextMarkdown: args.nextMarkdown,
+		origin: args.origin,
+	});
 }
 
 type TransformRun = {
@@ -215,6 +255,7 @@ export function canRejectAiCommit(
 	pending: PendingAiCommit | null,
 	documentId: string | null,
 	controller: AiCommitController | null,
+	currentMarkdown: string,
 ): pending is PendingAiCommit {
 	return Boolean(
 		pending &&
@@ -222,7 +263,10 @@ export function canRejectAiCommit(
 			documentId === pending.documentId &&
 			controller.commitProgrammatic === pending.controller.commitProgrammatic &&
 			controller.getHeadNodeId() === pending.aiNodeId &&
-			controller.materializeAt(pending.sourceNodeId) === pending.sourceMarkdown,
+			controller.materializeAt(pending.sourceNodeId) ===
+				pending.sourceMarkdown &&
+			!controller.hasPendingDraft() &&
+			pending.aiMarkdown === currentMarkdown,
 	);
 }
 
@@ -230,8 +274,12 @@ export function rejectAiCommit(
 	pending: PendingAiCommit | null,
 	documentId: string | null,
 	controller: AiCommitController | null,
+	currentMarkdown: string,
 ): boolean {
-	if (!controller || !canRejectAiCommit(pending, documentId, controller)) {
+	if (
+		!controller ||
+		!canRejectAiCommit(pending, documentId, controller, currentMarkdown)
+	) {
 		return false;
 	}
 	controller.navigateTo(pending.sourceNodeId);
@@ -656,9 +704,10 @@ export function useAiTransform(args: {
 			pendingCommitRef.current = {
 				documentId,
 				controller,
-				sourceNodeId,
+				sourceNodeId: commit.sourceNodeId,
 				sourceMarkdown,
 				aiNodeId: committed,
+				aiMarkdown: commit.aiMarkdown,
 			};
 			setState({
 				status: "committed",
@@ -799,18 +848,34 @@ export function useAiTransform(args: {
 				return;
 			}
 			if (!isCurrent()) return;
-			const committed = unresolved.controller.commitProgrammatic(nextMarkdown, {
+			const commit = commitTransformAtCurrentSource({
+				controller: unresolved.controller,
+				getMarkdown: getDocMarkdown,
+				sourceMarkdown: unresolved.snapshot.sourceMarkdown,
+				nextMarkdown,
 				origin: `ai:${unresolved.instructionLabel}`,
 			});
+			if (commit.status === "source-changed") {
+				unresolvedRef.current = null;
+				setState({
+					...INITIAL,
+					status: "error",
+					error:
+						"The transform finished, but the document changed. Select the text again.",
+				});
+				return;
+			}
 			if (!isCurrent()) return;
+			const committed = commit.nodeId;
 			unresolvedRef.current = null;
 			if (committed) {
 				pendingCommitRef.current = {
 					documentId: unresolved.documentId,
 					controller: unresolved.controller,
-					sourceNodeId: unresolved.snapshot.sourceNodeId,
+					sourceNodeId: commit.sourceNodeId,
 					sourceMarkdown: unresolved.snapshot.sourceMarkdown,
 					aiNodeId: committed,
+					aiMarkdown: commit.aiMarkdown,
 				};
 			}
 			setState({
@@ -835,10 +900,11 @@ export function useAiTransform(args: {
 			pendingCommitRef.current,
 			documentIdRef.current,
 			getController(),
+			getDocMarkdown(),
 		);
 		pendingCommitRef.current = null;
 		setState(INITIAL);
-	}, [getController]);
+	}, [getController, getDocMarkdown]);
 
 	return { state, transform, accept, reject, cancel, reset, reconcile };
 }
