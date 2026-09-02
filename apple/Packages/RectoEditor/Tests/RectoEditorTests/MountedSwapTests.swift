@@ -33,6 +33,7 @@ struct MountedSwapTests {
     final class Model {
         var storage: RectoTextStorage
         var styler: MarkdownStyler
+        var onCodeBlockAnchorsChange: (([RectoCodeBlockAnchor]) -> Void)?
         init(storage: RectoTextStorage, styler: MarkdownStyler) {
             self.storage = storage
             self.styler = styler
@@ -42,14 +43,21 @@ struct MountedSwapTests {
     private struct Host: View {
         let model: Model
         var body: some View {
-            RectoEditorView(storage: model.storage, styler: model.styler)
+            RectoEditorView(
+                storage: model.storage,
+                styler: model.styler,
+                onCodeBlockAnchorsChange: model.onCodeBlockAnchorsChange
+            )
         }
     }
 
     private func mount(_ storage: RectoTextStorage,
-                       _ presentation: Presentation = .rich) -> (WindowHarness, Model) {
+                       _ presentation: Presentation = .rich,
+                       onCodeBlockAnchorsChange: (([RectoCodeBlockAnchor]) -> Void)? = nil)
+        -> (WindowHarness, Model) {
         let model = Model(storage: storage,
                           styler: MarkdownStyler(presentation: presentation, theme: .twilight))
+        model.onCodeBlockAnchorsChange = onCodeBlockAnchorsChange
         return (WindowHarness(Host(model: model)), model)
     }
 
@@ -243,6 +251,91 @@ struct MountedSwapTests {
         let rawMarker = textView.textStorage?
             .attribute(.font, at: 0, effectiveRange: nil) as? NSFont
         #expect((rawMarker?.pointSize ?? 0) > 1, "the lens did not switch to raw")
+    }
+
+    @Test("mounted theme changes replace code token colours")
+    func mountedThemeChangeRestylesCode() throws {
+        let storage = RectoTextStorage(
+            documentId: "theme",
+            markdown: "```swift\nlet answer = 42\n```\n"
+        )
+        let (harness, model) = mount(storage)
+        defer { harness.tearDown() }
+        let textView = try #require(harness.editorTextView)
+        let token = (textView.string as NSString).range(of: "answer").location
+        let dark = try #require(
+            textView.textStorage?.attribute(.foregroundColor, at: token, effectiveRange: nil)
+                as? NSColor
+        )
+
+        model.styler = MarkdownStyler(theme: .paper)
+        harness.layout()
+
+        let light = try #require(
+            textView.textStorage?.attribute(.foregroundColor, at: token, effectiveRange: nil)
+                as? NSColor
+        )
+        #expect(light != dark)
+    }
+
+    @Test("effective appearance changes replace code token colours")
+    func effectiveAppearanceRestylesCode() throws {
+        let storage = RectoTextStorage(
+            documentId: "appearance",
+            markdown: "```swift\nlet answer = 42\n```\n"
+        )
+        let (harness, model) = mount(storage)
+        defer { harness.tearDown() }
+        var dynamicTheme = RectoEditorTheme.twilight
+        dynamicTheme.sheet = .textBackgroundColor
+        dynamicTheme.raised = .windowBackgroundColor
+        model.styler = MarkdownStyler(theme: dynamicTheme)
+        harness.layout()
+        let textView = try #require(harness.editorTextView)
+        let token = (textView.string as NSString).range(of: "answer").location
+        let dark = try #require(
+            textView.textStorage?.attribute(.foregroundColor, at: token, effectiveRange: nil)
+                as? NSColor
+        )
+
+        harness.window.appearance = NSAppearance(named: .aqua)
+        harness.layout()
+
+        let light = try #require(
+            textView.textStorage?.attribute(.foregroundColor, at: token, effectiveRange: nil)
+                as? NSColor
+        )
+        #expect(light != dark)
+    }
+
+    @Test("code-block selections follow mounted document switches")
+    func codeBlockSelectionsFollowDocumentSwitches() {
+        final class Box { var selections: [RectoCodeBlockAnchor] = [] }
+        let box = Box()
+        let a = RectoTextStorage(
+            documentId: "code-a",
+            markdown: "intro\n\n```swift\nlet a = 1\n```\n"
+        )
+        let b = RectoTextStorage(
+            documentId: "code-b",
+            markdown: "intro\n\n```python\nb = 2\n```\n"
+        )
+        let (harness, model) = mount(a) { box.selections = $0 }
+        harness.editorTextView?.setSelectedRange(NSRange(location: 0, length: 0))
+        harness.layout()
+        #expect(box.selections.contains {
+            $0.language == "swift" && $0.code.contains("let a")
+        })
+
+        model.storage = b
+        harness.layout()
+        #expect(box.selections.contains {
+            $0.language == "python" && $0.code.contains("b = 2")
+        })
+        #expect(!box.selections.contains { $0.language == "swift" })
+
+        harness.tearDown()
+        #expect(box.selections.isEmpty)
     }
 }
 }

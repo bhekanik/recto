@@ -27,6 +27,7 @@ public struct RectoEditorView: View {
     private let onAttach: ((RectoTextView?) -> Void)?
     private let onTextChange: ((String) -> Void)?
     private let onEdit: ((RectoEditorEdit) -> Void)?
+    private let onCodeBlockAnchorsChange: (([RectoCodeBlockAnchor]) -> Void)?
     private let writingController: RectoWritingController?
 
     /// - Parameter onAttach: Called with the AppKit seam when the editor
@@ -38,6 +39,7 @@ public struct RectoEditorView: View {
                 onAttach: ((RectoTextView?) -> Void)? = nil,
                 onTextChange: ((String) -> Void)? = nil,
                 onEdit: ((RectoEditorEdit) -> Void)? = nil,
+                onCodeBlockAnchorsChange: (([RectoCodeBlockAnchor]) -> Void)? = nil,
                 writingController: RectoWritingController? = nil) {
         self.storage = storage
         self.styler = styler
@@ -45,6 +47,7 @@ public struct RectoEditorView: View {
         self.onAttach = onAttach
         self.onTextChange = onTextChange
         self.onEdit = onEdit
+        self.onCodeBlockAnchorsChange = onCodeBlockAnchorsChange
         self.writingController = writingController
     }
 
@@ -59,6 +62,9 @@ public struct RectoEditorView: View {
         }
         .onChange(of: styler.presentation) { _, presentation in
             writingController?.update(storage: storage, presentation: presentation)
+        }
+        .onDisappear {
+            onCodeBlockAnchorsChange?([])
         }
     }
 
@@ -89,6 +95,7 @@ public struct RectoEditorView: View {
                 }
             ),
             configuration: styler.engineConfiguration(),
+            styleRevision: styler.theme.styleRevision,
             controller: storage.controller,
             fontName: styler.typography.family,
             fontSize: styler.typography.resolvedSize,
@@ -99,6 +106,9 @@ public struct RectoEditorView: View {
                 if storage.editorDidMutate(mutation) {
                     publishAcceptedEdit()
                 }
+            },
+            onCodeBlockSelectionChange: { selections in
+                onCodeBlockAnchorsChange?(selections.map(RectoCodeBlockAnchor.init))
             },
             placeholder: placeholderText
         )

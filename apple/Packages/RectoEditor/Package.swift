@@ -18,13 +18,20 @@ let package = Package(
     dependencies: [
         .package(
             url: "https://github.com/bhekanik/swift-markdown-engine",
-            revision: "14aadf54ffc2b460c49811f5483696ca43c56911"
+            revision: "a24901182d658590f83af337e768326e7f0ac923"
+        ),
+        .package(
+            url: "https://github.com/smittytone/HighlighterSwift",
+            exact: "3.1.0"
         ),
     ],
     targets: [
         .target(
             name: "RectoEditor",
-            dependencies: [.product(name: "MarkdownEngine", package: "swift-markdown-engine")],
+            dependencies: [
+                .product(name: "MarkdownEngine", package: "swift-markdown-engine"),
+                .product(name: "Highlighter", package: "HighlighterSwift"),
+            ],
             resources: [.process("Resources")],
             swiftSettings: [
                 // Every entry point is an AppKit delegate callback, a SwiftUI

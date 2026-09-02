@@ -96,6 +96,14 @@ public struct RectoEditorTheme: Sendable, Equatable {
     )
 }
 
+extension RectoEditorTheme {
+    var styleRevision: String {
+        [canvas, sheet, raised, ink, ink2, ink3, line, accent, accent2, selection, caret]
+            .map { String(reflecting: $0) }
+            .joined(separator: "\u{1F}")
+    }
+}
+
 // MARK: - OKLCH
 
 extension NSColor {
