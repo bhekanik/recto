@@ -26,6 +26,9 @@
  * @property {() => string} [clipboardRead]
  * @property {(text: string) => void} [clipboardWrite]
  *   The `"+` / `"*` registers, backed by NSPasteboard/UIPasteboard.
+ * @property {() => void} [saveRequested]
+ *   `:w`. Vim has no file of its own here; the host decides what saving means
+ *   (flush to disk, drain the sync outbox). Fire-and-forget.
  */
 
 /**
@@ -52,6 +55,9 @@ export function wrapHost(raw) {
 		clipboard: {
 			read: () => raw.clipboardRead?.() ?? "",
 			write: (text) => raw.clipboardWrite?.(text),
+		},
+		saveRequested() {
+			raw.saveRequested?.();
 		},
 	};
 }

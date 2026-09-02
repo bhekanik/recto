@@ -20,6 +20,8 @@ export type VimHost = {
 	historyCommand?: (kind: string) => string | null;
 	clipboardRead?: () => string;
 	clipboardWrite?: (text: string) => void;
+	/** `:w` — the host decides what saving means. */
+	saveRequested?: () => void;
 };
 
 export type VimResult = {

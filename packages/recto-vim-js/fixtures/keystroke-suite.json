@@ -353,6 +353,15 @@
 			"expectText": "alpha beta"
 		},
 		{
+			"name": ":w leaves the buffer alone and asks the host to save",
+			"text": "alpha beta",
+			"cursor": [0, 6],
+			"keys": ":w<CR>",
+			"expectText": "alpha beta",
+			"expectCursor": [0, 6],
+			"expectMode": "normal"
+		},
+		{
 			"name": "ex delete removes the line",
 			"text": "aaa\nbbb\nccc",
 			"cursor": [1, 0],

@@ -311,3 +311,23 @@ test("a dangling <C-g> does not survive into the next insert session", () => {
 	expect(JSON.parse(api.moveCursorFromHost(0, 0)).undoBreak).toBe(true);
 	api.setExternalInput(false);
 });
+
+test(":w reaches the host's save hook and nothing else", () => {
+	const host = start("alpha beta\n");
+	const result = press(":w<CR>", host);
+	expect(host.saveRequests).toBe(1);
+	expect(result.edits).toEqual([]);
+	expect(result.mode).toBe("normal");
+	expect(api.getText()).toBe("alpha beta\n");
+});
+
+test(":w without a save hook is a no-op rather than an error", () => {
+	api.init("alpha\n", {});
+	api.setCursor(0, 0);
+	let last: VimResult = JSON.parse(api.getState());
+	for (const { key, mods } of parseKeys(":w<CR>")) {
+		last = JSON.parse(api.handleKey(key, mods));
+	}
+	expect(last.notification ?? null).toBeNull();
+	expect(api.getText()).toBe("alpha\n");
+});

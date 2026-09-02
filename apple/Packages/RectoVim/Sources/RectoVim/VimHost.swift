@@ -21,6 +21,7 @@ import UIKit
     func historyCommand(_ kind: String) -> String?
     func clipboardRead() -> String
     func clipboardWrite(_ text: String)
+    func saveRequested()
 }
 
 /// Layout questions only the text view can answer.
@@ -106,6 +107,11 @@ public final class VimHost: NSObject, VimHostExport, @unchecked Sendable {
 
     @MainActor public weak var geometryProvider: VimGeometryProvider?
     @MainActor public weak var historyProvider: VimHistoryProvider?
+
+    /// `:w`. Vim has no file here, so the host decides what a save is — write
+    /// the document, drain the sync outbox. Nil means `:w` does nothing, which
+    /// is also what vim reports: no message, no error.
+    @MainActor public var onSave: (() -> Void)?
 
     /// Swapped out in the headless suite so it stays off the real pasteboard.
     ///
@@ -194,6 +200,10 @@ public final class VimHost: NSObject, VimHostExport, @unchecked Sendable {
 
     public nonisolated func clipboardWrite(_ text: String) {
         MainActor.assumeIsolated { pasteboardWrite(text) }
+    }
+
+    public nonisolated func saveRequested() {
+        MainActor.assumeIsolated { onSave?() }
     }
 
     private static func encode(_ dict: [String: Double]) -> String {

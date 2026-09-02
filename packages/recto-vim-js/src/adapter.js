@@ -1014,5 +1014,7 @@ RectoCM.commands = {
 	},
 	indentAuto: () => {},
 	newlineAndIndentContinueComment: undefined,
-	save: undefined,
+	// `:w`. Upstream's `write` calls this when defined; the host owns what a
+	// save is, so the request leaves JS the same way undo does.
+	save: (cm) => cm.host?.saveRequested?.(),
 };
