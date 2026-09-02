@@ -435,11 +435,26 @@ describe("AI transform acknowledgement boundary", () => {
 		expect(commits).toBe(0);
 	});
 
-	it("captures committed AI bytes while the remount window still reads the source", async () => {
+	it("canonicalizes committed AI bytes while the remount window still reads the source", async () => {
 		const source = "# Draft\n\nCafe\u0301 😀 — source\n";
-		const ai = "# AI result\n\nCafe\u0301 😀 — rewritten\n";
+		const rawAi = "* Cafe\u0301 😀 rewritten\n* second item";
+		const canonicalAi = "- Cafe\u0301 😀 rewritten\n- second item\n";
 		let headNodeId = "node-a";
 		let committedMarkdown: string | null = null;
+		const navigated: string[] = [];
+		const owner = {
+			currentNodeId: "node-a",
+			flush() {},
+			getHeadNodeId: () => headNodeId,
+			commitProgrammatic(markdown: string) {
+				committedMarkdown = markdown;
+				headNodeId = "node-c";
+				return headNodeId;
+			},
+			hasPendingDraft: () => false,
+			materializeAt: (nodeId: string) => (nodeId === "node-a" ? source : null),
+			navigateTo: (nodeId: string) => navigated.push(nodeId),
+		};
 		const result = await commitTransformAfterAcknowledgement({
 			acknowledge: async () => true,
 			snapshot: {
@@ -448,19 +463,10 @@ describe("AI transform acknowledgement boundary", () => {
 				range: { from: 9, to: 14 },
 				selection: "Cafe\u0301",
 			},
-			controller: {
-				currentNodeId: "node-a",
-				flush() {},
-				getHeadNodeId: () => headNodeId,
-				commitProgrammatic(markdown) {
-					committedMarkdown = markdown;
-					headNodeId = "node-c";
-					return headNodeId;
-				},
-			},
+			controller: owner,
 			getMarkdown: () => source,
 			isCurrent: () => true,
-			nextMarkdown: ai,
+			nextMarkdown: rawAi,
 			origin: "ai:tighten",
 		});
 
@@ -468,9 +474,63 @@ describe("AI transform acknowledgement boundary", () => {
 			status: "committed",
 			nodeId: "node-c",
 			sourceNodeId: "node-a",
-			aiMarkdown: ai,
+			aiMarkdown: canonicalAi,
 		});
-		expect(committedMarkdown).toBe(ai);
+		expect(committedMarkdown).toBe(canonicalAi);
+		if (result.status !== "committed" || !result.nodeId) {
+			throw new Error("Expected an AI commit");
+		}
+		expect(
+			rejectAiCommit(
+				{
+					documentId,
+					controller: owner,
+					sourceNodeId: result.sourceNodeId,
+					sourceMarkdown: source,
+					aiNodeId: result.nodeId,
+					aiMarkdown: result.aiMarkdown,
+				},
+				documentId,
+				owner,
+				canonicalAi,
+			),
+		).toBe(true);
+		expect(navigated).toEqual(["node-a"]);
+	});
+
+	it("keeps a canonical result but no pending node when the commit is empty", async () => {
+		const source = "before selected after\n";
+		let committedMarkdown = "";
+		const result = await commitTransformAfterAcknowledgement({
+			acknowledge: async () => true,
+			snapshot: {
+				sourceNodeId: "node-a",
+				sourceMarkdown: source,
+				range: { from: 7, to: 15 },
+				selection: "selected",
+			},
+			controller: {
+				currentNodeId: "node-a",
+				flush() {},
+				getHeadNodeId: () => "node-a",
+				commitProgrammatic(markdown) {
+					committedMarkdown = markdown;
+					return null;
+				},
+			},
+			getMarkdown: () => source,
+			isCurrent: () => true,
+			nextMarkdown: "* item",
+			origin: "ai:tighten",
+		});
+
+		expect(result).toEqual({
+			status: "committed",
+			nodeId: null,
+			sourceNodeId: "node-a",
+			aiMarkdown: "- item\n",
+		});
+		expect(committedMarkdown).toBe("- item\n");
 	});
 
 	it.each([

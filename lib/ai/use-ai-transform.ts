@@ -7,6 +7,7 @@ import { z } from "zod";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import type { HistoryController } from "@/lib/history/use-document-history";
+import { normalizeMarkdown } from "@/lib/markdown";
 import type { AiTransformMode } from "@/lib/studio/use-studio-settings";
 import { applyTransform, type TransformRange } from "./apply-transform";
 import { requireConvexSiteUrl } from "./convex-http";
@@ -108,14 +109,15 @@ function commitTransformAtCurrentSource(args: {
 	if (!sourceNodeId || args.getMarkdown() !== args.sourceMarkdown) {
 		return { status: "source-changed" };
 	}
-	const nodeId = args.controller.commitProgrammatic(args.nextMarkdown, {
+	const aiMarkdown = normalizeMarkdown(args.nextMarkdown);
+	const nodeId = args.controller.commitProgrammatic(aiMarkdown, {
 		origin: args.origin,
 	});
 	return {
 		status: "committed",
 		nodeId,
 		sourceNodeId,
-		aiMarkdown: args.nextMarkdown,
+		aiMarkdown,
 	};
 }
 
