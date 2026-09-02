@@ -60,21 +60,40 @@ struct EditorHostViewTests {
         let storage: RectoTextStorage
 
         var body: some View {
-            EditorHostView(document: $model.document, storage: storage)
+            Hermetic(editor: EditorHostView(document: $model.document, storage: storage))
+        }
+    }
+
+    /// The host reads the presentation preference from the app's defaults,
+    /// which the test host shares with the developer's own Recto. A stored raw
+    /// choice would switch smart input off under the expectations below, so
+    /// every mount reads an empty suite instead.
+    private struct Hermetic: View {
+        static let defaults: UserDefaults = {
+            let name = "com.bhekani.recto.tests.editor-host"
+            let defaults = UserDefaults(suiteName: name)!
+            defaults.removePersistentDomain(forName: name)
+            return defaults
+        }()
+
+        let editor: EditorHostView
+
+        var body: some View {
+            editor.defaultAppStorage(Self.defaults)
         }
     }
 
     private func mount(_ markdown: String, id: String)
-        -> (DocumentBox, RectoTextStorage, NSHostingView<EditorHostView>, NSWindow) {
+        -> (DocumentBox, RectoTextStorage, NSHostingView<Hermetic>, NSWindow) {
         let document = DocumentBox(markdown)
         let storage = RectoTextStorage(documentId: id, markdown: markdown)
-        let host = NSHostingView(rootView: EditorHostView(
+        let host = NSHostingView(rootView: Hermetic(editor: EditorHostView(
             document: Binding(
                 get: { document.value },
                 set: { document.value = $0 }
             ),
             storage: storage
-        ))
+        )))
         let window = NSWindow(contentViewController: NSViewController())
         window.contentView = host
         window.makeKeyAndOrderFront(nil)
@@ -187,13 +206,13 @@ struct EditorHostViewTests {
         #expect(undoManager.canUndo)
 
         document.value.markdown = "external\r\n"
-        host.rootView = EditorHostView(
+        host.rootView = Hermetic(editor: EditorHostView(
             document: Binding(
                 get: { document.value },
                 set: { document.value = $0 }
             ),
             storage: storage
-        )
+        ))
         host.layoutSubtreeIfNeeded()
         await drainMainQueue()
 
@@ -247,10 +266,10 @@ struct EditorHostViewTests {
         let edited = "A🧑🏽‍💻✅\r\n"
         var document = try RectoDocument(fileContents: bom + Data(original.utf8))
         let storage = RectoTextStorage(documentId: "bom-emoji-undo", markdown: document.markdown)
-        let host = NSHostingView(rootView: EditorHostView(
+        let host = NSHostingView(rootView: Hermetic(editor: EditorHostView(
             document: Binding(get: { document }, set: { document = $0 }),
             storage: storage
-        ))
+        )))
         let window = NSWindow(contentViewController: NSViewController())
         window.contentView = host
         window.makeKeyAndOrderFront(nil)
@@ -299,10 +318,10 @@ struct EditorHostViewTests {
         let source = "# Café 世界\r\n"
         var document = try RectoDocument(fileContents: bom + Data(source.utf8))
         let storage = RectoTextStorage(documentId: "bom", markdown: document.markdown)
-        let host = NSHostingView(rootView: EditorHostView(
+        let host = NSHostingView(rootView: Hermetic(editor: EditorHostView(
             document: Binding(get: { document }, set: { document = $0 }),
             storage: storage
-        ))
+        )))
         let window = NSWindow(contentViewController: NSViewController())
         window.contentView = host
         window.makeKeyAndOrderFront(nil)
@@ -464,7 +483,7 @@ struct EditorHostViewTests {
                 document = $0
             }
         )
-        let host = NSHostingView(rootView: EditorHostView(document: binding, storage: storage))
+        let host = NSHostingView(rootView: Hermetic(editor: EditorHostView(document: binding, storage: storage)))
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
             styleMask: [.titled, .closable, .resizable],
@@ -568,11 +587,11 @@ struct EditorHostViewTests {
         _ = NSApplication.shared
         var document = RectoDocument(markdown: "# Read only\n")
         let storage = RectoTextStorage(documentId: "read-only-test", markdown: document.markdown)
-        let host = NSHostingView(rootView: EditorHostView(
+        let host = NSHostingView(rootView: Hermetic(editor: EditorHostView(
             document: Binding(get: { document }, set: { document = $0 }),
             isEditable: false,
             storage: storage
-        ))
+        )))
         let window = NSWindow(contentViewController: NSViewController())
         window.contentView = host
         window.makeKeyAndOrderFront(nil)

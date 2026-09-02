@@ -29,6 +29,7 @@ public struct RectoEditorView: View {
     private let onEdit: ((RectoEditorEdit) -> Void)?
     private let onCodeBlockAnchorsChange: (([RectoCodeBlockAnchor]) -> Void)?
     private let writingController: RectoWritingController?
+    @State private var caretCarrier = PresentationCaretCarrier()
 
     /// - Parameter onAttach: Called with the AppKit seam when the editor
     ///   appears, and `nil` when it goes — the moment to install find, a vim key
@@ -61,6 +62,7 @@ public struct RectoEditorView: View {
             writingController?.update(storage: storage, presentation: styler.presentation)
         }
         .onChange(of: styler.presentation) { _, presentation in
+            caretCarrier.restore(into: storage.textView)
             writingController?.update(storage: storage, presentation: presentation)
         }
         .onDisappear {
@@ -81,7 +83,8 @@ public struct RectoEditorView: View {
     }
 
     private var editor: some View {
-        NativeTextViewWrapper(
+        caretCarrier.prepare(for: styler.presentation, in: storage.textView)
+        return NativeTextViewWrapper(
             text: Binding(
                 get: { storage.markdown },
                 // The engine writes the binding back after each edit; the
@@ -147,6 +150,70 @@ public struct RectoEditorView: View {
             .font: styler.typography.bodyFont,
             .foregroundColor: styler.theme.ink3,
         ])
+    }
+}
+
+/// The caret across a rich ⇄ raw switch.
+///
+/// The engine answers a presentation change with a whole-document rebuild of
+/// the attributed string, and AppKit treats that as one edit spanning the
+/// document, so the selection collapses to the end. SwiftUI evaluates `body`
+/// before the representable updates and runs `onChange` after it, which gives
+/// this one place to read the caret and one to put it back.
+///
+/// The scroll offset is kept in pixels across the rebuild while raw and rich
+/// line heights differ, and at the document end the rebuild clamps it upward,
+/// so a caret that was on screen ends up below or above the fold. The carrier
+/// scrolls it back only if it was on screen: a writer who had scrolled away
+/// from the caret on purpose keeps their place.
+///
+/// The scroll waits one run-loop turn. Rich shows the frontmatter header above
+/// the sheet and raw does not, so on raw → rich the scroll view is still at
+/// its raw height inside `onChange`; a scroll measured against that bottom
+/// lands the caret under the header's 60 pt once layout runs.
+@MainActor
+private final class PresentationCaretCarrier {
+    private var presentation: Presentation?
+    private var carried: (range: NSRange, text: String, wasOnScreen: Bool)?
+
+    /// Called from `body`: remembers the selection when the presentation is
+    /// about to change on a mounted view.
+    func prepare(for presentation: Presentation, in editor: RectoTextView) {
+        defer { self.presentation = presentation }
+        guard let previous = self.presentation, previous != presentation,
+              let textView = editor.nsTextView else { return }
+        let range = textView.selectedRange()
+        carried = (range, textView.string, Self.isOnScreen(range, in: editor))
+    }
+
+    /// Called from `onChange`: puts the selection back if the rebuild left the
+    /// text as it was. Any other text means an edit landed in between, and its
+    /// caret wins.
+    func restore(into editor: RectoTextView) {
+        guard let carried, let textView = editor.nsTextView else { return }
+        self.carried = nil
+        guard RectoTextStorage.hasSameUTF16(textView.string, carried.text) else { return }
+        textView.setSelectedRange(carried.range)
+        guard carried.wasOnScreen else { return }
+        let (range, text) = (carried.range, carried.text)
+        RunLoop.main.perform {
+            MainActor.assumeIsolated {
+                guard let textView = editor.nsTextView,
+                      RectoTextStorage.hasSameUTF16(textView.string, text) else { return }
+                editor.scroll(range: range, position: .nearest)
+            }
+        }
+    }
+
+    /// Whether any line of the selection is inside the viewport. A caret has
+    /// no selection rects, so it is judged by its own rect.
+    private static func isOnScreen(_ range: NSRange, in editor: RectoTextView) -> Bool {
+        guard let textView = editor.nsTextView else { return false }
+        let visible = textView.visibleRect
+        let rects = range.length == 0
+            ? editor.caretRect().map { [$0] } ?? []
+            : editor.rects(forSourceRange: range)
+        return rects.contains { $0.minY < visible.maxY && $0.maxY > visible.minY }
     }
 }
 

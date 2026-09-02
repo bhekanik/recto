@@ -9,6 +9,10 @@ struct CloudDocumentView: View {
     @State private var model: CloudDocumentModel?
     @State private var openingError: String?
     @State private var writingController = RectoWritingController()
+    @AppStorage(PresentationPreference.key) private var storedPresentation: String?
+    /// This window's lens. `nil` until it appears, when it takes the stored
+    /// default; after that only the writer's own choice moves it.
+    @State private var chosenPresentation: Presentation?
 
     var body: some View {
         Group {
@@ -24,6 +28,11 @@ struct CloudDocumentView: View {
                 ProgressView("Opening…")
             }
         }
+        .onAppear {
+            if chosenPresentation == nil {
+                chosenPresentation = PresentationPreference.choice(from: storedPresentation)
+            }
+        }
         .task(id: localId) {
             await open()
         }
@@ -34,8 +43,26 @@ struct CloudDocumentView: View {
         }
     }
 
+    private func styler(_ model: CloudDocumentModel) -> MarkdownStyler {
+        MarkdownStyler(
+            presentation: PresentationPreference.presentation(
+                chosen: chosenPresentation,
+                stored: storedPresentation,
+                isEditable: model.isEditable
+            ),
+            theme: .twilight,
+            undo: .external
+        )
+    }
+
+    private func choose(_ presentation: Presentation) {
+        chosenPresentation = presentation
+        storedPresentation = presentation.rawValue
+    }
+
     private func editor(_ model: CloudDocumentModel) -> some View {
-        VStack(spacing: 0) {
+        let styler = styler(model)
+        return VStack(spacing: 0) {
             if model.state.syncState == .diverged {
                 divergenceBanner(model)
             } else if let error = model.editError {
@@ -45,17 +72,22 @@ struct CloudDocumentView: View {
             }
             RectoEditorView(
                 storage: model.storage,
-                styler: MarkdownStyler(
-                    presentation: model.isEditable ? .rich : .preview,
-                    theme: .twilight,
-                    undo: .external
-                ),
+                styler: styler,
                 placeholder: "Start writing…",
                 onEdit: model.accept,
                 writingController: writingController
             )
             .frame(minWidth: 620, minHeight: 500)
             .background(WritingControlsHost(controller: writingController))
+            EditorStatusBar(
+                presentation: styler.presentation,
+                isEditable: model.isEditable,
+                storage: model.storage,
+                theme: styler.theme,
+                onSelect: choose
+            ) {
+                SyncStateLabel(state: model.state.syncState, pendingCount: model.pendingEditCount)
+            }
         }
         .navigationTitle(model.state.title)
         .toolbar {
@@ -70,7 +102,6 @@ struct CloudDocumentView: View {
                 }
                 .keyboardShortcut("z", modifiers: [.command, .shift])
                 .disabled(!model.state.canRedo)
-                SyncStateLabel(state: model.state.syncState, pendingCount: model.pendingEditCount)
             }
         }
     }

@@ -243,6 +243,9 @@ struct MountedSwapTests {
         let richMarker = textView.textStorage?
             .attribute(.font, at: 0, effectiveRange: nil) as? NSFont
         #expect((richMarker?.pointSize ?? 99) < 1, "rich did not collapse the `##`")
+        harness.window.makeFirstResponder(textView)
+        let selection = NSRange(location: 12, length: 4)
+        textView.setSelectedRange(selection)
 
         model.styler = MarkdownStyler(presentation: .raw, theme: .twilight)
         harness.layout()
@@ -251,6 +254,112 @@ struct MountedSwapTests {
         let rawMarker = textView.textStorage?
             .attribute(.font, at: 0, effectiveRange: nil) as? NSFont
         #expect((rawMarker?.pointSize ?? 0) > 1, "the lens did not switch to raw")
+        // The engine's rebuild collapses the selection to the document end;
+        // the view carries it across.
+        #expect(textView.selectedRange() == selection)
+
+        model.styler = MarkdownStyler(presentation: .rich, theme: .twilight)
+        harness.layout()
+
+        #expect(textView.selectedRange() == selection)
+    }
+
+    /// About 2k words under 40 headings: several screens tall in an 800×900
+    /// window, in either presentation. With frontmatter, rich shows the header
+    /// above the sheet and raw does not, so the scroll view changes height
+    /// across the switch.
+    private func longDocument(frontmatter: Bool) -> RectoTextStorage {
+        let paragraph = String(
+            repeating: "alpha bravo charlie delta echo foxtrot golf hotel india juliet ", count: 5)
+        let body = (1...40).map { "## Section \($0)\n\n\(paragraph)\n" }.joined(separator: "\n")
+        let markdown = frontmatter ? "---\ntitle: Sediment\n---\n\n" + body : body
+        return RectoTextStorage(documentId: "long", markdown: markdown)
+    }
+
+    private func caretIsOnScreen(_ storage: RectoTextStorage) -> Bool {
+        guard let textView = storage.textView.nsTextView,
+              let caret = storage.textView.caretRect() else { return false }
+        let visible = textView.visibleRect
+        return caret.minY < visible.maxY && caret.maxY > visible.minY
+    }
+
+    @Test("a caret on screen at the end of a long document stays on screen across rich → raw → rich",
+          arguments: [false, true])
+    func presentationSwitchKeepsVisibleCaretOnScreen(frontmatter: Bool) throws {
+        let storage = longDocument(frontmatter: frontmatter)
+        let (harness, model) = mount(storage, .rich)
+        defer { harness.tearDown() }
+        let textView = try #require(harness.editorTextView)
+        harness.window.makeFirstResponder(textView)
+        let end = NSRange(location: (textView.string as NSString).length, length: 0)
+        textView.setSelectedRange(end)
+        #expect(storage.textView.scroll(range: end))
+        harness.layout()
+        #expect(caretIsOnScreen(storage), "precondition: the caret is on screen before the switch")
+        let before = textView.visibleRect.minY
+
+        for presentation in [Presentation.raw, .rich] {
+            model.styler = MarkdownStyler(presentation: presentation, theme: .twilight)
+            harness.layout()
+            #expect(textView.selectedRange() == end)
+            #expect(caretIsOnScreen(storage), "\(presentation) left the caret off screen")
+        }
+        #expect(textView.visibleRect.minY == before, "the round trip must land where it started")
+    }
+
+    @Test("a caret near the bottom edge stays on screen across repeated switches", arguments: [false, true])
+    func presentationSwitchKeepsCaretNearBottomOnScreen(frontmatter: Bool) throws {
+        let storage = longDocument(frontmatter: frontmatter)
+        let (harness, model) = mount(storage, .rich)
+        defer { harness.tearDown() }
+        let textView = try #require(harness.editorTextView)
+        harness.window.makeFirstResponder(textView)
+        let caret = NSRange(location: (textView.string as NSString).range(of: "## Section 20").location, length: 0)
+        textView.setSelectedRange(caret)
+        #expect(storage.textView.scroll(range: caret))
+        harness.layout()
+        // Park the caret line just above the bottom edge: the case where a
+        // rebuild with different line heights pushes it under the fold.
+        let scrollView = try #require(textView.enclosingScrollView)
+        let line = try #require(harness.textViewRect(forCharacterRange: caret))
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: line.maxY + 4 - textView.visibleRect.height))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+        harness.layout()
+        #expect(caretIsOnScreen(storage), "precondition: the caret is on screen before the switch")
+
+        for presentation in [Presentation.raw, .rich, .raw, .rich] {
+            model.styler = MarkdownStyler(presentation: presentation, theme: .twilight)
+            harness.layout()
+            #expect(textView.selectedRange() == caret)
+            #expect(caretIsOnScreen(storage), "\(presentation) left the caret off screen")
+        }
+    }
+
+    @Test("a selection scrolled off screen before the switch is not pulled back", arguments: [false, true])
+    func presentationSwitchLeavesOffScreenSelectionAlone(frontmatter: Bool) throws {
+        let storage = longDocument(frontmatter: frontmatter)
+        let (harness, model) = mount(storage, .rich)
+        defer { harness.tearDown() }
+        let textView = try #require(harness.editorTextView)
+        let scrollView = try #require(textView.enclosingScrollView)
+        harness.window.makeFirstResponder(textView)
+        let selection = NSRange(location: (textView.string as NSString).length - 20, length: 5)
+        textView.setSelectedRange(selection)
+        #expect(storage.textView.scroll(range: selection))
+        harness.layout()
+        scrollView.contentView.scroll(to: .zero)
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+        harness.layout()
+        #expect(!caretIsOnScreen(storage), "precondition: the selection is off screen")
+        let viewportHeight = textView.visibleRect.height
+
+        for presentation in [Presentation.raw, .rich] {
+            model.styler = MarkdownStyler(presentation: presentation, theme: .twilight)
+            harness.layout()
+            #expect(textView.selectedRange() == selection)
+            #expect(!caretIsOnScreen(storage), "\(presentation) pulled the selection back on screen")
+            #expect(textView.visibleRect.minY < viewportHeight, "\(presentation) left the first screen")
+        }
     }
 
     @Test("mounted theme changes replace code token colours")
