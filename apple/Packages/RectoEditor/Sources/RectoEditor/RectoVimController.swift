@@ -73,6 +73,12 @@ public final class RectoVimController {
 
     public init() {}
 
+    deinit {
+        // `attach(to: nil)` removes these too; this is for an owner that drops
+        // the controller without detaching, so the blocks do not outlive it.
+        for observer in observers { NotificationCenter.default.removeObserver(observer) }
+    }
+
     /// Vim's registers and marks as JSON, for the host to persist across
     /// launches. `nil` before the engine has started.
     public func saveState() -> String? { engine?.saveState() }

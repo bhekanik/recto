@@ -451,6 +451,30 @@ struct VimPresentationTests {
         #expect(mounted.textView.selectedRange().location > 0)
     }
 
+    @Test("a controller dropped without detaching leaves no observers behind")
+    func deallocationRemovesObservers() throws {
+        let storage = RectoTextStorage(documentId: "vim-deinit", markdown: "abc\n")
+        var vim: RectoVimController? = RectoVimController()
+        weak var weakVim = vim
+        let harness = WindowHarness(
+            RectoEditorView(storage: storage, styler: MarkdownStyler(presentation: .vim, theme: .twilight),
+                            onAttach: { vim?.attach(to: $0) }),
+            size: CGSize(width: 640, height: 400))
+        defer { harness.tearDown() }
+        let textView = try #require(harness.editorTextView)
+        #expect(vim?.isAttached == true)
+
+        vim = nil
+        #expect(weakVim == nil, "the seam holds the interceptor weakly")
+        #expect(storage.controller.keyInterceptor == nil)
+        // Had a text-change block survived with its weak self, this would
+        // still be safe; the check is that nothing about the dead controller
+        // is reached. Typing plain text now goes straight to AppKit.
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        textView.insertText("x", replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(storage.markdown == "xabc\n")
+    }
+
     // MARK: - External changes
 
     @Test("an external storage change is adopted without echoing back")
