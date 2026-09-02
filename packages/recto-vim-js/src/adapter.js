@@ -299,6 +299,16 @@ export class RectoCM {
 	_applyEdit(from, to, insert, origin, resolved) {
 		if (!resolved) ({ from, to } = this._clampEditRange(from, to));
 		if (from === to && insert === "") return;
+		// The core spells every line break `\n` (a linewise put, a pasted
+		// string, a dot-repeat replay); the document may be CRLF. Converting
+		// here, at the one write path, keeps the mirror free of mixed endings
+		// and hands the host an edit it can apply verbatim — a bare LF landing
+		// in a CRLF document made the host normalise and resync, which
+		// dropped insert mode.
+		if (/[\r\n]/.test(insert)) {
+			const line = resolved ? resolved.start.line : this.doc.posFromIndex(from).line;
+			insert = insert.replace(/\r\n|\n|\r/g, this.doc.lineEndingFor(line));
+		}
 		this.edits.push({ from, to, insert });
 
 		for (const id in this.marks) this.marks[id].update(from, to, insert.length);

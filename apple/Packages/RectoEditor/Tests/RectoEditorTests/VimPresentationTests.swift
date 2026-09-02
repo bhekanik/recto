@@ -406,6 +406,53 @@ struct VimPresentationTests {
         #expect(mounted.failures.isEmpty)
     }
 
+    // MARK: - CRLF documents
+
+    @Test("a linewise put in a CRLF document lands once with the document's ending")
+    func linewisePutInCRLF() throws {
+        let mounted = try mount("alpha\r\nbeta\r\ngamma\r\n")
+        defer { mounted.harness.tearDown() }
+        mounted.textView.setSelectedRange(NSRange(location: 0, length: 0))
+        mounted.edits.removeAll()
+
+        try mounted.press("jyyp")
+
+        #expect(Array(mounted.storage.markdown.utf16) == Array("alpha\r\nbeta\r\nbeta\r\ngamma\r\n".utf16),
+                "\(describe(mounted.storage.markdown))")
+        #expect(mounted.mirrorMatchesStorage())
+        #expect(mounted.edits.count == 1)
+        #expect(mounted.vim.status?.mode == "normal")
+    }
+
+    @Test("pasting LF text in insert mode in a CRLF document keeps insert mode")
+    func insertModePasteInCRLF() throws {
+        let mounted = try mount("alpha\r\nbeta\r\n")
+        defer { mounted.harness.tearDown() }
+        mounted.textView.setSelectedRange(NSRange(location: 5, length: 0))
+
+        try mounted.press("i")
+        mounted.textView.insertText("X\nY", replacementRange: NSRange(location: NSNotFound, length: 0))
+
+        #expect(Array(mounted.storage.markdown.utf16) == Array("alphaX\r\nY\r\nbeta\r\n".utf16),
+                "\(describe(mounted.storage.markdown))")
+        #expect(mounted.mirrorMatchesStorage())
+        #expect(mounted.vim.status?.mode == "insert")
+        #expect(mounted.failures.isEmpty)
+    }
+
+    @Test("dot-repeat of an insert with a newline replays once in a CRLF document")
+    func dotRepeatNewlineInCRLF() throws {
+        let mounted = try mount("alpha\r\nbeta\r\ngamma\r\n")
+        defer { mounted.harness.tearDown() }
+        mounted.textView.setSelectedRange(NSRange(location: 0, length: 0))
+
+        try mounted.press("ix<CR>y<Esc>j.")
+
+        #expect(Array(mounted.storage.markdown.utf16) == Array("x\r\nyalpha\r\nx\r\nybeta\r\ngamma\r\n".utf16),
+                "\(describe(mounted.storage.markdown))")
+        #expect(mounted.mirrorMatchesStorage())
+    }
+
     // MARK: - Composition (IME)
 
     private func beginComposition(_ mounted: Mounted, _ marked: String) {

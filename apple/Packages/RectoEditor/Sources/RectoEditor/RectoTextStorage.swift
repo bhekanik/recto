@@ -80,6 +80,12 @@ public final class RectoTextStorage {
     @ObservationIgnored
     private var structuralEditDepth = 0
 
+    /// The editor's text as it stood when a normalising reconcile was refused
+    /// mid-transaction, so the transaction's second report of the same edit is
+    /// recognised and finishes the reconcile instead of landing the edit again.
+    @ObservationIgnored
+    private var editorTextAwaitingReconcile: String?
+
     var currentEditIsStructural: Bool { structuralEditDepth > 0 }
 
     /// `true` while the storage is applying an external change, so a listener
@@ -147,6 +153,19 @@ public final class RectoTextStorage {
     @discardableResult
     func editorDidMutate(_ mutation: MarkdownTextMutation) -> Bool {
         guard !isApplyingExternalEdit else { return false }
+        if let awaiting = editorTextAwaitingReconcile {
+            editorTextAwaitingReconcile = nil
+            // The engine reports a programmatic patch twice: from the text view's
+            // change notification inside its mutation transaction, and through
+            // `onTextMutation` after it. The first arrival normalised `markdown`
+            // but could not patch the editor (re-entrant); this is the second,
+            // and the editor still holds what it held then. Finish the reconcile
+            // rather than applying the edit to the normalised text a second time.
+            if editorHasSameUTF16(as: awaiting) {
+                reconcileEditor()
+                return false
+            }
+        }
         if editorHasSameUTF16(as: markdown) { return false }
         let normalized = currentEditIsStructural
             ? applyingStructuralMutation(mutation, to: markdown)
@@ -156,8 +175,9 @@ public final class RectoTextStorage {
 
         isApplyingExternalEdit = true
         withoutReconciling { markdown = normalized.markdown }
-        if !editorHasSameUTF16(as: normalized.markdown) {
-            controller.applyText(normalized.markdown)
+        if !editorHasSameUTF16(as: normalized.markdown),
+           !controller.applyText(normalized.markdown) {
+            editorTextAwaitingReconcile = controller.textView?.string
         }
         isApplyingExternalEdit = false
         onEdit?(normalized.mutation)

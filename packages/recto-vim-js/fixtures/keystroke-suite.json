@@ -362,6 +362,29 @@
 			"expectMode": "normal"
 		},
 		{
+			"name": "linewise put after keeps CRLF endings",
+			"text": "alpha\r\nbeta\r\ngamma\r\n",
+			"cursor": [1, 0],
+			"keys": "yyp",
+			"expectText": "alpha\r\nbeta\r\nbeta\r\ngamma\r\n",
+			"expectCursor": [2, 0]
+		},
+		{
+			"name": "linewise put before keeps CRLF endings",
+			"text": "alpha\r\nbeta\r\ngamma\r\n",
+			"cursor": [1, 0],
+			"keys": "yyP",
+			"expectText": "alpha\r\nbeta\r\nbeta\r\ngamma\r\n",
+			"expectCursor": [1, 0]
+		},
+		{
+			"name": "dot-repeat of an insert with a newline keeps CRLF endings",
+			"text": "alpha\r\nbeta\r\ngamma\r\n",
+			"cursor": [0, 0],
+			"keys": "ix<CR>y<Esc>j.",
+			"expectText": "x\r\nyalpha\r\nx\r\nybeta\r\ngamma\r\n"
+		},
+		{
 			"name": "ex delete removes the line",
 			"text": "aaa\nbbb\nccc",
 			"cursor": [1, 0],

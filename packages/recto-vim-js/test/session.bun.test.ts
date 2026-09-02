@@ -331,3 +331,14 @@ test(":w without a save hook is a no-op rather than an error", () => {
 	expect(last.notification ?? null).toBeNull();
 	expect(api.getText()).toBe("alpha\n");
 });
+
+test("host text with bare LF lands with the document's CRLF and keeps insert mode", () => {
+	const host = start("alpha\r\nbeta\r\n", 0, 5);
+	api.setExternalInput(true);
+	press("i", host);
+	const result: VimResult = JSON.parse(api.insertText("X\nY"));
+	expect(result.edits).toEqual([{ from: 5, to: 5, insert: "X\r\nY" }]);
+	expect(result.mode).toBe("insert");
+	expect(api.getText()).toBe("alphaX\r\nY\r\nbeta\r\n");
+	api.setExternalInput(false);
+});
