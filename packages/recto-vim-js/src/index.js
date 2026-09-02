@@ -435,8 +435,8 @@ const Vim = initVim(RectoCM);
  */
 {
 	const controller = Vim.getRegisterController();
-	const normalise = (text) =>
-		typeof text === "string" ? text.replace(/\r\n|\r/g, "\n") : text;
+	// `setText` accepts a missing text (upstream reads `text || ''`).
+	const normalise = (text) => (text ?? "").replace(/\r\n|\r/g, "\n");
 	const controllerProto = Object.getPrototypeOf(controller);
 	const pushText = controllerProto.pushText;
 	controllerProto.pushText = function (name, operator, text, linewise, blockwise) {

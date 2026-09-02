@@ -368,17 +368,23 @@ public final class RectoVimController {
 
 extension RectoVimController: MarkdownKeyInterceptor {
     public func interceptKeyDown(_ event: NSEvent, in textView: NSTextView) -> Bool {
-        guard let engine, textView === self.textView,
+        guard textView === self.textView,
               let (key, modifiers) = VimKeyEvent.translate(event) else { return false }
         // Command chords belong to the menu bar: ⌘Z reaches the host's history
         // through the responder chain, the same place `u` ends up.
         if modifiers.contains(.command) { return false }
+        return handle(key: key, modifiers: modifiers)
+    }
+
+    /// One key by DOM name. Returns whether vim consumed it.
+    private func handle(key: String, modifiers: VimModifiers = []) -> Bool {
+        guard let engine else { return false }
         do {
             let result = try engine.handleKey(key, modifiers: modifiers)
             try apply(result)
             return result.handled
         } catch {
-            Self.log.error("handleKey failed: \(String(describing: error), privacy: .public)")
+            Self.log.error("handleKey \(key, privacy: .public) failed: \(String(describing: error), privacy: .public)")
             return false
         }
     }
@@ -432,17 +438,10 @@ extension RectoVimController: MarkdownKeyInterceptor {
     ]
 
     public func interceptCommand(_ selector: Selector, in textView: NSTextView) -> Bool {
-        guard let engine, textView === self.textView else { return false }
+        guard textView === self.textView else { return false }
         // `<C-h>` is Backspace in vim; AppKit spells it deleteBackward:.
         if selector == #selector(NSResponder.deleteBackward(_:)) {
-            do {
-                let result = try engine.handleKey("Backspace")
-                try apply(result)
-                return result.handled
-            } catch {
-                Self.log.error("deleteBackward failed: \(String(describing: error), privacy: .public)")
-                return false
-            }
+            return handle(key: "Backspace")
         }
         return Self.editingSelectors.contains(selector)
     }
