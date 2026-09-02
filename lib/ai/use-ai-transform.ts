@@ -115,7 +115,7 @@ function commitTransformAtCurrentSource(args: {
 		status: "committed",
 		nodeId,
 		sourceNodeId,
-		aiMarkdown: args.getMarkdown(),
+		aiMarkdown: args.nextMarkdown,
 	};
 }
 

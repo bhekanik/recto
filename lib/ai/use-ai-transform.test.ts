@@ -435,6 +435,44 @@ describe("AI transform acknowledgement boundary", () => {
 		expect(commits).toBe(0);
 	});
 
+	it("captures committed AI bytes while the remount window still reads the source", async () => {
+		const source = "# Draft\n\nCafe\u0301 😀 — source\n";
+		const ai = "# AI result\n\nCafe\u0301 😀 — rewritten\n";
+		let headNodeId = "node-a";
+		let committedMarkdown: string | null = null;
+		const result = await commitTransformAfterAcknowledgement({
+			acknowledge: async () => true,
+			snapshot: {
+				sourceNodeId: "node-a",
+				sourceMarkdown: source,
+				range: { from: 9, to: 14 },
+				selection: "Cafe\u0301",
+			},
+			controller: {
+				currentNodeId: "node-a",
+				flush() {},
+				getHeadNodeId: () => headNodeId,
+				commitProgrammatic(markdown) {
+					committedMarkdown = markdown;
+					headNodeId = "node-c";
+					return headNodeId;
+				},
+			},
+			getMarkdown: () => source,
+			isCurrent: () => true,
+			nextMarkdown: ai,
+			origin: "ai:tighten",
+		});
+
+		expect(result).toEqual({
+			status: "committed",
+			nodeId: "node-c",
+			sourceNodeId: "node-a",
+			aiMarkdown: ai,
+		});
+		expect(committedMarkdown).toBe(ai);
+	});
+
 	it.each([
 		"immediate",
 		"post-rerender",
