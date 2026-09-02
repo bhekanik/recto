@@ -176,12 +176,32 @@ private struct ExactMarkdown: Equatable {
     }
 }
 
+/// Edit › Undo reaches `undo()` straight from the responder chain, not through
+/// `RectoEditorHistory.performHistory`. With a vim insert session's group still
+/// open, `NSUndoManager.undo()` raises "undo was called with too many nested
+/// undo groups"; closing the group first also makes menu Undo remove the whole
+/// session, as `u` does.
+final class GroupClosingUndoManager: UndoManager {
+    /// AppKit drives undo managers on the main thread, so the hook runs there.
+    var willNavigate: (@MainActor () -> Void)?
+
+    override func undo() {
+        MainActor.assumeIsolated { willNavigate?() }
+        super.undo()
+    }
+
+    override func redo() {
+        MainActor.assumeIsolated { willNavigate?() }
+        super.redo()
+    }
+}
+
 @MainActor
 final class DocumentUndoHistory: ObservableObject, RectoEditorHistory {
     // Bound V1's full-string snapshots until model history replaces this owner.
     private static let snapshotLimit = 100
 
-    let undoManager = UndoManager()
+    let undoManager = GroupClosingUndoManager()
 
     private let storage: RectoTextStorage
     private let writeDocument: (String) -> Void
@@ -198,6 +218,7 @@ final class DocumentUndoHistory: ObservableObject, RectoEditorHistory {
             document.wrappedValue = updated
         }
         storage.controller.undoManager = undoManager
+        undoManager.willNavigate = { [unowned self] in endCommandGroup() }
     }
 
     func attach(authoritativeMarkdown: String) {
@@ -266,6 +287,7 @@ final class DocumentUndoHistory: ObservableObject, RectoEditorHistory {
     private var openGroupPreviousGroupsByEvent: Bool?
     /// Set while a vim command group spans keystrokes.
     private var openCommandGroup: Bool?
+    var groupOpen: Bool { openCommandGroup != nil }
 
     /// Event grouping is off only while an explicit group is open: left on,
     /// AppKit would close its own per-event group around ours at the end of

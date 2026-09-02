@@ -72,6 +72,30 @@ struct VimHistoryTests {
         #expect(history.undoManager.groupingLevel == 0)
     }
 
+    @Test("Edit › Undo during an insert session closes the group and undoes it whole")
+    func menuUndoDuringOpenGroup() {
+        let (history, storage, _) = make("tail\n")
+        history.accept("xtail\n")
+        history.beginCommandGroup()
+        history.accept("xatail\n")
+        history.accept("xabtail\n")
+        #expect(history.undoManager.groupingLevel == 1)
+
+        // The responder chain's undo, not performHistory: it must not raise.
+        history.undoManager.undo()
+
+        #expect(storage.markdown == "xtail\n")
+        #expect(history.undoManager.groupingLevel == 0)
+        #expect(history.undoManager.groupsByEvent)
+        #expect(!history.groupOpen)
+
+        history.undoManager.redo()
+        #expect(storage.markdown == "xabtail\n")
+        history.undoManager.undo()
+        history.undoManager.undo()
+        #expect(storage.markdown == "tail\n")
+    }
+
     @Test("detach with an open group leaves the manager balanced")
     func detachClosesGroup() {
         let (history, _, _) = make("tail\n")
