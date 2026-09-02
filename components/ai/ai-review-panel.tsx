@@ -1,7 +1,7 @@
 "use client";
 
 import { X } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useEffectEvent, useRef } from "react";
 
 import {
 	Dialog,
@@ -32,6 +32,9 @@ export function AiReviewPanel({ open, review, onClose, onOpenReview }: Props) {
 	const { state, summary, error, run, reset, reconcile } = review;
 	const closeRef = useRef<HTMLButtonElement | null>(null);
 	const restoreFocusRef = useRef<HTMLElement | null>(null);
+	const previousOpenRef = useRef(false);
+	const startReview = useEffectEvent(() => void run());
+	const resetReview = useEffectEvent(reset);
 	const activeElement = globalThis.document?.activeElement;
 	if (
 		open &&
@@ -42,14 +45,14 @@ export function AiReviewPanel({ open, review, onClose, onOpenReview }: Props) {
 		restoreFocusRef.current = activeElement;
 	}
 
-	// Kick off the review when the panel opens; reset (aborts in-flight) on close.
+	// Callback identities change as the review advances. Only panel transitions
+	// may start or reset provider work.
 	useEffect(() => {
-		if (open) {
-			void run();
-		} else {
-			reset();
-		}
-	}, [open, run, reset]);
+		if (previousOpenRef.current === open) return;
+		previousOpenRef.current = open;
+		if (open) startReview();
+		else resetReview();
+	}, [open]);
 
 	return (
 		<Dialog
