@@ -6,13 +6,21 @@ import SwiftUI
 struct CloudDocumentView: View {
     let localId: String
     let registry: DocumentSessionRegistry
+    private let settings: StudioSettings
     @State private var model: CloudDocumentModel?
     @State private var openingError: String?
-    @State private var writingController = RectoWritingController()
+    @State private var chrome: EditorHostController
     @AppStorage(PresentationPreference.key) private var storedPresentation: String?
     /// This window's lens. `nil` until it appears, when it takes the stored
     /// default; after that only the writer's own choice moves it.
     @State private var chosenPresentation: Presentation?
+
+    init(localId: String, registry: DocumentSessionRegistry, settings: StudioSettings = .shared) {
+        self.localId = localId
+        self.registry = registry
+        self.settings = settings
+        _chrome = State(initialValue: EditorHostController(settings: settings))
+    }
 
     var body: some View {
         Group {
@@ -44,15 +52,11 @@ struct CloudDocumentView: View {
     }
 
     private func styler(_ model: CloudDocumentModel) -> MarkdownStyler {
-        MarkdownStyler(
-            presentation: PresentationPreference.presentation(
-                chosen: chosenPresentation,
-                stored: storedPresentation,
-                isEditable: model.isEditable
-            ),
-            theme: .twilight,
-            undo: .external
-        )
+        settings.styler(presentation: PresentationPreference.presentation(
+            chosen: chosenPresentation,
+            stored: storedPresentation,
+            isEditable: model.isEditable
+        ))
     }
 
     private func choose(_ presentation: Presentation) {
@@ -70,25 +74,42 @@ struct CloudDocumentView: View {
             } else if model.state.syncState == .failed {
                 statusBanner("Sync failed. Your changes remain on this Mac.", color: .orange)
             }
+            if settings.showToolbar {
+                TopFormatToolbar(
+                    theme: styler.theme,
+                    presentation: styler.presentation,
+                    actions: chrome.formatToolbarActions
+                )
+            }
             RectoEditorView(
                 storage: model.storage,
                 styler: styler,
                 placeholder: "Start writing…",
+                onAttach: chrome.attach,
                 onEdit: model.accept,
-                writingController: writingController
+                writingController: chrome.writingController
             )
             .frame(minWidth: 620, minHeight: 500)
-            .background(WritingControlsHost(controller: writingController))
-            EditorStatusBar(
-                presentation: styler.presentation,
-                isEditable: model.isEditable,
-                storage: model.storage,
-                theme: styler.theme,
-                onSelect: choose
-            ) {
-                SyncStateLabel(state: model.state.syncState, pendingCount: model.pendingEditCount)
+            .background(WritingControlsHost(controller: chrome.writingController))
+            if settings.showStatusBar {
+                EditorStatusBar(
+                    presentation: styler.presentation,
+                    isEditable: model.isEditable,
+                    storage: model.storage,
+                    settings: settings,
+                    theme: styler.theme,
+                    onSelect: choose
+                ) {
+                    SyncStateLabel(state: model.state.syncState, pendingCount: model.pendingEditCount)
+                }
             }
         }
+        .onAppear {
+            chrome.undo = { [model] in Task { await model.undo() } }
+            chrome.redo = { [model] in Task { await model.redo() } }
+        }
+        .onChange(of: settings.spellcheck) { chrome.applySettings() }
+        .onChange(of: settings.typewriter) { chrome.applySettings() }
         .navigationTitle(model.state.title)
         .toolbar {
             ToolbarItemGroup {

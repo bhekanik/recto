@@ -6,33 +6,37 @@ struct EditorHostView: View {
     @Binding private var document: RectoDocument
     @State private var storage: RectoTextStorage
     @StateObject private var history: DocumentUndoHistory
-    @State private var writingController = RectoWritingController()
+    @State private var chrome: EditorHostController
     @AppStorage(PresentationPreference.key) private var storedPresentation: String?
     /// This window's lens. `nil` until it appears, when it takes the stored
     /// default; after that only the writer's own choice moves it.
     @State private var chosenPresentation: Presentation?
+    private let settings: StudioSettings
     private let isEditable: Bool
 
-    init(document: Binding<RectoDocument>, isEditable: Bool) {
+    init(document: Binding<RectoDocument>, isEditable: Bool, settings: StudioSettings = .shared) {
         self.init(
             document: document,
             isEditable: isEditable,
             storage: RectoTextStorage(
                 documentId: UUID().uuidString,
                 markdown: document.wrappedValue.markdown
-            )
+            ),
+            settings: settings
         )
     }
 
     init(document: Binding<RectoDocument>, isEditable: Bool = true,
-         storage: RectoTextStorage) {
+         storage: RectoTextStorage, settings: StudioSettings = .shared) {
         _document = document
         self.isEditable = isEditable
+        self.settings = settings
         _storage = State(initialValue: storage)
         _history = StateObject(wrappedValue: DocumentUndoHistory(
             document: document,
             storage: storage
         ))
+        _chrome = State(initialValue: EditorHostController(settings: settings))
     }
 
     private var presentation: Presentation {
@@ -43,39 +47,49 @@ struct EditorHostView: View {
         )
     }
 
-    private var styler: MarkdownStyler {
-        MarkdownStyler(presentation: presentation, theme: .twilight, undo: .external)
-    }
-
     private func choose(_ presentation: Presentation) {
         chosenPresentation = presentation
         storedPresentation = presentation.rawValue
     }
 
     var body: some View {
+        let styler = settings.styler(presentation: presentation)
         VStack(spacing: 0) {
+            if settings.showToolbar {
+                TopFormatToolbar(
+                    theme: styler.theme,
+                    presentation: styler.presentation,
+                    actions: chrome.formatToolbarActions
+                )
+            }
             RectoEditorView(
                 storage: storage,
                 styler: styler,
                 placeholder: "Start writing…",
+                onAttach: chrome.attach,
                 onEdit: history.accept,
-                writingController: writingController
+                writingController: chrome.writingController
             )
             .frame(minWidth: 720, minHeight: 540)
-            .background(WritingControlsHost(controller: writingController))
-            EditorStatusBar(
-                presentation: styler.presentation,
-                isEditable: isEditable,
-                storage: storage,
-                theme: styler.theme,
-                onSelect: choose
-            )
+            .background(WritingControlsHost(controller: chrome.writingController))
+            if settings.showStatusBar {
+                EditorStatusBar(
+                    presentation: styler.presentation,
+                    isEditable: isEditable,
+                    storage: storage,
+                    settings: settings,
+                    theme: styler.theme,
+                    onSelect: choose
+                )
+            }
         }
         .onAppear {
             if chosenPresentation == nil {
                 chosenPresentation = PresentationPreference.choice(from: storedPresentation)
             }
             history.attach(authoritativeMarkdown: document.markdown)
+            chrome.undo = { [history] in history.undoManager.undo() }
+            chrome.redo = { [history] in history.undoManager.redo() }
         }
         .onDisappear {
             history.detach()
@@ -83,6 +97,8 @@ struct EditorHostView: View {
         .onChange(of: ExactMarkdown(document.markdown)) { _, markdown in
             history.adoptExternal(markdown.value)
         }
+        .onChange(of: settings.spellcheck) { chrome.applySettings() }
+        .onChange(of: settings.typewriter) { chrome.applySettings() }
     }
 }
 

@@ -7,7 +7,8 @@ import SwiftUI
 typealias WordCounter = @Sendable (String) -> Int
 
 /// The footer under the editor, after the web app's status bar: the mode
-/// switcher on the left, the word count on the right, in the editor's palette.
+/// switcher on the left; the studio controls, word count, reading time and
+/// sync state on the right, in the web's order, in the editor's palette.
 ///
 /// Takes the storage rather than its markdown so that only `WordCountLabel`
 /// observes the text: the host's body, and with it the editor's update pass,
@@ -16,6 +17,7 @@ struct EditorStatusBar<Trailing: View>: View {
     let presentation: Presentation
     let isEditable: Bool
     let storage: RectoTextStorage
+    let settings: StudioSettings
     let theme: RectoEditorTheme
     var wordCounter: WordCounter = WordCount.count
     /// The writer picked a lens, by button or by its shortcut.
@@ -23,11 +25,16 @@ struct EditorStatusBar<Trailing: View>: View {
     @ViewBuilder let trailing: () -> Trailing
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 8) {
             ModeSwitcher(active: presentation, isEditable: isEditable, theme: theme, onSelect: onSelect)
             Spacer(minLength: 0)
+            StudioControls(settings: settings, theme: theme)
+            StatusDivider(theme: theme)
             WordCountLabel(storage: storage, ink: theme.ink3, counter: wordCounter)
-            trailing()
+            if Trailing.self != EmptyView.self {
+                StatusDot(theme: theme)
+                trailing()
+            }
         }
         .font(.system(size: 12))
         .padding(.horizontal, 12)
@@ -44,6 +51,7 @@ extension EditorStatusBar where Trailing == EmptyView {
         presentation: Presentation,
         isEditable: Bool,
         storage: RectoTextStorage,
+        settings: StudioSettings,
         theme: RectoEditorTheme,
         wordCounter: @escaping WordCounter = WordCount.count,
         onSelect: @escaping (Presentation) -> Void
@@ -52,11 +60,151 @@ extension EditorStatusBar where Trailing == EmptyView {
             presentation: presentation,
             isEditable: isEditable,
             storage: storage,
+            settings: settings,
             theme: theme,
             wordCounter: wordCounter,
             onSelect: onSelect,
             trailing: EmptyView.init
         )
+    }
+}
+
+/// The web's right-hand controls, minus what is not native yet: appearance,
+/// palette, text zoom, spellcheck, typewriter. Body font, the prose linter,
+/// focus dimming, zen and goals slot in here when they land; all of them stay
+/// reachable from the command palette on the web, which is the contract.
+private struct StudioControls: View {
+    let settings: StudioSettings
+    let theme: RectoEditorTheme
+
+    var body: some View {
+        HStack(spacing: 8) {
+            labelButton(
+                settings.appearance.label,
+                symbol: settings.appearance.symbol,
+                help: "Appearance: \(settings.appearance.label) — click to cycle",
+                accessibility: "Appearance: \(settings.appearance.label). Click to change appearance",
+                action: settings.cycleAppearance
+            )
+            // Twilight is the only dark palette so far and Paper the only light
+            // one, so there is nothing to cycle to yet; the control reports the
+            // palette in force the way the web does when it is disabled.
+            labelButton(
+                settings.themeLabel,
+                symbol: "paintpalette",
+                help: settings.resolvedAppearance == .dark
+                    ? "Palette: Twilight — no other dark palette yet"
+                    : "Palette: Paper — the other palettes need a dark appearance",
+                accessibility: "Palette: \(settings.themeLabel)",
+                action: {}
+            )
+            .disabled(true)
+            .opacity(0.6)
+
+            StatusDivider(theme: theme)
+
+            HStack(spacing: 2) {
+                iconButton("minus", help: "Smaller text", accessibility: "Decrease text size", action: settings.zoomOut)
+                    .disabled(!settings.canZoomOut)
+                Button(action: settings.zoomReset) {
+                    Text(verbatim: "\(settings.zoomPercent)%")
+                        .monospacedDigit()
+                        .frame(minWidth: 30)
+                        .foregroundStyle(Color(nsColor: theme.ink3))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .focusable(false)
+                .help("Reset text size")
+                .accessibilityLabel("Reset text size")
+                iconButton("plus", help: "Bigger text", accessibility: "Increase text size", action: settings.zoomIn)
+                    .disabled(!settings.canZoomIn)
+            }
+
+            StatusDivider(theme: theme)
+
+            iconButton(
+                "textformat.abc.dottedunderline",
+                help: "Spellcheck: \(settings.spellcheck ? "On" : "Off")",
+                accessibility: "Toggle spellcheck",
+                isOn: settings.spellcheck,
+                action: settings.toggleSpellcheck
+            )
+            iconButton(
+                "arrow.up.and.down.text.horizontal",
+                help: "Typewriter scrolling: \(settings.typewriter ? "On" : "Off")",
+                accessibility: "Toggle typewriter scrolling",
+                isOn: settings.typewriter,
+                action: settings.toggleTypewriter
+            )
+        }
+    }
+
+    private func labelButton(
+        _ title: String,
+        symbol: String,
+        help: String,
+        accessibility: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: symbol)
+                    .foregroundStyle(Color(nsColor: theme.accent))
+                Text(title)
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 22)
+            .foregroundStyle(Color(nsColor: theme.ink3))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .help(help)
+        .accessibilityLabel(accessibility)
+    }
+
+    private func iconButton(
+        _ symbol: String,
+        help: String,
+        accessibility: String,
+        isOn: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 12))
+                .frame(width: 24, height: 24)
+                .foregroundStyle(Color(nsColor: isOn ? theme.accent : theme.ink3))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .help(help)
+        .accessibilityLabel(accessibility)
+        .accessibilityAddTraits(isOn ? .isSelected : [])
+    }
+}
+
+/// The web's `h-3.5 w-px bg-line` separator.
+private struct StatusDivider: View {
+    let theme: RectoEditorTheme
+
+    var body: some View {
+        Color(nsColor: theme.line)
+            .frame(width: 1, height: 14)
+            .accessibilityHidden(true)
+    }
+}
+
+/// The web's "·" between the trailing figures.
+private struct StatusDot: View {
+    let theme: RectoEditorTheme
+
+    var body: some View {
+        Text(verbatim: "·")
+            .foregroundStyle(Color(nsColor: theme.line))
+            .accessibilityHidden(true)
     }
 }
 
@@ -80,13 +228,14 @@ private struct WordCountLabel: View {
         let markdown = storage.markdown
         return Group {
             if let count {
-                Text("^[\(count) word](inflect: true)")
+                Text("^[\(count) word](inflect: true) · \(ReadingTime.format(minutes: ReadingTime.minutes(wordCount: count)))")
             } else {
                 Text(verbatim: "")
             }
         }
         .monospacedDigit()
         .foregroundStyle(Color(nsColor: ink))
+        .help("Estimated reading time")
         .task(id: MarkdownBytes(markdown)) {
             if count == nil {
                 count = counter(markdown)
