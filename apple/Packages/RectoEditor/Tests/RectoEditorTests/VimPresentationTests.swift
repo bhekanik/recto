@@ -499,6 +499,85 @@ struct VimPresentationTests {
         #expect(mounted.storage.markdown == "\u{65E5}yab\n", "the next key is text, not an operator")
     }
 
+    /// An input method's whole round: marked text goes up, then the committed
+    /// string replaces it.
+    private func commit(_ text: String, in mounted: Mounted) {
+        beginComposition(mounted, "ni")
+        mounted.textView.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(!mounted.textView.hasMarkedText())
+    }
+
+    @Test("an IME commit inside an insert session keeps the session one undo step")
+    func compositionKeepsInsertGroup() throws {
+        let mounted = try mount("ab\n")
+        defer { mounted.harness.tearDown() }
+        mounted.textView.setSelectedRange(NSRange(location: 0, length: 0))
+
+        try mounted.press("ix")
+        commit("\u{65E5}", in: mounted)
+        try mounted.press("y<Esc>")
+        #expect(mounted.storage.markdown == "x\u{65E5}yab\n")
+        #expect(mounted.history.beginCalls == 1)
+        #expect(mounted.history.endCalls == 1)
+
+        try mounted.press("u")
+        #expect(mounted.storage.markdown == "ab\n", "the whole session is one step")
+        #expect(mounted.mirrorMatchesStorage())
+    }
+
+    @Test("an IME-only insert session is one undo step")
+    func compositionOnlySessionIsGrouped() throws {
+        let mounted = try mount("ab\n")
+        defer { mounted.harness.tearDown() }
+        mounted.textView.setSelectedRange(NSRange(location: 0, length: 0))
+
+        try mounted.press("i")
+        commit("\u{65E5}", in: mounted)
+        commit("\u{672C}", in: mounted)
+        try mounted.press("<Esc>")
+        #expect(mounted.storage.markdown == "\u{65E5}\u{672C}ab\n")
+        #expect(mounted.history.beginCalls == 1)
+
+        try mounted.press("u")
+        #expect(mounted.storage.markdown == "ab\n")
+        #expect(mounted.mirrorMatchesStorage())
+    }
+
+    @Test("dot-repeat replays typed and committed text together")
+    func compositionIsPartOfDotRepeat() throws {
+        let mounted = try mount("ab\ncd\n")
+        defer { mounted.harness.tearDown() }
+        mounted.textView.setSelectedRange(NSRange(location: 0, length: 0))
+
+        try mounted.press("ix")
+        commit("\u{65E5}", in: mounted)
+        try mounted.press("y<Esc>j0.")
+
+        #expect(mounted.storage.markdown == "x\u{65E5}yab\nx\u{65E5}ycd\n", "\(describe(mounted.storage.markdown))")
+        #expect(mounted.mirrorMatchesStorage())
+    }
+
+    @Test("a cancelled composition does not swallow the next caret move")
+    func cancelledCompositionReleasesSelectionHandoff() throws {
+        let mounted = try mount("abcd\n")
+        defer { mounted.harness.tearDown() }
+        mounted.textView.setSelectedRange(NSRange(location: 0, length: 0))
+        try mounted.press("i")
+        beginComposition(mounted, "n")
+        // Cancel: the input method takes its marked run back; the text is as
+        // it was, so only a selection change reaches the controller.
+        mounted.textView.setMarkedText("", selectedRange: NSRange(location: 0, length: 0),
+                                       replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(!mounted.textView.hasMarkedText())
+        #expect(mounted.storage.markdown == "abcd\n")
+
+        mounted.textView.setSelectedRange(NSRange(location: 3, length: 0))
+        try mounted.press("X<Esc>")
+
+        #expect(mounted.storage.markdown == "abcXd\n", "the click moved the engine's caret too")
+        #expect(mounted.mirrorMatchesStorage())
+    }
+
     @Test("normal-mode keys during a composition do not edit the buffer")
     func compositionInNormalMode() throws {
         let mounted = try mount("abc\n")

@@ -189,9 +189,21 @@ public final class RectoVimController {
     /// Home/End, a click, a menu command.
     private func selectionDidChange() {
         guard !applyingEdits, !applyingSelection, let engine, let textView else { return }
+        // While marked text is up AppKit owns the selection.
         if textView.hasMarkedText() {
             compositionWasActive = true
             return
+        }
+        // On a commit AppKit reports the new selection before the text change,
+        // with the marked text already gone. Handing that to the engine as a
+        // cursor move would break the insert record and the undo block, so it
+        // waits for `textDidChange`, which adopts text and selection together.
+        // A cancelled composition that left the text untouched posts only the
+        // selection, so a text that already matches the mirror means no text
+        // change is coming and this is an ordinary move.
+        if compositionWasActive {
+            guard (textView.string as NSString).isEqual(to: engine.text()) else { return }
+            compositionWasActive = false
         }
         let selection = textView.selectedRange()
         guard selection != lastAppliedSelection else { return }
@@ -224,9 +236,11 @@ public final class RectoVimController {
                 return
             }
         }
-        // Leaving insert mode ends the command, and so the group, even on a
-        // keystroke that wrote nothing (`<Esc>` itself).
-        if !result.insertMode { closeCommandGroup() }
+        // The group follows the mode, not the journal: an insert session made
+        // entirely of IME commits carries no edits of its own (`adoptText`),
+        // and leaving insert mode ends the command even on a keystroke that
+        // wrote nothing (`<Esc>` itself).
+        if result.insertMode { openCommandGroup() } else { closeCommandGroup() }
         applySelection(result)
         seam?.caretShape = Self.caretShape(for: VimCaretShape(mode: result.mode))
         if let scroll = result.scroll { applyScroll(scroll) }
@@ -255,7 +269,6 @@ public final class RectoVimController {
             text.replaceCharacters(in: edit.range, with: edit.insert)
         }
         if insertMode { openCommandGroup() } else { closeCommandGroup() }
-
         applyingEdits = true
         defer { applyingEdits = false }
         // One edit is the common case (`x`, `dw`, a typed character) and is
