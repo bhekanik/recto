@@ -264,9 +264,13 @@ public final class RectoVimController {
 
         applyingEdits = true
         defer { applyingEdits = false }
-        guard seam.applyText(text as String) else {
-            return .failed(.rejectedByDelegate(edits[0].range))
-        }
+        // One edit is the common case (`x`, `dw`, a typed character) and is
+        // already a patch; the whole-document diff behind `applyText` is only
+        // needed to collapse a multi-edit journal into one run.
+        let landed = edits.count == 1
+            ? seam.applyPatch(MarkdownTextPatch(range: edits[0].range, replacement: edits[0].insert))
+            : seam.applyText(text as String)
+        guard landed else { return .failed(.rejectedByDelegate(edits[0].range)) }
         return (textView.string as NSString).isEqual(to: text as String) ? .applied : .normalised
     }
 
