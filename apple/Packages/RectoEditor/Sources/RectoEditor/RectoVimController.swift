@@ -111,9 +111,9 @@ public final class RectoVimController {
             engine.setExternalInput(true)
             seam.installKeyInterceptor(self)
             installObservers(on: textView)
+            // Vim starts where the reader's caret already is.
             let selection = GraphemeClamp.range(in: textView.string as NSString, textView.selectedRange())
-            try apply(engine.setText(
-                textView.string, anchor: selection.location, head: NSMaxRange(selection)))
+            try apply(engine.moveCursorFromHost(anchor: selection.location, head: NSMaxRange(selection)))
         } catch {
             Self.log.error("vim could not start: \(String(describing: error), privacy: .public)")
             detach()
@@ -212,20 +212,14 @@ public final class RectoVimController {
 
     private func apply(_ result: VimResult) throws {
         if !result.edits.isEmpty && !result.resynced {
-            switch applyEdits(result.edits, insertMode: result.insertMode) {
-            case .applied:
-                break
-            case .normalised:
-                // The keystroke landed, but the storage rewrote it (line
-                // endings). The mirror follows the storage; the caret is where
-                // the engine left it, clamped.
-                try resyncFromStorage()
-            case .failed(let failure):
+            let outcome = applyEdits(result.edits, insertMode: result.insertMode)
+            if outcome != .applied {
                 // JS committed these edits to its mirror before handing them
-                // over; a partial replay leaves the two disagreeing. The storage
-                // is the truth: tell the engine, and tell the host.
+                // over, so what the storage now holds is the truth and the
+                // result's selection no longer describes it. Take the storage
+                // back into the engine; a failure is also the host's to hear.
                 try resyncFromStorage()
-                onReplayFailure?(failure)
+                if case .failed(let failure) = outcome { onReplayFailure?(failure) }
                 status = VimStatus(result: try engine?.state() ?? result)
                 return
             }
@@ -239,7 +233,7 @@ public final class RectoVimController {
         status = VimStatus(result: result)
     }
 
-    private enum ReplayOutcome {
+    private enum ReplayOutcome: Equatable {
         case applied
         /// The edit landed but the storage rewrote it (line-ending policy).
         case normalised
@@ -290,8 +284,8 @@ public final class RectoVimController {
         guard let textView else { return }
         let length = (textView.string as NSString).length
         var range = result.primarySelection.range
-        // In normal mode vim's caret sits *on* a character; a zero-width
-        // selection would draw as a bar, so the caret shape carries the mode.
+        // The mirror and the storage agree after `applyEdits`, so this clamp
+        // only ever bites on a result that outlived a resync.
         range.location = min(range.location, length)
         range.length = min(range.length, length - range.location)
         lastAppliedSelection = range
