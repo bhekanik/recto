@@ -41,9 +41,11 @@ struct TopFormatToolbarTests {
         }
     }
 
-    @Test("the bar is live in rich only", arguments: Presentation.allCases)
-    func enabledInRichOnly(presentation: Presentation) {
-        #expect(TopFormatToolbar.isEnabled(in: presentation) == (presentation == .rich))
+    @Test("the bar is live wherever the text is editable", arguments: Presentation.allCases)
+    func enabledWhenEditable(presentation: Presentation) {
+        #expect(TopFormatToolbar.isEnabled(in: presentation) == presentation.isEditable)
+        #expect(TopFormatToolbar.isEnabled(in: .raw))
+        #expect(!TopFormatToolbar.isEnabled(in: .preview))
     }
 
     /// The substring each button must leave in "hello" once it has run — the
@@ -55,9 +57,10 @@ struct TopFormatToolbarTests {
     ]
 
     @Test("each button runs its command through the writing controls and hands focus back",
-          arguments: (TopFormatToolbar.inlineActions + TopFormatToolbar.blockActions).filter { $0.id != "link" })
-    func buttonsDispatch(action: FormatToolbarAction) async throws {
-        let mounted = try await mount("hello", presentation: .rich, id: "toolbar-\(action.id)")
+          arguments: (TopFormatToolbar.inlineActions + TopFormatToolbar.blockActions).filter { $0.id != "link" },
+          [Presentation.rich, .raw])
+    func buttonsDispatch(action: FormatToolbarAction, presentation: Presentation) async throws {
+        let mounted = try await mount("hello", presentation: presentation, id: "toolbar-\(action.id)-\(presentation.rawValue)")
         defer { mounted.window.close() }
         let textView = mounted.textView
         #expect(mounted.window.makeFirstResponder(textView))
@@ -87,9 +90,9 @@ struct TopFormatToolbarTests {
         #expect(mounted.window.firstResponder === textView)
     }
 
-    @Test("in preview the buttons are inert", arguments: [Presentation.preview, .raw])
-    func inertOutsideRich(presentation: Presentation) async throws {
-        let mounted = try await mount("hello", presentation: presentation, id: "toolbar-inert-\(presentation.rawValue)")
+    @Test("in preview the buttons are inert")
+    func inertInPreview() async throws {
+        let mounted = try await mount("hello", presentation: .preview, id: "toolbar-inert-preview")
         defer { mounted.window.close() }
         mounted.textView.setSelectedRange(NSRange(location: 0, length: 5))
         for action in TopFormatToolbar.inlineActions + TopFormatToolbar.blockActions {

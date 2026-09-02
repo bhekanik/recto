@@ -84,9 +84,17 @@ public final class RectoWritingController {
         refreshState()
     }
 
+    /// Run a formatting command on the current selection.
+    ///
+    /// Works in every editable presentation: the transformer edits Markdown
+    /// source, and the view's selection is in source coordinates whether the
+    /// markers are hidden (rich) or shown (raw), because hiding is a font size,
+    /// not a removal. Raw's "what you type is what the file gets" is about
+    /// smart input, and an explicit command is not that. The slash menu and the
+    /// selection bar are smart input, and stay rich-only.
     @discardableResult
     public func perform(_ command: RectoEditorCommand) -> Bool {
-        guard presentation == .rich,
+        guard presentation.isEditable,
               let storage,
               let textView,
               let edit = RectoCommandTransformer.edit(

@@ -59,12 +59,10 @@ struct TopFormatToolbar: View {
                             glyph: .symbol("curlybraces")),
     ]
 
-    /// Preview has nothing to format, and the native writing controls are
-    /// rich-only — `RectoWritingController.perform` refuses in raw, where what
-    /// the writer types is what the file gets — so the bar dims and goes inert
-    /// anywhere but rich.
-    nonisolated static func isEnabled(in presentation: Presentation) -> Bool {
-        presentation == .rich
+    /// Preview has nothing to format, so the bar dims and goes inert there,
+    /// like the web's. Raw formats too: the commands edit Markdown source.
+    static func isEnabled(in presentation: Presentation) -> Bool {
+        presentation.isEditable
     }
 
     private var isEnabled: Bool { Self.isEnabled(in: presentation) }
