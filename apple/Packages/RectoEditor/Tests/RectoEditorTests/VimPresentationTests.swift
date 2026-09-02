@@ -429,6 +429,28 @@ struct VimPresentationTests {
         #expect(mounted.mirrorMatchesStorage())
     }
 
+    // MARK: - Scrolling
+
+    @Test("a search that lands far away brings the caret on screen", arguments: [
+        "/Section 30<CR>", "G?Section 12<CR>", "/Section 30<CR>ggn",
+    ])
+    func searchRevealsCaret(keys: String) throws {
+        // The prompt closes outside a vim operation, so the core sends no
+        // scrollIntoView for `/` and `?`; motions and `n` do.
+        let mounted = try mount(PatchCaretTests.longDocument())
+        defer { mounted.harness.tearDown() }
+        mounted.textView.setSelectedRange(NSRange(location: 0, length: 0))
+        mounted.harness.layout()
+
+        try mounted.press(keys)
+        mounted.harness.layout()
+
+        let caret = try #require(mounted.storage.textView.caretRect())
+        #expect(mounted.textView.visibleRect.intersects(caret),
+                "caret \(caret) outside \(mounted.textView.visibleRect) after \(keys)")
+        #expect(mounted.textView.selectedRange().location > 0)
+    }
+
     // MARK: - External changes
 
     @Test("an external storage change is adopted without echoing back")

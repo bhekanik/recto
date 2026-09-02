@@ -241,9 +241,19 @@ public final class RectoVimController {
         // and leaving insert mode ends the command even on a keystroke that
         // wrote nothing (`<Esc>` itself).
         if result.insertMode { openCommandGroup() } else { closeCommandGroup() }
+        let before = textView?.selectedRange()
         applySelection(result)
         seam?.caretShape = Self.caretShape(for: VimCaretShape(mode: result.mode))
         if let scroll = result.scroll { applyScroll(scroll) }
+        if before != textView?.selectedRange(), result.scroll?.kind != "scrollIntoView" {
+            // A moved caret must end up visible. Motions ask for that
+            // themselves; `/` and `?` close their prompt outside a vim
+            // operation, so the result only carries incsearch's scroll back to
+            // where the search started and the match stayed off screen —
+            // CodeMirror reveals the cursor after that restore, and so does
+            // this. Nearest is a no-op when the caret is already visible.
+            seam?.scroll(range: NSRange(location: result.primarySelection.head, length: 0), position: .nearest)
+        }
         status = VimStatus(result: result)
     }
 
