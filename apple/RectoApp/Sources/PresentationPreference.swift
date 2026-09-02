@@ -8,9 +8,9 @@ import RectoEditor
 enum PresentationPreference {
     static let key = "editor.presentation"
 
-    /// What the writer can pick. Preview is not a choice: it is what a
-    /// read-only document gets, whatever is stored.
-    static let choices: [Presentation] = [.rich, .raw]
+    /// What the writer can pick, in the web's `MODE_RING` order. Preview is not
+    /// a choice: it is what a read-only document gets, whatever is stored.
+    static let choices: [Presentation] = [.rich, .raw, .vim]
 
     /// The stored raw value as a choice. Absent, unknown or unpickable → rich.
     static func choice(from stored: String?) -> Presentation {

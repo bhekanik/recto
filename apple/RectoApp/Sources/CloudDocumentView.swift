@@ -102,6 +102,7 @@ struct CloudDocumentView: View {
                     storage: model.storage,
                     settings: settings,
                     theme: styler.theme,
+                    vimController: vim.controller,
                     onSelect: choose
                 ) {
                     SyncStateLabel(state: model.state.syncState, pendingCount: model.pendingEditCount)

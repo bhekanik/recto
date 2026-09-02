@@ -283,6 +283,26 @@ struct MountedSwapTests {
         return caret.minY < visible.maxY && caret.maxY > visible.minY
     }
 
+    @Test("switching through vim carries the selection like raw does")
+    func vimSwitchCarriesSelection() throws {
+        let storage = RectoTextStorage(documentId: "vim-lens", markdown: "## Section\n\nBody.\n")
+        let (harness, model) = mount(storage, .rich)
+        defer { harness.tearDown() }
+        let textView = try #require(harness.editorTextView)
+        harness.window.makeFirstResponder(textView)
+        let selection = NSRange(location: 12, length: 4)
+        textView.setSelectedRange(selection)
+
+        for presentation in [Presentation.vim, .raw, .vim, .rich] {
+            model.styler = MarkdownStyler(presentation: presentation, theme: .twilight)
+            harness.layout()
+            #expect(textView.string == "## Section\n\nBody.\n", "\(presentation) must not touch the source")
+            #expect(textView.selectedRange() == selection, "\(presentation) dropped the selection")
+            let marker = textView.textStorage?.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
+            #expect(((marker?.pointSize ?? 0) > 1) == presentation.showsSource, "\(presentation) marker")
+        }
+    }
+
     @Test("a caret on screen at the end of a long document stays on screen across rich → raw → rich",
           arguments: [false, true])
     func presentationSwitchKeepsVisibleCaretOnScreen(frontmatter: Bool) throws {
@@ -298,7 +318,7 @@ struct MountedSwapTests {
         #expect(caretIsOnScreen(storage), "precondition: the caret is on screen before the switch")
         let before = textView.visibleRect.minY
 
-        for presentation in [Presentation.raw, .rich] {
+        for presentation in [Presentation.raw, .vim, .rich] {
             model.styler = MarkdownStyler(presentation: presentation, theme: .twilight)
             harness.layout()
             #expect(textView.selectedRange() == end)

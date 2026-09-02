@@ -85,6 +85,7 @@ struct EditorHostView: View {
                     storage: storage,
                     settings: settings,
                     theme: styler.theme,
+                    vimController: vim.controller,
                     onSelect: choose
                 )
             }

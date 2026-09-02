@@ -35,6 +35,7 @@
 		885D94683237079208EDA687 /* PaletteModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76EE13261BC8A4CB8A758876 /* PaletteModel.swift */; };
 		8C67170EE9A465BCAA518CC2 /* CloudDocumentModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8589138DCF2864A8EC5C41C9 /* CloudDocumentModel.swift */; };
 		94CE851A6BF9F407B0C2ED90 /* RootForegroundInterleavingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCEBFE1A5165F1BE37FD346D /* RootForegroundInterleavingTests.swift */; };
+		9A0126F78D54CBD645461F94 /* VimPresentationHostTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59B4F0B273ADA1DDC96FDDD0 /* VimPresentationHostTests.swift */; };
 		A69E275C753052A3B33B0261 /* MarkdownHandlerSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26EF72694687925314503054 /* MarkdownHandlerSettings.swift */; };
 		AC93C5BC994BDE1833BC6478 /* CommandRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81CED2C605817E35E510AFCB /* CommandRegistry.swift */; };
 		AF3C02D0F992E368A1F8B5BA /* EmailSignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06F1089147A9513D2B76ABDE /* EmailSignInView.swift */; };
@@ -87,6 +88,7 @@
 		4CE28505252B3B9A09DBBDA7 /* Recto.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Recto.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		526C9D721D8D013900C03100 /* TopFormatToolbar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopFormatToolbar.swift; sourceTree = "<group>"; };
 		584B9D617349E093DAD17A7F /* CommandPaletteController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandPaletteController.swift; sourceTree = "<group>"; };
+		59B4F0B273ADA1DDC96FDDD0 /* VimPresentationHostTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VimPresentationHostTests.swift; sourceTree = "<group>"; };
 		5A9B27E0E9570FB896924145 /* MarkdownHandlerSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownHandlerSettingsTests.swift; sourceTree = "<group>"; };
 		5EF8528C9DE808904C45C672 /* VimHistoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VimHistoryTests.swift; sourceTree = "<group>"; };
 		65710FD2CFB1ED4E06D82FE9 /* r-mono.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "r-mono.png"; sourceTree = "<group>"; };
@@ -260,6 +262,7 @@
 				2E1ECC25183D46D1E47201DE /* StudioSettingsTests.swift */,
 				081000DF06421E2AB99C4D14 /* TopFormatToolbarTests.swift */,
 				5EF8528C9DE808904C45C672 /* VimHistoryTests.swift */,
+				59B4F0B273ADA1DDC96FDDD0 /* VimPresentationHostTests.swift */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -389,6 +392,7 @@
 				CA5CE73AF6951C8A1C0A9874 /* StudioSettingsTests.swift in Sources */,
 				3A33650ED0EDD6B6845B4946 /* TopFormatToolbarTests.swift in Sources */,
 				BD0BB267D3FA29633D32B897 /* VimHistoryTests.swift in Sources */,
+				9A0126F78D54CBD645461F94 /* VimPresentationHostTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
