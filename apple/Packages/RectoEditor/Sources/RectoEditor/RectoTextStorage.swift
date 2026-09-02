@@ -217,7 +217,7 @@ public final class RectoTextStorage {
         return Self.hasSameUTF16(editorText, markdown)
     }
 
-    private static func hasSameUTF16(_ lhs: String, _ rhs: String) -> Bool {
+    static func hasSameUTF16(_ lhs: String, _ rhs: String) -> Bool {
         (lhs as NSString).isEqual(to: rhs)
     }
 

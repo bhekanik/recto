@@ -14,6 +14,8 @@ packages:
     path: ../Packages/RectoAuth
   RectoCore:
     path: ../Packages/RectoCore
+  RectoCoreJS:
+    path: ../Packages/RectoCoreJS
   RectoEditor:
     path: ../Packages/RectoEditor
   RectoHistory:
@@ -43,6 +45,7 @@ targets:
     dependencies:
       - package: RectoAuth
       - package: RectoCore
+      - package: RectoCoreJS
       - package: RectoEditor
       - package: RectoHistory
       - package: RectoStore

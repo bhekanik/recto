@@ -14,7 +14,7 @@ import Foundation
 public enum WordCount {
     /// Words in the prose of `markdown` — markdown syntax, code and URLs excluded.
     public static func count(_ markdown: String) -> Int {
-        countPlainText(MarkdownProse.extract(from: markdown))
+        countPlainText(utf16: MarkdownProse.extractUTF16(from: markdown))
     }
 
     /// Words in already-plain text: collapse whitespace, ignore empty tokens.
@@ -27,6 +27,22 @@ public enum WordCount {
         var inWord = false
         for scalar in text.unicodeScalars {
             if MarkdownProse.isJSWhitespace(scalar) {
+                inWord = false
+            } else if !inWord {
+                inWord = true
+                words += 1
+            }
+        }
+        return words
+    }
+
+    /// `countPlainText(_:)` over UTF-16 units. Every JS whitespace scalar is in
+    /// the BMP, so a surrogate half is never whitespace and the two agree.
+    static func countPlainText(utf16 units: [UInt16]) -> Int {
+        var words = 0
+        var inWord = false
+        for unit in units {
+            if let scalar = UnicodeScalar(UInt32(unit)), MarkdownProse.isJSWhitespace(scalar) {
                 inWord = false
             } else if !inWord {
                 inWord = true

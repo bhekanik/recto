@@ -14,6 +14,23 @@ extension MarkdownProse {
         }
 
         func run() -> (prose: String, headings: [OutlineHeading], firstParagraph: String?) {
+            let result = scan()
+            return (
+                String(decoding: result.prose, as: UTF16.self),
+                result.headings,
+                result.firstParagraph.map { String(decoding: $0, as: UTF16.self) }
+            )
+        }
+
+        /// The prose as UTF-16 units, for callers that only scan it. Transcoding
+        /// the buffer to `String` was a third of a whole-document word count.
+        func proseUTF16() -> [UInt16] {
+            scan().prose
+        }
+
+        /// Two passes: reference and footnote definitions must be known before
+        /// the inline scan can tell `[foo]` the link from `[foo]` the text.
+        private func scan() -> BlockResult {
             var definitionScanner = BlockScanner(
                 source: source, lines: lines, definitionLabels: [], footnoteDefinitionLabels: [])
             let definitions = definitionScanner.run(allowsFrontmatter: true)
@@ -21,12 +38,7 @@ extension MarkdownProse {
                 source: source, lines: lines,
                 definitionLabels: definitions.definitionLabels,
                 footnoteDefinitionLabels: definitions.footnoteDefinitionLabels)
-            let result = scanner.run(allowsFrontmatter: true)
-            return (
-                String(decoding: result.prose, as: UTF16.self),
-                result.headings,
-                result.firstParagraph.map { String(decoding: $0, as: UTF16.self) }
-            )
+            return scanner.run(allowsFrontmatter: true)
         }
 
         /// Splits physical lines without losing their original line endings.

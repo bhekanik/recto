@@ -59,6 +59,11 @@ enum MarkdownProse {
         Walker(markdown: markdown).run().prose
     }
 
+    /// `extract(from:)` as UTF-16 units, without the `String` round trip.
+    static func extractUTF16(from markdown: String) -> [UInt16] {
+        Walker(markdown: markdown).proseUTF16()
+    }
+
     static func firstParagraph(in markdown: String) -> String? {
         Walker(markdown: markdown).run().firstParagraph
     }

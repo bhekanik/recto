@@ -7,6 +7,10 @@ struct EditorHostView: View {
     @State private var storage: RectoTextStorage
     @StateObject private var history: DocumentUndoHistory
     @State private var writingController = RectoWritingController()
+    @AppStorage(PresentationPreference.key) private var storedPresentation: String?
+    /// This window's lens. `nil` until it appears, when it takes the stored
+    /// default; after that only the writer's own choice moves it.
+    @State private var chosenPresentation: Presentation?
     private let isEditable: Bool
 
     init(document: Binding<RectoDocument>, isEditable: Bool) {
@@ -31,21 +35,46 @@ struct EditorHostView: View {
         ))
     }
 
-    var body: some View {
-        RectoEditorView(
-            storage: storage,
-            styler: MarkdownStyler(
-                presentation: isEditable ? .rich : .preview,
-                theme: .twilight,
-                undo: .external
-            ),
-            placeholder: "Start writing…",
-            onEdit: history.accept,
-            writingController: writingController
+    private var presentation: Presentation {
+        PresentationPreference.presentation(
+            chosen: chosenPresentation,
+            stored: storedPresentation,
+            isEditable: isEditable
         )
-        .frame(minWidth: 720, minHeight: 540)
-        .background(WritingControlsHost(controller: writingController))
+    }
+
+    private var styler: MarkdownStyler {
+        MarkdownStyler(presentation: presentation, theme: .twilight, undo: .external)
+    }
+
+    private func choose(_ presentation: Presentation) {
+        chosenPresentation = presentation
+        storedPresentation = presentation.rawValue
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            RectoEditorView(
+                storage: storage,
+                styler: styler,
+                placeholder: "Start writing…",
+                onEdit: history.accept,
+                writingController: writingController
+            )
+            .frame(minWidth: 720, minHeight: 540)
+            .background(WritingControlsHost(controller: writingController))
+            EditorStatusBar(
+                presentation: styler.presentation,
+                isEditable: isEditable,
+                storage: storage,
+                theme: styler.theme,
+                onSelect: choose
+            )
+        }
         .onAppear {
+            if chosenPresentation == nil {
+                chosenPresentation = PresentationPreference.choice(from: storedPresentation)
+            }
             history.attach(authoritativeMarkdown: document.markdown)
         }
         .onDisappear {
