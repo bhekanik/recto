@@ -117,47 +117,84 @@ struct StylerTests {
         #expect(dark != light)
     }
 
-    @Test("an unknown fenced language falls back without changing Unicode")
-    func unknownCodeLanguageFallsBack() throws {
-        let code = "const emoji = \"😀\""
+    @Test("an unknown fenced language stays plain")
+    func unknownCodeLanguageStaysPlain() {
         let highlighter = MarkdownStyler()
             .engineConfiguration().services.syntaxHighlighter
-        let highlighted = try #require(
-            highlighter.highlight(code: code, language: "not-a-real-language")
-        )
 
-        #expect(highlighted.string == code)
-        #expect(highlighted.length == (code as NSString).length)
+        #expect(highlighter.highlight(
+            code: "const emoji = \"😀\"",
+            language: "not-a-real-language"
+        ) == nil)
+    }
+
+    @Test("a fence without a language stays plain instead of guessing a grammar")
+    func bareFenceStaysPlain() {
+        let code = "2026-09-02 INFO server started\n$ bun test\n160 tests passed\n"
+        let highlighter = MarkdownStyler()
+            .engineConfiguration().services.syntaxHighlighter
+
+        #expect(highlighter.highlight(code: code, language: nil) == nil)
+        #expect(highlighter.highlight(code: code, language: "") == nil)
+        #expect(highlighter.highlight(code: code, language: "   ") == nil)
+    }
+
+    @Test("only the first word of the info string names the language")
+    func infoStringAttributesAreIgnored() throws {
+        let code = "let answer = 42"
+        let highlighter = MarkdownStyler()
+            .engineConfiguration().services.syntaxHighlighter
+        let plain = try #require(highlighter.highlight(code: code, language: "swift"))
+
+        for infoString in ["swift {.numberLines}", "swift title=\"a\"", "  Swift  ", "swift\tstartFrom=3"] {
+            let highlighted = try #require(highlighter.highlight(code: code, language: infoString))
+            #expect(highlighted.isEqual(to: plain), "\(infoString.debugDescription)")
+        }
+        #expect(highlighter.highlight(code: code, language: "{.numberLines} swift") == nil)
+    }
+
+    @Test("Highlight.js aliases highlight even though the language list omits them")
+    func languageAliasesHighlight() throws {
+        let highlighter = MarkdownStyler()
+            .engineConfiguration().services.syntaxHighlighter
+        for alias in ["js", "py", "sh", "ts", "yml", "c++", "objc"] {
+            let highlighted = try #require(
+                highlighter.highlight(code: "x = 1 // note", language: alias), "\(alias)"
+            )
+            #expect(highlighted.string == "x = 1 // note")
+        }
     }
 
     @Test("code-highlight cache keys cannot collide across language and source")
     func codeHighlightCacheKeyIsUnambiguous() throws {
         let highlighter = MarkdownStyler()
             .engineConfiguration().services.syntaxHighlighter
-        let first = try #require(highlighter.highlight(code: "b", language: "x|a"))
-        let second = try #require(highlighter.highlight(code: "a|b", language: "x"))
+        // "# hello" is a comment in Python and a heading in Markdown.
+        let python = try #require(highlighter.highlight(code: "# hello\nx = 1\n", language: "python"))
+        let markdown = try #require(highlighter.highlight(code: "# hello\nx = 1\n", language: "markdown"))
 
-        #expect(first.string == "b")
-        #expect(second.string == "a|b")
+        #expect(!python.isEqual(to: markdown))
     }
 
-    @Test("huge and many unknown language tags fall back without changing text")
-    func adversarialLanguageTagsStayBounded() throws {
+    @Test("huge and many unknown language tags stay plain")
+    func adversarialLanguageTagsStayBounded() {
         let code = "let emoji = \"😀\""
         let highlighter = MarkdownStyler()
             .engineConfiguration().services.syntaxHighlighter
-        let huge = try #require(highlighter.highlight(
+        #expect(highlighter.highlight(
             code: code,
             language: String(repeating: "x", count: 1_000_000)
-        ))
-        #expect(huge.string == code)
+        ) == nil)
+        #expect(highlighter.highlight(
+            code: code,
+            language: "swift " + String(repeating: "x", count: 1_000_000)
+        ) != nil)
 
         for index in 0..<300 {
-            let highlighted = try #require(highlighter.highlight(
+            #expect(highlighter.highlight(
                 code: "\(code) // \(index)",
                 language: "unknown-\(index)"
-            ))
-            #expect(highlighted.string == "\(code) // \(index)")
+            ) == nil)
         }
     }
 

@@ -114,6 +114,17 @@ struct PerfTests {
         #expect(percentile(samples, 0.5) < Self.typingBudgetMilliseconds)
     }
 
+    @Test("typing inside a fence with no language meets the typing budget")
+    func bareFenceTypingBudget() {
+        // The commonest fence people type. Auto-detection here ran every
+        // grammar per keystroke: measured 116 ms p50 at this length.
+        let lines = (0..<50).map { "let value\($0) = \"line \($0)\"" }
+        let document = "```\n\(lines.joined(separator: "\n"))\n```\n"
+        let samples = typingSamples(in: document, anchor: "value25")
+        report("typing, bare fence", samples)
+        #expect(percentile(samples, 0.5) < Self.typingBudgetMilliseconds)
+    }
+
     @Test("typing inside a large plain code block meets the typing budget")
     func largeCodeTypingBudget() {
         let lines = (0..<300).map { "let value\($0) = \"line \($0)\"" }

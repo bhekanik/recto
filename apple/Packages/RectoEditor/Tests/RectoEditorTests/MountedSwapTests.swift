@@ -278,34 +278,36 @@ struct MountedSwapTests {
         #expect(light != dark)
     }
 
-    @Test("effective appearance changes replace code token colours")
-    func effectiveAppearanceRestylesCode() throws {
+    @Test("a window appearance flip is not a restyle; the theme decides light or dark")
+    func windowAppearanceDoesNotRestyleCode() throws {
         let storage = RectoTextStorage(
             documentId: "appearance",
             markdown: "```swift\nlet answer = 42\n```\n"
         )
         let (harness, model) = mount(storage)
         defer { harness.tearDown() }
-        var dynamicTheme = RectoEditorTheme.twilight
-        dynamicTheme.sheet = .textBackgroundColor
-        dynamicTheme.raised = .windowBackgroundColor
-        model.styler = MarkdownStyler(theme: dynamicTheme)
-        harness.layout()
+        #expect(model.styler.engineConfiguration().services.syntaxHighlighter
+            .appearanceDidChangeNotification == nil)
         let textView = try #require(harness.editorTextView)
         let token = (textView.string as NSString).range(of: "answer").location
-        let dark = try #require(
+        let before = try #require(
             textView.textStorage?.attribute(.foregroundColor, at: token, effectiveRange: nil)
                 as? NSColor
         )
+        var restyles = 0
+        let observer = NotificationCenter.default.addObserver(
+            forName: NSTextStorage.didProcessEditingNotification,
+            object: textView.textStorage, queue: nil
+        ) { _ in restyles += 1 }
+        defer { NotificationCenter.default.removeObserver(observer) }
 
         harness.window.appearance = NSAppearance(named: .aqua)
         harness.layout()
 
-        let light = try #require(
-            textView.textStorage?.attribute(.foregroundColor, at: token, effectiveRange: nil)
-                as? NSColor
-        )
-        #expect(light != dark)
+        let after = textView.textStorage?
+            .attribute(.foregroundColor, at: token, effectiveRange: nil) as? NSColor
+        #expect(after == before)
+        #expect(restyles == 0, "an appearance flip restyled the document \(restyles) time(s)")
     }
 
     @Test("code-block selections follow mounted document switches")
