@@ -90,6 +90,7 @@ struct EditorHostView: View {
             history.attach(authoritativeMarkdown: document.markdown)
             chrome.undo = { [history] in history.undoManager.undo() }
             chrome.redo = { [history] in history.undoManager.redo() }
+            chrome.choosePresentation = choose
         }
         .onDisappear {
             history.detach()

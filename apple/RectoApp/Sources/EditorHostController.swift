@@ -14,10 +14,15 @@ final class EditorHostController {
     /// the cloud document through its session.
     var undo: () -> Void = {}
     var redo: () -> Void = {}
+    /// Set by the host: the lens is this window's own, so a mode switch from
+    /// the palette lands on the window it was pressed in.
+    var choosePresentation: (Presentation) -> Void = { _ in }
     private(set) var seam: RectoTextView?
+    private let registry: EditorHostRegistry
 
-    init(settings: StudioSettings) {
+    init(settings: StudioSettings, registry: EditorHostRegistry = .shared) {
         self.settings = settings
+        self.registry = registry
         typewriter = RectoTypewriterController(isEnabled: settings.typewriter)
     }
 
@@ -27,7 +32,16 @@ final class EditorHostController {
         find.attach(to: seam)
         typewriter.attach(to: seam)
         applySettings()
+        if seam == nil { registry.remove(self) } else { registry.add(self) }
     }
+
+    /// The window this editor is on screen in, while it is.
+    var window: NSWindow? { seam?.nsTextView?.window }
+
+    /// The document as the editor holds it. Markers are hidden by font size,
+    /// not removed, so the view's string is the Markdown source in every
+    /// presentation.
+    var markdown: String? { seam?.text }
 
     /// Push the settings that reach into the live text view. Run on attach and
     /// whenever spellcheck or typewriter change.
@@ -72,5 +86,28 @@ final class EditorHostController {
             ? .showReplaceInterface
             : .showFindInterface
         find.performTextFinderAction(action)
+    }
+}
+
+/// The editors currently on screen, so an app-wide surface (the command
+/// palette) can find the one in a given window. Weak: a host that goes away
+/// without detaching costs nothing.
+@MainActor
+final class EditorHostRegistry {
+    static let shared = EditorHostRegistry()
+
+    private let controllers = NSHashTable<EditorHostController>.weakObjects()
+
+    func add(_ controller: EditorHostController) {
+        controllers.add(controller)
+    }
+
+    func remove(_ controller: EditorHostController) {
+        controllers.remove(controller)
+    }
+
+    func controller(in window: NSWindow?) -> EditorHostController? {
+        guard let window else { return nil }
+        return controllers.allObjects.first { $0.window === window }
     }
 }

@@ -107,6 +107,7 @@ struct CloudDocumentView: View {
         .onAppear {
             chrome.undo = { [model] in Task { await model.undo() } }
             chrome.redo = { [model] in Task { await model.redo() } }
+            chrome.choosePresentation = choose
         }
         .onChange(of: settings.spellcheck) { chrome.applySettings() }
         .onChange(of: settings.typewriter) { chrome.applySettings() }
