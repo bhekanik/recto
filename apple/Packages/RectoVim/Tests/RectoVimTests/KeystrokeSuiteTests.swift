@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 
+import RectoVimFixtures
 @testable import RectoVim
 
 /// The whole keystroke suite, driven through `JSContext` exactly as `keyDown`

@@ -3,6 +3,7 @@ import AppKit
 import Foundation
 import Testing
 
+import RectoVimFixtures
 @testable import RectoVim
 
 /// The same suite again, but driven through a real `NSTextView`.

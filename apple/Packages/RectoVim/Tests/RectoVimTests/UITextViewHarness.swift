@@ -2,6 +2,7 @@
 import Foundation
 import UIKit
 
+import RectoVimFixtures
 @testable import RectoVim
 
 /// A `UITextView` in a key window, wired to an engine over the built bundle.

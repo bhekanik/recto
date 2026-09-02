@@ -3,6 +3,7 @@ import AppKit
 import Foundation
 import Testing
 
+import RectoVimFixtures
 @testable import RectoVim
 
 /// Per-key latency against plan 023 §1.4's < 2 ms budget.
