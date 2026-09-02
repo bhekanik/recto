@@ -18,12 +18,15 @@ let package = Package(
     dependencies: [
         .package(
             url: "https://github.com/bhekanik/swift-markdown-engine",
-            revision: "a24901182d658590f83af337e768326e7f0ac923"
+            revision: "82712598323a3529dc446171ad60768fa7416c3b"
         ),
         .package(
             url: "https://github.com/smittytone/HighlighterSwift",
             exact: "3.1.0"
         ),
+        // The vim engine (JavaScriptCore) and its host protocols. The `.vim`
+        // presentation is raw rendering plus its key interception.
+        .package(path: "../RectoVim"),
     ],
     targets: [
         .target(
@@ -31,6 +34,7 @@ let package = Package(
             dependencies: [
                 .product(name: "MarkdownEngine", package: "swift-markdown-engine"),
                 .product(name: "Highlighter", package: "HighlighterSwift"),
+                .product(name: "RectoVim", package: "RectoVim"),
             ],
             resources: [.process("Resources")],
             swiftSettings: [
@@ -42,7 +46,10 @@ let package = Package(
         ),
         .testTarget(
             name: "RectoEditorTests",
-            dependencies: ["RectoEditor"],
+            dependencies: [
+                "RectoEditor",
+                .product(name: "RectoVimFixtures", package: "RectoVim"),
+            ],
             resources: [.copy("Corpus"), .copy("Snapshots")],
             swiftSettings: [
                 .defaultIsolation(MainActor.self),

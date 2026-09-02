@@ -7,9 +7,6 @@ import Foundation
 
 /// How one document is shown. The text storage is the same in every case —
 /// only what the reader sees changes.
-///
-/// `.vim` is deliberately absent: the modal layer is a key-handling shell over
-/// `.raw` and lands after the N0c JavaScriptCore spike reports.
 public enum Presentation: String, Sendable, CaseIterable, Codable {
     /// Markdown rendered in place: markers hidden except on the block or
     /// inline run the caret is in, prose type scale, drawn bullets and task
@@ -25,10 +22,15 @@ public enum Presentation: String, Sendable, CaseIterable, Codable {
     /// regardless of where the selection is. Selection and copy still work.
     case preview
 
+    /// `raw` with vim's modal key layer in front of the text view: normal,
+    /// insert and visual modes over the Markdown source, driven by
+    /// `RectoVimController`. Rendering is identical to `raw`.
+    case vim
+
     /// Whether the reader can type into this presentation.
     public var isEditable: Bool {
         switch self {
-        case .rich, .raw: return true
+        case .rich, .raw, .vim: return true
         case .preview: return false
         }
     }
@@ -37,7 +39,10 @@ public enum Presentation: String, Sendable, CaseIterable, Codable {
     public var usesProseScale: Bool {
         switch self {
         case .rich, .preview: return true
-        case .raw: return false
+        case .raw, .vim: return false
         }
     }
+
+    /// Whether the reader sees the Markdown source rather than a rendering of it.
+    public var showsSource: Bool { !usesProseScale }
 }

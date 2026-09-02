@@ -327,6 +327,7 @@ private extension Presentation {
         switch self {
         case .rich: "Rich text"
         case .raw: "Raw Markdown"
+        case .vim: "Vim"
         case .preview: "Preview"
         }
     }
@@ -336,16 +337,18 @@ private extension Presentation {
         switch self {
         case .rich: "textformat"
         case .raw: "chevron.left.forwardslash.chevron.right"
+        case .vim: "keyboard"
         case .preview: "eye"
         }
     }
 
     /// Recto's mode chords are Ctrl+Shift everywhere (blueprint §2.1, web
-    /// keymap) so the bare letters stay free for Vim.
+    /// keymap `lib/keyboard/actions.ts`) so the bare letters stay free for Vim.
     var shortcut: KeyboardShortcut? {
         switch self {
         case .rich: KeyboardShortcut("r", modifiers: [.control, .shift])
         case .raw: KeyboardShortcut("m", modifiers: [.control, .shift])
+        case .vim: KeyboardShortcut("v", modifiers: [.control, .shift])
         case .preview: nil
         }
     }
@@ -355,6 +358,7 @@ private extension Presentation {
         switch self {
         case .rich: "Rich text (⌃⇧R)"
         case .raw: "Raw Markdown (⌃⇧M)"
+        case .vim: "Vim (⌃⇧V)"
         case .preview: "Preview"
         }
     }

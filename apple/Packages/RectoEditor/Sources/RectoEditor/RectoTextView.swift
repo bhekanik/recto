@@ -142,6 +142,21 @@ public struct RectoTextView {
         return rect
     }
 
+    /// Bring the editor to `text` through the engine's own edit path: one
+    /// patch for the changed run, caret transformed through it, one `onEdit`.
+    /// Never assigns `NSTextView.string`.
+    @discardableResult
+    public func applyText(_ text: String) -> Bool {
+        controller.applyText(text)
+    }
+
+    /// How the insertion point is drawn. A modal key layer sets `.block` for
+    /// normal mode and `.bar` for insert mode.
+    public var caretShape: MarkdownCaretShape {
+        get { controller.caretShape }
+        nonmutating set { controller.caretShape = newValue }
+    }
+
     func installTextFinderResponder(_ responder: any MarkdownTextFinderActionResponder) {
         controller.textFinderActionResponder = responder
     }
@@ -149,6 +164,15 @@ public struct RectoTextView {
     func removeTextFinderResponder(_ responder: any MarkdownTextFinderActionResponder) {
         guard controller.textFinderActionResponder === responder else { return }
         controller.textFinderActionResponder = nil
+    }
+
+    func installKeyInterceptor(_ interceptor: any MarkdownKeyInterceptor) {
+        controller.keyInterceptor = interceptor
+    }
+
+    func removeKeyInterceptor(_ interceptor: any MarkdownKeyInterceptor) {
+        guard controller.keyInterceptor === interceptor else { return }
+        controller.keyInterceptor = nil
     }
 
     func rects(forSourceRange range: NSRange) -> [CGRect] {
