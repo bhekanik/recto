@@ -390,6 +390,45 @@ struct VimPresentationTests {
         #expect(mounted.storage.markdown == "xabc\n", "with vim gone, x is a letter again")
     }
 
+    // MARK: - Declined chords
+
+    @Test("insert-mode chords vim declines do not fall into AppKit's editing commands", arguments: [
+        ("<C-h>", "one two\nabove line foo ba\n"),
+        ("<C-k>", "one two\nabove line foo bar\n"),
+        ("<C-y>", "one two\nabove line foo bar\n"),
+    ])
+    func declinedInsertChords(chord: String, expected: String) throws {
+        // <C-h> is Backspace in vim; <C-k> starts a digraph and <C-y> copies
+        // from the line above, neither of which upstream implements. AppKit
+        // would have run deleteBackward:, deleteToEndOfParagraph: and yank:
+        // (the Emacs kill ring), and the resulting edit dropped vim to normal.
+        let mounted = try mount("one two\nabove line\n")
+        defer { mounted.harness.tearDown() }
+        mounted.textView.setSelectedRange(NSRange(location: 0, length: 0))
+
+        try mounted.press("jA foo bar" + chord)
+
+        #expect(mounted.storage.markdown == expected, "\(chord): \(describe(mounted.storage.markdown))")
+        #expect(mounted.vim.status?.mode == "insert", "\(chord) must leave insert mode alone")
+        #expect(mounted.mirrorMatchesStorage())
+        #expect(mounted.history.groupOpen, "\(chord) must not end the undo block")
+    }
+
+    @Test("Tab in normal and visual mode edits nothing")
+    func tabOutsideInsertIsInert() throws {
+        let mounted = try mount("one\ntwo\n")
+        defer { mounted.harness.tearDown() }
+        mounted.textView.setSelectedRange(NSRange(location: 0, length: 0))
+
+        try mounted.press("<Tab>")
+        #expect(mounted.storage.markdown == "one\ntwo\n")
+        try mounted.press("v<Tab><Esc>")
+        #expect(mounted.storage.markdown == "one\ntwo\n")
+        try mounted.press("i<Tab><Esc>")
+        #expect(mounted.storage.markdown == "\tone\ntwo\n", "insert mode still types a tab")
+        #expect(mounted.mirrorMatchesStorage())
+    }
+
     // MARK: - External changes
 
     @Test("an external storage change is adopted without echoing back")

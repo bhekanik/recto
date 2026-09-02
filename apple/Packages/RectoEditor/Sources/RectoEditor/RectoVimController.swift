@@ -381,12 +381,54 @@ extension RectoVimController: MarkdownKeyInterceptor {
         }
     }
 
+    /// `NSResponder` actions that would edit the text.
+    ///
+    /// What reaches here is a key vim declined. For a caret move that is what
+    /// vim wants: AppKit moves, and the selection comes back through
+    /// `moveCursorFromHost`. For an edit it is not: `<C-k>` is a digraph prefix
+    /// in vim and `deleteToEndOfParagraph:` in AppKit, `<C-y>` copies from the
+    /// line above and `yank:` pastes the Emacs kill ring, Tab in normal mode
+    /// is a jump and `insertTab:` types one. Any of those landing in the
+    /// storage came back as an outside edit and dropped vim to normal mode.
+    private static let editingSelectors: Set<Selector> = [
+        #selector(NSResponder.deleteForward(_:)),
+        #selector(NSResponder.deleteWordBackward(_:)),
+        #selector(NSResponder.deleteWordForward(_:)),
+        #selector(NSResponder.deleteToBeginningOfLine(_:)),
+        #selector(NSResponder.deleteToEndOfLine(_:)),
+        #selector(NSResponder.deleteToBeginningOfParagraph(_:)),
+        #selector(NSResponder.deleteToEndOfParagraph(_:)),
+        #selector(NSResponder.deleteBackwardByDecomposingPreviousCharacter(_:)),
+        #selector(NSResponder.yank(_:)),
+        #selector(NSResponder.transpose(_:)),
+        #selector(NSResponder.transposeWords(_:)),
+        #selector(NSResponder.uppercaseWord(_:)),
+        #selector(NSResponder.lowercaseWord(_:)),
+        #selector(NSResponder.capitalizeWord(_:)),
+        #selector(NSResponder.insertTab(_:)),
+        #selector(NSResponder.insertBacktab(_:)),
+        #selector(NSResponder.insertLineBreak(_:)),
+        #selector(NSResponder.insertParagraphSeparator(_:)),
+        #selector(NSResponder.insertContainerBreak(_:)),
+        #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)),
+        #selector(NSResponder.complete(_:)),
+        #selector(NSResponder.indent(_:)),
+    ]
+
     public func interceptCommand(_ selector: Selector, in textView: NSTextView) -> Bool {
-        // Every key vim wants is taken in `interceptKeyDown`; what reaches here
-        // is what it declined (arrow keys in insert mode, unbound chords), and
-        // AppKit's handling of those is what vim expects — the resulting
-        // selection change comes back through `moveCursorFromHost`.
-        false
+        guard let engine, textView === self.textView else { return false }
+        // `<C-h>` is Backspace in vim; AppKit spells it deleteBackward:.
+        if selector == #selector(NSResponder.deleteBackward(_:)) {
+            do {
+                let result = try engine.handleKey("Backspace")
+                try apply(result)
+                return result.handled
+            } catch {
+                Self.log.error("deleteBackward failed: \(String(describing: error), privacy: .public)")
+                return false
+            }
+        }
+        return Self.editingSelectors.contains(selector)
     }
 }
 
