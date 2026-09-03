@@ -48,6 +48,7 @@
 		C6E25DBA4B7F8A25D2C0A230 /* CloudLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0312E63D64B606C069224BD2 /* CloudLibraryView.swift */; };
 		CA5CE73AF6951C8A1C0A9874 /* StudioSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E1ECC25183D46D1E47201DE /* StudioSettingsTests.swift */; };
 		D0CB31577F7324EF57F36DB5 /* EditorStatusBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 667B77000492C546D56B2307 /* EditorStatusBar.swift */; };
+		D55F86FAC4D81DFAFF619FBE /* VimUndoRegimeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD732FDE9A42768F4D278301 /* VimUndoRegimeTests.swift */; };
 		D8373D06A45E37210DF0F78A /* PresentationPreference.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DFB77EE2FCD168B679A47D4 /* PresentationPreference.swift */; };
 		E02A3B1FE8A01024A31CBDC5 /* WritingControlsHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = C23DDE416656399FB4E41FEF /* WritingControlsHost.swift */; };
 		E2C8A1EB9E80686B323D0A61 /* AppConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E9FB961CB61B80D498AC7F0 /* AppConfiguration.swift */; };
@@ -118,6 +119,7 @@
 		C23DDE416656399FB4E41FEF /* WritingControlsHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WritingControlsHost.swift; sourceTree = "<group>"; };
 		C392C824BA3377AB65598207 /* ApplicationModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplicationModelTests.swift; sourceTree = "<group>"; };
 		C81BEB51E9CAED45132B82D2 /* RectoStore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = RectoStore; path = ../Packages/RectoStore; sourceTree = SOURCE_ROOT; };
+		CD732FDE9A42768F4D278301 /* VimUndoRegimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VimUndoRegimeTests.swift; sourceTree = "<group>"; };
 		D09B8E4F436878C6794F11AB /* ReadingTime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingTime.swift; sourceTree = "<group>"; };
 		DA53218E8DA7B61CDFDC0AE8 /* RectoSync */ = {isa = PBXFileReference; lastKnownFileType = folder; name = RectoSync; path = ../Packages/RectoSync; sourceTree = SOURCE_ROOT; };
 		FC238A1AE201F838C026FB1E /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
@@ -263,6 +265,7 @@
 				081000DF06421E2AB99C4D14 /* TopFormatToolbarTests.swift */,
 				5EF8528C9DE808904C45C672 /* VimHistoryTests.swift */,
 				59B4F0B273ADA1DDC96FDDD0 /* VimPresentationHostTests.swift */,
+				CD732FDE9A42768F4D278301 /* VimUndoRegimeTests.swift */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -393,6 +396,7 @@
 				3A33650ED0EDD6B6845B4946 /* TopFormatToolbarTests.swift in Sources */,
 				BD0BB267D3FA29633D32B897 /* VimHistoryTests.swift in Sources */,
 				9A0126F78D54CBD645461F94 /* VimPresentationHostTests.swift in Sources */,
+				D55F86FAC4D81DFAFF619FBE /* VimUndoRegimeTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -50,4 +50,33 @@ public protocol RectoEditorHistory: AnyObject {
     /// `abc`, not `c`); a normal-mode command is one `onEdit` already.
     func beginCommandGroup()
     func endCommandGroup()
+
+    /// The host's own Undo/Redo (the Edit menu, the toolbar) doesn't go
+    /// through vim, so it closes an open command group itself — and tells the
+    /// key layer here, before the navigation's storage change lands. The layer
+    /// ends its session bookkeeping (the next edit opens a fresh group) and
+    /// takes the change as mode-preserving: menu Undo mid-insert ends the
+    /// session's undo step but the writer stays in insert.
+    ///
+    /// Set by the key layer when its history is wired up.
+    var onExternalHistoryNavigation: (@MainActor @Sendable () -> Void)? { get set }
+
+    /// Its pair: fired after the navigation's storage changes have landed. The
+    /// popped group's closures post one change each, so the layer keeps taking
+    /// them mode-preserving until this arrives.
+    var onExternalHistoryNavigationEnded: (@MainActor @Sendable () -> Void)? { get set }
+}
+
+extension RectoEditorHistory {
+    /// Hosts that never close a command group out from under vim — the cloud
+    /// document's async session has no groups at all — need no storage.
+    public var onExternalHistoryNavigation: (@MainActor @Sendable () -> Void)? {
+        get { nil }
+        set {}
+    }
+
+    public var onExternalHistoryNavigationEnded: (@MainActor @Sendable () -> Void)? {
+        get { nil }
+        set {}
+    }
 }

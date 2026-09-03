@@ -40,7 +40,16 @@ public final class RectoVimController {
     public private(set) var status: VimStatus?
 
     /// The host's undo. `u`/`<C-r>` do nothing while this is `nil`.
-    @ObservationIgnored public weak var history: (any RectoEditorHistory)?
+    @ObservationIgnored public weak var history: (any RectoEditorHistory)? {
+        didSet {
+            history?.onExternalHistoryNavigation = { [weak self] in
+                self?.hostNavigatedHistory()
+            }
+            history?.onExternalHistoryNavigationEnded = { [weak self] in
+                self?.historyNavigationExpected = false
+            }
+        }
+    }
 
     /// `:w`.
     @ObservationIgnored public var onSave: (() -> Void)?
@@ -68,6 +77,15 @@ public final class RectoVimController {
     @ObservationIgnored private var compositionWasActive = false
     /// An insert session's `beginCommandGroup` is open on the host.
     @ObservationIgnored private var commandGroupIsOpen = false
+    /// The host's own Undo/Redo (menu, toolbar) is landing its changes. Until
+    /// `onExternalHistoryNavigationEnded` fires, `textDidChange` takes each one
+    /// with `adoptText`, not `setText`: the popped group's restore closures
+    /// post one change apiece, and a `setText` mid-way would eject insert mode
+    /// and swallow whatever the writer types next.
+    @ObservationIgnored private var historyNavigationExpected = false
+    /// `attach(to: nil)` is in flight. The selection churn of a presentation
+    /// swap must not reopen a group while the layer comes down.
+    @ObservationIgnored private var detaching = false
 
     private static let log = Logger(subsystem: "com.bhekani.recto", category: "RectoVim")
 
@@ -103,6 +121,7 @@ public final class RectoVimController {
         }
         detach()
         guard let seam, let textView = incoming else { return }
+        detaching = false
         self.seam = seam
         self.textView = textView
         do {
@@ -127,6 +146,7 @@ public final class RectoVimController {
     }
 
     private func detach() {
+        detaching = true
         closeCommandGroup()
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
         observers.removeAll()
@@ -138,6 +158,7 @@ public final class RectoVimController {
         textView = nil
         lastAppliedSelection = nil
         compositionWasActive = false
+        historyNavigationExpected = false
         status = nil
     }
 
@@ -166,6 +187,7 @@ public final class RectoVimController {
         let endedComposition = compositionWasActive && !composing
         compositionWasActive = composing
         let selection = GraphemeClamp.range(in: textView.string as NSString, textView.selectedRange())
+        let isHistoryNavigation = historyNavigationExpected
         do {
             if composing || endedComposition {
                 // Not an external edit: the user is typing, in insert mode, and
@@ -178,8 +200,20 @@ public final class RectoVimController {
                 if composing {
                     status = VimStatus(result: result)
                 } else {
+                    // The commit is the session's first text-affecting result
+                    // when nothing was typed before the composition.
+                    if result.insertMode { openCommandGroup() }
                     try apply(result)
                 }
+            } else if isHistoryNavigation {
+                // The host's Undo/Redo landed. `adoptText` keeps the mode: the
+                // session is over as far as undo goes (the host closed the
+                // group), but the writer is still typing, so the next edit
+                // opens a fresh group instead of running as normal-mode
+                // commands after a `setText` eject.
+                try apply(engine.adoptText(
+                    textView.string, anchor: selection.location, head: NSMaxRange(selection),
+                    composing: false))
             } else {
                 // Whatever command was in progress is over as far as undo goes.
                 closeCommandGroup()
@@ -197,7 +231,16 @@ public final class RectoVimController {
         guard !applyingEdits, !applyingSelection, let engine, let textView else { return }
         // While marked text is up AppKit owns the selection.
         if textView.hasMarkedText() {
-            compositionWasActive = true
+            if !compositionWasActive {
+                // A composition commits straight into the storage, and the
+                // host's undo registration of that commit runs before this
+                // layer's change notification arrives (the engine publishes
+                // first). Opening the session's group here, at the first
+                // marked-text selection, is the only moment early enough for
+                // an IME-first session's first commit to land inside it.
+                compositionWasActive = true
+                openCommandGroup()
+            }
             return
         }
         // On a commit AppKit reports the new selection before the text change,
@@ -242,11 +285,13 @@ public final class RectoVimController {
                 return
             }
         }
-        // The group follows the mode, not the journal: an insert session made
-        // entirely of IME commits carries no edits of its own (`adoptText`),
-        // and leaving insert mode ends the command even on a keystroke that
-        // wrote nothing (`<Esc>` itself).
-        if result.insertMode { openCommandGroup() } else { closeCommandGroup() }
+        // The group opens only at the session's first text-affecting result —
+        // `applyEdits`, an IME commit, a paste through `insertText` — never at
+        // mode entry or on a selection move: an empty host group is still an
+        // undo step, and closing one after an Undo wipes the redo stack. The
+        // close side stays mode-driven: leaving insert ends the command even
+        // when the keystroke wrote nothing (`<Esc>` itself).
+        if !result.insertMode { closeCommandGroup() }
         let before = textView?.selectedRange()
         applySelection(result)
         seam?.caretShape = Self.caretShape(for: VimCaretShape(mode: result.mode))
@@ -352,7 +397,7 @@ public final class RectoVimController {
     // MARK: - Command groups
 
     private func openCommandGroup() {
-        guard !commandGroupIsOpen else { return }
+        guard !commandGroupIsOpen, isAttached, !detaching else { return }
         commandGroupIsOpen = true
         history?.beginCommandGroup()
     }
@@ -361,6 +406,15 @@ public final class RectoVimController {
         guard commandGroupIsOpen else { return }
         commandGroupIsOpen = false
         history?.endCommandGroup()
+    }
+
+    /// The host navigated history itself — Edit ▸ Undo/Redo, the toolbar — and
+    /// closed the session's group out from under vim. End the session this
+    /// side too: the next text-affecting keystroke opens a fresh group, and
+    /// the landing storage change is adopted mode-preserving.
+    private func hostNavigatedHistory() {
+        commandGroupIsOpen = false
+        historyNavigationExpected = true
     }
 }
 

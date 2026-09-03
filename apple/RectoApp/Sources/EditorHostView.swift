@@ -184,15 +184,20 @@ private struct ExactMarkdown: Equatable {
 final class GroupClosingUndoManager: UndoManager {
     /// AppKit drives undo managers on the main thread, so the hook runs there.
     var willNavigate: (@MainActor () -> Void)?
+    /// After `super.undo()/redo()` returns: every `didChange` the navigation
+    /// posted has been delivered (the restore closures run synchronously).
+    var didNavigate: (@MainActor () -> Void)?
 
     override func undo() {
         MainActor.assumeIsolated { willNavigate?() }
         super.undo()
+        MainActor.assumeIsolated { didNavigate?() }
     }
 
     override func redo() {
         MainActor.assumeIsolated { willNavigate?() }
         super.redo()
+        MainActor.assumeIsolated { didNavigate?() }
     }
 }
 
@@ -218,7 +223,18 @@ final class DocumentUndoHistory: ObservableObject, RectoEditorHistory {
             document.wrappedValue = updated
         }
         storage.controller.undoManager = undoManager
-        undoManager.willNavigate = { [unowned self] in endCommandGroup() }
+        undoManager.willNavigate = { [unowned self] in
+            // Menu Undo/Redo closes vim's group from outside; vim keeps its own
+            // flag describing that group, so tell it the session is over before
+            // the navigation's change lands.
+            if openCommandGroup != nil { onExternalHistoryNavigation?() }
+            endCommandGroup()
+        }
+        undoManager.didNavigate = { [unowned self] in
+            // The popped group's closures run one didChange each; only now can
+            // vim stop treating the storage churn as navigation aftermath.
+            onExternalHistoryNavigationEnded?()
+        }
     }
 
     func attach(authoritativeMarkdown: String) {
@@ -254,13 +270,27 @@ final class DocumentUndoHistory: ObservableObject, RectoEditorHistory {
     /// it. Registrations made while undoing or redoing join the manager's own
     /// group for that operation.
     private func registerStep(restoring previous: String, actionName: String) {
-        let ownGroup = openCommandGroup == nil && !undoManager.isUndoing && !undoManager.isRedoing
-        if ownGroup { openGroup() }
+        let navigating = undoManager.isUndoing || undoManager.isRedoing
+        if !navigating {
+            if openCommandGroup != nil {
+                // An open command group materialises at its first edit, not at
+                // `beginCommandGroup`: an empty NSUndoManager group is still an
+                // undo step, and closing one after an Undo wipes the redo
+                // stack, so a bare `i<Esc>` or a cancelled composition must
+                // never reach the manager.
+                if !openCommandGroupMaterialized {
+                    openGroup()
+                    openCommandGroupMaterialized = true
+                }
+            } else {
+                openGroup()
+            }
+        }
         undoManager.registerUndo(withTarget: self) { history in
             history.restore(previous)
         }
         undoManager.setActionName(actionName)
-        if ownGroup { closeGroup() }
+        if !navigating, openCommandGroup == nil { closeGroup() }
     }
 
     func adoptExternal(_ markdown: String) {
@@ -283,10 +313,21 @@ final class DocumentUndoHistory: ObservableObject, RectoEditorHistory {
 
     // MARK: - RectoEditorHistory
 
+    /// Vim's hook: fired when the manager's own navigation (menu Undo/Redo)
+    /// closes an open command group, so the key layer ends the session
+    /// coherently instead of typing on under a stale flag.
+    var onExternalHistoryNavigation: (@MainActor @Sendable () -> Void)?
+    /// Its pair: fired after the navigation's storage changes have landed, so
+    /// the layer stops resyncing mode-preserving once the aftermath is over.
+    var onExternalHistoryNavigationEnded: (@MainActor @Sendable () -> Void)?
+
     /// `groupsByEvent` as it was before the current explicit group opened.
     private var openGroupPreviousGroupsByEvent: Bool?
     /// Set while a vim command group spans keystrokes.
     private var openCommandGroup: Bool?
+    /// Whether the open command group has seen an edit. The NSUndoManager
+    /// group exists only from that first edit on (see `registerStep`).
+    private var openCommandGroupMaterialized = false
     var groupOpen: Bool { openCommandGroup != nil }
 
     /// Event grouping is off only while an explicit group is open: left on,
@@ -334,12 +375,14 @@ final class DocumentUndoHistory: ObservableObject, RectoEditorHistory {
     func beginCommandGroup() {
         guard openCommandGroup == nil else { return }
         openCommandGroup = true
-        openGroup()
+        openCommandGroupMaterialized = false
     }
 
     func endCommandGroup() {
         guard openCommandGroup != nil else { return }
         openCommandGroup = nil
+        guard openCommandGroupMaterialized else { return }
+        openCommandGroupMaterialized = false
         closeGroup()
     }
 }
