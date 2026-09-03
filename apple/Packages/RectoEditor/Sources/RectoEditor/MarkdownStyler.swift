@@ -22,6 +22,10 @@ public struct MarkdownStyler: Sendable, Equatable {
     public var typography: RectoTypography
     /// Width of the centred writing column. `nil` fills the view.
     public var readingWidth: CGFloat?
+    /// Spelling and grammar squiggles. The engine reads this when it builds
+    /// the text view; a later change reaches a live view only through
+    /// `NSTextView`'s own toggles, which the app drives.
+    public var spellChecking: Bool
     /// Who owns undo. Recto's undo tree does, so the engine registers nothing.
     public var undo: UndoPolicy
 
@@ -30,12 +34,14 @@ public struct MarkdownStyler: Sendable, Equatable {
         theme: RectoEditorTheme = .twilight,
         typography: RectoTypography? = nil,
         readingWidth: CGFloat? = 720,
+        spellChecking: Bool = true,
         undo: UndoPolicy = .external
     ) {
         self.presentation = presentation
         self.theme = theme
         self.typography = typography ?? .forPresentation(presentation)
         self.readingWidth = readingWidth
+        self.spellChecking = spellChecking
         self.undo = undo
     }
 
@@ -88,6 +94,12 @@ public struct MarkdownStyler: Sendable, Equatable {
             ),
             textInsets: TextInsets(horizontal: 0, vertical: 32),
             readingWidth: readingWidth,
+            // Autocorrect is left to the OS setting: the web's toggle is the
+            // squiggles, not what gets typed.
+            spellChecking: SpellCheckingPolicy(
+                continuousSpellChecking: spellChecking,
+                grammarChecking: spellChecking
+            ),
             undo: undo,
             rawSourceMode: presentation == .raw,
             // The one construct beyond CommonMark + GFM tables that Recto's

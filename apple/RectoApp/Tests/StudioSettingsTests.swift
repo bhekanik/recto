@@ -1,0 +1,206 @@
+import AppKit
+import RectoEditor
+import Synchronization
+import Testing
+@testable import Recto
+
+@Suite("Studio settings", .serialized)
+@MainActor
+struct StudioSettingsTests {
+    /// The test host is the real app; its standard defaults hold the
+    /// developer's own settings. Every test reads an emptied suite instead.
+    private static let scratchSuite = "com.bhekani.recto.tests.studio-settings"
+    private let scratch: UserDefaults
+
+    init() throws {
+        scratch = try #require(UserDefaults(suiteName: Self.scratchSuite))
+        scratch.removePersistentDomain(forName: Self.scratchSuite)
+    }
+
+    private func settings(systemAppearance: StudioSettings.ResolvedAppearance = .dark) -> StudioSettings {
+        StudioSettings(defaults: scratch, systemAppearance: { systemAppearance })
+    }
+
+    @Test("an empty store gives the web's defaults")
+    func defaults() {
+        let settings = settings()
+        #expect(settings.appearance == .system)
+        #expect(settings.readingScale == 1)
+        #expect(settings.spellcheck)
+        #expect(!settings.typewriter)
+        #expect(settings.showToolbar)
+        #expect(settings.showStatusBar)
+    }
+
+    @Test("unreadable stored values fall back per key, not all at once")
+    func garbageFallsBackPerKey() {
+        scratch.set("purple", forKey: StudioSettings.Key.appearance)
+        scratch.set("big", forKey: StudioSettings.Key.readingScale)
+        scratch.set("yes", forKey: StudioSettings.Key.spellcheck)
+        scratch.set(3, forKey: StudioSettings.Key.typewriter)
+        scratch.set(false, forKey: StudioSettings.Key.showToolbar)
+        let settings = settings()
+        #expect(settings.appearance == .system)
+        #expect(settings.readingScale == 1)
+        #expect(settings.spellcheck)
+        #expect(!settings.typewriter)
+        #expect(!settings.showToolbar, "the one readable key still applies")
+    }
+
+    @Test("an out-of-range stored scale is clamped on read", arguments: [
+        (0.1, 0.8), (9.0, 2.0), (1.23456, 1.23), (Double.nan, 1.0), (Double.infinity, 1.0),
+    ])
+    func storedScaleIsClamped(stored: Double, expected: Double) {
+        scratch.set(stored, forKey: StudioSettings.Key.readingScale)
+        #expect(settings().readingScale == expected)
+    }
+
+    @Test("every setting survives a relaunch")
+    func persists() {
+        let first = settings()
+        first.appearance = .light
+        first.zoomIn()
+        first.zoomIn()
+        first.toggleSpellcheck()
+        first.toggleTypewriter()
+        first.toggleToolbar()
+        first.toggleStatusBar()
+
+        let second = settings()
+        #expect(second.appearance == .light)
+        #expect(second.readingScale == 1.2)
+        #expect(!second.spellcheck)
+        #expect(second.typewriter)
+        #expect(!second.showToolbar)
+        #expect(!second.showStatusBar)
+    }
+
+    @Test("system appearance follows the injected provider until overridden")
+    func resolvesAppearance() {
+        let system = Mutex(StudioSettings.ResolvedAppearance.dark)
+        let settings = StudioSettings(defaults: scratch, systemAppearance: { system.withLock { $0 } })
+        #expect(settings.resolvedAppearance == .dark)
+        #expect(settings.theme == .twilight)
+        #expect(settings.themeLabel == "Twilight")
+        #expect(settings.preferredColorScheme == nil)
+
+        system.withLock { $0 = .light }
+        #expect(settings.resolvedAppearance == .dark, "nothing re-reads the OS until told")
+        settings.refreshSystemAppearance()
+        #expect(settings.resolvedAppearance == .light)
+        #expect(settings.theme == .paper)
+        #expect(settings.themeLabel == "Paper")
+
+        settings.appearance = .dark
+        #expect(settings.resolvedAppearance == .dark)
+        #expect(settings.theme == .twilight)
+        #expect(settings.preferredColorScheme == .dark)
+
+        settings.appearance = .light
+        system.withLock { $0 = .dark }
+        settings.refreshSystemAppearance()
+        #expect(settings.resolvedAppearance == .light, "an explicit choice ignores the OS")
+        #expect(settings.preferredColorScheme == .light)
+    }
+
+    @Test("the appearance control cycles in the web's order")
+    func cyclesAppearance() {
+        let settings = settings()
+        var seen: [StudioSettings.Appearance] = []
+        for _ in 0..<4 {
+            seen.append(settings.appearance)
+            settings.cycleAppearance()
+        }
+        #expect(seen == [.system, .light, .dark, .system])
+    }
+
+    @Test("text zoom steps by a tenth and clamps at the web's bounds")
+    func zoomClamps() {
+        let settings = settings()
+        settings.zoomIn()
+        #expect(settings.readingScale == 1.1, "no float drift")
+        #expect(settings.zoomPercent == 110)
+        for _ in 0..<20 { settings.zoomIn() }
+        #expect(settings.readingScale == StudioSettings.readingScaleMax)
+        #expect(!settings.canZoomIn)
+        #expect(settings.canZoomOut)
+        for _ in 0..<20 { settings.zoomOut() }
+        #expect(settings.readingScale == StudioSettings.readingScaleMin)
+        #expect(settings.zoomPercent == 80)
+        #expect(!settings.canZoomOut)
+        #expect(settings.canZoomIn)
+        settings.zoomReset()
+        #expect(settings.readingScale == 1)
+    }
+
+    @Test("the styler carries theme, scale and spellcheck into the editor")
+    func stylerReflectsSettings() {
+        let settings = settings(systemAppearance: .light)
+        settings.zoomIn()
+        settings.toggleSpellcheck()
+        let styler = settings.styler(presentation: .raw)
+        #expect(styler.presentation == .raw)
+        #expect(styler.theme == .paper)
+        #expect(styler.typography.scale == 1.1)
+        #expect(styler.typography.family == RectoFonts.sourceFamily)
+        #expect(!styler.spellChecking)
+        let configuration = styler.engineConfiguration()
+        #expect(!configuration.spellChecking.continuousSpellChecking)
+        #expect(!configuration.spellChecking.grammarChecking)
+    }
+
+    /// P2-1: `.shared` is created before `NSApplication.shared` exists, so the
+    /// scene roots arm the observation on appear. The test host is the real app,
+    /// so by the time any test runs a root has appeared: asserting the arming
+    /// here, without arming by hand, is what pins the `onAppear` wiring — the
+    /// line that was missing when "System" never followed the OS.
+    @Test("the shared settings follow the application's appearance once armed")
+    func sharedFollowsApplication() async {
+        _ = NSApplication.shared
+        let previous = NSApp.appearance
+        defer { NSApp.appearance = previous }
+        let settings = StudioSettings.shared
+        #expect(settings.isFollowingApplicationAppearance)
+
+        NSApp.appearance = NSAppearance(named: .aqua)
+        await drainMainQueue()
+        #expect(settings.systemAppearance == .light)
+
+        NSApp.appearance = NSAppearance(named: .darkAqua)
+        await drainMainQueue()
+        #expect(settings.systemAppearance == .dark)
+    }
+
+    @Test("following is a no-op until armed")
+    func notFollowingUntilArmed() {
+        let settings = settings()
+        #expect(!settings.isFollowingApplicationAppearance)
+        settings.followApplicationAppearance()
+        #expect(settings.isFollowingApplicationAppearance)
+    }
+
+    private func drainMainQueue() async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+    }
+
+    @Test("every SF Symbol the status bar names exists", arguments: StudioSettings.Appearance.allCases)
+    func appearanceSymbolsResolve(appearance: StudioSettings.Appearance) {
+        #expect(NSImage(systemSymbolName: appearance.symbol, accessibilityDescription: nil) != nil)
+    }
+}
+
+@Suite("Reading time")
+struct ReadingTimeTests {
+    /// The web's `reading-time.test.ts` values.
+    @Test(arguments: [(0, 0), (-50, 0), (1, 1), (30, 1), (200, 1), (201, 2), (2_400, 12)])
+    func minutes(words: Int, expected: Int) {
+        #expect(ReadingTime.minutes(wordCount: words) == expected)
+    }
+
+    @Test(arguments: [(0, "0 min"), (1, "1 min"), (12, "12 min")])
+    func format(minutes: Int, expected: String) {
+        #expect(ReadingTime.format(minutes: minutes) == expected)
+    }
+}

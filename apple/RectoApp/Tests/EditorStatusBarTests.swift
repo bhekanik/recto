@@ -11,6 +11,7 @@ import Testing
 struct EditorStatusBarTests {
     private struct Host: View {
         let storage: RectoTextStorage
+        let settings: StudioSettings
         let counter: WordCounter
 
         var body: some View {
@@ -18,6 +19,7 @@ struct EditorStatusBarTests {
                 presentation: .rich,
                 isEditable: true,
                 storage: storage,
+                settings: settings,
                 theme: .twilight,
                 wordCounter: counter,
                 onSelect: { _ in }
@@ -43,7 +45,11 @@ struct EditorStatusBarTests {
         )
         #expect(WordCount.count(storage.markdown) == 10_240)
 
-        let host = NSHostingView(rootView: Host(storage: storage, counter: counter))
+        let host = NSHostingView(rootView: Host(
+            storage: storage,
+            settings: StudioSettings(defaults: scratchDefaults(), systemAppearance: { .dark }),
+            counter: counter
+        ))
         let window = NSWindow(contentViewController: NSViewController())
         window.contentView = host
         window.orderFront(nil)
@@ -62,6 +68,15 @@ struct EditorStatusBarTests {
         await drainMainQueue()
         let settled = calls.withLock { $0 }
         #expect(settled >= 1 && settled <= 2, "one count after the burst settles, got \(settled)")
+    }
+
+    /// Empty, and emptied again on exit, so the test never reads or writes the
+    /// developer's own studio settings.
+    private func scratchDefaults() -> UserDefaults {
+        let name = "com.bhekani.recto.tests.status-bar"
+        let defaults = UserDefaults(suiteName: name)!
+        defaults.removePersistentDomain(forName: name)
+        return defaults
     }
 
     private func drainMainQueue() async {

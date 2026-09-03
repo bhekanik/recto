@@ -21,6 +21,12 @@ struct WritingControlsHost: NSViewRepresentable {
         coordinator.uninstall()
     }
 
+    /// The toolbar's Link button: the same destination popover the selection
+    /// bar opens, anchored to the selection when there is one.
+    static func showLinkInput(for controller: RectoWritingController) {
+        Coordinator.owner(of: controller)?.showSelectionLinkInput()
+    }
+
     @MainActor
     final class Coordinator {
         private static let selectionPanelSize = NSSize(width: 246, height: 38)
@@ -51,6 +57,10 @@ struct WritingControlsHost: NSViewRepresentable {
             self.controller = controller
             slashPopover.behavior = .semitransient
             inputPopover.behavior = .applicationDefined
+        }
+
+        static func owner(of controller: RectoWritingController) -> Coordinator? {
+            callbackOwners.object(forKey: controller)
         }
 
         func install() {
