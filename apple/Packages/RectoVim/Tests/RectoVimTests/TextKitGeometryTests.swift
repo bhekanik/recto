@@ -97,6 +97,54 @@ struct TextKitGeometryTests {
         #expect(abs(info.clientHeight - mounted.scrollView.contentView.bounds.height) < 0.5)
     }
 
+    @Test("verticalMove keeps a document-space goal column across a wrap")
+    func verticalMoveHonoursAReadingColumnOrigin() throws {
+        let paragraph = String(repeating: "word ", count: 80) + "end\n"
+        let mounted = mount(
+            paragraph, inset: CGSize(width: 0, height: 32),
+            textViewOrigin: CGPoint(x: 120, y: 0))
+        mounted.textView.setFrameSize(CGSize(width: 220, height: 800))
+        mounted.textView.textContainer?.size = CGSize(width: 220, height: 1_000_000)
+        mounted.textView.textLayoutManager?.ensureLayout(
+            for: mounted.textView.textLayoutManager!.documentRange)
+
+        let start = 12
+        let coords = mounted.geometry.charCoords(offset: start)
+        let moved = try #require(mounted.geometry.verticalMove(
+            from: start, amount: 1, unit: "line", goalColumn: coords.left))
+        #expect(moved.offset > start)
+        let down = mounted.geometry.charCoords(offset: moved.offset)
+        #expect(down.top > coords.top + 2)
+        #expect(abs(down.left - coords.left) < 16)
+
+        let back = try #require(mounted.geometry.verticalMove(
+            from: moved.offset, amount: -1, unit: "line", goalColumn: coords.left))
+        #expect(back.offset == start)
+    }
+
+    @Test("lineHeight is the laid-out fragment, not the font metric")
+    func lineHeightUsesTheLaidOutFragment() {
+        let mounted = mount(
+            "one\ntwo\nthree\n", inset: CGSize(width: 0, height: 32),
+            textViewOrigin: .zero)
+        let style = NSMutableParagraphStyle()
+        style.minimumLineHeight = 28
+        style.maximumLineHeight = 28
+        mounted.textView.defaultParagraphStyle = style
+        mounted.textView.typingAttributes[.paragraphStyle] = style
+        mounted.textView.textStorage?.addAttribute(
+            .paragraphStyle, value: style,
+            range: NSRange(location: 0, length: (mounted.textView.string as NSString).length))
+        mounted.textView.textLayoutManager?.ensureLayout(
+            for: mounted.textView.textLayoutManager!.documentRange)
+
+        let font = mounted.textView.font ?? .monospacedSystemFont(ofSize: 13, weight: .regular)
+        let fontHeight = font.ascender - font.descender + font.leading
+        let laidOut = mounted.geometry.lineHeight()
+        #expect(laidOut >= 27.5, "laid-out \(laidOut), font \(fontHeight)")
+        #expect(laidOut > Double(fontHeight) + 4, "must not report the font metric \(fontHeight)")
+    }
+
     @Test("a text view with no scroll view answers in its own coordinates")
     func bareTextViewIsAZeroOffset() {
         let window = NSWindow(

@@ -144,7 +144,13 @@ struct VimPresentationTests {
         }
     }
 
-    private func mount(_ markdown: String, writingController: RectoWritingController? = nil) throws -> Mounted {
+    private func mount(
+        _ markdown: String,
+        writingController: RectoWritingController? = nil,
+        size: CGSize = CGSize(width: 640, height: 400),
+        styler: MarkdownStyler? = nil
+    ) throws -> Mounted {
+        let styler = styler ?? MarkdownStyler(presentation: .vim, theme: .twilight)
         let storage = RectoTextStorage(documentId: "vim", markdown: markdown)
         let vim = RectoVimController()
         let history = SnapshotEditorHistory(storage: storage)
@@ -153,7 +159,7 @@ struct VimPresentationTests {
         let harness = WindowHarness(
             RectoEditorView(
                 storage: storage,
-                styler: MarkdownStyler(presentation: .vim, theme: .twilight),
+                styler: styler,
                 onAttach: { seam in
                     mounted?.seam = seam
                     vim.attach(to: seam)
@@ -164,7 +170,7 @@ struct VimPresentationTests {
                 },
                 writingController: writingController
             ),
-            size: CGSize(width: 640, height: 400)
+            size: size
         )
         let textView = try #require(harness.editorTextView)
         let result = Mounted(harness: harness, storage: storage, vim: vim, history: history,
@@ -521,6 +527,209 @@ struct VimPresentationTests {
         textView.setSelectedRange(NSRange(location: 0, length: 0))
         textView.insertText("x", replacementRange: NSRange(location: NSNotFound, length: 0))
         #expect(storage.markdown == "xabc\n")
+    }
+
+    // MARK: - Geometry and scrolling
+
+    /// Laid-out row vs font metric. `<C-e>` used the font (~11–18 pt) and
+    /// crawled; the visual row on this scale is ~28 pt.
+    private func expectLaidOutLineHeight(_ mounted: Mounted) throws -> Double {
+        let geometry = VimTextKitGeometry(textView: mounted.textView)
+        let font = mounted.textView.font ?? .monospacedSystemFont(ofSize: 17.5, weight: .regular)
+        let fontHeight = Double(font.ascender - font.descender + font.leading)
+        let laidOut = geometry.lineHeight()
+        #expect(laidOut > fontHeight + 4, "lineHeight \(laidOut) vs font \(fontHeight)")
+        return laidOut
+    }
+
+    private func placeOnSection(_ mounted: Mounted, _ needle: String) throws -> Int {
+        let range = (mounted.textView.string as NSString).range(of: needle)
+        #expect(range.location != NSNotFound, "missing \(needle)")
+        mounted.textView.setSelectedRange(NSRange(location: range.location, length: 0))
+        return range.location
+    }
+
+    @Test("zz, zt, zb, paging and HML land on the visible line of a 10k-word document")
+    func scrollGeometryOnSettledDocument() throws {
+        let mounted = try mount(PatchCaretTests.longDocument(), size: CGSize(width: 800, height: 480))
+        defer { mounted.harness.tearDown() }
+        mounted.harness.layout(passes: 6)
+        let geometry = VimTextKitGeometry(textView: mounted.textView)
+        let lineH = try expectLaidOutLineHeight(mounted)
+        let clip = try #require(mounted.textView.enclosingScrollView?.contentView)
+
+        _ = try placeOnSection(mounted, "Section 200")
+        try mounted.press("zz")
+        mounted.harness.layout(passes: 2)
+        let afterZz = clip.bounds.origin.y
+        try expectCaretPlacement(mounted, geometry: geometry, lineH: lineH, at: .center)
+
+        try mounted.press("zt")
+        mounted.harness.layout(passes: 2)
+        try expectCaretPlacement(mounted, geometry: geometry, lineH: lineH, at: .top)
+
+        try mounted.press("zb")
+        mounted.harness.layout(passes: 2)
+        try expectCaretPlacement(mounted, geometry: geometry, lineH: lineH, at: .bottom)
+
+        try mounted.press("zz")
+        mounted.harness.layout(passes: 2)
+        let beforeE = clip.bounds.origin.y
+        try mounted.press("<C-e>")
+        mounted.harness.layout(passes: 2)
+        let eStep = clip.bounds.origin.y - beforeE
+        #expect(
+            abs(eStep - lineH) < lineH * 0.35,
+            "<C-e> stepped \(eStep), laid-out line \(lineH)"
+        )
+
+        try mounted.press("<C-y>")
+        mounted.harness.layout(passes: 2)
+        #expect(abs(clip.bounds.origin.y - afterZz) < lineH * 0.5, "<C-y> should undo <C-e>")
+
+        let client = geometry.scrollInfo().clientHeight
+        try mounted.press("zz")
+        mounted.harness.layout(passes: 2)
+        let beforeF = clip.bounds.origin.y
+        try mounted.press("<C-f>")
+        mounted.harness.layout(passes: 2)
+        #expect(clip.bounds.origin.y - beforeF > client * 0.6, "<C-f> should page by the viewport")
+
+        try mounted.press("zz")
+        mounted.harness.layout(passes: 2)
+        let beforeD = clip.bounds.origin.y
+        try mounted.press("<C-d>")
+        mounted.harness.layout(passes: 2)
+        let dStep = clip.bounds.origin.y - beforeD
+        #expect(
+            dStep > client * 0.3 && dStep < client * 0.85,
+            "<C-d> stepped \(dStep), client \(client)"
+        )
+
+        try mounted.press("<C-u>")
+        mounted.harness.layout(passes: 2)
+        #expect(clip.bounds.origin.y < beforeD + client * 0.2, "<C-u> should page back up")
+
+        try mounted.press("zz")
+        mounted.harness.layout(passes: 2)
+        try mounted.press("H")
+        expectVisibleBand(mounted, geometry: geometry, band: .top)
+        try mounted.press("L")
+        expectVisibleBand(mounted, geometry: geometry, band: .bottom)
+        try mounted.press("M")
+        expectVisibleBand(mounted, geometry: geometry, band: .middle)
+    }
+
+    @Test("zz and <C-e> hold their offset within a second of open")
+    func scrollGeometryImmediatelyAfterOpen() throws {
+        let mounted = try mount(PatchCaretTests.longDocument(), size: CGSize(width: 800, height: 480))
+        defer { mounted.harness.tearDown() }
+        let geometry = VimTextKitGeometry(textView: mounted.textView)
+        let lineH = try expectLaidOutLineHeight(mounted)
+        let clip = try #require(mounted.textView.enclosingScrollView?.contentView)
+
+        _ = try placeOnSection(mounted, "Section 180")
+        try mounted.press("zz")
+        let zzY = clip.bounds.origin.y
+        try expectCaretPlacement(mounted, geometry: geometry, lineH: lineH, at: .center)
+
+        mounted.harness.layout(passes: 3)
+        #expect(
+            abs(clip.bounds.origin.y - zzY) < 1,
+            "layout after zz yanked \(clip.bounds.origin.y) off \(zzY)"
+        )
+
+        try mounted.press("<C-e>")
+        let eY = clip.bounds.origin.y
+        #expect(eY - zzY > lineH * 0.5, "<C-e> stepped \(eY - zzY), line \(lineH)")
+        mounted.harness.layout(passes: 3)
+        #expect(
+            abs(clip.bounds.origin.y - eY) < 1,
+            "layout after <C-e> yanked \(clip.bounds.origin.y) off \(eY)"
+        )
+    }
+
+    @Test("gj and gk walk display lines across a wrap in the reading column")
+    func displayLineMotionsAcrossWraps() throws {
+        let paragraph = String(repeating: "word ", count: 80) + "end\n"
+        let mounted = try mount(
+            paragraph,
+            size: CGSize(width: 900, height: 400),
+            styler: MarkdownStyler(presentation: .vim, theme: .twilight, readingWidth: 280)
+        )
+        defer { mounted.harness.tearDown() }
+        mounted.harness.layout(passes: 4)
+        let geometry = VimTextKitGeometry(textView: mounted.textView)
+        mounted.textView.setSelectedRange(NSRange(location: 12, length: 0))
+        let start = geometry.charCoords(offset: 12)
+        #expect(start.left > 0)
+
+        try mounted.press("gj")
+        let afterDown = mounted.textView.selectedRange().location
+        #expect(afterDown > 12, "gj should advance inside the wrapped paragraph")
+        let down = geometry.charCoords(offset: afterDown)
+        #expect(down.top > start.top + 2, "gj should land on the next display line")
+        #expect(abs(down.left - start.left) < 16, "gj should keep the goal column")
+
+        try mounted.press("gk")
+        #expect(abs(mounted.textView.selectedRange().location - 12) <= 1)
+    }
+
+    private enum CaretPlacement { case top, center, bottom }
+    private enum VisibleBand { case top, middle, bottom }
+
+    private func expectCaretPlacement(
+        _ mounted: Mounted,
+        geometry: VimTextKitGeometry,
+        lineH: Double,
+        at placement: CaretPlacement,
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) throws {
+        let offset = mounted.textView.selectedRange().location
+        let coords = geometry.charCoords(offset: offset)
+        let info = geometry.scrollInfo()
+        let mid = (coords.top + coords.bottom) / 2
+        let viewMid = info.top + info.clientHeight / 2
+        let viewBottom = info.top + info.clientHeight
+        let error: Double
+        switch placement {
+        case .top:
+            error = abs(coords.top - info.top)
+        case .center:
+            error = abs(mid - viewMid)
+        case .bottom:
+            error = abs(coords.bottom - viewBottom)
+        }
+        #expect(
+            error < lineH * 0.6,
+            "\(placement) error \(error) pt, line \(lineH), caret \(coords) view top \(info.top) height \(info.clientHeight)",
+            sourceLocation: sourceLocation
+        )
+    }
+
+    /// `H`/`M`/`L` pick a document line via `coordsChar` at the viewport
+    /// edge, then the first non-blank. That is the visible first/middle/last
+    /// line, not a pixel-exact edge.
+    private func expectVisibleBand(
+        _ mounted: Mounted,
+        geometry: VimTextKitGeometry,
+        band: VisibleBand,
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) {
+        let coords = geometry.charCoords(offset: mounted.textView.selectedRange().location)
+        let info = geometry.scrollInfo()
+        let mid = (coords.top + coords.bottom) / 2
+        let rel = (mid - info.top) / info.clientHeight
+        #expect(coords.bottom > info.top && coords.top < info.top + info.clientHeight,
+                sourceLocation: sourceLocation)
+        switch band {
+        case .top:
+            #expect(rel < 0.34, "H relative \(rel)", sourceLocation: sourceLocation)
+        case .middle:
+            #expect(rel > 0.33 && rel < 0.67, "M relative \(rel)", sourceLocation: sourceLocation)
+        case .bottom:
+            #expect(rel > 0.66, "L relative \(rel)", sourceLocation: sourceLocation)
+        }
     }
 
     // MARK: - External changes

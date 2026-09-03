@@ -38,6 +38,29 @@ public struct VimGeometryRequest: Decodable {
         public let left: Double
         public let top: Double
     }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try container.decode(String.self, forKey: .kind)
+        offset = try container.decodeIfPresent(Int.self, forKey: .offset)
+        mode = try container.decodeIfPresent(String.self, forKey: .mode)
+        unit = try container.decodeIfPresent(String.self, forKey: .unit)
+        goalColumn = try container.decodeIfPresent(Double.self, forKey: .goalColumn)
+        coords = try container.decodeIfPresent(Coords.self, forKey: .coords)
+        // `<C-d>` sizes the repeat as `clientHeight / (2 * lineHeight)`, a
+        // float. Strict `Int` decoding dropped the whole findPosV request.
+        if let int = try? container.decodeIfPresent(Int.self, forKey: .amount) {
+            amount = int
+        } else if let value = try container.decodeIfPresent(Double.self, forKey: .amount) {
+            amount = Int(value.rounded(.towardZero))
+        } else {
+            amount = nil
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind, offset, mode, amount, unit, goalColumn, coords
+    }
 }
 
 /// Implemented by whatever owns the text view.

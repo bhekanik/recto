@@ -36,6 +36,7 @@ export type VimResult = {
 	visualMode: boolean;
 	prompt: { prefix: string; value: string } | null;
 	notification: { text: string } | null;
+	scroll: { kind: string; offset?: number | null; x?: number | null; y?: number | null } | null;
 	search: string | null;
 	resynced: boolean;
 	/**

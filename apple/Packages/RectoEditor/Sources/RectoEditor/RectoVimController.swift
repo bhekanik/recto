@@ -383,11 +383,8 @@ public final class RectoVimController {
             let range = scroll.offset.map { NSRange(location: $0, length: 0) } ?? textView.selectedRange()
             seam.scroll(range: range, position: .nearest)
         case "scrollTo":
-            // Best effort until the engine exposes a vertical-offset scroll that
-            // also cancels its pending restore (plan 024 slice V2).
-            if let y = scroll.y, let scrollView = seam.scrollView {
-                scrollView.contentView.scroll(to: NSPoint(x: 0, y: y))
-                scrollView.reflectScrolledClipView(scrollView.contentView)
+            if let y = scroll.y {
+                seam.scroll(toVerticalOffset: CGFloat(y))
             }
         default:
             break

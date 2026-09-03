@@ -321,6 +321,48 @@ test(":w reaches the host's save hook and nothing else", () => {
 	expect(api.getText()).toBe("alpha beta\n");
 });
 
+test("<C-d> reports scrollTo, not a later scrollIntoView", () => {
+	const lineH = 20;
+	const host: VimHost = {
+		geometry(requestJson) {
+			const req = JSON.parse(requestJson) as {
+				kind: string;
+				offset?: number;
+				amount?: number;
+			};
+			if (req.kind === "lineHeight") {
+				return JSON.stringify({ lineHeight: lineH });
+			}
+			if (req.kind === "scrollInfo") {
+				return JSON.stringify({
+					left: 0,
+					top: 0,
+					height: 8_000,
+					width: 0,
+					clientHeight: 400,
+					clientWidth: 0,
+				});
+			}
+			if (req.kind === "charCoords") {
+				const top = (req.offset ?? 0) * lineH;
+				return JSON.stringify({ left: 0, top, bottom: top + lineH });
+			}
+			if (req.kind === "findPosV") {
+				return JSON.stringify({
+					offset: (req.offset ?? 0) + (req.amount ?? 0) * 10,
+					hitSide: 0,
+				});
+			}
+			return null;
+		},
+	};
+	api.init(`${"line\n".repeat(80)}`, host);
+	api.setCursor(10, 0);
+	const result: VimResult = JSON.parse(api.handleKey("d", 1));
+	expect(result.handled).toBe(true);
+	expect(result.scroll?.kind).toBe("scrollTo");
+});
+
 test(":w without a save hook is a no-op rather than an error", () => {
 	api.init("alpha\n", {});
 	api.setCursor(0, 0);

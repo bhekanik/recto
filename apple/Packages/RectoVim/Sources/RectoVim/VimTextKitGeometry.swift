@@ -27,8 +27,37 @@ public struct VimTextKitGeometry {
     }
 
     public func lineHeight() -> Double {
+        // `<C-e>`/`<C-y>` step by this, and `H`/`M`/`L` size the viewport in
+        // rows of it. Font metrics are ~11–18 pt; the laid-out fragment is
+        // the visual row (Recto's 1.6 leading makes that ~28 pt). Using the
+        // font left those commands crawling.
+        if let height = laidOutLineHeight(), height > 0 { return height }
+        return fontLineHeight()
+    }
+
+    private func fontLineHeight() -> Double {
         let font = textView.font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
         return Double(font.ascender - font.descender + font.leading)
+    }
+
+    /// Height of a real `NSTextLineFragment`. Falls back to nil when TextKit
+    /// has not produced one yet (empty view, layout not started).
+    private func laidOutLineHeight() -> Double? {
+        if let line = displayLine(containing: 0), line.frame.height > 0 {
+            return Double(line.frame.height)
+        }
+        guard let layoutManager = textView.textLayoutManager else { return nil }
+        var height: CGFloat = 0
+        layoutManager.enumerateTextLayoutFragments(
+            from: layoutManager.documentRange.location,
+            options: [.ensuresLayout, .ensuresExtraLineFragment]
+        ) { fragment in
+            if let line = fragment.textLineFragments.first, line.typographicBounds.height > 0 {
+                height = line.typographicBounds.height
+            }
+            return false
+        }
+        return height > 0 ? Double(height) : nil
     }
 
     /// Where the *character* is, not where its line starts.
@@ -81,10 +110,20 @@ public struct VimTextKitGeometry {
     public func verticalMove(
         from offset: Int, amount: Int, unit: String, goalColumn: Double?
     ) -> (offset: Int, hitSide: Bool)? {
-        guard unit == "line", amount != 0, let current = displayLine(containing: offset)
-        else { return nil }
+        guard unit == "line", amount != 0 else { return nil }
+        if abs(amount) > 1, let layoutManager = textView.textLayoutManager {
+            // `<C-d>` walks many display lines. Viewport-only layout stops
+            // at the last realized fragment and the motion looks like a no-op.
+            layoutManager.ensureLayout(for: layoutManager.documentRange)
+        }
+        guard let current = displayLine(containing: offset) else { return nil }
 
-        let goal = goalColumn.map { CGFloat($0) } ?? current.x(of: offset)
+        // `gj`/`gk` pass `charCoords.left`, which is document space. The
+        // fragment's `x(of:)` is local to the line, so a reading-column
+        // origin would otherwise look like a huge column and land on the
+        // wrap's right edge.
+        let goal = goalColumn.map { CGFloat($0) - toDocument(current.frame).minX }
+            ?? current.x(of: offset)
         var line = current
         var hitSide = false
         for _ in 0..<abs(amount) {
@@ -174,7 +213,7 @@ public struct VimTextKitGeometry {
         guard let layoutManager = textView.textLayoutManager,
             let contentManager = layoutManager.textContentManager,
             let sibling = forward
-                ? layoutManager.textLayoutFragment(for: line.fragment.rangeInElement.endLocation)
+                ? nextFragment(after: line.fragment)
                 : previousFragment(before: line.fragment),
             sibling !== line.fragment, !sibling.textLineFragments.isEmpty
         else { return nil }
@@ -183,6 +222,24 @@ public struct VimTextKitGeometry {
             index: forward ? 0 : sibling.textLineFragments.count - 1,
             paragraphStart: contentManager.offset(
                 from: contentManager.documentRange.location, to: sibling.rangeInElement.location))
+    }
+
+    /// `textLayoutFragment(for:)` will not create fragments below the
+    /// viewport, so a half-page `<C-d>` used to stop at the last laid-out
+    /// line and report no motion.
+    private func nextFragment(after fragment: NSTextLayoutFragment) -> NSTextLayoutFragment? {
+        guard let layoutManager = textView.textLayoutManager else { return nil }
+        var next: NSTextLayoutFragment?
+        layoutManager.enumerateTextLayoutFragments(
+            from: fragment.rangeInElement.endLocation, options: [.ensuresLayout]
+        ) { candidate in
+            if candidate !== fragment {
+                next = candidate
+                return false
+            }
+            return true
+        }
+        return next
     }
 
     private func previousFragment(before fragment: NSTextLayoutFragment) -> NSTextLayoutFragment? {
