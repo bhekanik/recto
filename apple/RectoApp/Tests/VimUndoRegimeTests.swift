@@ -121,6 +121,31 @@ struct VimUndoRegimeTests {
         #expect(!undoManager.canUndo)
     }
 
+    @Test("after menu Undo, a later external change is a plain external change again")
+    func navigationLatchEnds() async throws {
+        let mounted = try await mountToVim("tail\n")
+        defer { mounted.window.close() }
+        let undoManager = try #require(mounted.undoManager)
+
+        try mounted.press("iab")
+        undoManager.undo()
+        try mounted.press("cd")
+        #expect(mounted.storage.markdown == "cdtail\n")
+        #expect(mounted.vim?.status?.mode == "insert")
+        #expect(undoManager.groupingLevel == 1)
+
+        // A sync landing, not the host's history: the navigation is long over,
+        // so this must end the session the way any external edit does. A latch
+        // that never ended would adopt it mode-preserving and keep the group open.
+        mounted.storage.markdown = "Xcdtail\n"
+        await mounted.settle()
+
+        #expect(mounted.vim?.status?.mode == "normal",
+                "an external change after the navigation ended must leave insert mode")
+        #expect(undoManager.groupingLevel == 0, "and close the session's group")
+        #expect(mounted.storage.markdown == "Xcdtail\n")
+    }
+
     @Test("⌃⇧R mid-insert leaves exactly the session's step behind")
     func detachMidInsertLeavesOneStep() async throws {
         let mounted = try await mountToVim("tail\n")
