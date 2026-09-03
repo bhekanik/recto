@@ -300,14 +300,12 @@ export class RectoCM {
 		if (!resolved) ({ from, to } = this._clampEditRange(from, to));
 		if (from === to && insert === "") return;
 		// The core spells every line break `\n` (a linewise put, a pasted
-		// string, a dot-repeat replay); the document may be CRLF. Converting
-		// here, at the one write path, keeps the mirror free of mixed endings
-		// and hands the host an edit it can apply verbatim — a bare LF landing
-		// in a CRLF document made the host normalise and resync, which
-		// dropped insert mode.
+		// string, a dot-repeat replay); the document sets the ending. Converting
+		// here, at the one write path, keeps the mirror free of endings the host
+		// would rewrite — a bare LF landing in a CRLF document made the host
+		// normalise and resync, which dropped insert mode.
 		if (/[\r\n]/.test(insert)) {
-			const line = resolved ? resolved.start.line : this.doc.posFromIndex(from).line;
-			insert = insert.replace(/\r\n|\n|\r/g, this.doc.lineEndingFor(line));
+			insert = insert.replace(/\r\n|\n|\r/g, this.doc.documentEnding());
 		}
 		this.edits.push({ from, to, insert });
 
@@ -1020,7 +1018,7 @@ RectoCM.commands = {
 	newlineAndIndent: (cm) => {
 		const cur = cm.getCursor();
 		const indent = /^[ \t]*/.exec(cm.getLine(cur.line))[0];
-		cm.replaceSelection(`${cm.doc.lineEndingFor(cur.line)}${indent}`);
+		cm.replaceSelection(`${cm.doc.documentEnding()}${indent}`);
 	},
 	indentAuto: () => {},
 	newlineAndIndentContinueComment: undefined,

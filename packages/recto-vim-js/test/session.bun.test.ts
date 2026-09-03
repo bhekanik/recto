@@ -342,3 +342,33 @@ test("host text with bare LF lands with the document's CRLF and keeps insert mod
 	expect(api.getText()).toBe("alphaX\r\nY\r\nbeta\r\n");
 	api.setExternalInput(false);
 });
+
+test("a mixed-ending document types the storage's ending, not the minority line's", () => {
+	// The storage's policy is first-ending-wins (MarkdownLineEnding(detecting:));
+	// the mirror writing the same ending is what keeps an insert on an LF line
+	// of a CRLF document from bouncing through a normalising resync.
+	const host = start("alpha\r\nbeta\ngamma\r\n", 1, 3);
+	api.setExternalInput(true);
+	press("A", host);
+	let result: VimResult = JSON.parse(api.insertText("x"));
+	expect(result.edits).toEqual([{ from: 11, to: 11, insert: "x" }]);
+	result = JSON.parse(api.handleKey("Enter"));
+	expect(result.edits).toEqual([{ from: 12, to: 12, insert: "\r\n" }]);
+	result = JSON.parse(api.insertText("y"));
+	expect(result.edits).toEqual([{ from: 14, to: 14, insert: "y" }]);
+	result = JSON.parse(api.handleKey("Escape"));
+	expect(api.getText()).toBe("alpha\r\nbetax\r\ny\ngamma\r\n");
+	expect(result.mode).toBe("normal");
+	api.setExternalInput(false);
+});
+
+test("an insert-mode paste on an LF line of a CRLF document writes CRLF", () => {
+	const host = start("alpha\r\nbeta\ngamma\r\n", 1, 2);
+	api.setExternalInput(true);
+	press("i", host);
+	const result: VimResult = JSON.parse(api.insertText("X\nY"));
+	expect(result.edits).toEqual([{ from: 9, to: 9, insert: "X\r\nY" }]);
+	expect(result.mode).toBe("insert");
+	expect(api.getText()).toBe("alpha\r\nbeX\r\nYta\ngamma\r\n");
+	api.setExternalInput(false);
+});

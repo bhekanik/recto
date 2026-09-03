@@ -606,6 +606,41 @@ struct VimPresentationTests {
         #expect(mounted.failures.isEmpty)
     }
 
+    /// A mixed-ending document: the storage's policy is first-ending-wins
+    /// (`MarkdownLineEnding(detecting:)`), and the mirror writes the same
+    /// document ending — before, an insert on the minority line typed the
+    /// line's own ending, the storage rewrote it, and the normalising resync
+    /// dropped insert mode, so the next letters ran as normal-mode commands.
+    @Test("an insert-mode paste on an LF line of a mixed document stays in insert")
+    func insertPasteOnLFLineOfMixedDocStaysInInsert() throws {
+        let mounted = try mount("alpha\r\nbeta\ngamma\r\n")
+        defer { mounted.harness.tearDown() }
+        mounted.textView.setSelectedRange(NSRange(location: 9, length: 0))
+
+        try mounted.press("i")
+        mounted.textView.insertText("X\nY", replacementRange: NSRange(location: NSNotFound, length: 0))
+
+        #expect((mounted.storage.markdown as NSString).isEqual(to: "alpha\r\nbeX\r\nYta\ngamma\r\n"),
+                "\(describe(mounted.storage.markdown))")
+        #expect(mounted.vim.status?.mode == "insert", "the normalising resync must not fire")
+        #expect(mounted.mirrorMatchesStorage())
+        #expect(mounted.failures.isEmpty)
+    }
+
+    @Test("typed lines on an LF line of a mixed document land with the storage's ending")
+    func typedCRLFOnLFLineOfMixedDoc() throws {
+        let mounted = try mount("alpha\r\nbeta\ngamma\r\n")
+        defer { mounted.harness.tearDown() }
+        mounted.textView.setSelectedRange(NSRange(location: 9, length: 0))
+
+        try mounted.press("Ax<CR>y<Esc>")
+
+        #expect((mounted.storage.markdown as NSString).isEqual(to: "alpha\r\nbetax\r\ny\ngamma\r\n"),
+                "\(describe(mounted.storage.markdown))")
+        #expect(mounted.mirrorMatchesStorage())
+        #expect(mounted.failures.isEmpty)
+    }
+
     @Test("dot-repeat of an insert with a newline replays once in a CRLF document")
     func dotRepeatNewlineInCRLF() throws {
         let mounted = try mount("alpha\r\nbeta\r\ngamma\r\n")
