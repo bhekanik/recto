@@ -91,6 +91,20 @@ private struct StudioCommands: Commands {
     @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
+        // The window toolbars no longer carry undo/redo (the web-parity
+        // TopFormatToolbar already owns them), so the Edit menu answers ⌘Z
+        // instead: the key window's host history where the host registered one,
+        // else whatever the responder chain would have done with the key.
+        CommandGroup(replacing: .undoRedo) {
+            Button("Undo") {
+                UndoRedoCommands.perform(.undo, keyWindow: NSApp.keyWindow, editors: editors)
+            }
+            .keyboardShortcut("z")
+            Button("Redo") {
+                UndoRedoCommands.perform(.redo, keyWindow: NSApp.keyWindow, editors: editors)
+            }
+            .keyboardShortcut("z", modifiers: [.command, .shift])
+        }
         CommandGroup(after: .toolbar) {
             Button(CommandPaletteController.placeholder) {
                 palette.open(library: library)
@@ -144,5 +158,43 @@ private struct StudioCommands: Commands {
             },
             canOpenInWeb: model.canOpenSelectedDocumentInWeb
         )
+    }
+}
+
+/// The Edit menu's undo/redo dispatch: the key window's editor host owns the
+/// history when there is one (the cloud document through its session, the file
+/// document through its `GroupClosingUndoManager` — the same manager the
+/// responder chain would find, so the standard path keeps working too); a
+/// window without a host falls through to the responder chain, so undo in a
+/// first-responder anything else (a Settings text field, say) is unchanged.
+@MainActor
+enum UndoRedoCommands {
+    enum Direction {
+        case undo
+        case redo
+    }
+
+    /// The selectors the standard menu items send; kept nameable so a test can
+    /// pin that the fallback is the stock chain, not a private path.
+    static let undoSelector = #selector(UndoManager.undo)
+    static let redoSelector = #selector(UndoManager.redo)
+
+    /// `true` when a host's history handled the key, `false` when the action
+    /// went to the responder chain.
+    @discardableResult
+    static func perform(
+        _ direction: Direction, keyWindow: NSWindow?, editors: EditorHostRegistry
+    ) -> Bool {
+        if let chrome = editors.controller(in: keyWindow) {
+            switch direction {
+            case .undo: chrome.undo()
+            case .redo: chrome.redo()
+            }
+            return true
+        }
+        NSApp.sendAction(
+            direction == .undo ? undoSelector : redoSelector,
+            to: nil, from: nil)
+        return false
     }
 }
