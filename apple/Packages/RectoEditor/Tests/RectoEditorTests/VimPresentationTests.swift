@@ -700,10 +700,45 @@ struct VimPresentationTests {
         #expect(afterDown > 12, "gj should advance inside the wrapped paragraph")
         let down = geometry.charCoords(offset: afterDown)
         #expect(down.top > start.top + 2, "gj should land on the next display line")
-        #expect(abs(down.left - start.left) < 16, "gj should keep the goal column")
+        // Exact: the mono column under the same x. A tolerance of a column here
+        // hid a left drift of one column per move.
+        #expect(down.left == start.left, "gj should keep the goal column exactly")
 
         try mounted.press("gk")
-        #expect(abs(mounted.textView.selectedRange().location - 12) <= 1)
+        #expect(mounted.textView.selectedRange().location == 12)
+    }
+
+    /// The row is 25 columns wide, so column 20 sits at offsets 20, 45, 70, 95.
+    @Test("gj and gk keep the exact column over several rows and after a click")
+    func displayLineMotionsKeepTheColumn() throws {
+        let paragraph = String(repeating: "word ", count: 80) + "end\n"
+        let mounted = try mount(
+            paragraph,
+            size: CGSize(width: 900, height: 400),
+            styler: MarkdownStyler(presentation: .vim, theme: .twilight, readingWidth: 280)
+        )
+        defer { mounted.harness.tearDown() }
+        mounted.harness.layout(passes: 4)
+
+        mounted.textView.setSelectedRange(NSRange(location: 20, length: 0))
+        try mounted.press("gj")
+        #expect(mounted.textView.selectedRange().location == 45)
+        try mounted.press("gj")
+        #expect(mounted.textView.selectedRange().location == 70)
+        try mounted.press("gk")
+        try mounted.press("gk")
+        #expect(mounted.textView.selectedRange().location == 20)
+
+        // A host move (a click) resets the wanted column, as in Vim; before, the
+        // old pixel goal from the previous gj/gk survived it.
+        try mounted.press("gj")
+        mounted.textView.setSelectedRange(NSRange(location: 30, length: 0))
+        try mounted.press("gj")
+        try mounted.press("gj")
+        #expect(mounted.textView.selectedRange().location == 80)
+        try mounted.press("gk")
+        try mounted.press("gk")
+        #expect(mounted.textView.selectedRange().location == 30)
     }
 
     private enum CaretPlacement { case top, center, bottom }

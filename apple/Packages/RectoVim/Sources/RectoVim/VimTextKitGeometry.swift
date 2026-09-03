@@ -181,7 +181,19 @@ public struct VimTextKitGeometry {
 
         func offset(atX x: CGFloat) -> Int {
             let point = CGPoint(x: x, y: line.typographicBounds.height / 2)
-            return paragraphStart + line.characterIndex(for: point)
+            // `characterIndex(for:)` answers "which glyph contains x"; a goal
+            // column is a glyph's LEFT edge, which sits on the boundary with the
+            // glyph before it and came back as that one, so `gj`/`gk` drifted a
+            // column left per move. Round to the nearest boundary instead, like
+            // CodeMirror's `coordsChar`.
+            let index = line.characterIndex(for: point)
+            let fraction = line.fractionOfDistanceThroughGlyph(for: point)
+            let rounded = fraction >= 0.5 ? index + 1 : index
+            // Past the row's right edge stay on ITS last character: the boundary
+            // there is the next row's first character.
+            let last = max(line.characterRange.location,
+                           line.characterRange.location + line.characterRange.length - 1)
+            return paragraphStart + min(rounded, last)
         }
     }
 
