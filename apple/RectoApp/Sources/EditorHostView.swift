@@ -99,6 +99,7 @@ struct EditorHostView: View {
             chrome.redo = { [history] in history.undoManager.redo() }
             chrome.choosePresentation = choose
             vim.controller.history = history
+            vim.controller.typewriter = chrome.typewriter
             vim.controller.onSave = {
                 // The document menu's Save, through the responder chain, so
                 // `:w` and ⌘S are the same action.

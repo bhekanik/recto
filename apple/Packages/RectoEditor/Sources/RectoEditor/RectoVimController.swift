@@ -54,6 +54,14 @@ public final class RectoVimController {
     /// `:w`.
     @ObservationIgnored public var onSave: (() -> Void)?
 
+    /// Typewriter scrolling's controller, when the host runs both. While it is
+    /// enabled, each vim command's edit and selection application runs inside
+    /// its `performProgrammaticChange`: one recenter per command, never on an
+    /// intermediate state. Vim's own repositioning still runs first, so the
+    /// recenter decides the frame: `zz` is redundant while typewriter is on, and
+    /// `zt`/`zb` are immediately overridden by the center pass.
+    @ObservationIgnored public weak var typewriter: RectoTypewriterController?
+
     /// Replaying a keystroke's edits failed and the engine was resynced from
     /// the storage. The document is intact; the keystroke's effect is not.
     @ObservationIgnored public var onReplayFailure: ((VimReplayFailure) -> Void)?
@@ -272,6 +280,16 @@ public final class RectoVimController {
     // MARK: - Applying results
 
     private func apply(_ result: VimResult) throws {
+        guard let typewriter, typewriter.isEnabled else {
+            try applyResult(result)
+            return
+        }
+        try typewriter.performProgrammaticChange {
+            try applyResult(result)
+        }
+    }
+
+    private func applyResult(_ result: VimResult) throws {
         if !result.edits.isEmpty && !result.resynced {
             let outcome = applyEdits(result.edits, insertMode: result.insertMode)
             if outcome != .applied {

@@ -38,6 +38,11 @@ public final class RectoTypewriterController {
     private var isDraggingSelection = false
     private var needsRecenter = false
 
+    /// Recenters that actually ran (every guard passed and the center scroll
+    /// was issued). The one-recenter-per-change contract has no other probe: the
+    /// scroll is a pixel no-op whenever the caret is already centered.
+    private(set) var recenterCount = 0
+
     public init(isEnabled: Bool = false) {
         self.isEnabled = isEnabled
     }
@@ -211,6 +216,7 @@ public final class RectoTypewriterController {
         else { return }
 
         needsRecenter = false
+        recenterCount += 1
         _ = seam.scroll(range: textView.selectedRange(), position: .center)
     }
 

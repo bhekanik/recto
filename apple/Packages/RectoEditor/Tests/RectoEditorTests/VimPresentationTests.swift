@@ -148,13 +148,15 @@ struct VimPresentationTests {
         _ markdown: String,
         writingController: RectoWritingController? = nil,
         size: CGSize = CGSize(width: 640, height: 400),
-        styler: MarkdownStyler? = nil
+        styler: MarkdownStyler? = nil,
+        typewriter: RectoTypewriterController? = nil
     ) throws -> Mounted {
         let styler = styler ?? MarkdownStyler(presentation: .vim, theme: .twilight)
         let storage = RectoTextStorage(documentId: "vim", markdown: markdown)
         let vim = RectoVimController()
         let history = SnapshotEditorHistory(storage: storage)
         vim.history = history
+        vim.typewriter = typewriter
         var mounted: Mounted?
         let harness = WindowHarness(
             RectoEditorView(
@@ -162,6 +164,7 @@ struct VimPresentationTests {
                 styler: styler,
                 onAttach: { seam in
                     mounted?.seam = seam
+                    typewriter?.attach(to: seam)
                     vim.attach(to: seam)
                 },
                 onEdit: { edit in
@@ -758,6 +761,55 @@ struct VimPresentationTests {
         case .bottom:
             #expect(rel > 0.66, "L relative \(rel)", sourceLocation: sourceLocation)
         }
+    }
+
+    // MARK: - Typewriter interaction
+
+    @Test("typewriter scrolling recenters once per vim command and overrides zt")
+    func typewriterRecentersOncePerVimCommand() throws {
+        // Typewriter + vim: every command's edit and selection application runs
+        // inside performProgrammaticChange, so the recenter count is one per
+        // command and the center pass — not vim's own request — owns the frame.
+        let typewriter = RectoTypewriterController(isEnabled: true)
+        let mounted = try mount(
+            PatchCaretTests.longDocument(),
+            size: CGSize(width: 640, height: 400),
+            typewriter: typewriter
+        )
+        defer { mounted.harness.tearDown() }
+        #expect(mounted.harness.window.makeFirstResponder(mounted.textView))
+        mounted.harness.layout(passes: 6)
+        let geometry = VimTextKitGeometry(textView: mounted.textView)
+        let lineH = try expectLaidOutLineHeight(mounted)
+        let baseline = typewriter.recenterCount
+
+        try mounted.press("G")
+        mounted.harness.layout(passes: 3)
+        #expect(typewriter.recenterCount - baseline == 1, "G must recenter exactly once")
+
+
+        // `G` parks the caret on the phantom line past the final newline, where
+        // charCoords has no fragment; `h` steps onto the last real line.
+        // `G` parks the caret on the phantom line past the final newline, where
+        // charCoords has no fragment; `k` steps onto the last real line.
+        try mounted.press("k")
+        mounted.harness.layout(passes: 3)
+        #expect(typewriter.recenterCount - baseline == 2, "k must recenter exactly once")
+        try expectCaretPlacement(mounted, geometry: geometry, lineH: lineH, at: .center)
+
+        // zz is redundant while typewriter is on: the command's own scroll and
+        // the recenter ask for the same frame.
+        try mounted.press("zz")
+        mounted.harness.layout(passes: 3)
+        #expect(typewriter.recenterCount - baseline == 3, "zz must recenter exactly once")
+        try expectCaretPlacement(mounted, geometry: geometry, lineH: lineH, at: .center)
+
+        // zt is overridden: the deferred center pass decides where the clip ends.
+        try mounted.press("zt")
+        mounted.harness.layout(passes: 3)
+        #expect(typewriter.recenterCount - baseline == 4, "zt must recenter exactly once")
+        try expectCaretPlacement(mounted, geometry: geometry, lineH: lineH, at: .center)
+        #expect(mounted.mirrorMatchesStorage())
     }
 
     // MARK: - External changes
