@@ -36,6 +36,8 @@ enum CommandRegistry {
                       aliases: ["wysiwyg", "rich"], shortcut: "⌃⇧R"),
         CommandAction(id: "mode-raw", label: "Switch to Raw Markdown", section: .modes,
                       aliases: ["markdown", "source", "raw"], shortcut: "⌃⇧M"),
+        CommandAction(id: "mode-vim", label: "Switch to Vim", section: .modes,
+                      aliases: ["modal"], shortcut: "⌃⇧V"),
         CommandAction(id: "undo", label: "Undo", section: .history, aliases: [], shortcut: "⌘Z"),
         CommandAction(id: "redo", label: "Redo", section: .history, aliases: [], shortcut: "⌘⇧Z"),
         CommandAction(id: "copy-markdown", label: "Copy as Markdown", section: .copyExport,

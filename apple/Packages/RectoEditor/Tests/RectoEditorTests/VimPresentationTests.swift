@@ -102,17 +102,20 @@ struct VimPresentationTests {
         let history: SnapshotEditorHistory
         let textView: NSTextView
         var seam: RectoTextView?
+        let writingController: RectoWritingController?
         var edits: [RectoEditorEdit] = []
         var failures: [VimReplayFailure] = []
         var saves = 0
 
         init(harness: WindowHarness, storage: RectoTextStorage, vim: RectoVimController,
-             history: SnapshotEditorHistory, textView: NSTextView) {
+             history: SnapshotEditorHistory, textView: NSTextView,
+             writingController: RectoWritingController? = nil) {
             self.harness = harness
             self.storage = storage
             self.vim = vim
             self.history = history
             self.textView = textView
+            self.writingController = writingController
         }
 
         /// Drive keys the way a keyboard does: every key through
@@ -141,7 +144,7 @@ struct VimPresentationTests {
         }
     }
 
-    private func mount(_ markdown: String) throws -> Mounted {
+    private func mount(_ markdown: String, writingController: RectoWritingController? = nil) throws -> Mounted {
         let storage = RectoTextStorage(documentId: "vim", markdown: markdown)
         let vim = RectoVimController()
         let history = SnapshotEditorHistory(storage: storage)
@@ -158,12 +161,14 @@ struct VimPresentationTests {
                 onEdit: { edit in
                     history.accept(edit)
                     mounted?.edits.append(edit)
-                }
+                },
+                writingController: writingController
             ),
             size: CGSize(width: 640, height: 400)
         )
         let textView = try #require(harness.editorTextView)
-        let result = Mounted(harness: harness, storage: storage, vim: vim, history: history, textView: textView)
+        let result = Mounted(harness: harness, storage: storage, vim: vim, history: history,
+                             textView: textView, writingController: writingController)
         result.seam = storage.textView
         vim.onReplayFailure = { result.failures.append($0) }
         vim.onSave = { result.saves += 1 }
@@ -487,6 +492,39 @@ struct VimPresentationTests {
         try mounted.press("x")
 
         #expect(mounted.storage.markdown == "one\nwo\n")
+        #expect(mounted.mirrorMatchesStorage())
+        #expect(mounted.failures.isEmpty)
+    }
+
+    /// The format toolbar is enabled in `.vim` (`presentation.isEditable`), so
+    /// its commands must not desynchronise vim: a bold lands through
+    /// `applyPatch` and reaches the layer as an external edit
+    /// (`textDidChange` → `setText`) — and the command's selection (the
+    /// freshly wrapped word) arrives like any host-driven selection, which is
+    /// what visual mode is for upstream.
+    @Test("a toolbar bold in vim keeps the mirror in sync")
+    func toolbarBoldKeepsMirrorInSync() throws {
+        let writing = RectoWritingController()
+        let mounted = try mount("plain bold\n", writingController: writing)
+        defer { mounted.harness.tearDown() }
+        #expect(mounted.writingController != nil)
+
+        // Normal mode: visual-select "bold" the vim way, then bold it.
+        mounted.textView.setSelectedRange(NSRange(location: 6, length: 0))
+        try mounted.press("ve")
+        #expect(mounted.vim.status?.mode == "visual")
+        #expect(writing.perform(.bold))
+        #expect(mounted.storage.markdown == "plain **bold**\n",
+                "\(describe(mounted.storage.markdown))")
+        #expect(mounted.mirrorMatchesStorage())
+        #expect(mounted.failures.isEmpty)
+
+        // Insert mode: a caret at the end gets the empty-selection form.
+        try mounted.press("<Esc>$A")
+        #expect(mounted.vim.status?.mode == "insert")
+        #expect(writing.perform(.bold))
+        #expect(mounted.storage.markdown == "plain **bold****text**\n",
+                "\(describe(mounted.storage.markdown))")
         #expect(mounted.mirrorMatchesStorage())
         #expect(mounted.failures.isEmpty)
     }

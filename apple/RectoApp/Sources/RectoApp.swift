@@ -84,6 +84,8 @@ private struct StudioCommands: Commands {
                 .keyboardShortcut("r", modifiers: [.control, .shift])
             Button("Switch to Raw Markdown") { editors.choosePresentation(.raw, in: NSApp.keyWindow) }
                 .keyboardShortcut("m", modifiers: [.control, .shift])
+            Button("Switch to Vim") { editors.choosePresentation(.vim, in: NSApp.keyWindow) }
+                .keyboardShortcut("v", modifiers: [.control, .shift])
             Divider()
             Button("Toggle formatting toolbar", action: settings.toggleToolbar)
             Button("Toggle word count / status bar", action: settings.toggleStatusBar)
