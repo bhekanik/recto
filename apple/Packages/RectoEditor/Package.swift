@@ -18,7 +18,7 @@ let package = Package(
     dependencies: [
         .package(
             url: "https://github.com/bhekanik/swift-markdown-engine",
-            revision: "edf20d1e45a68294da6f65f4f08b40f6db2cccb3"
+            revision: "656a68024fd621829d208fb6677676a280bcee6a"
         ),
         .package(
             url: "https://github.com/smittytone/HighlighterSwift",
