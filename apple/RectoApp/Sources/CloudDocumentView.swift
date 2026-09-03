@@ -1,6 +1,5 @@
 import RectoCore
 import RectoEditor
-import RectoStore
 import SwiftUI
 
 struct CloudDocumentView: View {
@@ -105,7 +104,11 @@ struct CloudDocumentView: View {
                     vimController: vim.controller,
                     onSelect: choose
                 ) {
-                    SyncStateLabel(state: model.state.syncState, pendingCount: model.pendingEditCount)
+                    SyncIndicator(
+                        state: model.state.syncState,
+                        pendingCount: model.pendingEditCount,
+                        theme: styler.theme
+                    )
                 }
             }
         }
@@ -179,55 +182,6 @@ struct CloudDocumentView: View {
         } catch is CancellationError {
         } catch {
             openingError = error.localizedDescription
-        }
-    }
-}
-
-private struct SyncStateLabel: View {
-    let state: SyncState
-    let pendingCount: Int
-
-    var body: some View {
-        Label(title, systemImage: symbol)
-            .foregroundStyle(color)
-            .help(helpText)
-    }
-
-    private var title: String {
-        if pendingCount > 0 { return "Saving" }
-        return switch state {
-        case .synced: "Synced"
-        case .pending: "Pending"
-        case .syncing: "Syncing"
-        case .diverged: "Needs review"
-        case .failed: "On this Mac"
-        }
-    }
-
-    private var symbol: String {
-        switch state {
-        case .synced: "checkmark.icloud"
-        case .pending, .syncing: "arrow.trianglehead.2.clockwise.rotate.90.icloud"
-        case .diverged: "arrow.triangle.branch"
-        case .failed: "exclamationmark.icloud"
-        }
-    }
-
-    private var color: Color {
-        switch state {
-        case .synced: .secondary
-        case .pending, .syncing: .blue
-        case .diverged: .orange
-        case .failed: .red
-        }
-    }
-
-    private var helpText: String {
-        switch state {
-        case .synced: "This document matches Recto on the web."
-        case .pending, .syncing: "Changes are saved locally and waiting to sync."
-        case .diverged: "Choose which branch should become current."
-        case .failed: "Sync failed. Changes remain in the local database."
         }
     }
 }
