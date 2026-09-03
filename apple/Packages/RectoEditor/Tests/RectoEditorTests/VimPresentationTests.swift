@@ -483,6 +483,34 @@ struct VimPresentationTests {
         #expect(mounted.mirrorMatchesStorage())
     }
 
+    // MARK: - Non-US layouts
+
+    /// NSEvent as a layout that composes ASCII punctuation under Option
+    /// delivers it (German Option-8 = `{`, Option-9 = `}`).
+    private func composedKeyEvent(_ composed: String, _ base: String) -> NSEvent {
+        NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: .option, timestamp: 0,
+            windowNumber: 0, context: nil, characters: composed,
+            charactersIgnoringModifiers: base, isARepeat: false, keyCode: 0)!
+    }
+
+    @Test("Option-composed paragraph motions run against the engine's view")
+    func composedLayoutKeysWorkOnTheEngineView() throws {
+        let mounted = try mount("one\ntwo\n\nthree\n\n\nfour\n")
+        defer { mounted.harness.tearDown() }
+        mounted.textView.setSelectedRange(NSRange(location: 9, length: 0))
+
+        mounted.textView.keyDown(with: composedKeyEvent("{", "8"))
+        #expect(
+            mounted.textView.selectedRange().location == 8,
+            "German Option-8 must act as `{`, got \(mounted.textView.selectedRange())")
+        mounted.textView.keyDown(with: composedKeyEvent("}", "9"))
+        #expect(
+            mounted.textView.selectedRange().location == 15,
+            "German Option-9 must act as `}`, got \(mounted.textView.selectedRange())")
+        #expect(mounted.mirrorMatchesStorage())
+    }
+
     // MARK: - Scrolling
 
     @Test("a search that lands far away brings the caret on screen", arguments: [

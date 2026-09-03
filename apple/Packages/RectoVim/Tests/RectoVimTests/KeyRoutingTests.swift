@@ -29,6 +29,15 @@ struct KeyRoutingTests {
     static let enter = "\r"
     static let backspace = "\u{7F}"
 
+    /// A key as a layout delivers it when Option composes a different character
+    /// than the unmodified base (German Option-8 = `{`, some layouts Option-L = `@`).
+    static func composed(_ composed: String, _ base: String) -> NSEvent {
+        NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: .option, timestamp: 0,
+            windowNumber: 0, context: nil, characters: composed,
+            charactersIgnoringModifiers: base, isARepeat: false, keyCode: 0)!
+    }
+
     @Test("a physical key reaches vim without the caller wiring anything")
     func keyHookIsInstalled() throws {
         let harness = try TextViewHarness("the quick brown fox\n")
@@ -123,6 +132,59 @@ struct KeyRoutingTests {
         harness.textView.unmarkText()
 
         #expect(harness.textView.string.contains("\u{65E5}"))
+        #expect(sameCodeUnits(harness.engine.text(), harness.textView.string))
+    }
+
+    // MARK: - Option-composed layout symbols
+
+    @Test("layout symbols behind Option arrive as their character, not <A-x>", arguments: [
+        (base: "8", composed: "{"),
+        (base: "9", composed: "}"),
+        (base: "5", composed: "["),
+        (base: "6", composed: "]"),
+        (base: "l", composed: "@"),
+    ])
+    func optionComposedSymbolsArriveAsTheirCharacters(base: String, composed: String) throws {
+        let translated = try #require(VimKeyEvent.translate(Self.composed(composed, base)))
+        #expect(translated.key == composed)
+        #expect(translated.mods.isEmpty)
+    }
+
+    @Test("an Option accent is not a composed symbol and stays <A-x>")
+    func usOptionAccentStaysAChord() throws {
+        // US Option-a composes "å" into `characters` — non-ASCII, so it is the
+        // accent mnemonic, and the core must still see the chord so <A-a>
+        // mappings and unhandled fall-through keep working.
+        let translated = try #require(VimKeyEvent.translate(Self.composed("å", "a")))
+        #expect(translated.key == "a")
+        #expect(translated.mods == [.option])
+    }
+
+    @Test("a control chord with a composed character keeps its modifier")
+    func controlOptionChordStaysAChord() throws {
+        let event = NSEvent.keyEvent(
+            with: .keyDown, location: .zero,
+            modifierFlags: [.control, .option], timestamp: 0,
+            windowNumber: 0, context: nil, characters: "[",
+            charactersIgnoringModifiers: "5", isARepeat: false, keyCode: 0)!
+        let translated = try #require(VimKeyEvent.translate(event))
+        #expect(translated.key == "5")
+        #expect(translated.mods == [.control, .option])
+    }
+
+    @Test("paragraph motions work when the layout composes them under Option")
+    func composedParagraphMotionsWork() throws {
+        let harness = try TextViewHarness("one\ntwo\n\nthree\n\n\nfour\n")
+        // Caret on the "three" paragraph: `{` to its start, `}` to the next.
+        harness.textView.setSelectedRange(NSRange(location: 9, length: 0))
+        harness.textView.keyDown(with: Self.composed("{", "8"))
+        #expect(
+            harness.textView.selectedRange().location == 8,
+            "German Option-8 must act as `{`, got \(harness.textView.selectedRange())")
+        harness.textView.keyDown(with: Self.composed("}", "9"))
+        #expect(
+            harness.textView.selectedRange().location == 15,
+            "German Option-9 must act as `}`, got \(harness.textView.selectedRange())")
         #expect(sameCodeUnits(harness.engine.text(), harness.textView.string))
     }
 
