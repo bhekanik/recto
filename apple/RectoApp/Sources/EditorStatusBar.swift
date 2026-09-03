@@ -1,3 +1,4 @@
+import AppKit
 import RectoCoreJS
 import RectoEditor
 import SwiftUI
@@ -238,13 +239,24 @@ private struct WordCountLabel: View {
     let counter: WordCounter
     @State private var count: Int?
 
+    /// "1,000 words" measured in the monospaced-digit face the label renders
+    /// in — the proportional face is narrower, so a floor measured there let
+    /// 999 → 1,000 still shove the reading time and the sync slot.
+    private static let wordCountMinWidth: CGFloat = {
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular),
+        ]
+        return ("1,000 words" as NSString).size(withAttributes: attributes).width
+    }()
+
     var body: some View {
         let markdown = storage.markdown
-        return Group {
+        return HStack(spacing: 8) {
             if let count {
-                Text("^[\(count) word](inflect: true) · \(ReadingTime.format(minutes: ReadingTime.minutes(wordCount: count)))")
-            } else {
-                Text(verbatim: "")
+                Text("^[\(count) word](inflect: true)")
+                    .frame(minWidth: Self.wordCountMinWidth, alignment: .trailing)
+                Text(verbatim: "·")
+                Text(ReadingTime.format(minutes: ReadingTime.minutes(wordCount: count)))
             }
         }
         .monospacedDigit()

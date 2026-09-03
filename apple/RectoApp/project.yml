@@ -68,6 +68,12 @@ targets:
         NSHumanReadableCopyright: "Copyright © 2026 Bhekani Khumalo"
         RectoClerkPublishableKey: "$(RECTO_CLERK_PUBLISHABLE_KEY)"
         RectoConvexURL: "$(RECTO_CONVEX_URL)"
+        RectoWebURL: "$(RECTO_WEB_URL)"
+        CFBundleURLTypes:
+          - CFBundleTypeRole: Editor
+            CFBundleURLName: Recto document link
+            CFBundleURLSchemes:
+              - recto
         CFBundleDocumentTypes:
           - CFBundleTypeName: Markdown document
             CFBundleTypeRole: Editor

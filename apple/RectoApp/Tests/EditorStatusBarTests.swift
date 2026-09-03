@@ -1,6 +1,7 @@
 import AppKit
 import RectoCoreJS
 import RectoEditor
+import RectoStore
 import SwiftUI
 import Synchronization
 import Testing
@@ -68,6 +69,77 @@ struct EditorStatusBarTests {
         await drainMainQueue()
         let settled = calls.withLock { $0 }
         #expect(settled >= 1 && settled <= 2, "one count after the burst settles, got \(settled)")
+    }
+
+    /// The floor is measured in the face the label renders in; a floor measured
+    /// in the proportional face was 2.7 pt too short and let the row jump.
+    @Test("the bar's width is identical at 999 and 1,001 words")
+    func wordCountCrossingOneThousandDoesNotShiftTheBar() async throws {
+        _ = NSApplication.shared
+        func width(words: Int) async -> CGFloat {
+            let storage = RectoTextStorage(
+                documentId: "status-bar-\(words)",
+                markdown: Array(repeating: "word", count: words).joined(separator: " ")
+            )
+            let host = NSHostingView(rootView: Host(
+                storage: storage,
+                settings: StudioSettings(defaults: scratchDefaults(), systemAppearance: { .dark }),
+                counter: WordCount.count
+            ))
+            host.layoutSubtreeIfNeeded()
+            await drainMainQueue()
+            return host.fittingSize.width
+        }
+        let before = await width(words: 999)
+        let after = await width(words: 1_001)
+        #expect(before == after, "999 → 1,001 words moved the bar by \(after - before) pt")
+    }
+
+    @Test("sync labels match the web: Saving, Saved, Unsynced, Not synced")
+    func syncLabelsMatchTheWeb() {
+        #expect(SyncIndicator.label(state: .synced, pendingCount: 0) == "Saved")
+        #expect(SyncIndicator.label(state: .pending, pendingCount: 0) == "Saving")
+        #expect(SyncIndicator.label(state: .syncing, pendingCount: 0) == "Saving")
+        #expect(SyncIndicator.label(state: .failed, pendingCount: 0) == "Unsynced")
+        #expect(SyncIndicator.label(state: .diverged, pendingCount: 0) == "Not synced")
+        #expect(SyncIndicator.label(state: .synced, pendingCount: 1) == "Saving")
+        #expect(SyncIndicator.label(state: .diverged, pendingCount: 1) == "Saving")
+        #expect(SyncIndicator.label(state: .failed, pendingCount: 1) == "Saving")
+    }
+
+    @Test("the sync indicator's rendered width is identical across every SyncState and pendingCount 0/1")
+    func syncIndicatorWidthIsStable() {
+        _ = NSApplication.shared
+        let samples: [(SyncState, Int)] = [
+            (.synced, 0), (.synced, 1),
+            (.pending, 0), (.pending, 1),
+            (.syncing, 0), (.syncing, 1),
+            (.diverged, 0), (.diverged, 1),
+            (.failed, 0), (.failed, 1),
+        ]
+        let widths = samples.map { measureSyncIndicator(state: $0.0, pendingCount: $0.1) }
+        let first = widths[0]
+        #expect(first > 0)
+        for (index, width) in widths.enumerated() {
+            #expect(
+                abs(width - first) < 0.5,
+                "sample \(index) was \(width), first was \(first)"
+            )
+        }
+    }
+
+    private func measureSyncIndicator(state: SyncState, pendingCount: Int) -> CGFloat {
+        let host = NSHostingView(rootView: SyncIndicator(
+            state: state,
+            pendingCount: pendingCount,
+            theme: .twilight
+        ))
+        let window = NSWindow(contentViewController: NSViewController())
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.close() }
+        host.layoutSubtreeIfNeeded()
+        return host.fittingSize.width
     }
 
     /// Empty, and emptied again on exit, so the test never reads or writes the

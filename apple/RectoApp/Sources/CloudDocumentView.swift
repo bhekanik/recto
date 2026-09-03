@@ -1,6 +1,6 @@
+import AppKit
 import RectoCore
 import RectoEditor
-import RectoStore
 import SwiftUI
 
 struct CloudDocumentView: View {
@@ -11,6 +11,7 @@ struct CloudDocumentView: View {
     @State private var openingError: String?
     @State private var chrome: EditorHostController
     @State private var vim = VimHostState()
+    @Environment(\.rectoWebOrigin) private var webOrigin
     @AppStorage(PresentationPreference.key) private var storedPresentation: String?
     /// This window's lens. `nil` until it appears, when it takes the stored
     /// default; after that only the writer's own choice moves it.
@@ -105,7 +106,22 @@ struct CloudDocumentView: View {
                     vimController: vim.controller,
                     onSelect: choose
                 ) {
-                    SyncStateLabel(state: model.state.syncState, pendingCount: model.pendingEditCount)
+                    HStack(spacing: 8) {
+                        OpenInWebButton(
+                            enabled: WebHandoff.isEnabled(
+                                convexId: model.state.convexId, webOrigin: webOrigin),
+                            help: WebHandoff.disabledReason(
+                                convexId: model.state.convexId, webOrigin: webOrigin),
+                            theme: styler.theme
+                        ) {
+                            openInWeb(convexId: model.state.convexId)
+                        }
+                        SyncIndicator(
+                            state: model.state.syncState,
+                            pendingCount: model.pendingEditCount,
+                            theme: styler.theme
+                        )
+                    }
                 }
             }
         }
@@ -181,53 +197,33 @@ struct CloudDocumentView: View {
             openingError = error.localizedDescription
         }
     }
+
+    private func openInWeb(convexId: String?) {
+        guard let origin = webOrigin, let convexId,
+              let url = DocumentLink.webURL(origin: origin, convexId: convexId)
+        else { return }
+        NSWorkspace.shared.open(url)
+    }
 }
 
-private struct SyncStateLabel: View {
-    let state: SyncState
-    let pendingCount: Int
+private struct OpenInWebButton: View {
+    let enabled: Bool
+    let help: String
+    let theme: RectoEditorTheme
+    let action: () -> Void
 
     var body: some View {
-        Label(title, systemImage: symbol)
-            .foregroundStyle(color)
-            .help(helpText)
-    }
-
-    private var title: String {
-        if pendingCount > 0 { return "Saving" }
-        return switch state {
-        case .synced: "Synced"
-        case .pending: "Pending"
-        case .syncing: "Syncing"
-        case .diverged: "Needs review"
-        case .failed: "On this Mac"
+        Button(action: action) {
+            Image(systemName: "globe")
+                .font(.system(size: 12))
+                .frame(width: 24, height: 24)
+                .foregroundStyle(Color(nsColor: theme.ink3))
+                .contentShape(Rectangle())
         }
-    }
-
-    private var symbol: String {
-        switch state {
-        case .synced: "checkmark.icloud"
-        case .pending, .syncing: "arrow.trianglehead.2.clockwise.rotate.90.icloud"
-        case .diverged: "arrow.triangle.branch"
-        case .failed: "exclamationmark.icloud"
-        }
-    }
-
-    private var color: Color {
-        switch state {
-        case .synced: .secondary
-        case .pending, .syncing: .blue
-        case .diverged: .orange
-        case .failed: .red
-        }
-    }
-
-    private var helpText: String {
-        switch state {
-        case .synced: "This document matches Recto on the web."
-        case .pending, .syncing: "Changes are saved locally and waiting to sync."
-        case .diverged: "Choose which branch should become current."
-        case .failed: "Sync failed. Changes remain in the local database."
-        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .disabled(!enabled)
+        .help(help)
+        .accessibilityLabel("Open in web app")
     }
 }

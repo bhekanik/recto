@@ -20,6 +20,7 @@
 		3A33650ED0EDD6B6845B4946 /* TopFormatToolbarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 081000DF06421E2AB99C4D14 /* TopFormatToolbarTests.swift */; };
 		3B6D75ED64FCB5ADC1495B05 /* CommandPaletteController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 584B9D617349E093DAD17A7F /* CommandPaletteController.swift */; };
 		3CAB53AC97E73959F71428C2 /* CommandPaletteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9162CA095C6BFD74EA02C263 /* CommandPaletteView.swift */; };
+		4B7768AF1639661E35CE9474 /* DocumentLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5607FF90F1BEA6D3ED8F410D /* DocumentLink.swift */; };
 		50B65633ED8E88066BE2DDC4 /* EditorHostViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3043896BC9224FA46A887898 /* EditorHostViewTests.swift */; };
 		56B00C95C1D0711D83C520C3 /* TopFormatToolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 526C9D721D8D013900C03100 /* TopFormatToolbar.swift */; };
 		57FCF6A7BFB1333924E4C57F /* EditorHostController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C615302D3E7E2CA08AD39F6 /* EditorHostController.swift */; };
@@ -32,11 +33,14 @@
 		763091A8177058FC11D1EE7A /* RectoDocumentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9F5C256848CE3E71B3FBBF0 /* RectoDocumentTests.swift */; };
 		840F1328B957A05D45E90150 /* OrderedDocumentEdits.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1016C956B2129F9E615F092 /* OrderedDocumentEdits.swift */; };
 		84424EF9E12A3D7DE5AD6CA2 /* RectoAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 4DC894E55209EEC836FC3509 /* RectoAuth */; };
+		87C43C876F634C0552593789 /* HandoffEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02B6D7800E92A211EE1A23EB /* HandoffEnvironment.swift */; };
 		885D94683237079208EDA687 /* PaletteModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76EE13261BC8A4CB8A758876 /* PaletteModel.swift */; };
 		8C67170EE9A465BCAA518CC2 /* CloudDocumentModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8589138DCF2864A8EC5C41C9 /* CloudDocumentModel.swift */; };
+		914DD232485A7200442F54CF /* SyncIndicator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CB4981001B07AA443DF62E5 /* SyncIndicator.swift */; };
 		94CE851A6BF9F407B0C2ED90 /* RootForegroundInterleavingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCEBFE1A5165F1BE37FD346D /* RootForegroundInterleavingTests.swift */; };
 		9A0126F78D54CBD645461F94 /* VimPresentationHostTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59B4F0B273ADA1DDC96FDDD0 /* VimPresentationHostTests.swift */; };
 		A69E275C753052A3B33B0261 /* MarkdownHandlerSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26EF72694687925314503054 /* MarkdownHandlerSettings.swift */; };
+		A7B6B93988B966AC74FECF57 /* DocumentLinkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 974F77168BF315CC83C58C3E /* DocumentLinkTests.swift */; };
 		AC93C5BC994BDE1833BC6478 /* CommandRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81CED2C605817E35E510AFCB /* CommandRegistry.swift */; };
 		AF3C02D0F992E368A1F8B5BA /* EmailSignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06F1089147A9513D2B76ABDE /* EmailSignInView.swift */; };
 		B24A3B1FC7CA46D45EF1C453 /* OrderedDocumentEditsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA24465686AB4748FE498A70 /* OrderedDocumentEditsTests.swift */; };
@@ -68,6 +72,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		02B6D7800E92A211EE1A23EB /* HandoffEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandoffEnvironment.swift; sourceTree = "<group>"; };
 		0312E63D64B606C069224BD2 /* CloudLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudLibraryView.swift; sourceTree = "<group>"; };
 		06F1089147A9513D2B76ABDE /* EmailSignInView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmailSignInView.swift; sourceTree = "<group>"; };
 		081000DF06421E2AB99C4D14 /* TopFormatToolbarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopFormatToolbarTests.swift; sourceTree = "<group>"; };
@@ -88,6 +93,7 @@
 		4BEA2AD7F2D906737F82E9F6 /* EditorHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorHostView.swift; sourceTree = "<group>"; };
 		4CE28505252B3B9A09DBBDA7 /* Recto.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Recto.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		526C9D721D8D013900C03100 /* TopFormatToolbar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopFormatToolbar.swift; sourceTree = "<group>"; };
+		5607FF90F1BEA6D3ED8F410D /* DocumentLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentLink.swift; sourceTree = "<group>"; };
 		584B9D617349E093DAD17A7F /* CommandPaletteController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandPaletteController.swift; sourceTree = "<group>"; };
 		59B4F0B273ADA1DDC96FDDD0 /* VimPresentationHostTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VimPresentationHostTests.swift; sourceTree = "<group>"; };
 		5A9B27E0E9570FB896924145 /* MarkdownHandlerSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownHandlerSettingsTests.swift; sourceTree = "<group>"; };
@@ -95,6 +101,7 @@
 		65710FD2CFB1ED4E06D82FE9 /* r-mono.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "r-mono.png"; sourceTree = "<group>"; };
 		667B77000492C546D56B2307 /* EditorStatusBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorStatusBar.swift; sourceTree = "<group>"; };
 		688482441E8C255771A630E8 /* RectoDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RectoDocument.swift; sourceTree = "<group>"; };
+		6CB4981001B07AA443DF62E5 /* SyncIndicator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncIndicator.swift; sourceTree = "<group>"; };
 		6E3D324F800F5CE7E4DED32D /* RectoSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RectoSettingsView.swift; sourceTree = "<group>"; };
 		76CCA8C9943CBC9CB2C0C048 /* RectoEditor */ = {isa = PBXFileReference; lastKnownFileType = folder; name = RectoEditor; path = ../Packages/RectoEditor; sourceTree = SOURCE_ROOT; };
 		76EE13261BC8A4CB8A758876 /* PaletteModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaletteModel.swift; sourceTree = "<group>"; };
@@ -108,6 +115,7 @@
 		8DFB77EE2FCD168B679A47D4 /* PresentationPreference.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresentationPreference.swift; sourceTree = "<group>"; };
 		9162CA095C6BFD74EA02C263 /* CommandPaletteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandPaletteView.swift; sourceTree = "<group>"; };
 		93B05EF44F4CD5DAC0FC14AE /* RectoTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RectoTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		974F77168BF315CC83C58C3E /* DocumentLinkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentLinkTests.swift; sourceTree = "<group>"; };
 		9BC4145FD50C0B2E0D076716 /* SHA256SUMS */ = {isa = PBXFileReference; path = SHA256SUMS; sourceTree = "<group>"; };
 		A1016C956B2129F9E615F092 /* OrderedDocumentEdits.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrderedDocumentEdits.swift; sourceTree = "<group>"; };
 		A889A25CDE48A7DD348070E0 /* RectoCloudRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RectoCloudRootView.swift; sourceTree = "<group>"; };
@@ -189,10 +197,12 @@
 				584B9D617349E093DAD17A7F /* CommandPaletteController.swift */,
 				9162CA095C6BFD74EA02C263 /* CommandPaletteView.swift */,
 				81CED2C605817E35E510AFCB /* CommandRegistry.swift */,
+				5607FF90F1BEA6D3ED8F410D /* DocumentLink.swift */,
 				7C615302D3E7E2CA08AD39F6 /* EditorHostController.swift */,
 				4BEA2AD7F2D906737F82E9F6 /* EditorHostView.swift */,
 				667B77000492C546D56B2307 /* EditorStatusBar.swift */,
 				06F1089147A9513D2B76ABDE /* EmailSignInView.swift */,
+				02B6D7800E92A211EE1A23EB /* HandoffEnvironment.swift */,
 				26EF72694687925314503054 /* MarkdownHandlerSettings.swift */,
 				A1016C956B2129F9E615F092 /* OrderedDocumentEdits.swift */,
 				76EE13261BC8A4CB8A758876 /* PaletteModel.swift */,
@@ -204,6 +214,7 @@
 				688482441E8C255771A630E8 /* RectoDocument.swift */,
 				6E3D324F800F5CE7E4DED32D /* RectoSettingsView.swift */,
 				873CFE9D408A1611A230EF44 /* StudioSettings.swift */,
+				6CB4981001B07AA443DF62E5 /* SyncIndicator.swift */,
 				526C9D721D8D013900C03100 /* TopFormatToolbar.swift */,
 				C23DDE416656399FB4E41FEF /* WritingControlsHost.swift */,
 			);
@@ -253,6 +264,7 @@
 				FD3F7F786A85496318A94A06 /* AppConfigurationTests.swift */,
 				C392C824BA3377AB65598207 /* ApplicationModelTests.swift */,
 				2F03D2999A598D80B0686FA9 /* CommandPaletteTests.swift */,
+				974F77168BF315CC83C58C3E /* DocumentLinkTests.swift */,
 				3043896BC9224FA46A887898 /* EditorHostViewTests.swift */,
 				250C2D1E689D4E327F47CA43 /* EditorStatusBarTests.swift */,
 				5A9B27E0E9570FB896924145 /* MarkdownHandlerSettingsTests.swift */,
@@ -384,6 +396,7 @@
 				58006658EEBBF3A6E9838451 /* AppConfigurationTests.swift in Sources */,
 				21A6C4AB51BF061B6A77E594 /* ApplicationModelTests.swift in Sources */,
 				66EA966A8506D70C38405B71 /* CommandPaletteTests.swift in Sources */,
+				A7B6B93988B966AC74FECF57 /* DocumentLinkTests.swift in Sources */,
 				50B65633ED8E88066BE2DDC4 /* EditorHostViewTests.swift in Sources */,
 				E724056F89B96985B9A6DB0B /* EditorStatusBarTests.swift in Sources */,
 				12C672FD1921110AACD309FA /* MarkdownHandlerSettingsTests.swift in Sources */,
@@ -411,10 +424,12 @@
 				3B6D75ED64FCB5ADC1495B05 /* CommandPaletteController.swift in Sources */,
 				3CAB53AC97E73959F71428C2 /* CommandPaletteView.swift in Sources */,
 				AC93C5BC994BDE1833BC6478 /* CommandRegistry.swift in Sources */,
+				4B7768AF1639661E35CE9474 /* DocumentLink.swift in Sources */,
 				57FCF6A7BFB1333924E4C57F /* EditorHostController.swift in Sources */,
 				7576DBE4CEA3C712E79E6C84 /* EditorHostView.swift in Sources */,
 				D0CB31577F7324EF57F36DB5 /* EditorStatusBar.swift in Sources */,
 				AF3C02D0F992E368A1F8B5BA /* EmailSignInView.swift in Sources */,
+				87C43C876F634C0552593789 /* HandoffEnvironment.swift in Sources */,
 				A69E275C753052A3B33B0261 /* MarkdownHandlerSettings.swift in Sources */,
 				840F1328B957A05D45E90150 /* OrderedDocumentEdits.swift in Sources */,
 				885D94683237079208EDA687 /* PaletteModel.swift in Sources */,
@@ -426,6 +441,7 @@
 				16894C35A6742F13EF48D5D7 /* RectoDocument.swift in Sources */,
 				69D25773E0AE440A6159F187 /* RectoSettingsView.swift in Sources */,
 				243C0E64708D2DE3071D4BBE /* StudioSettings.swift in Sources */,
+				914DD232485A7200442F54CF /* SyncIndicator.swift in Sources */,
 				56B00C95C1D0711D83C520C3 /* TopFormatToolbar.swift in Sources */,
 				E02A3B1FE8A01024A31CBDC5 /* WritingControlsHost.swift in Sources */,
 			);

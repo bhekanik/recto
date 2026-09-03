@@ -3,6 +3,10 @@ import Foundation
 struct AppConfiguration: Equatable, Sendable {
     let convexURL: String
     let clerkPublishableKey: String
+    /// HTTPS origin of the web app. `nil` in unsigned local builds: the
+    /// Info.plist key is empty or still a `$(RECTO_WEB_URL)` token, and
+    /// Open in web is disabled.
+    let webURL: String?
 
     init(bundle: Bundle = .main) throws {
         try self.init(values: bundle.infoDictionary ?? [:])
@@ -19,11 +23,23 @@ struct AppConfiguration: Equatable, Sendable {
         }
         self.convexURL = convexURL
         self.clerkPublishableKey = clerkPublishableKey
+        self.webURL = try Self.parseOptionalWebURL(values["RectoWebURL"])
     }
 
-    init(convexURL: String, clerkPublishableKey: String) {
+    init(convexURL: String, clerkPublishableKey: String, webURL: String? = nil) {
         self.convexURL = convexURL
         self.clerkPublishableKey = clerkPublishableKey
+        self.webURL = webURL
+    }
+
+    static func parseOptionalWebURL(_ value: Any?) throws -> String? {
+        guard let string = value as? String else { return nil }
+        let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty || trimmed.contains("$(") { return nil }
+        guard isValidHTTPSURL(trimmed) else {
+            throw AppConfigurationError.invalidWebURL
+        }
+        return trimmed
     }
 
     static func isValidHTTPSURL(_ value: String) -> Bool {
@@ -74,6 +90,7 @@ struct AppConfiguration: Equatable, Sendable {
 enum AppConfigurationError: LocalizedError, Equatable {
     case missingConvexURL
     case missingClerkPublishableKey
+    case invalidWebURL
 
     var errorDescription: String? {
         switch self {
@@ -81,6 +98,8 @@ enum AppConfigurationError: LocalizedError, Equatable {
             "This Recto build has no HTTPS Convex URL."
         case .missingClerkPublishableKey:
             "This Recto build has no Clerk publishable key."
+        case .invalidWebURL:
+            "This Recto build's web URL is not a valid HTTPS origin."
         }
     }
 }

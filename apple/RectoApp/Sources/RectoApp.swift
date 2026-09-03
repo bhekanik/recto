@@ -11,7 +11,7 @@ struct RectoApp: App {
     var body: some Scene {
         Window("Recto", id: "cloud-library") {
             StudioAppearance(settings: settings) {
-                RectoCloudRootView(model: model)
+                CloudLibraryScene(model: model)
                     .background(LibraryWindowAnchor(editors: .shared))
                     .onChange(of: scenePhase) { _, phase in
                         Task {
@@ -46,6 +46,25 @@ struct RectoApp: App {
     }
 }
 
+/// Library window: receives `recto://document/<id>` and carries the web origin
+/// into the status bar's globe button.
+private struct CloudLibraryScene: View {
+    let model: RectoApplicationModel
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        RectoCloudRootView(model: model)
+            .environment(\.rectoWebOrigin, model.webURL)
+            .onOpenURL { url in
+                Task {
+                    if await model.openDocument(from: url) {
+                        openWindow(id: "cloud-library")
+                    }
+                }
+            }
+    }
+}
+
 /// Puts a window on the writer's chosen appearance so its chrome matches the
 /// editor's palette. A view rather than a modifier in `App.body`, so the
 /// settings read is observed.
@@ -77,6 +96,10 @@ private struct StudioCommands: Commands {
                 palette.open(library: library)
             }
             .keyboardShortcut("k")
+            Button("Open in web app") {
+                model.openSelectedDocumentInWeb()
+            }
+            .disabled(!model.canOpenSelectedDocumentInWeb)
             Divider()
             // The ring's buttons carry these chords in-window; with the bar
             // hidden the ring is gone, and the menu is what answers them.
@@ -115,7 +138,11 @@ private struct StudioCommands: Commands {
             create: { [model] in
                 openWindow(id: "cloud-library")
                 Task { await model.createDocument() }
-            }
+            },
+            openInWeb: { [model] in
+                model.openSelectedDocumentInWeb()
+            },
+            canOpenInWeb: model.canOpenSelectedDocumentInWeb
         )
     }
 }

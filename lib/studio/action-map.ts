@@ -9,6 +9,7 @@ import {
 	exportHtmlFile,
 	exportMarkdownFile,
 } from "@/lib/export";
+import { macAppDocumentURL } from "@/lib/handoff/document-link";
 import type { HistoryController } from "@/lib/history/use-document-history";
 import type { ActionId } from "@/lib/keyboard/actions";
 import {
@@ -52,6 +53,7 @@ export type ActionMapDeps = {
 	setZen: (updater: (v: boolean) => boolean) => void;
 	setGoalConfigOpen: (open: boolean) => void;
 	toggleAiEnabled?: () => void;
+	openInMacApp?: (documentId: Id<"documents">) => void;
 };
 
 /**
@@ -98,6 +100,14 @@ export function createActionMap(
 
 	return {
 		"new-document": () => void handleCreate(),
+		"open-in-mac-app": () => {
+			if (!activeDocId) return;
+			if (deps.openInMacApp) {
+				deps.openInMacApp(activeDocId);
+				return;
+			}
+			window.location.assign(macAppDocumentURL(activeDocId));
+		},
 		"mode-rich": () => dispatchModeSwitch("rich"),
 		"mode-raw": () => dispatchModeSwitch("raw"),
 		"mode-vim": () => dispatchModeSwitch("vim"),

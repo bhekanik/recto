@@ -14,6 +14,51 @@ struct AppConfigurationTests {
             "RectoClerkPublishableKey": validKey,
         ])
         #expect(configuration.convexURL == "https://example.convex.cloud")
+        #expect(configuration.webURL == nil)
+    }
+
+    @Test("missing or unresolved web URL disables Open in web")
+    func optionalWebURL() throws {
+        let missing = try AppConfiguration(values: [
+            "RectoConvexURL": "https://example.convex.cloud",
+            "RectoClerkPublishableKey": validKey,
+        ])
+        #expect(missing.webURL == nil)
+
+        let unresolved = try AppConfiguration(values: [
+            "RectoConvexURL": "https://example.convex.cloud",
+            "RectoClerkPublishableKey": validKey,
+            "RectoWebURL": "$(RECTO_WEB_URL)",
+        ])
+        #expect(unresolved.webURL == nil)
+
+        let empty = try AppConfiguration(values: [
+            "RectoConvexURL": "https://example.convex.cloud",
+            "RectoClerkPublishableKey": validKey,
+            "RectoWebURL": "",
+        ])
+        #expect(empty.webURL == nil)
+    }
+
+    @Test("accepts an HTTPS web origin")
+    func acceptsWebURL() throws {
+        let configuration = try AppConfiguration(values: [
+            "RectoConvexURL": "https://example.convex.cloud",
+            "RectoClerkPublishableKey": validKey,
+            "RectoWebURL": "https://recto.example",
+        ])
+        #expect(configuration.webURL == "https://recto.example")
+    }
+
+    @Test(arguments: ["https://", "http://example.com", "https://example.com/path?x=1"])
+    func rejectsMalformedWebURL(_ url: String) {
+        #expect(throws: AppConfigurationError.invalidWebURL) {
+            try AppConfiguration(values: [
+                "RectoConvexURL": "https://example.convex.cloud",
+                "RectoClerkPublishableKey": validKey,
+                "RectoWebURL": url,
+            ])
+        }
     }
 
     @Test(arguments: [
@@ -63,11 +108,12 @@ struct AppConfigurationTests {
             .deletingLastPathComponent()
             .appending(path: "scripts/validate-archive-config.sh")
 
-        func validate(convexURL: String, clerkKey: String) throws -> Int32 {
+        func validate(convexURL: String, clerkKey: String, webURL: String) throws -> Int32 {
             let data = try PropertyListSerialization.data(
                 fromPropertyList: [
                     "RectoConvexURL": convexURL,
                     "RectoClerkPublishableKey": clerkKey,
+                    "RectoWebURL": webURL,
                 ],
                 format: .xml,
                 options: 0
@@ -84,14 +130,28 @@ struct AppConfigurationTests {
         }
 
         #expect(try validate(
-            convexURL: "https://example.convex.cloud", clerkKey: validKey) == 0)
-        #expect(try validate(convexURL: "https://", clerkKey: validKey) != 0)
+            convexURL: "https://example.convex.cloud", clerkKey: validKey,
+            webURL: "https://recto.example") == 0)
+        #expect(try validate(convexURL: "https://", clerkKey: validKey, webURL: "https://recto.example") != 0)
         #expect(try validate(
-            convexURL: "https://example.convex.cloud", clerkKey: "pk_test_") != 0)
+            convexURL: "https://example.convex.cloud", clerkKey: "pk_test_",
+            webURL: "https://recto.example") != 0)
         #expect(try validate(
-            convexURL: "https://example.convex.cloud", clerkKey: "pk_live_$(MISSING)") != 0)
+            convexURL: "https://example.convex.cloud", clerkKey: "pk_live_$(MISSING)",
+            webURL: "https://recto.example") != 0)
         #expect(try validate(
             convexURL: "https://example.convex.cloud",
-            clerkKey: "pk_test_aG9zdC9wYXRoJA") != 0)
+            clerkKey: "pk_test_aG9zdC9wYXRoJA", webURL: "https://recto.example") != 0)
+        // The web URL follows the same rule as the Convex URL: present, HTTPS,
+        // resolved. An archive without one ships the handoff disabled.
+        #expect(try validate(
+            convexURL: "https://example.convex.cloud", clerkKey: validKey,
+            webURL: "http://recto.example") != 0)
+        #expect(try validate(
+            convexURL: "https://example.convex.cloud", clerkKey: validKey,
+            webURL: "$(RECTO_WEB_URL)") != 0)
+        #expect(try validate(
+            convexURL: "https://example.convex.cloud", clerkKey: validKey,
+            webURL: "") != 0)
     }
 }

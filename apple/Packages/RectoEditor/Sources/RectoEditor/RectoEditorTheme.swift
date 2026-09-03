@@ -119,7 +119,7 @@ extension NSColor {
     ///   - lightness: 0…1.
     ///   - chroma: 0…~0.37.
     ///   - hue: degrees.
-    static func oklch(_ lightness: CGFloat, _ chroma: CGFloat, _ hue: CGFloat) -> NSColor {
+    public static func oklch(_ lightness: CGFloat, _ chroma: CGFloat, _ hue: CGFloat) -> NSColor {
         let hueRadians = hue * .pi / 180
         let a = chroma * cos(hueRadians)
         let b = chroma * sin(hueRadians)

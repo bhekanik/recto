@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 import RectoAuth
@@ -39,10 +40,14 @@ final class RectoApplicationModel {
     private(set) var registry: DocumentSessionRegistry?
     private(set) var library: DocumentLibrary?
     private(set) var auth: RectoAuth?
+    /// HTTPS origin of the web app. `nil` disables Open in web.
+    var webURL: URL?
+    var openURL: (URL) -> Bool = { NSWorkspace.shared.open($0) }
     private var emailChallenge: EmailCodeChallenge?
     private var authTask: Task<Void, Never>?
     private var syncTask: Task<Void, Never>?
     private let injectedComponents: Components?
+    private var pendingOpenConvexId: String?
 
     init(components: Components? = nil) {
         injectedComponents = components
@@ -54,11 +59,14 @@ final class RectoApplicationModel {
         do {
             if let injectedComponents {
                 install(injectedComponents)
+                applyWebURL(configuration)
                 startupState = .ready
                 await injectedComponents.auth.start()
+                await applyPendingOpen()
                 return
             }
             let configuration = try configuration ?? AppConfiguration()
+            applyWebURL(configuration)
             RectoAuth.configureClerk(publishableKey: configuration.clerkPublishableKey)
             let store = try RectoStore(url: RectoStore.defaultURL())
             let auth = RectoAuth(store: store)
@@ -81,6 +89,7 @@ final class RectoApplicationModel {
                 store: store, auth: auth, sync: sync, registry: registry, library: library))
             startupState = .ready
             await auth.start()
+            await applyPendingOpen()
         } catch {
             startupState = .failed(error.localizedDescription)
         }
@@ -118,19 +127,48 @@ final class RectoApplicationModel {
         guard case .signedIn = authStatus, let library else {
             documents = []
             selectedDocumentId = nil
+            await applyPendingOpen()
             return
         }
         do {
             documents = try await library.documents()
-            if let selectedDocumentId,
-               documents.contains(where: { $0.localId == selectedDocumentId }) {
-                return
+            if selectedDocumentId == nil
+                || !documents.contains(where: { $0.localId == selectedDocumentId }) {
+                selectedDocumentId = documents.first?.localId
+                errorMessage = nil
             }
-            selectedDocumentId = documents.first?.localId
-            errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
         }
+        await applyPendingOpen()
+    }
+
+    /// The selected document's convex id as the published library knows it.
+    /// Array-only because the menu items that read this run synchronously on
+    /// the main actor; the store stays behind `await` in `applyPendingOpen`.
+    var selectedConvexId: String? {
+        guard let selectedDocumentId else { return nil }
+        return documents.first(where: { $0.localId == selectedDocumentId })?.convexId
+    }
+
+    var canOpenSelectedDocumentInWeb: Bool {
+        WebHandoff.isEnabled(convexId: selectedConvexId, webOrigin: webURL)
+    }
+
+    func openSelectedDocumentInWeb() {
+        guard let origin = webURL, let convexId = selectedConvexId,
+              let url = DocumentLink.webURL(origin: origin, convexId: convexId)
+        else { return }
+        _ = openURL(url)
+    }
+
+    /// `recto://document/<convexId>`. Returns false for anything else, without throwing.
+    @discardableResult
+    func openDocument(from url: URL) async -> Bool {
+        guard let convexId = DocumentLink.parse(url) else { return false }
+        pendingOpenConvexId = convexId
+        await applyPendingOpen()
+        return true
     }
 
     func createDocument() async {
@@ -227,6 +265,35 @@ final class RectoApplicationModel {
         authStatus = status
         if case .signedOut = status { emailChallenge = nil }
         await refreshDocuments()
+    }
+
+    private func applyWebURL(_ configuration: AppConfiguration?) {
+        webURL = configuration?.webURL.flatMap(URL.init(string:))
+    }
+
+    private func localId(forConvexId convexId: String) async -> String? {
+        if let id = documents.first(where: { $0.convexId == convexId })?.localId {
+            return id
+        }
+        // The published list can lag a just-landed sync by one event loop, so
+        // ask the mirror itself before declaring the document unknown.
+        if let record = try? await store?.document(convexId: convexId) {
+            return record.localId
+        }
+        return nil
+    }
+
+    private func applyPendingOpen() async {
+        guard let convexId = pendingOpenConvexId else { return }
+        if let localId = await localId(forConvexId: convexId) {
+            selectedDocumentId = localId
+            pendingOpenConvexId = nil
+            errorMessage = nil
+            return
+        }
+        guard store != nil, startupState == .ready else { return }
+        pendingOpenConvexId = nil
+        errorMessage = "This document isn't on this Mac yet. Sign in and wait for it to sync, then open the link again."
     }
 
     private func install(_ components: Components) {

@@ -11,6 +11,12 @@ struct PaletteLibrary {
     var documents: [DocumentRecord] = []
     var open: (String) -> Void = { _ in }
     var create: () -> Void = {}
+    var openInWeb: () -> Void = {}
+    /// Whether the selected cloud document can be opened in the web app: a
+    /// convex id and a configured web URL. The palette hides the command
+    /// otherwise, the way the web hides "Open in Recto app" off macOS — a
+    /// dead palette entry would say nothing about why.
+    var canOpenInWeb = false
 }
 
 /// Opens the ⌘K palette over the key window and carries out what it picks.
@@ -109,15 +115,20 @@ final class CommandPaletteController {
                 actions = actions.filter { $0.id.hasPrefix("appearance-") }
             }
             var items = actions.map(PaletteItem.init(action:))
-            if section == .documents, library.isSignedIn {
-                items += library.documents.map { document in
-                    PaletteItem(
-                        id: "document-\(document.localId)",
-                        kind: .document(localId: document.localId),
-                        label: document.title,
-                        detail: .text("\(document.wordCount.formatted()) w"),
-                        searchValue: "document \(document.title)"
-                    )
+            if section == .documents {
+                if !library.canOpenInWeb {
+                    items.removeAll { $0.id == "open-in-web" }
+                }
+                if library.isSignedIn {
+                    items += library.documents.map { document in
+                        PaletteItem(
+                            id: "document-\(document.localId)",
+                            kind: .document(localId: document.localId),
+                            label: document.title,
+                            detail: .text("\(document.wordCount.formatted()) w"),
+                            searchValue: "document \(document.title)"
+                        )
+                    }
                 }
             }
             return items.isEmpty ? nil : PaletteSection(title: section.rawValue, items: items)
@@ -144,6 +155,8 @@ final class CommandPaletteController {
             } else {
                 NSDocumentController.shared.newDocument(nil)
             }
+        case "open-in-web":
+            library.openInWeb()
         case "mode-rich":
             editor?.choosePresentation(.rich)
         case "mode-raw":
