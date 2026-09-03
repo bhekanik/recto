@@ -42,6 +42,8 @@ type CommandPaletteProps = {
 	onRunAction: (id: ActionId) => void;
 	onOpenDocument: (id: Id<"documents">) => void;
 	onJumpToHeading: (index: number) => void;
+	/** macOS + an active document. Hidden otherwise so Windows/Linux never see it. */
+	canOpenInMacApp?: boolean;
 };
 
 const HEADING =
@@ -64,6 +66,7 @@ export function CommandPalette({
 	onRunAction,
 	onOpenDocument,
 	onJumpToHeading,
+	canOpenInMacApp = false,
 }: CommandPaletteProps) {
 	const close = useCallback(() => onOpenChange(false), [onOpenChange]);
 
@@ -101,6 +104,7 @@ export function CommandPalette({
 	const sections =
 		scope === "documents" ? (["Documents"] as const) : SECTION_ORDER;
 	const newDoc = ACTIONS.find((a) => a.id === "new-document");
+	const openInMac = ACTIONS.find((a) => a.id === "open-in-mac-app");
 
 	return (
 		<div
@@ -180,6 +184,19 @@ export function CommandPalette({
 												<kbd className="recto-kbd">{shortcutHint(newDoc)}</kbd>
 											</Command.Item>
 										)}
+										{canOpenInMacApp && openInMac && (
+											<Command.Item
+												value={`${openInMac.label} ${openInMac.aliases?.join(" ") ?? ""} Documents`}
+												onSelect={() =>
+													run(() => onRunAction("open-in-mac-app"))
+												}
+												className={ITEM}
+											>
+												<span className="flex-1 text-[var(--color-ink-primary)]">
+													{openInMac.label}
+												</span>
+											</Command.Item>
+										)}
 										{(documents ?? []).map((doc) => (
 											<Command.Item
 												key={doc._id}
@@ -200,7 +217,10 @@ export function CommandPalette({
 							}
 
 							let defs = ACTIONS.filter(
-								(a) => a.section === section && a.id !== "new-document",
+								(a) =>
+									a.section === section &&
+									a.id !== "new-document" &&
+									a.id !== "open-in-mac-app",
 							);
 							// AI is opt-in: when disabled, only the toggle is reachable so the
 							// user can turn it on; otherwise no AI UI appears (plan 009).

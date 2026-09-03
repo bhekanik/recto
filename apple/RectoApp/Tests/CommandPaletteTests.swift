@@ -12,6 +12,7 @@ struct CommandRegistryTests {
     /// would tie the suite to the web checkout; this is the contract instead.
     private static let expected: [(String, CommandSection, String, String)] = [
         ("new-document", .documents, "New document", "⌘N"),
+        ("open-in-web", .documents, "Open in web app", ""),
         ("mode-rich", .modes, "Switch to Rich text", "⌃⇧R"),
         ("mode-raw", .modes, "Switch to Raw Markdown", "⌃⇧M"),
         ("mode-vim", .modes, "Switch to Vim", "⌃⇧V"),
@@ -48,6 +49,7 @@ struct CommandRegistryTests {
         #expect(CommandRegistry.action("find-replace")?.aliases == ["search", "replace", "regex", "find"])
         #expect(CommandRegistry.action("appearance-dark")?.aliases == ["dark", "night", "twilight"])
         #expect(CommandRegistry.action("undo")?.aliases == [])
+        #expect(CommandRegistry.action("open-in-web")?.aliases == ["browser", "website"])
     }
 
     @Test("sections follow SECTION_ORDER and ids are unique")
@@ -206,6 +208,23 @@ struct CommandPaletteControllerTests {
         #expect(documents?.items[1].kind == .document(localId: "a"))
         #expect(documents?.items[1].detail == .text("1,234 w"))
         #expect(documents?.items[1].searchValue == "document Notes")
+    }
+
+    @Test("Open in web app appears in Documents only when the handoff is available")
+    func openInWebGatedByHandoff() {
+        let available = PaletteLibrary(isSignedIn: true, documents: [
+            record("a", "Notes", words: 1),
+        ], canOpenInWeb: true)
+        let shown = CommandPaletteController.sections(settings: settings(), library: available).first
+        #expect(shown?.items.map(\.id) == ["new-document", "open-in-web", "document-a"])
+
+        // An unsigned build, or a document with no convex id yet: the command
+        // is absent rather than offered dead, so nothing lies about why.
+        let unavailable = PaletteLibrary(isSignedIn: true, documents: [
+            record("a", "Notes", words: 1),
+        ], canOpenInWeb: false)
+        let hidden = CommandPaletteController.sections(settings: settings(), library: unavailable).first
+        #expect(hidden?.items.map(\.id) == ["new-document", "document-a"])
     }
 
     @Test("sections come in SECTION_ORDER and empty ones are skipped")

@@ -41,6 +41,11 @@ import {
 	LINT_COUNT_EVENT,
 } from "@/lib/events";
 import type { ExportSource } from "@/lib/export";
+import {
+	isMacOSPlatform,
+	macAppDocumentURL,
+} from "@/lib/handoff/document-link";
+import { useDocumentDeepLink } from "@/lib/handoff/use-document-deep-link";
 import type { ActionId } from "@/lib/keyboard/actions";
 import {
 	createAppShortcutHandler,
@@ -153,6 +158,16 @@ function StudioWorkspace() {
 	const isMobileRef = useRef(isMobile);
 	isMobileRef.current = isMobile;
 	const activeDocId = activeLeaf?.documentId ?? null;
+	const canOpenInMacApp = isMacOSPlatform() && activeDocId !== null;
+
+	useDocumentDeepLink({
+		enabled: !loading && workspace !== null,
+		documents,
+		activePaneId: workspace?.activePaneId,
+		setPaneDocument: (paneId, documentId) => {
+			actions.setPaneDocument(paneId, documentId);
+		},
+	});
 	const activeSync = activeDocId ? getDocumentSync(activeDocId) : null;
 	const activeTitle =
 		documents?.find((d) => d._id === activeDocId)?.title ?? "Untitled";
@@ -451,6 +466,9 @@ function StudioWorkspace() {
 				setZen,
 				setGoalConfigOpen,
 				toggleAiEnabled,
+				openInMacApp: (documentId) => {
+					window.location.assign(macAppDocumentURL(documentId));
+				},
 			}),
 		[
 			actions,
@@ -768,6 +786,11 @@ function StudioWorkspace() {
 					<div className={bottomChromeClass} {...chromeHoverProps}>
 						<SyncStatusBar
 							sync={activeSync}
+							onOpenInMacApp={
+								canOpenInMacApp
+									? () => dispatchRef.current("open-in-mac-app")
+									: undefined
+							}
 							wordCount={activeSync.wordCount}
 							readingMinutes={readingTimeMinutes(activeSync.wordCount)}
 							mode={activeMode}
@@ -876,6 +899,7 @@ function StudioWorkspace() {
 						jumpToHeading(i);
 						dispatchFocusEditor();
 					}}
+					canOpenInMacApp={canOpenInMacApp}
 				/>
 
 				<DocumentSwitcher

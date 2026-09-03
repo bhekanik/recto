@@ -2,6 +2,7 @@
 
 import {
 	AlignVerticalJustifyCenter,
+	AppWindowMac,
 	Eye,
 	FileCode,
 	Flame,
@@ -60,6 +61,8 @@ export type StatusBarProps = {
 	 * discarding is lossy and a one-click control could not say so.
 	 */
 	onShowBlocked?: () => void;
+	/** macOS + an active document. Navigates to `recto://document/<id>`. */
+	onOpenInMacApp?: () => void;
 	mode: Mode;
 	onModeChange: (mode: Mode) => void;
 	theme: Theme;
@@ -291,6 +294,7 @@ export function StatusBar({
 	readingMinutes,
 	syncStatus,
 	onShowBlocked,
+	onOpenInMacApp,
 	mode,
 	onModeChange,
 	theme,
@@ -619,6 +623,17 @@ export function StatusBar({
 				>
 					·
 				</span>
+				{onOpenInMacApp && (
+					<button
+						type="button"
+						className={iconBtn}
+						onClick={onOpenInMacApp}
+						title="Open in Recto app"
+						aria-label="Open in Recto app"
+					>
+						<AppWindowMac aria-hidden className="size-[15px]" />
+					</button>
+				)}
 				<SyncIndicator status={syncStatus} onShowBlocked={onShowBlocked} />
 			</div>
 		</footer>

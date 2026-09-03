@@ -32,6 +32,8 @@ enum CommandRegistry {
     static let actions: [CommandAction] = [
         CommandAction(id: "new-document", label: "New document", section: .documents,
                       aliases: ["create", "add"], shortcut: "⌘N"),
+        CommandAction(id: "open-in-web", label: "Open in web app", section: .documents,
+                      aliases: ["browser", "website"], shortcut: ""),
         CommandAction(id: "mode-rich", label: "Switch to Rich text", section: .modes,
                       aliases: ["wysiwyg", "rich"], shortcut: "⌃⇧R"),
         CommandAction(id: "mode-raw", label: "Switch to Raw Markdown", section: .modes,

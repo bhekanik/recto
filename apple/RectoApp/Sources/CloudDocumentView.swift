@@ -1,3 +1,4 @@
+import AppKit
 import RectoCore
 import RectoEditor
 import SwiftUI
@@ -10,6 +11,7 @@ struct CloudDocumentView: View {
     @State private var openingError: String?
     @State private var chrome: EditorHostController
     @State private var vim = VimHostState()
+    @Environment(\.rectoWebOrigin) private var webOrigin
     @AppStorage(PresentationPreference.key) private var storedPresentation: String?
     /// This window's lens. `nil` until it appears, when it takes the stored
     /// default; after that only the writer's own choice moves it.
@@ -104,11 +106,22 @@ struct CloudDocumentView: View {
                     vimController: vim.controller,
                     onSelect: choose
                 ) {
-                    SyncIndicator(
-                        state: model.state.syncState,
-                        pendingCount: model.pendingEditCount,
-                        theme: styler.theme
-                    )
+                    HStack(spacing: 8) {
+                        OpenInWebButton(
+                            enabled: WebHandoff.isEnabled(
+                                convexId: model.state.convexId, webOrigin: webOrigin),
+                            help: WebHandoff.disabledReason(
+                                convexId: model.state.convexId, webOrigin: webOrigin),
+                            theme: styler.theme
+                        ) {
+                            openInWeb(convexId: model.state.convexId)
+                        }
+                        SyncIndicator(
+                            state: model.state.syncState,
+                            pendingCount: model.pendingEditCount,
+                            theme: styler.theme
+                        )
+                    }
                 }
             }
         }
@@ -183,5 +196,34 @@ struct CloudDocumentView: View {
         } catch {
             openingError = error.localizedDescription
         }
+    }
+
+    private func openInWeb(convexId: String?) {
+        guard let origin = webOrigin, let convexId,
+              let url = DocumentLink.webURL(origin: origin, convexId: convexId)
+        else { return }
+        NSWorkspace.shared.open(url)
+    }
+}
+
+private struct OpenInWebButton: View {
+    let enabled: Bool
+    let help: String
+    let theme: RectoEditorTheme
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "globe")
+                .font(.system(size: 12))
+                .frame(width: 24, height: 24)
+                .foregroundStyle(Color(nsColor: theme.ink3))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .disabled(!enabled)
+        .help(help)
+        .accessibilityLabel("Open in web app")
     }
 }

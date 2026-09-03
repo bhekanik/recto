@@ -68,6 +68,7 @@ function makeDeps(overrides: Partial<ActionMapDeps> = {}): ActionMapDeps {
 		setStatusVisible: vi.fn(),
 		setZen: vi.fn(),
 		setGoalConfigOpen: vi.fn(),
+		openInMacApp: vi.fn(),
 		...overrides,
 	};
 }
@@ -77,6 +78,15 @@ afterEach(() => {
 });
 
 describe("createActionMap", () => {
+	it("registers Open in Recto app under Documents", () => {
+		const def = ACTIONS.find((a) => a.id === "open-in-mac-app");
+		expect(def).toMatchObject({
+			label: "Open in Recto app",
+			section: "Documents",
+			aliases: ["mac", "desktop", "native"],
+		});
+	});
+
 	it("has a handler for every declared ActionId (single source of truth)", () => {
 		const map = createActionMap(makeDeps());
 		for (const def of ACTIONS) {
@@ -96,6 +106,10 @@ describe("createActionMap", () => {
 
 		map["new-document"]();
 		expect(deps.handleCreate).toHaveBeenCalledTimes(1);
+
+		map["open-in-mac-app"]();
+		expect(deps.openInMacApp).toHaveBeenCalledTimes(1);
+		expect(deps.openInMacApp).toHaveBeenCalledWith("doc1");
 
 		map.checkpoint();
 		expect(deps.handleCheckpoint).toHaveBeenCalledTimes(1);
@@ -265,6 +279,13 @@ describe("createActionMap", () => {
 		ownedMap["review-surface"]();
 		expect(owned.setShareDialogOpen).toHaveBeenCalledWith(true);
 		expect(owned.setReviewOpen).toHaveBeenCalledWith(true);
+	});
+
+	it("open-in-mac-app is a no-op without an active document", () => {
+		const openInMacApp = vi.fn();
+		const map = createActionMap(makeDeps({ openInMacApp, activeDocId: null }));
+		map["open-in-mac-app"]();
+		expect(openInMacApp).not.toHaveBeenCalled();
 	});
 
 	it("export actions only run when there is an export source", () => {

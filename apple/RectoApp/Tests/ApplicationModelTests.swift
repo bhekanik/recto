@@ -1,3 +1,4 @@
+import Foundation
 import RectoCore
 import RectoStore
 import RectoSync
@@ -458,5 +459,107 @@ struct ApplicationModelTests {
 
         await components.registry.resumeAll(after: freeze)
         await model.close()
+    }
+}
+
+/// The web ↔ Mac handoff as the model drives it: `recto://document/<id>`
+/// resolves to a local document, and Open in web only fires when both a
+/// convex id and a web origin exist.
+@Suite("web ↔ Mac handoff")
+struct HandoffModelTests {
+    @MainActor
+    private func startedModel() async throws -> (RectoApplicationModel, RectoApplicationModel.Components) {
+        let components = try await makeComponents()
+        let model = RectoApplicationModel(components: components)
+        await model.start()
+        return (model, components)
+    }
+
+    /// A document the server has seen, so it carries a convex id.
+    @MainActor
+    private func assignConvexId(
+        _ convexId: String, localId: String, in components: RectoApplicationModel.Components
+    ) async throws {
+        var record = try #require(await components.store.document(localId: localId))
+        record.convexId = convexId
+        try await components.store.save(record)
+    }
+
+    @MainActor
+    @Test("Open in web is gated by the web origin and the document's convex id")
+    func openInWebGating() async throws {
+        let (model, components) = try await startedModel()
+        await model.createDocument()
+        let localId = try #require(model.selectedDocumentId)
+        let origin = try #require(URL(string: "https://recto.example"))
+        var opened: [URL] = []
+        model.openURL = { opened.append($0); return true }
+
+        // Local-only document: no convex id, so the web has no page to open.
+        model.webURL = origin
+        #expect(!model.canOpenSelectedDocumentInWeb)
+        model.openSelectedDocumentInWeb()
+        #expect(opened.isEmpty)
+
+        try await assignConvexId("k57handoff0000000", localId: localId, in: components)
+        // Signing in routes refreshDocuments through the library, so the
+        // published list carries the convex id the gate reads.
+        await model.receiveAuthStatus(.signedIn(userId: "test-user"))
+        #expect(model.canOpenSelectedDocumentInWeb)
+        model.openSelectedDocumentInWeb()
+        #expect(opened == [URL(string: "https://recto.example/?doc=k57handoff0000000")!])
+
+        // An unsigned local build: no configured origin, so the handoff is off.
+        opened.removeAll()
+        model.webURL = nil
+        #expect(!model.canOpenSelectedDocumentInWeb)
+        model.openSelectedDocumentInWeb()
+        #expect(opened.isEmpty)
+    }
+
+    @MainActor
+    @Test("recto://document/<id> selects the local document that carries the id")
+    func linkSelectsLocalDocument() async throws {
+        let (model, components) = try await startedModel()
+        await model.createDocument()
+        let other = try await components.library.createDocument(title: "Other")
+        try await assignConvexId("k57handoff0000000", localId: other.localId, in: components)
+
+        let handled = await model.openDocument(
+            from: try #require(DocumentLink.appURL(convexId: "k57handoff0000000")))
+        #expect(handled)
+        #expect(model.selectedDocumentId == other.localId)
+        #expect(model.errorMessage == nil)
+    }
+
+    @MainActor
+    @Test("an unknown document link surfaces a note instead of crashing")
+    func unknownLinkReports() async throws {
+        let (model, _) = try await startedModel()
+        await model.createDocument()
+        let before = model.selectedDocumentId
+
+        let handled = await model.openDocument(
+            from: try #require(DocumentLink.appURL(convexId: "k57nosuch0000000")))
+        #expect(handled)
+        #expect(model.selectedDocumentId == before)
+        #expect(model.errorMessage == "This document isn't on this Mac yet. Sign in and wait for it to sync, then open the link again.")
+    }
+
+    @MainActor
+    @Test("anything that is not a document link changes nothing")
+    func garbageLinksRejected() async throws {
+        let (model, _) = try await startedModel()
+        for string in [
+            "https://example.com/?doc=k57handoff0000000",
+            "recto://other/k57handoff0000000",
+            "recto://document/a/b",
+            "recto://document/k57handoff0000000?x=1",
+        ] {
+            let handled = await model.openDocument(from: try #require(URL(string: string)))
+            #expect(!handled, "should reject \(string)")
+        }
+        #expect(model.errorMessage == nil)
+        #expect(model.selectedDocumentId == nil)
     }
 }

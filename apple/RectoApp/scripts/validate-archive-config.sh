@@ -8,6 +8,7 @@ plist="$archive_path/Products/Applications/Recto.app/Contents/Info.plist"
 
 convex_url=$(/usr/libexec/PlistBuddy -c 'Print :RectoConvexURL' "$plist")
 clerk_key=$(/usr/libexec/PlistBuddy -c 'Print :RectoClerkPublishableKey' "$plist")
+web_url=$(/usr/libexec/PlistBuddy -c 'Print :RectoWebURL' "$plist")
 
 valid_host() {
   local host=$1
@@ -27,6 +28,15 @@ valid_host() {
 }
 valid_host "$match[1]" || {
   echo "archive RectoConvexURL does not contain a valid host" >&2
+  exit 1
+}
+[[ "$web_url" =~ '^https://([^/:?#]+)(/[^?#]*)?$'
+  && "$web_url" != *'$('* ]] || {
+  echo "archive has an empty, unresolved, or non-HTTPS RectoWebURL" >&2
+  exit 1
+}
+valid_host "$match[1]" || {
+  echo "archive RectoWebURL does not contain a valid host" >&2
   exit 1
 }
 case "$clerk_key" in
