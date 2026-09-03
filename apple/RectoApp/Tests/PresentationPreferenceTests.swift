@@ -29,7 +29,7 @@ struct PresentationPreferenceTests {
     }
 
     @Test("absent or unusable stored values fall back to rich", arguments: [
-        nil, "", "vim", "RAW", "preview",
+        nil, "", "VIM", "RAW", "preview",
     ])
     func fallsBackToRich(stored: String?) {
         #expect(PresentationPreference.choice(from: stored) == .rich)
@@ -42,10 +42,17 @@ struct PresentationPreferenceTests {
         #expect(PresentationPreference.presentation(stored: choice.rawValue, isEditable: true) == choice)
     }
 
-    @Test("a read-only document is previewed whatever is stored", arguments: [nil, "rich", "raw", "preview"])
+    @Test("a read-only document is previewed whatever is stored", arguments: [nil, "rich", "raw", "vim", "preview"])
     func readOnlyIsPreview(stored: String?) {
         #expect(PresentationPreference.presentation(stored: stored, isEditable: false) == .preview)
         #expect(PresentationPreference.presentation(chosen: .raw, stored: stored, isEditable: false) == .preview)
+        #expect(PresentationPreference.presentation(chosen: .vim, stored: stored, isEditable: false) == .preview)
+    }
+
+    @Test("the ring is the web's order and a stored vim decodes to vim")
+    func vimIsAChoice() {
+        #expect(PresentationPreference.choices == [.rich, .raw, .vim])
+        #expect(PresentationPreference.choice(from: "vim") == .vim)
     }
 
     @Test("a window's own choice outranks the stored default", arguments: PresentationPreference.choices)
@@ -182,10 +189,14 @@ struct PresentationPreferenceTests {
         #expect(markerIsHidden(in: secondText), "opening a window changes nothing elsewhere")
     }
 
-    /// The mode chords from the web keymap: ⌃⇧M for raw, ⌃⇧R for rich,
-    /// delivered the way AppKit delivers them to the key window.
+    /// The mode chords from the web keymap: ⌃⇧M for raw, ⌃⇧R for rich, ⌃⇧V
+    /// for vim, delivered the way AppKit delivers them to the key window.
     private func press(_ presentation: Presentation, in window: NSWindow) {
-        let (key, code): (String, UInt16) = presentation == .raw ? ("m", 46) : ("r", 15)
+        let (key, code): (String, UInt16) = switch presentation {
+        case .raw: ("m", 46)
+        case .vim: ("v", 9)
+        default: ("r", 15)
+        }
         let event = NSEvent.keyEvent(
             with: .keyDown, location: .zero, modifierFlags: [.control, .shift],
             timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,

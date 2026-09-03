@@ -1,4 +1,6 @@
+import AppKit
 import Foundation
+import MarkdownEngine
 import RectoEditor
 import SwiftUI
 
@@ -7,6 +9,7 @@ struct EditorHostView: View {
     @State private var storage: RectoTextStorage
     @StateObject private var history: DocumentUndoHistory
     @State private var chrome: EditorHostController
+    @State private var vim = VimHostState()
     @AppStorage(PresentationPreference.key) private var storedPresentation: String?
     /// This window's lens. `nil` until it appears, when it takes the stored
     /// default; after that only the writer's own choice moves it.
@@ -66,7 +69,10 @@ struct EditorHostView: View {
                 storage: storage,
                 styler: styler,
                 placeholder: "Start writing…",
-                onAttach: chrome.attach,
+                onAttach: { seam in
+                    chrome.attach(seam)
+                    vim.sync(seam: seam, presentation: presentation)
+                },
                 onEdit: history.accept,
                 writingController: chrome.writingController
             )
@@ -79,6 +85,7 @@ struct EditorHostView: View {
                     storage: storage,
                     settings: settings,
                     theme: styler.theme,
+                    vimController: vim.controller,
                     onSelect: choose
                 )
             }
@@ -91,15 +98,69 @@ struct EditorHostView: View {
             chrome.undo = { [history] in history.undoManager.undo() }
             chrome.redo = { [history] in history.undoManager.redo() }
             chrome.choosePresentation = choose
+            vim.controller.history = history
+            vim.controller.onSave = {
+                // The document menu's Save, through the responder chain, so
+                // `:w` and ⌘S are the same action.
+                NSApp.sendAction(#selector(NSDocument.save(_:)), to: nil, from: nil)
+            }
         }
         .onDisappear {
+            vim.sync(seam: nil, presentation: presentation)
             history.detach()
+        }
+        .onChange(of: presentation) { _, presentation in
+            vim.sync(seam: storage.textView, presentation: presentation)
         }
         .onChange(of: ExactMarkdown(document.markdown)) { _, markdown in
             history.adoptExternal(markdown.value)
         }
         .onChange(of: settings.spellcheck) { chrome.applySettings() }
         .onChange(of: settings.typewriter) { chrome.applySettings() }
+    }
+}
+
+/// The vim layer's app-side lifetime: attach it when the editor is on screen in
+/// `.vim`, detach otherwise, and carry registers and marks across sessions.
+///
+/// Shared by both document hosts, which call `sync` on attach, on a
+/// presentation change and on disappear.
+@MainActor
+@Observable
+final class VimHostState {
+    let controller = RectoVimController()
+
+    /// Vim's registers and marks, JSON from `saveState`. Global rather than
+    /// per document: that is vim's own model (`"a` yanked in one buffer pastes
+    /// in another).
+    @ObservationIgnored
+    private var registers: String {
+        get { UserDefaults.standard.string(forKey: Self.registersKey) ?? "" }
+        set { UserDefaults.standard.set(newValue, forKey: Self.registersKey) }
+    }
+    private static let registersKey = "vim.registers"
+
+    /// Call whenever the editor seam or the presentation changes.
+    func sync(seam: RectoTextView?, presentation: Presentation) {
+        if let seam, seam.isAttached, presentation == .vim {
+            attach(seam)
+        } else {
+            detach()
+        }
+    }
+
+    private func attach(_ seam: RectoTextView) {
+        let wasAttached = controller.isAttached
+        controller.attach(to: seam)
+        if !wasAttached, controller.isAttached, !registers.isEmpty {
+            controller.restoreState(registers)
+        }
+    }
+
+    private func detach() {
+        guard controller.isAttached else { return }
+        if let saved = controller.saveState() { registers = saved }
+        controller.attach(to: nil)
     }
 }
 
@@ -115,12 +176,37 @@ private struct ExactMarkdown: Equatable {
     }
 }
 
+/// Edit › Undo reaches `undo()` straight from the responder chain, not through
+/// `RectoEditorHistory.performHistory`. With a vim insert session's group still
+/// open, `NSUndoManager.undo()` raises "undo was called with too many nested
+/// undo groups"; closing the group first also makes menu Undo remove the whole
+/// session, as `u` does.
+final class GroupClosingUndoManager: UndoManager {
+    /// AppKit drives undo managers on the main thread, so the hook runs there.
+    var willNavigate: (@MainActor () -> Void)?
+    /// After `super.undo()/redo()` returns: every `didChange` the navigation
+    /// posted has been delivered (the restore closures run synchronously).
+    var didNavigate: (@MainActor () -> Void)?
+
+    override func undo() {
+        MainActor.assumeIsolated { willNavigate?() }
+        super.undo()
+        MainActor.assumeIsolated { didNavigate?() }
+    }
+
+    override func redo() {
+        MainActor.assumeIsolated { willNavigate?() }
+        super.redo()
+        MainActor.assumeIsolated { didNavigate?() }
+    }
+}
+
 @MainActor
-private final class DocumentUndoHistory: ObservableObject {
+final class DocumentUndoHistory: ObservableObject, RectoEditorHistory {
     // Bound V1's full-string snapshots until model history replaces this owner.
     private static let snapshotLimit = 100
 
-    let undoManager = UndoManager()
+    let undoManager = GroupClosingUndoManager()
 
     private let storage: RectoTextStorage
     private let writeDocument: (String) -> Void
@@ -137,6 +223,18 @@ private final class DocumentUndoHistory: ObservableObject {
             document.wrappedValue = updated
         }
         storage.controller.undoManager = undoManager
+        undoManager.willNavigate = { [unowned self] in
+            // Menu Undo/Redo closes vim's group from outside; vim keeps its own
+            // flag describing that group, so tell it the session is over before
+            // the navigation's change lands.
+            if openCommandGroup != nil { onExternalHistoryNavigation?() }
+            endCommandGroup()
+        }
+        undoManager.didNavigate = { [unowned self] in
+            // The popped group's closures run one didChange each; only now can
+            // vim stop treating the storage churn as navigation aftermath.
+            onExternalHistoryNavigationEnded?()
+        }
     }
 
     func attach(authoritativeMarkdown: String) {
@@ -145,6 +243,7 @@ private final class DocumentUndoHistory: ObservableObject {
     }
 
     func detach() {
+        endCommandGroup()
         undoManager.removeAllActions()
         if storage.controller.undoManager === undoManager {
             storage.controller.undoManager = nil
@@ -158,13 +257,40 @@ private final class DocumentUndoHistory: ObservableObject {
     func accept(_ edit: RectoEditorEdit) {
         let markdown = edit.markdown
         guard !(currentMarkdown as NSString).isEqual(to: markdown) else { return }
-        let previous = currentMarkdown
+        registerStep(restoring: currentMarkdown, actionName: edit.structural ? "Format" : "Edit")
+        currentMarkdown = markdown
+        writeDocument(markdown)
+    }
+
+    /// Every step is an explicit group. Left to `groupsByEvent`, AppKit opens
+    /// a group at the first registration of a run-loop pass and closes it at
+    /// the end, so two steps registered in one pass (a test, or a command that
+    /// edits and then opens an insert session) collapse into one, and an
+    /// explicit group opened inside it undoes together with whatever preceded
+    /// it. Registrations made while undoing or redoing join the manager's own
+    /// group for that operation.
+    private func registerStep(restoring previous: String, actionName: String) {
+        let navigating = undoManager.isUndoing || undoManager.isRedoing
+        if !navigating {
+            if openCommandGroup != nil {
+                // An open command group materialises at its first edit, not at
+                // `beginCommandGroup`: an empty NSUndoManager group is still an
+                // undo step, and closing one after an Undo wipes the redo
+                // stack, so a bare `i<Esc>` or a cancelled composition must
+                // never reach the manager.
+                if !openCommandGroupMaterialized {
+                    openGroup()
+                    openCommandGroupMaterialized = true
+                }
+            } else {
+                openGroup()
+            }
+        }
         undoManager.registerUndo(withTarget: self) { history in
             history.restore(previous)
         }
-        undoManager.setActionName(edit.structural ? "Format" : "Edit")
-        currentMarkdown = markdown
-        writeDocument(markdown)
+        undoManager.setActionName(actionName)
+        if !navigating, openCommandGroup == nil { closeGroup() }
     }
 
     func adoptExternal(_ markdown: String) {
@@ -177,15 +303,86 @@ private final class DocumentUndoHistory: ObservableObject {
     }
 
     private func restore(_ markdown: String) {
-        let previous = currentMarkdown
-        undoManager.registerUndo(withTarget: self) { history in
-            history.restore(previous)
-        }
-        undoManager.setActionName("Edit")
+        registerStep(restoring: currentMarkdown, actionName: "Edit")
         currentMarkdown = markdown
         if !(storage.markdown as NSString).isEqual(to: markdown) {
             storage.markdown = markdown
         }
         writeDocument(markdown)
+    }
+
+    // MARK: - RectoEditorHistory
+
+    /// Vim's hook: fired when the manager's own navigation (menu Undo/Redo)
+    /// closes an open command group, so the key layer ends the session
+    /// coherently instead of typing on under a stale flag.
+    var onExternalHistoryNavigation: (@MainActor @Sendable () -> Void)?
+    /// Its pair: fired after the navigation's storage changes have landed, so
+    /// the layer stops resyncing mode-preserving once the aftermath is over.
+    var onExternalHistoryNavigationEnded: (@MainActor @Sendable () -> Void)?
+
+    /// `groupsByEvent` as it was before the current explicit group opened.
+    private var openGroupPreviousGroupsByEvent: Bool?
+    /// Set while a vim command group spans keystrokes.
+    private var openCommandGroup: Bool?
+    /// Whether the open command group has seen an edit. The NSUndoManager
+    /// group exists only from that first edit on (see `registerStep`).
+    private var openCommandGroupMaterialized = false
+    var groupOpen: Bool { openCommandGroup != nil }
+
+    /// Event grouping is off only while an explicit group is open: left on,
+    /// AppKit would close its own per-event group around ours at the end of
+    /// the pass; left off for good, its IME path (`_prepareEventGrouping`)
+    /// raises on the text view's undo manager.
+    private func openGroup() {
+        openGroupPreviousGroupsByEvent = undoManager.groupsByEvent
+        undoManager.groupsByEvent = false
+        undoManager.beginUndoGrouping()
+    }
+
+    private func closeGroup() {
+        undoManager.endUndoGrouping()
+        if let previous = openGroupPreviousGroupsByEvent {
+            undoManager.groupsByEvent = previous
+            openGroupPreviousGroupsByEvent = nil
+        }
+    }
+
+    /// Vim's `u`/`<C-r>` and ⌘Z share this manager, so they never disagree
+    /// about what the last step was. The caret comes from a diff of the two
+    /// snapshots: right for every contiguous change, and the known fallback
+    /// where text repeats until B4 stores a patch per node.
+    func performHistory(_ direction: RectoHistoryDirection) -> RectoHistoryOutcome? {
+        endCommandGroup()
+        let before = currentMarkdown
+        switch direction {
+        case .undo:
+            guard undoManager.canUndo else { return nil }
+            undoManager.undo()
+        case .redo:
+            guard undoManager.canRedo else { return nil }
+            undoManager.redo()
+        }
+        guard !(currentMarkdown as NSString).isEqual(to: before) else { return nil }
+        return RectoHistoryOutcome(
+            markdown: currentMarkdown,
+            patchStart: MarkdownTextPatch.diff(from: before, to: currentMarkdown).range.location
+        )
+    }
+
+    /// One group across the keystrokes of an insert session, so `iabc<Esc>u`
+    /// removes `abc` and not `c`.
+    func beginCommandGroup() {
+        guard openCommandGroup == nil else { return }
+        openCommandGroup = true
+        openCommandGroupMaterialized = false
+    }
+
+    func endCommandGroup() {
+        guard openCommandGroup != nil else { return }
+        openCommandGroup = nil
+        guard openCommandGroupMaterialized else { return }
+        openCommandGroupMaterialized = false
+        closeGroup()
     }
 }

@@ -10,6 +10,7 @@ struct CloudDocumentView: View {
     @State private var model: CloudDocumentModel?
     @State private var openingError: String?
     @State private var chrome: EditorHostController
+    @State private var vim = VimHostState()
     @AppStorage(PresentationPreference.key) private var storedPresentation: String?
     /// This window's lens. `nil` until it appears, when it takes the stored
     /// default; after that only the writer's own choice moves it.
@@ -85,7 +86,10 @@ struct CloudDocumentView: View {
                 storage: model.storage,
                 styler: styler,
                 placeholder: "Start writing…",
-                onAttach: chrome.attach,
+                onAttach: { seam in
+                    chrome.attach(seam)
+                    vim.sync(seam: seam, presentation: styler.presentation)
+                },
                 onEdit: model.accept,
                 writingController: chrome.writingController
             )
@@ -98,6 +102,7 @@ struct CloudDocumentView: View {
                     storage: model.storage,
                     settings: settings,
                     theme: styler.theme,
+                    vimController: vim.controller,
                     onSelect: choose
                 ) {
                     SyncStateLabel(state: model.state.syncState, pendingCount: model.pendingEditCount)
@@ -108,9 +113,14 @@ struct CloudDocumentView: View {
             chrome.undo = { [model] in Task { await model.undo() } }
             chrome.redo = { [model] in Task { await model.redo() } }
             chrome.choosePresentation = choose
+            vim.controller.history = model
+            vim.controller.onSave = { Task { await model.save() } }
         }
         .onChange(of: settings.spellcheck) { chrome.applySettings() }
         .onChange(of: settings.typewriter) { chrome.applySettings() }
+        .onChange(of: styler.presentation) { _, presentation in
+            vim.sync(seam: model.storage.textView, presentation: presentation)
+        }
         .navigationTitle(model.state.title)
         .toolbar {
             ToolbarItemGroup {

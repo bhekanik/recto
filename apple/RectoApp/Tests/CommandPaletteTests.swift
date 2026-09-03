@@ -14,6 +14,7 @@ struct CommandRegistryTests {
         ("new-document", .documents, "New document", "⌘N"),
         ("mode-rich", .modes, "Switch to Rich text", "⌃⇧R"),
         ("mode-raw", .modes, "Switch to Raw Markdown", "⌃⇧M"),
+        ("mode-vim", .modes, "Switch to Vim", "⌃⇧V"),
         ("undo", .history, "Undo", "⌘Z"),
         ("redo", .history, "Redo", "⌘⇧Z"),
         ("copy-markdown", .copyExport, "Copy as Markdown", "⌘⌥C"),
@@ -43,6 +44,7 @@ struct CommandRegistryTests {
     @Test("aliases are the web's")
     func aliases() {
         #expect(CommandRegistry.action("mode-raw")?.aliases == ["markdown", "source", "raw"])
+        #expect(CommandRegistry.action("mode-vim")?.aliases == ["modal"])
         #expect(CommandRegistry.action("find-replace")?.aliases == ["search", "replace", "regex", "find"])
         #expect(CommandRegistry.action("appearance-dark")?.aliases == ["dark", "night", "twilight"])
         #expect(CommandRegistry.action("undo")?.aliases == [])
@@ -268,8 +270,9 @@ struct CommandPaletteControllerTests {
         controller.perform("undo", editor: editor, library: PaletteLibrary())
         controller.perform("redo", editor: editor, library: PaletteLibrary())
         controller.perform("mode-raw", editor: editor, library: PaletteLibrary())
+        controller.perform("mode-vim", editor: editor, library: PaletteLibrary())
         controller.perform("mode-rich", editor: editor, library: PaletteLibrary())
-        #expect(log == ["undo", "redo", "mode:raw", "mode:rich"], "mode switches go to this window's lens, not a global")
+        #expect(log == ["undo", "redo", "mode:raw", "mode:vim", "mode:rich"], "mode switches go to this window's lens, not a global")
         controller.perform("copy-markdown", editor: editor, library: PaletteLibrary())
         #expect(pasteboard.string(forType: .string) == "# Title\n\nbody")
     }
@@ -396,15 +399,16 @@ struct CommandPaletteControllerTests {
         mounted.chrome.choosePresentation = { chosen.append($0) }
 
         mounted.registry.choosePresentation(.raw, in: mounted.window)
+        mounted.registry.choosePresentation(.vim, in: mounted.window)
         mounted.registry.choosePresentation(.rich, in: mounted.window)
-        #expect(chosen == [.raw, .rich])
+        #expect(chosen == [.raw, .vim, .rich])
 
         let other = NSWindow(contentViewController: NSViewController())
         other.isReleasedWhenClosed = false
         defer { other.close() }
         mounted.registry.choosePresentation(.raw, in: other)
         mounted.registry.choosePresentation(.raw, in: nil)
-        #expect(chosen == [.raw, .rich], "a window without an editor gets nothing")
+        #expect(chosen == [.raw, .vim, .rich], "a window without an editor gets nothing")
     }
 
     @Test("closing the parent window closes the palette")

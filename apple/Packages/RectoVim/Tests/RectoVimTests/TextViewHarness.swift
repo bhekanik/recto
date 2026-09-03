@@ -2,6 +2,7 @@
 import AppKit
 import Foundation
 
+import RectoVimFixtures
 @testable import RectoVim
 
 /// A text view in a window, wired to an engine over the built bundle.

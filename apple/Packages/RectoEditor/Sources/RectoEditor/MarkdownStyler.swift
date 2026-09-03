@@ -78,7 +78,7 @@ public struct MarkdownStyler: Sendable, Equatable {
                 // editing helpers it gates the DRAWN bullets, numbers and task
                 // boxes. Off for preview would leave preview showing raw `-`
                 // markers, so it tracks "not raw", not "editable".
-                helpersEnabled: presentation != .raw,
+                helpersEnabled: !presentation.showsSource,
                 // Auto-closing pairs are pure input, and raw is source: what
                 // the reader types is what the file gets.
                 autoClosePairsEnabled: presentation == .rich
@@ -101,7 +101,7 @@ public struct MarkdownStyler: Sendable, Equatable {
                 grammarChecking: spellChecking
             ),
             undo: undo,
-            rawSourceMode: presentation == .raw,
+            rawSourceMode: presentation.showsSource,
             // The one construct beyond CommonMark + GFM tables that Recto's
             // dialect has and the engine does not build in.
             extensions: [StrikethroughExtension()]

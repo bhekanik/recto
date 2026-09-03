@@ -145,6 +145,13 @@ export class TestHost implements VimHost {
 	clipboardWrite(text: string): void {
 		this.clipboardText = text;
 	}
+
+	/** How many times `:w` asked the host to save. */
+	saveRequests = 0;
+
+	saveRequested(): void {
+		this.saveRequests += 1;
+	}
 }
 
 type Snapshot = { text: string; anchor: number; head: number };

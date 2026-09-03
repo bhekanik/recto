@@ -128,6 +128,18 @@ final class CloudDocumentModel {
         }
     }
 
+    /// `:w`. Drain what the editor produced and force-commit the session's
+    /// draft, the same thing closing the window does short of releasing it.
+    func save() async {
+        await edits.waitUntilDrained()
+        do {
+            try await session.flush()
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     func undo() async {
         await performNavigation { try await session.undo() }
     }
@@ -195,4 +207,26 @@ final class CloudDocumentModel {
             storage.markdown = updated.markdown
         }
     }
+}
+
+// MARK: - RectoEditorHistory
+
+extension CloudDocumentModel: RectoEditorHistory {
+    /// `DocumentSession` is an actor, so the step cannot land inside the
+    /// keystroke. It is started here and reaches the editor as the storage
+    /// change `adopt` makes; vim then follows the caret the engine's patch
+    /// mapping produces (near the change, not vim-exact) until B4 gives the
+    /// session a synchronous head/parent cache (plan 024).
+    func performHistory(_ direction: RectoHistoryDirection) -> RectoHistoryOutcome? {
+        switch direction {
+        case .undo: Task { await undo() }
+        case .redo: Task { await redo() }
+        }
+        return nil
+    }
+
+    /// Every `onEdit` is its own session node until B4 groups them.
+    func beginCommandGroup() {}
+
+    func endCommandGroup() {}
 }

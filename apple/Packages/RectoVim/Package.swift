@@ -13,22 +13,29 @@ let package = Package(
     name: "RectoVim",
     platforms: [.macOS(.v26), .iOS(.v26)],
     products: [
-        .library(name: "RectoVim", targets: ["RectoVim"])
+        .library(name: "RectoVim", targets: ["RectoVim"]),
+        // Test support: the keystroke fixture loader and key parser, so every
+        // Swift host suite (here and in RectoEditor) replays the same file.
+        .library(name: "RectoVimFixtures", targets: ["RectoVimFixtures"]),
     ],
     targets: [
         .target(
             name: "RectoVim",
             resources: [.copy("JS")]
         ),
+        .target(
+            name: "RectoVimFixtures",
+            dependencies: ["RectoVim"]
+        ),
         .testTarget(
             name: "RectoVimTests",
-            dependencies: ["RectoVim"]
+            dependencies: ["RectoVim", "RectoVimFixtures"]
         ),
         // Per-key latency against the < 2 ms budget. Opt-in (RECTO_VIM_PERF=1):
         // it builds a 950 kB document and runs thousands of keys.
         .testTarget(
             name: "RectoVimPerfTests",
-            dependencies: ["RectoVim"]
+            dependencies: ["RectoVim", "RectoVimFixtures"]
         ),
     ]
 )

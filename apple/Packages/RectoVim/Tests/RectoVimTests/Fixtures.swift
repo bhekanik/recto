@@ -1,31 +1,14 @@
 import Foundation
+import RectoVimFixtures
 import Testing
 
 @testable import RectoVim
 
-/// `packages/recto-vim-js/fixtures/keystroke-suite.json`, read from the source
-/// tree rather than copied into the test bundle.
-///
-/// Copying would mean a second place for it to go stale, and the whole point is
-/// that Bun and JavaScriptCore run *the same bytes*: a divergence between the
-/// two suites is then a bridge bug, not a vim bug.
+/// Engines over the built bundle, for the suites.
 enum Fixtures {
-    static let repositoryRoot: URL = {
-        // …/apple/Packages/RectoVim/Tests/RectoVimTests/Fixtures.swift
-        var url = URL(fileURLWithPath: #filePath)
-        for _ in 0..<5 { url.deleteLastPathComponent() }
-        return url.deletingLastPathComponent()
-    }()
+    static var bundleURL: URL { KeystrokeSuite.bundleURL }
 
-    static var bundleURL: URL {
-        repositoryRoot.appending(path: "packages/recto-vim-js/dist/recto-vim.js")
-    }
-
-    static func suite() throws -> KeystrokeSuite {
-        let url = repositoryRoot.appending(
-            path: "packages/recto-vim-js/fixtures/keystroke-suite.json")
-        return try JSONDecoder().decode(KeystrokeSuite.self, from: Data(contentsOf: url))
-    }
+    static func suite() throws -> KeystrokeSuite { try KeystrokeSuite.load() }
 
     /// An engine over the built bundle, with a snapshot-based undo host.
     @MainActor
@@ -50,21 +33,6 @@ enum Fixtures {
             "packages/recto-vim-js/dist/recto-vim.js is missing — run `bun run vim:build`"
         }
     }
-}
-
-struct KeystrokeSuite: Decodable {
-    struct Case: Decodable {
-        let name: String
-        let text: String
-        let cursor: [Int]
-        let keys: String
-        let expectText: String
-        let expectCursor: [Int]?
-        let expectMode: String?
-        /// Why an expectation diverges from real vim, where one does.
-        let note: String?
-    }
-    let cases: [Case]
 }
 
 /// The host's undo, modelled as a snapshot stack.
@@ -126,63 +94,6 @@ final class SnapshotHistory: VimHistoryProvider {
         // A snapshot host has no patch, so it reports the caret it saved. The
         // adapters carry the real range; this only has to prove the round trip.
         return VimHistoryResult(text: target.text, patchStart: target.anchor)
-    }
-}
-
-/// Parses the fixture's vim-style key strings.
-///
-/// Mirrors `test/harness.ts`'s `parseKeys` exactly, including the rule that `<<`
-/// is two `<` keys rather than one malformed group — the two suites read the
-/// same file, so a parser that disagreed would make them test different things.
-enum VimKeys {
-    private static let named: [String: String] = [
-        "CR": "Enter", "Enter": "Enter", "Esc": "Escape", "BS": "Backspace",
-        "Del": "Delete", "Space": " ", "Tab": "Tab", "Left": "ArrowLeft",
-        "Right": "ArrowRight", "Up": "ArrowUp", "Down": "ArrowDown", "lt": "<",
-    ]
-
-    static func parse(_ spec: String) -> [(key: String, modifiers: VimModifiers)] {
-        var out: [(String, VimModifiers)] = []
-        let characters = Array(spec)
-        var i = 0
-        while i < characters.count {
-            if characters[i] == "<", let close = characters[i...].firstIndex(of: ">"),
-                let body = groupBody(String(characters[(i + 1)..<close]))
-            {
-                out.append(body)
-                i = close + 1
-                continue
-            }
-            let character = String(characters[i])
-            // An uppercase letter is Shift on a real keyboard, and the core
-            // checks `shiftKey` when naming chords.
-            let shifted = character.count == 1 && character.first?.isUppercase == true
-                && character.first?.isLetter == true
-            out.append((character, shifted ? .shift : []))
-            i += 1
-        }
-        return out
-    }
-
-    /// nil when the body is not a chord or a key name, so `<` stays literal.
-    private static func groupBody(_ body: String) -> (String, VimModifiers)? {
-        var modifiers: VimModifiers = []
-        var rest = Substring(body)
-        while rest.count > 2, rest.dropFirst().first == "-",
-            let prefix = rest.first, "CAMS".contains(prefix)
-        {
-            switch prefix {
-            case "C": modifiers.insert(.control)
-            case "A": modifiers.insert(.option)
-            case "M": modifiers.insert(.command)
-            default: modifiers.insert(.shift)
-            }
-            rest = rest.dropFirst(2)
-        }
-        guard let first = rest.first, first.isLetter,
-            rest.allSatisfy({ $0.isLetter || $0.isNumber })
-        else { return nil }
-        return (named[String(rest)] ?? String(rest), modifiers)
     }
 }
 

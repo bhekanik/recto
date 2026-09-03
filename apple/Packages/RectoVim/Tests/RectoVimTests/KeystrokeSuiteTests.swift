@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 
+import RectoVimFixtures
 @testable import RectoVim
 
 /// The whole keystroke suite, driven through `JSContext` exactly as `keyDown`
@@ -138,6 +139,23 @@ struct KeystrokeSuiteTests {
         #expect(state.prompt?.prefix == ":")
         #expect(state.prompt?.value == "s")
         #expect(VimStatus(result: state).prompt == ":s")
+    }
+
+    @Test(":w asks the host to save and leaves the buffer alone")
+    func writeCallsHost() throws {
+        let (engine, _, host) = try Fixtures.engine()
+        var saves = 0
+        host.onSave = { saves += 1 }
+        try engine.start(text: "alpha\n")
+        try engine.setCursor(line: 0, column: 0)
+        var last = try engine.state()
+        for key in VimKeys.parse(":w<CR>") {
+            last = try engine.handleKey(key.key, modifiers: key.modifiers)
+        }
+        #expect(saves == 1)
+        #expect(last.edits.isEmpty)
+        #expect(last.mode == "normal")
+        #expect(sameCodeUnits(engine.text(), "alpha\n"))
     }
 
     @Test("the bundle resolves from the package's own resources")

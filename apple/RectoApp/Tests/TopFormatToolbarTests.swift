@@ -45,6 +45,7 @@ struct TopFormatToolbarTests {
     func enabledWhenEditable(presentation: Presentation) {
         #expect(TopFormatToolbar.isEnabled(in: presentation) == presentation.isEditable)
         #expect(TopFormatToolbar.isEnabled(in: .raw))
+        #expect(TopFormatToolbar.isEnabled(in: .vim))
         #expect(!TopFormatToolbar.isEnabled(in: .preview))
     }
 

@@ -76,7 +76,7 @@ public struct RectoEditorView: View {
     /// there. Rich and preview hide it from the body, which is exactly why the
     /// header has to exist: without it the reader's title would disappear.
     private var header: Frontmatter? {
-        guard styler.presentation != .raw,
+        guard !styler.presentation.showsSource,
               let frontmatter = storage.frontmatter,
               DocumentHeaderView.hasVisibleFields(frontmatter) else { return nil }
         return frontmatter

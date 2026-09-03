@@ -182,6 +182,7 @@ JS-side mirror. Only these reach Swift:
 | `geometry({kind:"findPosV"})` | `j`/`k` over wrapped lines, `<C-f>` | return `null` to fall back to document lines |
 | `historyCommand("undo"\|"redo")` | `u`, `<C-r>` | host performs it, returns `{text, anchor, head}` |
 | `clipboardRead` / `clipboardWrite` | `"+`/`"*` registers | NSPasteboard |
+| `saveRequested` | `:w` | the host decides what a save is; no reply |
 
 All arguments and replies are JSON strings: reading a field off a `JSValue` is a
 bridge crossing of its own, so one string beats five property reads.

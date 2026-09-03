@@ -299,6 +299,14 @@ export class RectoCM {
 	_applyEdit(from, to, insert, origin, resolved) {
 		if (!resolved) ({ from, to } = this._clampEditRange(from, to));
 		if (from === to && insert === "") return;
+		// The core spells every line break `\n` (a linewise put, a pasted
+		// string, a dot-repeat replay); the document sets the ending. Converting
+		// here, at the one write path, keeps the mirror free of endings the host
+		// would rewrite — a bare LF landing in a CRLF document made the host
+		// normalise and resync, which dropped insert mode.
+		if (/[\r\n]/.test(insert)) {
+			insert = insert.replace(/\r\n|\n|\r/g, this.doc.documentEnding());
+		}
 		this.edits.push({ from, to, insert });
 
 		for (const id in this.marks) this.marks[id].update(from, to, insert.length);
@@ -1010,9 +1018,11 @@ RectoCM.commands = {
 	newlineAndIndent: (cm) => {
 		const cur = cm.getCursor();
 		const indent = /^[ \t]*/.exec(cm.getLine(cur.line))[0];
-		cm.replaceSelection(`${cm.doc.lineEndingFor(cur.line)}${indent}`);
+		cm.replaceSelection(`${cm.doc.documentEnding()}${indent}`);
 	},
 	indentAuto: () => {},
 	newlineAndIndentContinueComment: undefined,
-	save: undefined,
+	// `:w`. Upstream's `write` calls this when defined; the host owns what a
+	// save is, so the request leaves JS the same way undo does.
+	save: (cm) => cm.host?.saveRequested?.(),
 };

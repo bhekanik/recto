@@ -20,13 +20,22 @@ struct EditorStatusBar<Trailing: View>: View {
     let settings: StudioSettings
     let theme: RectoEditorTheme
     var wordCounter: WordCounter = WordCount.count
+    /// The window's vim layer. Its mode line sits right of the ring while the
+    /// lens is `.vim`; only this bar observes its status, so a mode change
+    /// re-renders the footer and not the host.
+    var vimController: RectoVimController? = nil
     /// The writer picked a lens, by button or by its shortcut.
     let onSelect: (Presentation) -> Void
     @ViewBuilder let trailing: () -> Trailing
 
+    var showsVimStatus: Bool { presentation == .vim && vimController != nil }
+
     var body: some View {
         HStack(spacing: 8) {
             ModeSwitcher(active: presentation, isEditable: isEditable, theme: theme, onSelect: onSelect)
+            if showsVimStatus, let vimController {
+                VimStatusView(status: vimController.status, theme: theme)
+            }
             Spacer(minLength: 0)
             StudioControls(settings: settings, theme: theme)
             StatusDivider(theme: theme)
@@ -54,6 +63,7 @@ extension EditorStatusBar where Trailing == EmptyView {
         settings: StudioSettings,
         theme: RectoEditorTheme,
         wordCounter: @escaping WordCounter = WordCount.count,
+        vimController: RectoVimController? = nil,
         onSelect: @escaping (Presentation) -> Void
     ) {
         self.init(
@@ -63,6 +73,7 @@ extension EditorStatusBar where Trailing == EmptyView {
             settings: settings,
             theme: theme,
             wordCounter: wordCounter,
+            vimController: vimController,
             onSelect: onSelect,
             trailing: EmptyView.init
         )
@@ -277,11 +288,10 @@ private struct ModeSwitcher: View {
     let theme: RectoEditorTheme
     let onSelect: (Presentation) -> Void
 
-    /// Web order, minus what does not exist natively yet. Vim slots in between
-    /// raw and preview when the RectoVim slice lands. Preview only appears for
-    /// a read-only document, where it is the state rather than a choice.
+    /// The web's `MODE_RING`: rich, raw, vim, then preview. Preview only appears
+    /// for a read-only document, where it is the state rather than a choice.
     private var ring: [Presentation] {
-        isEditable ? [.rich, .raw] : [.rich, .raw, .preview]
+        isEditable ? PresentationPreference.choices : PresentationPreference.choices + [.preview]
     }
 
     var body: some View {
@@ -327,6 +337,7 @@ private extension Presentation {
         switch self {
         case .rich: "Rich text"
         case .raw: "Raw Markdown"
+        case .vim: "Vim"
         case .preview: "Preview"
         }
     }
@@ -336,16 +347,18 @@ private extension Presentation {
         switch self {
         case .rich: "textformat"
         case .raw: "chevron.left.forwardslash.chevron.right"
+        case .vim: "keyboard"
         case .preview: "eye"
         }
     }
 
     /// Recto's mode chords are Ctrl+Shift everywhere (blueprint §2.1, web
-    /// keymap) so the bare letters stay free for Vim.
+    /// keymap `lib/keyboard/actions.ts`) so the bare letters stay free for Vim.
     var shortcut: KeyboardShortcut? {
         switch self {
         case .rich: KeyboardShortcut("r", modifiers: [.control, .shift])
         case .raw: KeyboardShortcut("m", modifiers: [.control, .shift])
+        case .vim: KeyboardShortcut("v", modifiers: [.control, .shift])
         case .preview: nil
         }
     }
@@ -355,6 +368,7 @@ private extension Presentation {
         switch self {
         case .rich: "Rich text (⌃⇧R)"
         case .raw: "Raw Markdown (⌃⇧M)"
+        case .vim: "Vim (⌃⇧V)"
         case .preview: "Preview"
         }
     }

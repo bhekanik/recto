@@ -190,6 +190,11 @@ try adapter.start()
 if adapter.handle(event) { return }
 ```
 
+That adapter binds a plain `NSTextView` (its own `BlockCaretTextView`). The
+app's `.vim` presentation binds the same engine to the engine-owned text view
+through `RectoEditor.RectoVimController`, a `MarkdownKeyInterceptor`; both
+share `VimTextKitGeometry` for the TextKit 2 line walk.
+
 ## The adapter contract
 
 **JS owns a mirror of the document.** The vim core reads the buffer dozens of

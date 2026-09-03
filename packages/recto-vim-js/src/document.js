@@ -141,16 +141,19 @@ export class RectoDoc {
 	}
 
 	/**
-	 * The ending to use for a line vim inserts itself (`o`, `O`, `<CR>`).
+	 * The ending to use for a line break vim inserts (`o`, `O`, `<CR>`, a put,
+	 * a paste): the first ending in the buffer, LF while there is none.
 	 *
-	 * Since the mirror keeps endings verbatim, inserting a bare `\n` into a CRLF
-	 * document would leave it mixed. Vim reads `fileformat` for this; the nearest
-	 * line's ending is the same answer without a second source of truth.
-	 *
-	 * @param {number} row
+	 * This is the host storage's policy exactly — `MarkdownLineEnding(detecting:)`
+	 * scans for the first ending the same way — so bytes the mirror writes are
+	 * bytes the storage keeps. Using the edited line's own ending instead meant
+	 * a mixed-ending document had the two sides disagree: the mirror wrote the
+	 * minority line's LF, the storage rewrote it to the majority CRLF, and the
+	 * reconcile resync kicked insert mode out mid-session.
 	 */
-	lineEndingFor(row) {
-		return this.endings[row] || this.endings[Math.max(0, row - 1)] || "\n";
+	documentEnding() {
+		for (const ending of this.endings) if (ending) return ending === "\r\n" ? "\r\n" : "\n";
+		return "\n";
 	}
 
 	/** @param {number} row */

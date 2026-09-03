@@ -148,6 +148,8 @@ final class CommandPaletteController {
             editor?.choosePresentation(.rich)
         case "mode-raw":
             editor?.choosePresentation(.raw)
+        case "mode-vim":
+            editor?.choosePresentation(.vim)
         case "undo":
             editor?.undo()
         case "redo":

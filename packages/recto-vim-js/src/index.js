@@ -424,6 +424,32 @@ class VimSession {
 const Vim = initVim(RectoCM);
 
 /**
+ * Registers hold `\n`-separated text whatever the document's ending.
+ *
+ * Upstream slices register text by single characters: a linewise put after the
+ * cursor is `'\n' + text.slice(0, -1)`, which on a yank of `beta\r\n` leaves
+ * `\nbeta\r` — a stray CR that became an extra blank line in a CRLF file. With
+ * registers normalised on the way in, that arithmetic is right, and the write
+ * path (`RectoCM._applyEdit`) puts the document's own ending back on the way
+ * out. Patched on the prototypes so a `Vim` reset keeps it.
+ */
+{
+	const controller = Vim.getRegisterController();
+	// `setText` accepts a missing text (upstream reads `text || ''`).
+	const normalise = (text) => (text ?? "").replace(/\r\n|\r/g, "\n");
+	const controllerProto = Object.getPrototypeOf(controller);
+	const pushText = controllerProto.pushText;
+	controllerProto.pushText = function (name, operator, text, linewise, blockwise) {
+		return pushText.call(this, name, operator, normalise(text), linewise, blockwise);
+	};
+	const registerProto = Object.getPrototypeOf(controller.unnamedRegister);
+	const setText = registerProto.setText;
+	registerProto.setText = function (text, linewise, blockwise) {
+		return setText.call(this, normalise(text), linewise, blockwise);
+	};
+}
+
+/**
  * `h`, `l`, `x`, `X`, `s`, `~`, `dl`, `dh` and every count on them, stepping by
  * grapheme cluster instead of by code point.
  *
