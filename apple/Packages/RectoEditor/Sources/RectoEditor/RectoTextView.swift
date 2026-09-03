@@ -163,6 +163,10 @@ public struct RectoTextView {
         nonmutating set { controller.caretShape = newValue }
     }
 
+    /// The drawn block/hollow caret for ``caretShape``, so a host can assert
+    /// its frame and styling. Exists only while a non-bar shape is active.
+    public var vimCaretOverlay: VimCaretOverlayView? { controller.vimCaretOverlay }
+
     func installTextFinderResponder(_ responder: any MarkdownTextFinderActionResponder) {
         controller.textFinderActionResponder = responder
     }

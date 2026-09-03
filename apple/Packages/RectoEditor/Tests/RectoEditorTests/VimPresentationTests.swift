@@ -350,6 +350,14 @@ struct VimPresentationTests {
         #expect(mounted.vim.status?.label == "")
         #expect(mounted.vim.status?.caret == .block)
         #expect(mounted.seam?.caretShape == .block)
+        // The block caret is drawn by the engine's overlay layer, with a
+        // frame covering the glyph cell rather than a resized indicator bar.
+        let overlay = try #require(mounted.seam?.vimCaretOverlay)
+        #expect(!overlay.isHidden)
+        #expect(!overlay.isHollow)
+        #expect(overlay.frame.width > 4, "a cell, not a bar")
+        let cell = ("m" as NSString).size(withAttributes: [.font: mounted.textView.font!]).width
+        #expect(abs(overlay.frame.width - cell) < 1, "the layer covers the cell at the caret")
 
         try mounted.press("3d")
         #expect(mounted.vim.status?.pending == "3d")
@@ -362,6 +370,7 @@ struct VimPresentationTests {
         try mounted.press("i")
         #expect(mounted.vim.status?.label == "-- INSERT --")
         #expect(mounted.seam?.caretShape == .bar)
+        #expect(mounted.seam?.vimCaretOverlay == nil, "insert mode gives the caret back to the bar")
         try mounted.press("<Esc>V")
         #expect(mounted.vim.status?.label == "-- VISUAL LINE --")
         try mounted.press("<Esc>")
@@ -399,6 +408,7 @@ struct VimPresentationTests {
 
         #expect(mounted.vim.status == nil)
         #expect(mounted.seam?.caretShape == .bar)
+        #expect(mounted.seam?.vimCaretOverlay == nil, "detaching removes the drawn caret with it")
         mounted.textView.setSelectedRange(NSRange(location: 0, length: 0))
         try mounted.press("x")
         #expect(mounted.storage.markdown == "xabc\n", "with vim gone, x is a letter again")
