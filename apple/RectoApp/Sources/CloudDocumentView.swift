@@ -138,20 +138,9 @@ struct CloudDocumentView: View {
             vim.sync(seam: model.storage.textView, presentation: presentation)
         }
         .navigationTitle(model.state.title)
-        .toolbar {
-            ToolbarItemGroup {
-                Button("Undo", systemImage: "arrow.uturn.backward") {
-                    Task { await model.undo() }
-                }
-                .keyboardShortcut("z", modifiers: .command)
-                .disabled(!model.state.canUndo)
-                Button("Redo", systemImage: "arrow.uturn.forward") {
-                    Task { await model.redo() }
-                }
-                .keyboardShortcut("z", modifiers: [.command, .shift])
-                .disabled(!model.state.canRedo)
-            }
-        }
+        // No window-toolbar undo/redo: TopFormatToolbar owns the buttons (web
+        // parity) and the Edit menu owns the chords, dispatched through
+        // EditorHostRegistry so ⌘Z still undoes in this window.
     }
 
     private func divergenceBanner(_ model: CloudDocumentModel) -> some View {
