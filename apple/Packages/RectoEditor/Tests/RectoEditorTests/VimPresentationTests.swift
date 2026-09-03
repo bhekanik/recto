@@ -419,6 +419,49 @@ struct VimPresentationTests {
         #expect(mounted.history.groupOpen, "\(chord) must not end the undo block")
     }
 
+    /// Upstream declines `<CR>` after a pending operator and in visual mode.
+    /// The declined keyDown used to reach AppKit's `insertNewline:` and type a
+    /// newline — in visual mode replacing the selection. A declined key must
+    /// never edit the document.
+    @Test("a declined Enter edits nothing, pending or visual", arguments: [
+        "d<CR>", "c<CR>", "y<CR>", "g<CR>", "=<CR>", "><CR>", "d2<CR>", "v<CR>",
+    ])
+    func declinedEnterIsSwallowed(spec: String) throws {
+        let mounted = try mount("one\ntwo\nthree\n")
+        defer { mounted.harness.tearDown() }
+        mounted.textView.setSelectedRange(NSRange(location: 0, length: 0))
+
+        try mounted.press(spec)
+
+        #expect(mounted.storage.markdown == "one\ntwo\nthree\n",
+                "\(spec): \(describe(mounted.storage.markdown))")
+        #expect(mounted.edits.isEmpty, "\(spec) reported an edit")
+        #expect(mounted.mirrorMatchesStorage())
+
+        // Out of visual (or with the pending operator cleared), the editor is
+        // ready for the next command.
+        try mounted.press("<Esc>0x")
+        #expect(mounted.storage.markdown == "ne\ntwo\nthree\n")
+        #expect(mounted.mirrorMatchesStorage())
+    }
+
+    @Test("insert-mode Enter types the document's line ending", arguments: [
+        ("ab\n", "x\nab\n"),
+        ("ab\r\n", "x\r\nab\r\n"),
+    ])
+    func insertEnterTypesDocumentEnding(text: String, expected: String) throws {
+        let mounted = try mount(text)
+        defer { mounted.harness.tearDown() }
+        mounted.textView.setSelectedRange(NSRange(location: 0, length: 0))
+
+        try mounted.press("ix<CR>")
+
+        #expect((mounted.storage.markdown as NSString).isEqual(to: expected),
+                "\(describe(mounted.storage.markdown))")
+        #expect(mounted.vim.status?.mode == "insert")
+        #expect(mounted.mirrorMatchesStorage())
+    }
+
     @Test("Tab in normal and visual mode edits nothing")
     func tabOutsideInsertIsInert() throws {
         let mounted = try mount("one\ntwo\n")

@@ -412,7 +412,15 @@ extension RectoVimController: MarkdownKeyInterceptor {
     /// line above and `yank:` pastes the Emacs kill ring, Tab in normal mode
     /// is a jump and `insertTab:` types one. Any of those landing in the
     /// storage came back as an outside edit and dropped vim to normal mode.
+    ///
+    /// `insertNewline:` earns its place by being the one decline that silently
+    /// DELETED text: upstream declines `<CR>` after a pending operator (`d<CR>`)
+    /// and in visual mode, and the undelivered keyDown reaches AppKit as
+    /// `insertNewline:` — which inserts "\n", replacing a visual selection.
+    /// Swallowing is safe because insert-mode Enter never reaches here: the
+    /// engine handles it at keyDown (including `i<C-r><CR>` and friends).
     private static let editingSelectors: Set<Selector> = [
+        #selector(NSResponder.insertNewline(_:)),
         #selector(NSResponder.deleteForward(_:)),
         #selector(NSResponder.deleteWordBackward(_:)),
         #selector(NSResponder.deleteWordForward(_:)),
