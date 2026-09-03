@@ -78,6 +78,19 @@ describe("isMacOSPlatform", () => {
 
 	it("is true for navigator.platform containing Mac", () => {
 		expect(isMacOSPlatform({ platform: "MacIntel" })).toBe(true);
+		// iPadOS desktop-mode Safari: MacIntel with a touch screen
+		expect(isMacOSPlatform({ platform: "MacIntel", maxTouchPoints: 5 })).toBe(
+			false,
+		);
+		expect(
+			isMacOSPlatform({
+				userAgentData: { platform: "macOS" },
+				maxTouchPoints: 5,
+			}),
+		).toBe(false);
+		expect(isMacOSPlatform({ platform: "MacIntel", maxTouchPoints: 0 })).toBe(
+			true,
+		);
 		expect(isMacOSPlatform({ platform: "MacPPC" })).toBe(true);
 	});
 

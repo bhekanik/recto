@@ -10,6 +10,7 @@ export const MAC_APP_SCHEME = "recto";
 
 type NavigatorPlatform = {
 	platform?: string;
+	maxTouchPoints?: number;
 	userAgentData?: { platform?: string };
 };
 
@@ -19,6 +20,9 @@ export function isMacOSPlatform(
 		: navigator,
 ): boolean {
 	if (!nav) return false;
+	// Desktop-mode Safari on iPadOS reports platform "MacIntel" too; the Mac
+	// app can't be there, and a touch screen is what tells the two apart.
+	if ((nav.maxTouchPoints ?? 0) > 0) return false;
 	if (nav.userAgentData?.platform === "macOS") return true;
 	return typeof nav.platform === "string" && /Mac/.test(nav.platform);
 }
