@@ -949,7 +949,11 @@ export class RectoCM {
 			}
 			this.curOp = null;
 		}
-		if (scrollIntoView) this.scrollIntoView();
+		// Motions like `<C-d>` already called `scrollTo`. A later
+		// `scrollIntoView` would replace that request and the host would
+		// only nearest-reveal, leaving the viewport unmoved when the caret
+		// stayed on-screen.
+		if (scrollIntoView && !this.$scrollRequest) this.scrollIntoView();
 	}
 
 	/* -- host handoff ------------------------------------------------------ */

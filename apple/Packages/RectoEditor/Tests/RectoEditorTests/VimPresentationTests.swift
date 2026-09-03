@@ -144,18 +144,27 @@ struct VimPresentationTests {
         }
     }
 
-    private func mount(_ markdown: String, writingController: RectoWritingController? = nil) throws -> Mounted {
+    private func mount(
+        _ markdown: String,
+        writingController: RectoWritingController? = nil,
+        size: CGSize = CGSize(width: 640, height: 400),
+        styler: MarkdownStyler? = nil,
+        typewriter: RectoTypewriterController? = nil
+    ) throws -> Mounted {
+        let styler = styler ?? MarkdownStyler(presentation: .vim, theme: .twilight)
         let storage = RectoTextStorage(documentId: "vim", markdown: markdown)
         let vim = RectoVimController()
         let history = SnapshotEditorHistory(storage: storage)
         vim.history = history
+        vim.typewriter = typewriter
         var mounted: Mounted?
         let harness = WindowHarness(
             RectoEditorView(
                 storage: storage,
-                styler: MarkdownStyler(presentation: .vim, theme: .twilight),
+                styler: styler,
                 onAttach: { seam in
                     mounted?.seam = seam
+                    typewriter?.attach(to: seam)
                     vim.attach(to: seam)
                 },
                 onEdit: { edit in
@@ -164,7 +173,7 @@ struct VimPresentationTests {
                 },
                 writingController: writingController
             ),
-            size: CGSize(width: 640, height: 400)
+            size: size
         )
         let textView = try #require(harness.editorTextView)
         let result = Mounted(harness: harness, storage: storage, vim: vim, history: history,
@@ -477,6 +486,34 @@ struct VimPresentationTests {
         #expect(mounted.mirrorMatchesStorage())
     }
 
+    // MARK: - Non-US layouts
+
+    /// NSEvent as a layout that composes ASCII punctuation under Option
+    /// delivers it (German Option-8 = `{`, Option-9 = `}`).
+    private func composedKeyEvent(_ composed: String, _ base: String) -> NSEvent {
+        NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: .option, timestamp: 0,
+            windowNumber: 0, context: nil, characters: composed,
+            charactersIgnoringModifiers: base, isARepeat: false, keyCode: 0)!
+    }
+
+    @Test("Option-composed paragraph motions run against the engine's view")
+    func composedLayoutKeysWorkOnTheEngineView() throws {
+        let mounted = try mount("one\ntwo\n\nthree\n\n\nfour\n")
+        defer { mounted.harness.tearDown() }
+        mounted.textView.setSelectedRange(NSRange(location: 9, length: 0))
+
+        mounted.textView.keyDown(with: composedKeyEvent("{", "8"))
+        #expect(
+            mounted.textView.selectedRange().location == 8,
+            "German Option-8 must act as `{`, got \(mounted.textView.selectedRange())")
+        mounted.textView.keyDown(with: composedKeyEvent("}", "9"))
+        #expect(
+            mounted.textView.selectedRange().location == 15,
+            "German Option-9 must act as `}`, got \(mounted.textView.selectedRange())")
+        #expect(mounted.mirrorMatchesStorage())
+    }
+
     // MARK: - Scrolling
 
     @Test("a search that lands far away brings the caret on screen", arguments: [
@@ -521,6 +558,293 @@ struct VimPresentationTests {
         textView.setSelectedRange(NSRange(location: 0, length: 0))
         textView.insertText("x", replacementRange: NSRange(location: NSNotFound, length: 0))
         #expect(storage.markdown == "xabc\n")
+    }
+
+    // MARK: - Geometry and scrolling
+
+    /// Laid-out row vs font metric. `<C-e>` used the font (~11–18 pt) and
+    /// crawled; the visual row on this scale is ~28 pt.
+    private func expectLaidOutLineHeight(_ mounted: Mounted) throws -> Double {
+        let geometry = VimTextKitGeometry(textView: mounted.textView)
+        let font = mounted.textView.font ?? .monospacedSystemFont(ofSize: 17.5, weight: .regular)
+        let fontHeight = Double(font.ascender - font.descender + font.leading)
+        let laidOut = geometry.lineHeight()
+        #expect(laidOut > fontHeight + 4, "lineHeight \(laidOut) vs font \(fontHeight)")
+        return laidOut
+    }
+
+    private func placeOnSection(_ mounted: Mounted, _ needle: String) throws -> Int {
+        let range = (mounted.textView.string as NSString).range(of: needle)
+        #expect(range.location != NSNotFound, "missing \(needle)")
+        mounted.textView.setSelectedRange(NSRange(location: range.location, length: 0))
+        return range.location
+    }
+
+    @Test("zz, zt, zb, paging and HML land on the visible line of a 10k-word document")
+    func scrollGeometryOnSettledDocument() throws {
+        let mounted = try mount(PatchCaretTests.longDocument(), size: CGSize(width: 800, height: 480))
+        defer { mounted.harness.tearDown() }
+        mounted.harness.layout(passes: 6)
+        let geometry = VimTextKitGeometry(textView: mounted.textView)
+        let lineH = try expectLaidOutLineHeight(mounted)
+        let clip = try #require(mounted.textView.enclosingScrollView?.contentView)
+
+        _ = try placeOnSection(mounted, "Section 200")
+        try mounted.press("zz")
+        mounted.harness.layout(passes: 2)
+        let afterZz = clip.bounds.origin.y
+        try expectCaretPlacement(mounted, geometry: geometry, lineH: lineH, at: .center)
+
+        try mounted.press("zt")
+        mounted.harness.layout(passes: 2)
+        try expectCaretPlacement(mounted, geometry: geometry, lineH: lineH, at: .top)
+
+        try mounted.press("zb")
+        mounted.harness.layout(passes: 2)
+        try expectCaretPlacement(mounted, geometry: geometry, lineH: lineH, at: .bottom)
+
+        try mounted.press("zz")
+        mounted.harness.layout(passes: 2)
+        let beforeE = clip.bounds.origin.y
+        try mounted.press("<C-e>")
+        mounted.harness.layout(passes: 2)
+        let eStep = clip.bounds.origin.y - beforeE
+        #expect(
+            abs(eStep - lineH) < lineH * 0.35,
+            "<C-e> stepped \(eStep), laid-out line \(lineH)"
+        )
+
+        try mounted.press("<C-y>")
+        mounted.harness.layout(passes: 2)
+        #expect(abs(clip.bounds.origin.y - afterZz) < lineH * 0.5, "<C-y> should undo <C-e>")
+
+        let client = geometry.scrollInfo().clientHeight
+        try mounted.press("zz")
+        mounted.harness.layout(passes: 2)
+        let beforeF = clip.bounds.origin.y
+        try mounted.press("<C-f>")
+        mounted.harness.layout(passes: 2)
+        #expect(clip.bounds.origin.y - beforeF > client * 0.6, "<C-f> should page by the viewport")
+
+        try mounted.press("zz")
+        mounted.harness.layout(passes: 2)
+        let beforeD = clip.bounds.origin.y
+        try mounted.press("<C-d>")
+        mounted.harness.layout(passes: 2)
+        let dStep = clip.bounds.origin.y - beforeD
+        #expect(
+            dStep > client * 0.3 && dStep < client * 0.85,
+            "<C-d> stepped \(dStep), client \(client)"
+        )
+
+        try mounted.press("<C-u>")
+        mounted.harness.layout(passes: 2)
+        #expect(clip.bounds.origin.y < beforeD + client * 0.2, "<C-u> should page back up")
+
+        try mounted.press("zz")
+        mounted.harness.layout(passes: 2)
+        try mounted.press("H")
+        expectVisibleBand(mounted, geometry: geometry, band: .top)
+        try mounted.press("L")
+        expectVisibleBand(mounted, geometry: geometry, band: .bottom)
+        try mounted.press("M")
+        expectVisibleBand(mounted, geometry: geometry, band: .middle)
+    }
+
+    @Test("zz and <C-e> hold their offset within a second of open")
+    func scrollGeometryImmediatelyAfterOpen() throws {
+        let mounted = try mount(PatchCaretTests.longDocument(), size: CGSize(width: 800, height: 480))
+        defer { mounted.harness.tearDown() }
+        let geometry = VimTextKitGeometry(textView: mounted.textView)
+        let lineH = try expectLaidOutLineHeight(mounted)
+        let clip = try #require(mounted.textView.enclosingScrollView?.contentView)
+
+        _ = try placeOnSection(mounted, "Section 180")
+        try mounted.press("zz")
+        let zzY = clip.bounds.origin.y
+        try expectCaretPlacement(mounted, geometry: geometry, lineH: lineH, at: .center)
+
+        mounted.harness.layout(passes: 3)
+        #expect(
+            abs(clip.bounds.origin.y - zzY) < 1,
+            "layout after zz yanked \(clip.bounds.origin.y) off \(zzY)"
+        )
+
+        try mounted.press("<C-e>")
+        let eY = clip.bounds.origin.y
+        #expect(eY - zzY > lineH * 0.5, "<C-e> stepped \(eY - zzY), line \(lineH)")
+        mounted.harness.layout(passes: 3)
+        #expect(
+            abs(clip.bounds.origin.y - eY) < 1,
+            "layout after <C-e> yanked \(clip.bounds.origin.y) off \(eY)"
+        )
+    }
+
+    @Test("gj and gk walk display lines across a wrap in the reading column")
+    func displayLineMotionsAcrossWraps() throws {
+        let paragraph = String(repeating: "word ", count: 80) + "end\n"
+        let mounted = try mount(
+            paragraph,
+            size: CGSize(width: 900, height: 400),
+            styler: MarkdownStyler(presentation: .vim, theme: .twilight, readingWidth: 280)
+        )
+        defer { mounted.harness.tearDown() }
+        mounted.harness.layout(passes: 4)
+        let geometry = VimTextKitGeometry(textView: mounted.textView)
+        mounted.textView.setSelectedRange(NSRange(location: 12, length: 0))
+        let start = geometry.charCoords(offset: 12)
+        #expect(start.left > 0)
+
+        try mounted.press("gj")
+        let afterDown = mounted.textView.selectedRange().location
+        #expect(afterDown > 12, "gj should advance inside the wrapped paragraph")
+        let down = geometry.charCoords(offset: afterDown)
+        #expect(down.top > start.top + 2, "gj should land on the next display line")
+        // Exact: the mono column under the same x. A tolerance of a column here
+        // hid a left drift of one column per move.
+        #expect(down.left == start.left, "gj should keep the goal column exactly")
+
+        try mounted.press("gk")
+        #expect(mounted.textView.selectedRange().location == 12)
+    }
+
+    /// The row is 25 columns wide, so column 20 sits at offsets 20, 45, 70, 95.
+    @Test("gj and gk keep the exact column over several rows and after a click")
+    func displayLineMotionsKeepTheColumn() throws {
+        let paragraph = String(repeating: "word ", count: 80) + "end\n"
+        let mounted = try mount(
+            paragraph,
+            size: CGSize(width: 900, height: 400),
+            styler: MarkdownStyler(presentation: .vim, theme: .twilight, readingWidth: 280)
+        )
+        defer { mounted.harness.tearDown() }
+        mounted.harness.layout(passes: 4)
+
+        mounted.textView.setSelectedRange(NSRange(location: 20, length: 0))
+        try mounted.press("gj")
+        #expect(mounted.textView.selectedRange().location == 45)
+        try mounted.press("gj")
+        #expect(mounted.textView.selectedRange().location == 70)
+        try mounted.press("gk")
+        try mounted.press("gk")
+        #expect(mounted.textView.selectedRange().location == 20)
+
+        // A host move (a click) resets the wanted column, as in Vim; before, the
+        // old pixel goal from the previous gj/gk survived it.
+        try mounted.press("gj")
+        mounted.textView.setSelectedRange(NSRange(location: 30, length: 0))
+        try mounted.press("gj")
+        try mounted.press("gj")
+        #expect(mounted.textView.selectedRange().location == 80)
+        try mounted.press("gk")
+        try mounted.press("gk")
+        #expect(mounted.textView.selectedRange().location == 30)
+    }
+
+    private enum CaretPlacement { case top, center, bottom }
+    private enum VisibleBand { case top, middle, bottom }
+
+    private func expectCaretPlacement(
+        _ mounted: Mounted,
+        geometry: VimTextKitGeometry,
+        lineH: Double,
+        at placement: CaretPlacement,
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) throws {
+        let offset = mounted.textView.selectedRange().location
+        let coords = geometry.charCoords(offset: offset)
+        let info = geometry.scrollInfo()
+        let mid = (coords.top + coords.bottom) / 2
+        let viewMid = info.top + info.clientHeight / 2
+        let viewBottom = info.top + info.clientHeight
+        let error: Double
+        switch placement {
+        case .top:
+            error = abs(coords.top - info.top)
+        case .center:
+            error = abs(mid - viewMid)
+        case .bottom:
+            error = abs(coords.bottom - viewBottom)
+        }
+        #expect(
+            error < lineH * 0.6,
+            "\(placement) error \(error) pt, line \(lineH), caret \(coords) view top \(info.top) height \(info.clientHeight)",
+            sourceLocation: sourceLocation
+        )
+    }
+
+    /// `H`/`M`/`L` pick a document line via `coordsChar` at the viewport
+    /// edge, then the first non-blank. That is the visible first/middle/last
+    /// line, not a pixel-exact edge.
+    private func expectVisibleBand(
+        _ mounted: Mounted,
+        geometry: VimTextKitGeometry,
+        band: VisibleBand,
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) {
+        let coords = geometry.charCoords(offset: mounted.textView.selectedRange().location)
+        let info = geometry.scrollInfo()
+        let mid = (coords.top + coords.bottom) / 2
+        let rel = (mid - info.top) / info.clientHeight
+        #expect(coords.bottom > info.top && coords.top < info.top + info.clientHeight,
+                sourceLocation: sourceLocation)
+        switch band {
+        case .top:
+            #expect(rel < 0.34, "H relative \(rel)", sourceLocation: sourceLocation)
+        case .middle:
+            #expect(rel > 0.33 && rel < 0.67, "M relative \(rel)", sourceLocation: sourceLocation)
+        case .bottom:
+            #expect(rel > 0.66, "L relative \(rel)", sourceLocation: sourceLocation)
+        }
+    }
+
+    // MARK: - Typewriter interaction
+
+    @Test("typewriter scrolling recenters once per vim command and overrides zt")
+    func typewriterRecentersOncePerVimCommand() throws {
+        // Typewriter + vim: every command's edit and selection application runs
+        // inside performProgrammaticChange, so the recenter count is one per
+        // command and the center pass — not vim's own request — owns the frame.
+        let typewriter = RectoTypewriterController(isEnabled: true)
+        let mounted = try mount(
+            PatchCaretTests.longDocument(),
+            size: CGSize(width: 640, height: 400),
+            typewriter: typewriter
+        )
+        defer { mounted.harness.tearDown() }
+        #expect(mounted.harness.window.makeFirstResponder(mounted.textView))
+        mounted.harness.layout(passes: 6)
+        let geometry = VimTextKitGeometry(textView: mounted.textView)
+        let lineH = try expectLaidOutLineHeight(mounted)
+        let baseline = typewriter.recenterCount
+
+        try mounted.press("G")
+        mounted.harness.layout(passes: 3)
+        #expect(typewriter.recenterCount - baseline == 1, "G must recenter exactly once")
+
+
+        // `G` parks the caret on the phantom line past the final newline, where
+        // charCoords has no fragment; `h` steps onto the last real line.
+        // `G` parks the caret on the phantom line past the final newline, where
+        // charCoords has no fragment; `k` steps onto the last real line.
+        try mounted.press("k")
+        mounted.harness.layout(passes: 3)
+        #expect(typewriter.recenterCount - baseline == 2, "k must recenter exactly once")
+        try expectCaretPlacement(mounted, geometry: geometry, lineH: lineH, at: .center)
+
+        // zz is redundant while typewriter is on: the command's own scroll and
+        // the recenter ask for the same frame.
+        try mounted.press("zz")
+        mounted.harness.layout(passes: 3)
+        #expect(typewriter.recenterCount - baseline == 3, "zz must recenter exactly once")
+        try expectCaretPlacement(mounted, geometry: geometry, lineH: lineH, at: .center)
+
+        // zt is overridden: the deferred center pass decides where the clip ends.
+        try mounted.press("zt")
+        mounted.harness.layout(passes: 3)
+        #expect(typewriter.recenterCount - baseline == 4, "zt must recenter exactly once")
+        try expectCaretPlacement(mounted, geometry: geometry, lineH: lineH, at: .center)
+        #expect(mounted.mirrorMatchesStorage())
     }
 
     // MARK: - External changes

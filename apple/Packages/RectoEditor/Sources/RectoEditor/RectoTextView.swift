@@ -109,6 +109,12 @@ public struct RectoTextView {
         controller.scroll(range: range, position: position)
     }
 
+    /// Set the clip origin through the engine's clamp/restore-cancel path.
+    @discardableResult
+    public func scroll(toVerticalOffset y: CGFloat) -> Bool {
+        controller.scroll(toVerticalOffset: y)
+    }
+
     /// Make the editor first responder.
     @discardableResult
     public func focus() -> Bool {

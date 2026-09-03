@@ -54,6 +54,14 @@ public final class RectoVimController {
     /// `:w`.
     @ObservationIgnored public var onSave: (() -> Void)?
 
+    /// Typewriter scrolling's controller, when the host runs both. While it is
+    /// enabled, each vim command's edit and selection application runs inside
+    /// its `performProgrammaticChange`: one recenter per command, never on an
+    /// intermediate state. Vim's own repositioning still runs first, so the
+    /// recenter decides the frame: `zz` is redundant while typewriter is on, and
+    /// `zt`/`zb` are immediately overridden by the center pass.
+    @ObservationIgnored public weak var typewriter: RectoTypewriterController?
+
     /// Replaying a keystroke's edits failed and the engine was resynced from
     /// the storage. The document is intact; the keystroke's effect is not.
     @ObservationIgnored public var onReplayFailure: ((VimReplayFailure) -> Void)?
@@ -272,6 +280,16 @@ public final class RectoVimController {
     // MARK: - Applying results
 
     private func apply(_ result: VimResult) throws {
+        guard let typewriter, typewriter.isEnabled else {
+            try applyResult(result)
+            return
+        }
+        try typewriter.performProgrammaticChange {
+            try applyResult(result)
+        }
+    }
+
+    private func applyResult(_ result: VimResult) throws {
         if !result.edits.isEmpty && !result.resynced {
             let outcome = applyEdits(result.edits, insertMode: result.insertMode)
             if outcome != .applied {
@@ -383,11 +401,8 @@ public final class RectoVimController {
             let range = scroll.offset.map { NSRange(location: $0, length: 0) } ?? textView.selectedRange()
             seam.scroll(range: range, position: .nearest)
         case "scrollTo":
-            // Best effort until the engine exposes a vertical-offset scroll that
-            // also cancels its pending restore (plan 024 slice V2).
-            if let y = scroll.y, let scrollView = seam.scrollView {
-                scrollView.contentView.scroll(to: NSPoint(x: 0, y: y))
-                scrollView.reflectScrolledClipView(scrollView.contentView)
+            if let y = scroll.y {
+                seam.scroll(toVerticalOffset: CGFloat(y))
             }
         default:
             break

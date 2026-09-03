@@ -60,6 +60,27 @@ public enum VimKeyEvent {
         if flags.contains(.command) { modifiers.insert(.command) }
         if flags.contains(.shift) { modifiers.insert(.shift) }
 
+        // Layouts that park ASCII punctuation behind Option — German
+        // Option-8/9/5/6 give `{ } [ ]`, some give Option-L = `@` — compose the
+        // real character into `event.characters`, while
+        // `charactersIgnoringModifiers` strips Option and would hand vim an
+        // unbindable `<A-8>` chord (and the paragraph motions die). Vim's command
+        // alphabet is ASCII, so an ASCII-printable character that differs from
+        // its unmodified base is that layout's direct input for it: send the
+        // character and drop the modifier. Non-ASCII combos — US Option-a = "å"
+        // — are the accent-mnemonic chords, and stay `<A-x>` for the core.
+        if modifiers.contains(.option),
+            !modifiers.contains(.control), !modifiers.contains(.command),
+            let composed = event.characters,
+            let base = event.charactersIgnoringModifiers,
+            composed != base,
+            composed.unicodeScalars.count == 1,
+            let scalar = composed.unicodeScalars.first,
+            (0x21...0x7E).contains(scalar.value) {
+            modifiers.remove(.option)
+            return translate(characters: composed, modifiers: modifiers)
+        }
+
         // `charactersIgnoringModifiers` is what gives `<C-w>` the letter "w"
         // rather than the control character AppKit would otherwise deliver.
         guard let raw = event.charactersIgnoringModifiers else { return nil }

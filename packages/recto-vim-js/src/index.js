@@ -275,6 +275,11 @@ class VimSession {
 				cm.posFromIndex(this._clampOffset(head ?? anchor)),
 			);
 		});
+		// Vim resets the wanted column (`curswant`) when the mouse moves the
+		// cursor. The core only recomputes `lastHSPos`/`lastHPos` when the
+		// previous motion was not a vertical one, so after `gj` a host move
+		// would leave `gj`/`gk` aiming at the old column.
+		if (cm.state.vim) cm.state.vim.lastMotion = null;
 		const result = this._result(true);
 		this.undoBreak = false;
 		return result;
