@@ -109,13 +109,6 @@ public struct RectoTextView {
         controller.scroll(range: range, position: position)
     }
 
-    /// Clip-view origin y in document coordinates. See
-    /// ``MarkdownEditorController/verticalScrollOffset``.
-    public var verticalScrollOffset: CGFloat { controller.verticalScrollOffset }
-
-    /// Clip-view visible height. See ``MarkdownEditorController/visibleHeight``.
-    public var visibleHeight: CGFloat { controller.visibleHeight }
-
     /// Set the clip origin through the engine's clamp/restore-cancel path.
     @discardableResult
     public func scroll(toVerticalOffset y: CGFloat) -> Bool {
