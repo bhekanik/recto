@@ -9,7 +9,12 @@ import {
 	DialogContent,
 	DialogTitle,
 } from "@/components/ui/dialog";
-import { instructionLabel, TRANSFORM_PRESETS } from "@/lib/ai/instructions";
+import {
+	instructionLabel,
+	TRANSFORM_PRESETS,
+	type TransformPresetId,
+} from "@/lib/ai/instructions";
+import { transformWarnings } from "@/lib/ai/transform-checks";
 import type {
 	AiTransformSnapshot,
 	AiTransformState,
@@ -59,6 +64,7 @@ export function AiTransformPopover({
 	onReconcile,
 }: Props) {
 	const [query, setQuery] = useState("");
+	const [presetId, setPresetId] = useState<TransformPresetId>();
 	const popupRef = useRef<HTMLDivElement | null>(null);
 	const closeRef = useRef<HTMLButtonElement | null>(null);
 	const restoreFocusRef = useRef<HTMLElement | null>(null);
@@ -87,8 +93,13 @@ export function AiTransformPopover({
 
 	if (!selection) return null;
 
-	const run = (instruction: string, label: string) => {
+	const run = (
+		instruction: string,
+		label: string,
+		preset?: TransformPresetId,
+	) => {
 		if (!instruction.trim()) return;
+		setPresetId(preset);
 		onRun({
 			instruction,
 			instructionLabel: label,
@@ -98,6 +109,14 @@ export function AiTransformPopover({
 
 	const streaming = state.status === "streaming";
 	const showPicker = state.status === "idle";
+	// Only once the text is final: a half-streamed rewrite trips every check.
+	const warnings = state.awaitingDecision
+		? transformWarnings({
+				presetId,
+				original: selection.selection,
+				rewritten: state.partial,
+			})
+		: [];
 
 	return (
 		<Dialog
@@ -166,7 +185,7 @@ export function AiTransformPopover({
 									<Command.Item
 										key={preset.id}
 										value={`${preset.label} ${preset.id}`}
-										onSelect={() => run(preset.prompt, preset.label)}
+										onSelect={() => run(preset.prompt, preset.label, preset.id)}
 										className={ITEM}
 									>
 										<span className="flex-1 text-[var(--color-ink-primary)]">
@@ -221,6 +240,16 @@ export function AiTransformPopover({
 								</p>
 							)}
 						</div>
+						{warnings.length > 0 && (
+							<ul
+								aria-label="Checks on this suggestion"
+								className="border-t border-[var(--color-line)] px-[var(--space-4)] py-[var(--space-2)] text-[0.6875rem] leading-[var(--leading-ui)] text-[var(--color-ink-secondary)]"
+							>
+								{warnings.map((warning) => (
+									<li key={warning}>{warning}</li>
+								))}
+							</ul>
+						)}
 						<div className="flex items-center justify-end gap-[var(--space-2)] border-t border-[var(--color-line)] px-[var(--space-4)] py-[var(--space-2)]">
 							{streaming && (
 								<button
