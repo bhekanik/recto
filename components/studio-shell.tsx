@@ -282,6 +282,15 @@ function StudioWorkspace() {
 		return handle?.getCanonicalMarkdown() ?? activeSync?.markdown ?? "";
 	}, [activeDocId, workspace, registry, activeSync]);
 
+	const getActiveCaretSection = useCallback((): string => {
+		if (!activeDocId || !workspace) return "";
+		const handle = registry.getPrimaryHandle(
+			activeDocId,
+			workspace.activePaneId,
+		);
+		return handle?.getCaretSectionMarkdown?.() ?? getActiveMarkdown();
+	}, [activeDocId, workspace, registry, getActiveMarkdown]);
+
 	// --- Comments (plan 010 Phase B) ---------------------------------------
 	const {
 		commentsOpen,
@@ -1032,7 +1041,8 @@ function StudioWorkspace() {
 						<RelatedPassagesPanel
 							open={relatedOpen}
 							activeDocumentId={activeDocId}
-							getQueryText={getActiveMarkdown}
+							getSourceMarkdown={getActiveMarkdown}
+							getQueryText={getActiveCaretSection}
 							getSourceNodeId={() =>
 								activeHistoryRef.current?.currentNodeId ?? null
 							}

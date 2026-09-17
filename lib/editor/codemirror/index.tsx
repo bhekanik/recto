@@ -29,6 +29,7 @@ import type { LintIssue } from "@/lib/lint";
 import { markdownFromHtml, normalizeMarkdown } from "@/lib/markdown";
 import { exportCaretFromCm, importCaretToCm } from "@/lib/modes/caret";
 import type { CaretPosition, VimSubMode } from "@/lib/modes/types";
+import { sectionAtOffset } from "@/lib/outline/section";
 import {
 	type CommentHighlight,
 	commentHighlightExtension,
@@ -582,6 +583,16 @@ export const CodeMirrorEditor = forwardRef<
 			if (!view) return { offset: 0, anchor: 0, head: 0 };
 			const { anchor, head } = view.state.selection.main;
 			return exportCaretFromCm(anchor, head);
+		},
+		getCaretSectionMarkdown() {
+			const view = viewRef.current;
+			if (!view) return null;
+			return (
+				sectionAtOffset(
+					view.state.doc.toString(),
+					view.state.selection.main.head,
+				) || null
+			);
 		},
 		importCaret(caret: CaretPosition) {
 			const view = viewRef.current;

@@ -26,6 +26,12 @@ export type EditorHandle = {
 	 * may omit it.
 	 */
 	getSelectedMarkdown?: () => string | null;
+	/**
+	 * Markdown of the heading-bounded section holding the caret. Related-passage
+	 * search queries with it: what the writer is working on now, not the head of
+	 * the document.
+	 */
+	getCaretSectionMarkdown?: () => string | null;
 	/** Capture selected Markdown and its replacement transaction from one editor state. */
 	captureAiSelection?: () => {
 		markdown: string;
