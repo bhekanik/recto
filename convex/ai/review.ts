@@ -24,8 +24,10 @@ import {
 	verifySource,
 } from "./request";
 
-type Comment = { quote: string; body: string; category?: string };
-type Suggestion = { quote: string; replacement: string };
+/** The model's pointer into the draft. `prefix`/`suffix` pick one occurrence of a repeated quote. */
+type QuoteAnchor = { quote: string; prefix?: string; suffix?: string };
+type Comment = QuoteAnchor & { body: string; category?: ReviewCategory };
+type Suggestion = QuoteAnchor & { replacement: string };
 type ReviewResult = { comments: Comment[]; suggestions: Suggestion[] };
 type AiReviewSummary = {
 	commentsPlaced: number;
@@ -60,6 +62,56 @@ const MAX_REVIEW_TOKENS = 4_000;
 const MAX_REVIEW_ITERATIONS = 8;
 const MAX_REVIEW_ITEMS = 100;
 
+// A fixed set so the `[Category]` label on stored comments stays consistent
+// across runs instead of drifting with the model's wording.
+const REVIEW_CATEGORIES = [
+	"Clarity",
+	"Pacing",
+	"Structure",
+	"Tone",
+	"Argument",
+	"Grammar",
+] as const;
+type ReviewCategory = (typeof REVIEW_CATEGORIES)[number];
+
+const REVIEW_SYSTEM = [
+	"You are a sharp, kind developmental editor reviewing a Markdown draft the way",
+	"a human reviewer would: pointing at exact words, not vague impressions.",
+	"",
+	"Leave feedback by calling tools, not by writing prose:",
+	"- `create_comment` for a span that is weak, unclear, or dragging, and why.",
+	"- `suggest_edit` for a concrete replacement of a span.",
+	"Make one tool call per distinct piece of feedback.",
+	"",
+	"Rules for `quote`:",
+	"- It must be an exact substring of the draft, copied character for character.",
+	"  Do not paraphrase, fix typos, add or strip Markdown, or use an ellipsis. A",
+	"  quote that is not an exact substring is discarded.",
+	"- Keep it short: a phrase or a sentence, not paragraphs.",
+	"- When the quote is short or could appear more than once, also give `prefix`",
+	"  and `suffix`: up to 40 characters copied verbatim from immediately before and",
+	"  after the quote. A repeated quote without them is discarded.",
+	"",
+	"When the useful feedback is recorded, reply with a one-line summary and stop",
+	"calling tools. If the draft needs no changes, call no tools and say so.",
+].join("\n");
+
+const anchorProperties = {
+	quote: {
+		type: "string",
+		description: "Exact substring of the draft this attaches to.",
+	},
+	prefix: {
+		type: "string",
+		description:
+			"Up to 40 characters immediately before the quote, verbatim. Required when the quote repeats.",
+	},
+	suffix: {
+		type: "string",
+		description: "Up to 40 characters immediately after the quote, verbatim.",
+	},
+} as const;
+
 const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
 	{
 		type: "function",
@@ -69,9 +121,9 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
 			parameters: {
 				type: "object",
 				properties: {
-					quote: { type: "string" },
+					...anchorProperties,
 					body: { type: "string" },
-					category: { type: "string" },
+					category: { type: "string", enum: REVIEW_CATEGORIES },
 				},
 				required: ["quote", "body"],
 				additionalProperties: false,
@@ -86,7 +138,7 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
 			parameters: {
 				type: "object",
 				properties: {
-					quote: { type: "string" },
+					...anchorProperties,
 					replacement: { type: "string" },
 				},
 				required: ["quote", "replacement"],
@@ -96,13 +148,22 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
 	},
 ];
 
-const commentToolArgsSchema = z.object({
+const anchorArgs = {
 	quote: z.string().min(1),
+	prefix: z.string().optional(),
+	suffix: z.string().optional(),
+};
+const commentToolArgsSchema = z.object({
+	...anchorArgs,
 	body: z.string().trim().min(1),
-	category: z.string().optional(),
+	// An off-list category costs the label, not the comment.
+	category: z
+		.string()
+		.optional()
+		.transform((value) => REVIEW_CATEGORIES.find((known) => known === value)),
 });
 const suggestionToolArgsSchema = z.object({
-	quote: z.string().min(1),
+	...anchorArgs,
 	replacement: z.string(),
 });
 const reviewSummarySchema = z.object({
@@ -115,7 +176,10 @@ const reviewSummarySchema = z.object({
 	branchId: z.string().nullable(),
 });
 
-function parseJson<T>(raw: string, schema: z.ZodType<T>): T | null {
+function parseJson<S extends z.ZodType>(
+	raw: string,
+	schema: S,
+): z.output<S> | null {
 	try {
 		const parsed = schema.safeParse(JSON.parse(raw));
 		return parsed.success ? parsed.data : null;
@@ -156,8 +220,7 @@ export async function reviewWithTools(args: {
 	const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
 		{
 			role: "system",
-			content:
-				"Review the Markdown draft. Use create_comment for anchored feedback and suggest_edit for exact replacements. Quotes must be verbatim substrings. Stop when the useful feedback is recorded.",
+			content: REVIEW_SYSTEM,
 		},
 		{ role: "user", content: args.text },
 	];
@@ -222,10 +285,31 @@ export async function reviewWithTools(args: {
 	return { result: { comments, suggestions }, usage };
 }
 
-function uniqueQuoteOffset(text: string, quote: string): number | null {
-	const first = text.indexOf(quote);
-	if (first < 0 || text.indexOf(quote, first + 1) >= 0) return null;
-	return first;
+/**
+ * Offset of the one occurrence the model pointed at, or null. A repeated quote
+ * is placed only when its prefix/suffix match exactly one occurrence verbatim.
+ * No fuzzy scoring: a dropped item is counted and shown, a misplaced edit
+ * rewrites the wrong sentence.
+ */
+export function locateQuote(text: string, anchor: QuoteAnchor): number | null {
+	const offsets: number[] = [];
+	for (
+		let at = text.indexOf(anchor.quote);
+		at >= 0;
+		at = text.indexOf(anchor.quote, at + 1)
+	) {
+		offsets.push(at);
+	}
+	if (offsets.length <= 1) return offsets[0] ?? null;
+	const prefix = anchor.prefix ?? "";
+	const suffix = anchor.suffix ?? "";
+	if (!prefix && !suffix) return null;
+	const matches = offsets.filter(
+		(at) =>
+			text.slice(0, at).endsWith(prefix) &&
+			text.slice(at + anchor.quote.length).startsWith(suffix),
+	);
+	return matches.length === 1 ? (matches[0] ?? null) : null;
 }
 
 export function applySuggestions(
@@ -234,7 +318,7 @@ export function applySuggestions(
 ): AppliedSuggestions {
 	const edits = suggestions
 		.map((suggestion) => {
-			const from = uniqueQuoteOffset(text, suggestion.quote);
+			const from = locateQuote(text, suggestion);
 			return from === null
 				? null
 				: {
@@ -389,7 +473,7 @@ export const run = action({
 				},
 			});
 			const comments = result.comments.flatMap((comment) => {
-				const offset = uniqueQuoteOffset(args.text, comment.quote);
+				const offset = locateQuote(args.text, comment);
 				if (offset === null) return [];
 				return [
 					{
