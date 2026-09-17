@@ -17,7 +17,9 @@ type Props = {
 	open: boolean;
 	/** The current document id (excluded from results). */
 	activeDocumentId: Id<"documents"> | null;
-	/** Reads the current section/document markdown to use as the query. */
+	/** The whole live draft; the embed run is fenced on it matching the server. */
+	getSourceMarkdown: () => string;
+	/** What to match against: the section at the caret, else the whole draft. */
 	getQueryText: () => string;
 	getSourceNodeId: () => string | null;
 	/** Open a cited passage: switch to that doc and scroll to charStart. */
@@ -36,6 +38,7 @@ type Status = "idle" | "loading" | "ready" | "error";
 export function RelatedPassagesPanel({
 	open,
 	activeDocumentId,
+	getSourceMarkdown,
 	getQueryText,
 	getSourceNodeId,
 	onOpenPassage,
@@ -62,8 +65,8 @@ export function RelatedPassagesPanel({
 		abortRef.current?.abort();
 		const ac = new AbortController();
 		abortRef.current = ac;
-		const sourceMarkdown = getQueryText();
-		const text = sourceMarkdown.trim();
+		const sourceMarkdown = getSourceMarkdown();
+		const text = getQueryText().trim();
 		if (!text) {
 			setStatus("error");
 			setError("Nothing to match — the document is empty.");
@@ -87,7 +90,13 @@ export function RelatedPassagesPanel({
 			setStatus("error");
 			setError(err instanceof Error ? err.message : "Search failed");
 		}
-	}, [findRelated, getQueryText, getSourceNodeId, activeDocumentId]);
+	}, [
+		findRelated,
+		getSourceMarkdown,
+		getQueryText,
+		getSourceNodeId,
+		activeDocumentId,
+	]);
 
 	useEffect(() => {
 		if (open) {

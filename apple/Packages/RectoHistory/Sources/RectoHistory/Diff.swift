@@ -143,6 +143,31 @@ public func diffLines(_ a: String, _ b: String) -> [DiffLine] {
   return out
 }
 
+private let labelQuoteUnits = 32
+
+/// The inserted text as a one-line quote for a history label, or "" when there is
+/// nothing readable to quote: only whitespace, or a lone surrogate (a patch
+/// boundary inside an emoji). Works on UTF-16 units and four literal whitespace characters
+/// so the result is identical to `labelQuote` in `lib/history/diff.ts`.
+private func labelQuote(_ insert: JSString) -> String {
+  guard insert.isWellFormed else { return "" }
+  let whitespace: Set<UInt16> = [0x20, 0x09, 0x0A, 0x0D]
+  var line: [UInt16] = []
+  for unit in insert.units {
+    if whitespace.contains(unit) {
+      if line.last != 0x20 { line.append(0x20) }
+    } else {
+      line.append(unit)
+    }
+  }
+  if line.first == 0x20 { line.removeFirst() }
+  if line.last == 0x20 { line.removeLast() }
+  if line.count <= labelQuoteUnits { return JSString(units: line).lossyString }
+  var cut = Array(line.prefix(labelQuoteUnits))
+  if let last = cut.last, (0xD800...0xDBFF).contains(last) { cut.removeLast() }
+  return JSString(units: cut).lossyString + "…"
+}
+
 /// A short human label for an undo node, derived from its patch (blueprint 07 §4 B4).
 public func nodeLabel(patch: String, parentNodeId: String?, origin: String? = nil) -> String {
   if parentNodeId == nil { return "Document created" }
@@ -156,6 +181,11 @@ public func nodeLabel(patch: String, parentNodeId: String?, origin: String? = ni
   guard let decoded = try? TextPatch.decode(patch) else { return "Change" }
   let removed = decoded.to - decoded.from
   let added = decoded.insert.count
+  // The words say more than a count. A deletion's text is not in its patch.
+  let quote = labelQuote(decoded.insert)
+  if !quote.isEmpty {
+    return removed == 0 ? "Added “\(quote)”" : "Changed to “\(quote)”"
+  }
   if added > 0, removed == 0 { return "Added \(added) char\(added == 1 ? "" : "s")" }
   if removed > 0, added == 0 { return "Removed \(removed) char\(removed == 1 ? "" : "s")" }
   if added > 0 || removed > 0 { return "Edited" }

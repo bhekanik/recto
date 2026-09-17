@@ -59,7 +59,7 @@ test("AI transform accept then undo restores the original", async ({
 		await page.keyboard.press("Control+Shift+u");
 		await expect(historyPanel).toBeVisible();
 		const labels = await historyPanel.locator("li").allInnerTexts();
-		const committed = labels.some((l) => /Added \d+ chars|Edited/.test(l));
+		const committed = labels.some((l) => /Added |Changed to |Edited/.test(l));
 		await historyPanel.getByRole("button", { name: "Close history" }).click();
 		await expect(historyPanel).toBeHidden();
 		if (!committed) {

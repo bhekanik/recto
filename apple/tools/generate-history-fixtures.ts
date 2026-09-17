@@ -78,6 +78,14 @@ const swiftPatchPairs: Array<[string, string]> = [
 	["नमस्ते", "नमस्कार"],
 	["tab\there", "tab\u{00A0}here"],
 	["line\r\nend", "line\nend"],
+	// Node labels quote the inserted text, cut at 32 UTF-16 units. These pin the
+	// cut, the no-split-surrogate rule, whitespace collapsing, and the
+	// whitespace-only fallback to a character count.
+	["start end", `start ${"word ".repeat(12)}end`],
+	["x", `x${"a".repeat(31)}\u{1F600}tail`],
+	["intro", "intro\n\n## Heading\n\tBody  text \n"],
+	["one two", "one\n\n two"],
+	["one\u{00A0}two", "one\u{00A0}\u{00A0}\u{00A0}two"],
 ];
 
 /** (current, branch) pairs beyond the shared corpus. */

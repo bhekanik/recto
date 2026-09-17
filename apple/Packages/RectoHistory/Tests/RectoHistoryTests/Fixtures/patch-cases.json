@@ -5,28 +5,28 @@
 			"next": "hello",
 			"patch": "{\"from\":0,\"to\":0,\"insert\":\"hello\"}",
 			"applied": "hello",
-			"label": "Added 5 chars"
+			"label": "Added “hello”"
 		},
 		{
 			"parent": "hello world",
 			"next": "hello brave world",
 			"patch": "{\"from\":6,\"to\":6,\"insert\":\"brave \"}",
 			"applied": "hello brave world",
-			"label": "Added 6 chars"
+			"label": "Added “brave”"
 		},
 		{
 			"parent": "# Title\n\nBody.\n",
 			"next": "# Title\n\nBody edited.\n",
 			"patch": "{\"from\":13,\"to\":13,\"insert\":\" edited\"}",
 			"applied": "# Title\n\nBody edited.\n",
-			"label": "Added 7 chars"
+			"label": "Added “edited”"
 		},
 		{
 			"parent": "abcdef",
 			"next": "abXYZef",
 			"patch": "{\"from\":2,\"to\":4,\"insert\":\"XYZ\"}",
 			"applied": "abXYZef",
-			"label": "Edited"
+			"label": "Changed to “XYZ”"
 		},
 		{
 			"parent": "keep this",
@@ -54,7 +54,7 @@
 			"next": "a😀c",
 			"patch": "{\"from\":3,\"to\":4,\"insert\":\"c\"}",
 			"applied": "a😀c",
-			"label": "Edited"
+			"label": "Changed to “c”"
 		},
 		{
 			"parent": "",
@@ -68,7 +68,7 @@
 			"next": "hello",
 			"patch": "{\"from\":0,\"to\":0,\"insert\":\"hello\"}",
 			"applied": "hello",
-			"label": "Added 5 chars"
+			"label": "Added “hello”"
 		},
 		{
 			"parent": "hello",
@@ -82,7 +82,7 @@
 			"next": "hello brave world",
 			"patch": "{\"from\":6,\"to\":6,\"insert\":\"brave \"}",
 			"applied": "hello brave world",
-			"label": "Added 6 chars"
+			"label": "Added “brave”"
 		},
 		{
 			"parent": "hello world",
@@ -96,14 +96,14 @@
 			"next": "abd",
 			"patch": "{\"from\":2,\"to\":3,\"insert\":\"d\"}",
 			"applied": "abd",
-			"label": "Edited"
+			"label": "Changed to “d”"
 		},
 		{
 			"parent": "# Title\n\nBody.\n",
 			"next": "# Title\n\nBody edited.\n",
 			"patch": "{\"from\":13,\"to\":13,\"insert\":\" edited\"}",
 			"applied": "# Title\n\nBody edited.\n",
-			"label": "Added 7 chars"
+			"label": "Added “edited”"
 		},
 		{
 			"parent": "one\ntwo\nthree\n",
@@ -117,7 +117,7 @@
 			"next": "prefix CHANGED suffix",
 			"patch": "{\"from\":7,\"to\":11,\"insert\":\"CHANGED\"}",
 			"applied": "prefix CHANGED suffix",
-			"label": "Edited"
+			"label": "Changed to “CHANGED”"
 		},
 		{
 			"parent": "😀",
@@ -145,7 +145,7 @@
 			"next": "café time",
 			"patch": "{\"from\":3,\"to\":5,\"insert\":\"é\"}",
 			"applied": "café time",
-			"label": "Edited"
+			"label": "Changed to “é”"
 		},
 		{
 			"parent": "family 👨‍👩‍👧 here",
@@ -166,14 +166,14 @@
 			"next": "नमस्कार",
 			"patch": "{\"from\":4,\"to\":6,\"insert\":\"कार\"}",
 			"applied": "नमस्कार",
-			"label": "Edited"
+			"label": "Changed to “कार”"
 		},
 		{
 			"parent": "tab\there",
 			"next": "tab here",
 			"patch": "{\"from\":3,\"to\":4,\"insert\":\" \"}",
 			"applied": "tab here",
-			"label": "Edited"
+			"label": "Changed to “ ”"
 		},
 		{
 			"parent": "line\r\nend",
@@ -181,6 +181,41 @@
 			"patch": "{\"from\":4,\"to\":5,\"insert\":\"\"}",
 			"applied": "line\nend",
 			"label": "Removed 1 char"
+		},
+		{
+			"parent": "start end",
+			"next": "start word word word word word word word word word word word word end",
+			"patch": "{\"from\":6,\"to\":6,\"insert\":\"word word word word word word word word word word word word \"}",
+			"applied": "start word word word word word word word word word word word word end",
+			"label": "Added “word word word word word word wo…”"
+		},
+		{
+			"parent": "x",
+			"next": "xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa😀tail",
+			"patch": "{\"from\":1,\"to\":1,\"insert\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa😀tail\"}",
+			"applied": "xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa😀tail",
+			"label": "Added “aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa…”"
+		},
+		{
+			"parent": "intro",
+			"next": "intro\n\n## Heading\n\tBody  text \n",
+			"patch": "{\"from\":5,\"to\":5,\"insert\":\"\\n\\n## Heading\\n\\tBody  text \\n\"}",
+			"applied": "intro\n\n## Heading\n\tBody  text \n",
+			"label": "Added “## Heading Body text”"
+		},
+		{
+			"parent": "one two",
+			"next": "one\n\n two",
+			"patch": "{\"from\":3,\"to\":3,\"insert\":\"\\n\\n\"}",
+			"applied": "one\n\n two",
+			"label": "Added 2 chars"
+		},
+		{
+			"parent": "one two",
+			"next": "one   two",
+			"patch": "{\"from\":4,\"to\":4,\"insert\":\"  \"}",
+			"applied": "one   two",
+			"label": "Added “  ”"
 		}
 	]
 }

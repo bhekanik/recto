@@ -3,8 +3,10 @@ import retextIndefiniteArticle from "retext-indefinite-article";
 import retextPassive from "retext-passive";
 import retextReadability from "retext-readability";
 import { unified } from "unified";
+import { visit } from "unist-util-visit";
 import { VFile } from "vfile";
 import type { VFileMessage } from "vfile-message";
+import { parseMarkdown } from "@/lib/markdown/parse";
 import type { LintCategory, LintIssue, LintOptions } from "./types";
 
 /**
@@ -115,6 +117,56 @@ async function writeGoodIssues(text: string): Promise<LintIssue[]> {
 }
 
 /**
+ * Blank out everything that is not the writer's prose: code, raw HTML, link and
+ * image destinations. retext and write-good read a plain string, so without this
+ * they lint shell comments inside a fence and count a URL's syllables against the
+ * sentence that links it. Each masked character becomes one space (newlines kept),
+ * so every offset still points into the original string.
+ */
+function maskNonProse(text: string): string {
+	const ranges: [number, number][] = [];
+	const mask = (from: number | undefined, to: number | undefined) => {
+		if (from !== undefined && to !== undefined && from < to)
+			ranges.push([from, to]);
+	};
+	visit(parseMarkdown(text), (node) => {
+		const start = node.position?.start.offset;
+		const end = node.position?.end.offset;
+		if (
+			node.type === "code" ||
+			node.type === "inlineCode" ||
+			node.type === "html" ||
+			node.type === "yaml" ||
+			node.type === "definition" ||
+			node.type === "image" ||
+			node.type === "imageReference"
+		) {
+			mask(start, end);
+			return;
+		}
+		if (node.type === "link") {
+			const label = node.children;
+			const only = label.length === 1 ? label[0] : undefined;
+			// An autolink's label IS the URL, so there is no prose in it to keep.
+			if (only?.type === "text" && node.url.endsWith(only.value)) {
+				mask(start, end);
+				return;
+			}
+			mask(start, label[0]?.position?.start.offset ?? end);
+			mask(label.at(-1)?.position?.end.offset ?? start, end);
+		}
+	});
+	if (ranges.length === 0) return text;
+	const chars = text.split("");
+	for (const [from, to] of ranges) {
+		for (let i = from; i < to; i++) {
+			if (chars[i] !== "\n") chars[i] = " ";
+		}
+	}
+	return chars.join("");
+}
+
+/**
  * Analyze prose for highlightable mechanics issues (passive voice, hard-to-read
  * sentences, adverbs, weasel/filler words). Pure: text in, issues out, with
  * offsets into the exact string passed. The caller decides whether to feed the
@@ -127,9 +179,12 @@ export async function analyze(
 ): Promise<LintIssue[]> {
 	if (text.trim() === "") return [];
 
-	const all = [...retextIssues(text), ...(await writeGoodIssues(text))].filter(
-		(issue) => options[issue.category],
-	);
+	const prose = maskNonProse(text);
+	const all = [...retextIssues(prose), ...(await writeGoodIssues(prose))]
+		.filter((issue) => options[issue.category])
+		// A sentence-wide range can span a masked link; `text` must stay the source
+		// substring because Milkdown re-finds the range by searching for it.
+		.map((issue) => ({ ...issue, text: text.slice(issue.from, issue.to) }));
 	all.sort((a, b) => a.from - b.from || a.to - b.to);
 
 	// De-dupe exact [from, to, category] triples (passive can be double-reported).

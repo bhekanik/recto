@@ -82,4 +82,54 @@ describe("analyze", () => {
 			expect(i.from).toBeLessThan(i.to);
 		}
 	});
+
+	it("ignores fenced and inline code", async () => {
+		const text = [
+			"Run this:",
+			"",
+			"```sh",
+			"# the file is written by the build and is really very slow",
+			"```",
+			"",
+			"Then call `was_really_written_by` once.",
+		].join("\n");
+		expect(await analyze(text, ALL)).toEqual([]);
+	});
+
+	it("does not let a link URL make a short sentence hard to read", async () => {
+		const text =
+			"See [the docs](https://example.com/extraordinarily/convoluted/documentation/path/internationalization) now.";
+		expect(
+			(await analyze(text, ALL)).filter((i) => i.category === "readability"),
+		).toEqual([]);
+	});
+
+	it("reports the source substring when a flagged sentence spans a link", async () => {
+		const text =
+			"This is an extraordinarily long and convoluted sentence that keeps " +
+			"going and going with [many clauses](https://example.com) and " +
+			"qualifications and asides so that the reader struggles to hold the " +
+			"whole thought in mind at once.";
+		const issues = (await analyze(text, ALL)).filter(
+			(i) => i.category === "readability",
+		);
+		expect(issues.length).toBeGreaterThan(0);
+		for (const issue of issues) {
+			expect(issue.text).toBe(text.slice(issue.from, issue.to));
+		}
+	});
+
+	it("still flags prose in link text and keeps source offsets", async () => {
+		const text =
+			"```\nwas written\n```\n\nRead [what was written by Jane](https://example.com).";
+		const issues = (await analyze(text, ALL)).filter(
+			(i) => i.category === "passive",
+		);
+		expect(issues).toHaveLength(1);
+		const first = issues[0];
+		if (!first) throw new Error("expected a passive issue");
+		expect(first.from).toBeGreaterThan(text.indexOf("Read"));
+		expect(text.slice(first.from, first.to)).toBe(first.text);
+		expect(first.text).toMatch(/written/);
+	});
 });

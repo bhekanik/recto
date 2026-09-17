@@ -62,6 +62,7 @@ import {
 	commentPlugin,
 	setCommentMeta,
 } from "@/lib/review/comment-decorations-pm";
+import { caretSectionRange } from "./caret-section";
 import { lintPlugin, setLintMeta } from "./lint-plugin";
 import { replaceMarkdownSelection } from "./replace-selection";
 import { SelectionToolbarView } from "./selection-toolbar-view";
@@ -602,6 +603,17 @@ const MilkdownEditorInner = forwardRef<MilkdownEditorHandle, InnerProps>(
 					if (to <= from) return null;
 					const markdown = editor.action(getMarkdown({ from, to })).trim();
 					return markdown || null;
+				} catch {
+					return null;
+				}
+			},
+			getCaretSectionMarkdown() {
+				const editor = editorRef.current;
+				if (!editor) return null;
+				try {
+					const { doc, selection } = editor.ctx.get(editorViewCtx).state;
+					const range = caretSectionRange(doc, selection.head);
+					return editor.action(getMarkdown(range)).trim() || null;
 				} catch {
 					return null;
 				}

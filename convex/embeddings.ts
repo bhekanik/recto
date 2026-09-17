@@ -26,6 +26,11 @@ import { requireOwnedDocument, requireUserId } from "./documents";
 
 const CHUNK_LIMIT = 256; // safety cap on chunks per document
 const VECTOR_RESULTS = 8;
+// Vector search can filter by user but not exclude a document, and the active
+// draft's own chunks match a query cut from it better than anything else. Fetch
+// enough that eight survive once those, and overlapping neighbours, are removed.
+const VECTOR_CANDIDATES = 48;
+const MAX_PASSAGES_PER_DOCUMENT = 3;
 
 /**
  * Embedding model + dimension, kept in sync with lib/ai/config.ts and the
@@ -253,6 +258,35 @@ export type RelatedPassage = {
 };
 
 /**
+ * Pick the passages to show from scored candidates: not the active draft, no two
+ * overlapping windows of one document (chunks share a paragraph, so neighbours
+ * repeat text), and a per-document cap so one long draft cannot fill the panel.
+ */
+export function selectPassages(
+	candidates: RelatedPassage[],
+	excludeDocumentId: Id<"documents"> | undefined,
+): RelatedPassage[] {
+	const kept: RelatedPassage[] = [];
+	const perDocument = new Map<Id<"documents">, number>();
+	for (const candidate of candidates.toSorted((a, b) => b.score - a.score)) {
+		if (kept.length === VECTOR_RESULTS) break;
+		if (candidate.documentId === excludeDocumentId) continue;
+		const count = perDocument.get(candidate.documentId) ?? 0;
+		if (count === MAX_PASSAGES_PER_DOCUMENT) continue;
+		const overlapsKept = kept.some(
+			(other) =>
+				other.documentId === candidate.documentId &&
+				candidate.charStart < other.charEnd &&
+				other.charStart < candidate.charEnd,
+		);
+		if (overlapsKept) continue;
+		kept.push(candidate);
+		perDocument.set(candidate.documentId, count + 1);
+	}
+	return kept;
+}
+
+/**
  * Search past drafts by a pre-computed query embedding (the client embeds the
  * query text via the Next route first). Runs ctx.vectorSearch filtered to the
  * caller, loads the matched rows, and returns cited passages. Actions can't touch
@@ -279,7 +313,7 @@ export const searchByVector = action({
 
 		const results = await ctx.vectorSearch("docChunks", "by_embedding", {
 			vector: args.vector,
-			limit: VECTOR_RESULTS,
+			limit: VECTOR_CANDIDATES,
 			filter: (q) => q.eq("userId", userId),
 		});
 		if (results.length === 0) return [];
@@ -290,16 +324,17 @@ export const searchByVector = action({
 		});
 		const scoreById = new Map(results.map((r) => [r._id, r._score]));
 
-		return rows
-			.filter((r) => r.documentId !== args.excludeDocumentId)
-			.map((r) => ({
+		return selectPassages(
+			rows.map((r) => ({
 				documentId: r.documentId,
 				title: r.title,
 				text: r.text,
 				charStart: r.charStart,
 				charEnd: r.charEnd,
 				score: scoreById.get(r._id) ?? 0,
-			}));
+			})),
+			args.excludeDocumentId,
+		);
 	},
 });
 

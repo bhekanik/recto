@@ -79,4 +79,37 @@ describe("AI transform dialog accessibility", () => {
 		expect(onClose).toHaveBeenCalledOnce();
 		expect(document.activeElement).toBe(trigger);
 	});
+	it("lists what the suggestion dropped beside Keep and Reject", async () => {
+		const container = document.createElement("div");
+		document.body.append(container);
+		root = createRoot(container);
+		await act(async () => {
+			root?.render(
+				<AiTransformPopover
+					open
+					onOpenChange={vi.fn()}
+					selection={{
+						...selection,
+						selection: "Read [the docs](https://example.com).",
+					}}
+					state={{
+						status: "committed",
+						partial: "Read the docs.",
+						error: null,
+						awaitingDecision: true,
+					}}
+					onRun={vi.fn()}
+					onAccept={vi.fn()}
+					onReject={vi.fn()}
+					onCancel={vi.fn()}
+					onReconcile={vi.fn()}
+				/>,
+			);
+			await new Promise((resolve) => setTimeout(resolve, 0));
+		});
+		const checks = document.querySelector(
+			"[aria-label='Checks on this suggestion']",
+		);
+		expect(checks?.textContent).toBe("Dropped Markdown: 1 link.");
+	});
 });

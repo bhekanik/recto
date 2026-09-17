@@ -165,6 +165,24 @@ export function diffLines(a: string, b: string): DiffLine[] {
 	return out;
 }
 
+const LABEL_QUOTE_UNITS = 32;
+
+/**
+ * The inserted text as a one-line quote for a history label, or "" when there is
+ * nothing readable to quote: only whitespace, or a lone surrogate (a patch
+ * boundary inside an emoji). Specified in UTF-16 units and four literal whitespace
+ * characters, not `\s` or grapheme clusters, because `Diff.swift` must produce the
+ * same string and those differ between JavaScript and Swift.
+ */
+function labelQuote(insert: string): string {
+	if (!insert.isWellFormed()) return "";
+	const line = insert.replace(/[ \t\n\r]+/g, " ").replace(/^ | $/g, "");
+	if (line.length <= LABEL_QUOTE_UNITS) return line;
+	const cut = line.charCodeAt(LABEL_QUOTE_UNITS - 1);
+	const splitsPair = cut >= 0xd800 && cut <= 0xdbff;
+	return `${line.slice(0, LABEL_QUOTE_UNITS - (splitsPair ? 1 : 0))}…`;
+}
+
 /** A short human label for an undo node, derived from its patch (blueprint 07 §4 B4). */
 export function nodeLabel(
 	patch: string,
@@ -187,6 +205,10 @@ export function nodeLabel(
 		};
 		const removed = to - from;
 		const added = insert.length;
+		// The words say more than a count. A deletion's text is not in its patch.
+		const quote = labelQuote(insert);
+		if (quote)
+			return removed === 0 ? `Added “${quote}”` : `Changed to “${quote}”`;
 		if (added > 0 && removed === 0)
 			return `Added ${added} char${added === 1 ? "" : "s"}`;
 		if (removed > 0 && added === 0)
