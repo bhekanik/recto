@@ -5,6 +5,7 @@ import {
 	parseKeys,
 	type RectoVimApi,
 	TestHost,
+	type VimHost,
 	type VimResult,
 } from "./harness";
 
@@ -394,11 +395,11 @@ test("a mixed-ending document types the storage's ending, not the minority line'
 	press("A", host);
 	let result: VimResult = JSON.parse(api.insertText("x"));
 	expect(result.edits).toEqual([{ from: 11, to: 11, insert: "x" }]);
-	result = JSON.parse(api.handleKey("Enter"));
+	result = JSON.parse(api.handleKey("Enter", 0));
 	expect(result.edits).toEqual([{ from: 12, to: 12, insert: "\r\n" }]);
 	result = JSON.parse(api.insertText("y"));
 	expect(result.edits).toEqual([{ from: 14, to: 14, insert: "y" }]);
-	result = JSON.parse(api.handleKey("Escape"));
+	result = JSON.parse(api.handleKey("Escape", 0));
 	expect(api.getText()).toBe("alpha\r\nbetax\r\ny\ngamma\r\n");
 	expect(result.mode).toBe("normal");
 	api.setExternalInput(false);
