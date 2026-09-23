@@ -303,12 +303,12 @@ public actor DocumentSession {
   /// between them would leave a document pointing at a node that does not
   /// describe its text (the local shape of plan 022).
   public func applyLocalChange(
-    markdown: String, selection: NodeSelection?, structural: Bool = false
+    markdown: String, selection: NodeSelection?, structural: Bool = false, origin: String? = nil
   ) async throws {
     try await withTransition {
       try await performLocalChange(
         markdown: markdown, selection: selection, structural: structural,
-        persistedGeneration: nil)
+        persistedGeneration: nil, originOverride: origin)
     }
   }
 
@@ -319,12 +319,13 @@ public actor DocumentSession {
     markdown: String,
     selection: NodeSelection?,
     structural: Bool = false,
-    generation: Int
+    generation: Int,
+    origin: String? = nil
   ) async throws {
     try await withTransition {
       try await performLocalChange(
         markdown: markdown, selection: selection, structural: structural,
-        persistedGeneration: generation)
+        persistedGeneration: generation, originOverride: origin)
     }
   }
 
@@ -384,7 +385,8 @@ public actor DocumentSession {
     markdown: String,
     selection: NodeSelection?,
     structural: Bool,
-    persistedGeneration: Int?
+    persistedGeneration: Int?,
+    originOverride: String? = nil
   ) async throws {
     try requireWritable()
     guard controller != nil else { throw SessionError.notOpen }
@@ -425,10 +427,14 @@ public actor DocumentSession {
     var expectedGeneration = generation
     do {
       var head = document.localHeadNodeId
-      for commit in commits {
+      for (index, commit) in commits.enumerated() {
+        // An override (an AI edit's `ai:<label>`) names this change's own node,
+        // the last commit; a draft it closed on the way keeps the device origin.
+        let isThisChange = index == commits.count - 1
         let persisted = try await persist(
           commit, base: head, expectedDraftRevision: expectedGeneration,
-          includeDerivedTitle: !editorTitleLaneOwnsDraft, at: timestamp)
+          includeDerivedTitle: !editorTitleLaneOwnsDraft,
+          origin: isThisChange ? originOverride ?? origin : origin, at: timestamp)
         head = persisted.localHeadNodeId
         expectedGeneration = persisted.draftRevision
       }
@@ -551,9 +557,11 @@ public actor DocumentSession {
     base: String,
     expectedDraftRevision: Int? = nil,
     includeDerivedTitle: Bool = true,
+    origin: String? = nil,
     at timestamp: Double
   ) async throws -> DocumentRecord
   {
+    let origin = origin ?? self.origin
     let words = countWords(commit.markdown)
     let title = includeDerivedTitle ? derivedTitle(for: commit.markdown) : nil
     let node = DocNodeRecord(

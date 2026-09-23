@@ -16,6 +16,12 @@ struct PaneContext {
     /// The writer moved into this pane (a click, the caret).
     let activate: () -> Void
     let commands: PaneCommands
+    /// Open another synced document (by server id) in the active pane, at a
+    /// UTF-16 offset: a related passage's citation.
+    var openDocument: (String, Int) -> Void = { _, _ in }
+    /// Where to put the caret once this pane's document opens, then forget it.
+    var pendingJump: Int? = nil
+    var clearJump: () -> Void = {}
 }
 
 /// The pane tree as nested split views, the web's `render-pane-node`. The

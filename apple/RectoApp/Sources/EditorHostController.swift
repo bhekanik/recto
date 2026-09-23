@@ -4,6 +4,15 @@ import RectoEditor
 import RectoSync
 import SwiftUI
 
+/// The AI actions a synced host carries out.
+struct AIHooks {
+    var toggle: () -> Void
+    var transform: () -> Void
+    var critique: () -> Void
+    var related: () -> Void
+    var reindex: () -> Void
+}
+
 /// The review actions a synced host carries out.
 struct ReviewHooks {
     var openSharing: () -> Void
@@ -52,6 +61,7 @@ final class EditorHostController {
     var checkpoint: (() -> Void)?
     /// Set by the synced host: sharing, comments and suggestions.
     var review: ReviewHooks?
+    var ai: AIHooks?
     /// The window's panes, when this editor is one of them.
     var panes: PaneCommands?
     /// The writer moved into this editor: a click or a caret move while it is

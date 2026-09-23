@@ -37,6 +37,12 @@ struct CommandRegistryTests {
         ("review-surface", .review, "Review suggestions…", ""),
         ("toggle-comments", .review, "Toggle comments panel", ""),
         ("add-comment", .review, "Add comment on selection", ""),
+        ("ai-transform", .ai, "Transform selection with AI…", "⌃⇧I"),
+        ("ai-critique", .ai, "AI review (comments)…", "⌃⇧J"),
+        ("ai-related", .ai, "Related passages from past drafts…", "⌃⇧K"),
+        ("ai-reindex", .ai, "Re-index this draft for search", ""),
+        ("toggle-ai", .ai, "Toggle AI features", ""),
+        ("toggle-transform-mode", .ai, "Toggle AI transform mode (pending/replace)", ""),
         ("copy-rich", .copyExport, "Copy as rich text", "⌘⇧C"),
         ("copy-markdown", .copyExport, "Copy as Markdown", "⌘⌥C"),
         ("export-md", .copyExport, "Export as .md", "⌃⇧E"),
@@ -275,7 +281,7 @@ struct CommandPaletteControllerTests {
     @Test("sections come in SECTION_ORDER and empty ones are skipped")
     func sectionOrder() {
         let titles = CommandPaletteController.sections(settings: settings(), library: PaletteLibrary()).map(\.title)
-        #expect(titles == ["Documents", "Modes", "Navigate", "History", "Copy/Export", "View", "Theme"])
+        #expect(titles == ["Documents", "Modes", "Navigate", "History", "AI", "Copy/Export", "View", "Theme"])
     }
 
     @Test("the dark palette hides while the appearance resolves to light")
