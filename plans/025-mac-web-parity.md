@@ -2,7 +2,9 @@
 
 ## Status
 
-IN PROGRESS (2026-09-23). Supersedes the N6/N7 feature scope of plan 023 for
+DONE (2026-09-24): every web action has a Mac twin (63 of 63; `open-in-mac-app`
+is the web's, `open-in-web` the Mac's). PRs #37–#45, fix #46; engine PRs
+bhekanik/swift-markdown-engine #8–#10 (pin `c528eb6`). Supersedes the N6/N7 feature scope of plan 023 for
 the macOS app; iPad/iPhone (N8/N9) and App Store release (N10) are out of scope.
 
 Baseline: `main` `e161f7f`. The Mac palette carries 20 of the web's 63 actions
@@ -42,6 +44,33 @@ Not ported: `open-in-mac-app` (web-only; the Mac's twin is `open-in-web`).
 Each package: failing tests first where the behaviour is testable, app suite
 green three runs in a row, merged to `main`, then the signed app reinstalled to
 `/Applications` (orchestration memory).
+
+## Outcome
+
+| # | PR | Notes |
+|---|---|---|
+| P0 | #37 | `RectoAPI`; flaky selection-chrome test fixed |
+| P1 | #38 | Figtree bundled; preview never stored as the default lens |
+| P3 | #39 | Pi GLM draft, reworked (outline placement, `export:docx`, sync before DOCX) |
+| P2 | #40 | Pi GLM draft, reworked (engine paste flag, stats off the status bar, cross-device days) |
+| P4 | #41 | Engine #9 (fragment dimming), #10 (underlines; TextKit 2 ignores underline rendering attributes) |
+| P5 | #42 | One model per document per window, mirror storages |
+| P6 | #43 | Session `historyNodes`/`markdown(at:)`; auto versions; ⌘S after Save |
+| P7 | #44 | `CommentAnchor` port; share, comments, review surface |
+| P8 | #45 | Session origin override (`ai:<label>`); core `transformWarnings` + `chunk` |
+
+Gates were local throughout (GitHub Actions cannot start jobs). App suite 239.
+
+## Not done
+
+- The reviewer side of review: opening a document someone shared with you
+  (`review:listSharedWithMe`, `getReviewerDocument`, `reviewerAppend`). No palette
+  action names it, so it was outside this plan.
+- Removing a saved OpenRouter key or revoking AI consent from the Mac (the server
+  functions are registered; there is no UI yet).
+- On-screen checks of the synced-only features (P5–P8): they need a signed-in
+  library. Their logic is covered by tests against the in-memory backend and a
+  scripted API; P1–P4 were checked on screen through Codex computer-use.
 
 ## Unresolved
 
