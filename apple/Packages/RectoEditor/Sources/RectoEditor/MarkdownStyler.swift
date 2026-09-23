@@ -30,6 +30,9 @@ public struct MarkdownStyler: Sendable, Equatable {
     public var spellChecking: Bool
     /// Who owns undo. Recto's undo tree does, so the engine registers nothing.
     public var undo: UndoPolicy
+    /// Smart paste: rich-mode paste turns an HTML flavor into Markdown. Off
+    /// pastes the plain text. Read at paste time, so a toggle applies at once.
+    public var convertsPastedHTML: Bool
 
     public init(
         presentation: Presentation = .rich,
@@ -38,7 +41,8 @@ public struct MarkdownStyler: Sendable, Equatable {
         readingFont: ReadingFont = .serif,
         readingWidth: CGFloat? = 720,
         spellChecking: Bool = true,
-        undo: UndoPolicy = .external
+        undo: UndoPolicy = .external,
+        convertsPastedHTML: Bool = true
     ) {
         self.presentation = presentation
         self.theme = theme
@@ -47,6 +51,7 @@ public struct MarkdownStyler: Sendable, Equatable {
         self.readingWidth = readingWidth
         self.spellChecking = spellChecking
         self.undo = undo
+        self.convertsPastedHTML = convertsPastedHTML
     }
 
     /// The same styler at a different presentation, with the matching scale.
@@ -109,7 +114,8 @@ public struct MarkdownStyler: Sendable, Equatable {
             rawSourceMode: presentation.showsSource,
             // The one construct beyond CommonMark + GFM tables that Recto's
             // dialect has and the engine does not build in.
-            extensions: [StrikethroughExtension()]
+            extensions: [StrikethroughExtension()],
+            convertsPastedHTML: convertsPastedHTML
         )
     }
 

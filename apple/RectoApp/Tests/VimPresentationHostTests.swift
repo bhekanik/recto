@@ -105,17 +105,17 @@ struct VimPresentationHostTests {
 
     @Test("the footer shows the vim mode line only for the vim lens")
     func statusBarShowsVimOnlyInVim() {
-        let storage = RectoTextStorage(documentId: "vim-bar", markdown: "")
+        let wordCount = DocumentWordCount()
         let settings = StudioSettings(defaults: scratch, systemAppearance: { .dark })
         let vim = RectoVimController()
         for presentation in Presentation.allCases {
             let bar = EditorStatusBar(
-                presentation: presentation, isEditable: true, storage: storage, settings: settings,
+                presentation: presentation, isEditable: true, wordCount: wordCount, settings: settings,
                 theme: .twilight, vimController: vim, onSelect: { _ in })
             #expect(bar.showsVimStatus == (presentation == .vim), "\(presentation)")
         }
         let bare = EditorStatusBar(
-            presentation: .vim, isEditable: true, storage: storage, settings: settings,
+            presentation: .vim, isEditable: true, wordCount: wordCount, settings: settings,
             theme: .twilight, onSelect: { _ in })
         #expect(!bare.showsVimStatus, "a host without a vim layer shows nothing")
     }

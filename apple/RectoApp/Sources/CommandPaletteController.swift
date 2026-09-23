@@ -38,6 +38,7 @@ final class CommandPaletteController {
     private let settings: StudioSettings
     private let editors: EditorHostRegistry
     private let pasteboard: NSPasteboard
+    private let goals: GoalConfigController
     private var panel: PalettePanel?
     /// The model the open panel shows, for the headings finder's tests; `nil`
     /// while no palette is up.
@@ -48,11 +49,13 @@ final class CommandPaletteController {
     init(
         settings: StudioSettings,
         editors: EditorHostRegistry = .shared,
-        pasteboard: NSPasteboard = .general
+        pasteboard: NSPasteboard = .general,
+        goals: GoalConfigController = .shared
     ) {
         self.settings = settings
         self.editors = editors
         self.pasteboard = pasteboard
+        self.goals = goals
     }
 
     var isOpen: Bool { panel != nil }
@@ -284,6 +287,19 @@ final class CommandPaletteController {
             editor?.toggleZen()
         case "toggle-font":
             settings.toggleReadingFont()
+        case "toggle-smart-paste":
+            settings.toggleSmartPaste()
+        case "toggle-email-preview":
+            settings.togglePreviewVariant()
+        case "set-goal":
+            // After the palette's own close, so the goal panel is not dismissed
+            // by the key-window change that close makes.
+            let window = editor?.window
+            Task { @MainActor [goals] in goals.open(over: window) }
+        case "toggle-goal-style":
+            settings.toggleGoalStyle()
+        case "toggle-goal-scope":
+            settings.toggleGoalScope()
         case "zoom-in":
             settings.zoomIn()
         case "zoom-out":

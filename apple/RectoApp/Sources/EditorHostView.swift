@@ -12,6 +12,7 @@ struct EditorHostView: View {
     @State private var chrome: EditorHostController
     @State private var vim = VimHostState()
     @State private var zen = ZenMode()
+    @State private var wordCount = DocumentWordCount()
     @AppStorage(PresentationPreference.key) private var storedPresentation: String?
     /// This window's lens. `nil` until it appears, when it takes the stored
     /// default; after that only the writer's own choice moves it.
@@ -71,9 +72,11 @@ struct EditorHostView: View {
         EditorStatusBar(
             presentation: styler.presentation,
             isEditable: isEditable,
-            storage: storage,
+            wordCount: wordCount,
             settings: settings,
             theme: styler.theme,
+            stats: .shared,
+            onOpenGoalConfig: { [chrome] in GoalConfigController.shared.open(over: chrome.window) },
             vimController: vim.controller,
             zen: zen,
             onToggleZen: chrome.toggleZen,
@@ -86,6 +89,10 @@ struct EditorHostView: View {
         VStack(spacing: 0) {
             if settings.showToolbar, !zen.hidesChrome {
                 toolbar(styler)
+            }
+            if styler.presentation == .preview, settings.previewVariant == .email {
+                EmailPreviewChrome(
+                    frontmatter: storage.frontmatter, fallbackTitle: chrome.documentTitle, theme: styler.theme)
             }
             HStack(spacing: 0) {
                 RectoEditorView(
@@ -114,17 +121,8 @@ struct EditorHostView: View {
                 statusBar(styler)
             }
         }
-        .overlay(alignment: .top) {
-            if zen.showsOverlayChrome, settings.showToolbar {
-                toolbar(styler).onHover(perform: zen.pointerOverChrome)
-            }
-        }
-        .overlay(alignment: .bottom) {
-            if zen.showsOverlayChrome, settings.showStatusBar {
-                statusBar(styler).onHover(perform: zen.pointerOverChrome)
-            }
-        }
-        .animation(.easeOut(duration: 0.15), value: zen.showsOverlayChrome)
+        .modifier(ZenChrome(zen: zen, settings: settings, toolbar: toolbar(styler), statusBar: statusBar(styler)))
+        .background { WordCountTracker(storage: storage, count: wordCount) }
         .onAppear {
             if chosenPresentation == nil {
                 chosenPresentation = PresentationPreference.choice(from: storedPresentation)

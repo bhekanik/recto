@@ -38,8 +38,13 @@ struct CommandRegistryTests {
         ("zoom-out", .view, "Decrease text size", ""),
         ("zoom-reset", .view, "Reset text size", ""),
         ("toggle-spellcheck", .view, "Toggle spellcheck", ""),
+        ("toggle-smart-paste", .view, "Toggle smart paste (HTML → Markdown)", ""),
         ("toggle-toolbar", .view, "Toggle formatting toolbar", ""),
         ("toggle-typewriter", .view, "Toggle typewriter scrolling", "⌃⇧T"),
+        ("toggle-email-preview", .view, "Toggle email/inbox preview", ""),
+        ("set-goal", .view, "Set word goal…", ""),
+        ("toggle-goal-style", .view, "Toggle goal display (ring / bar)", ""),
+        ("toggle-goal-scope", .view, "Toggle goal scope (document / daily)", ""),
         ("appearance-system", .theme, "Appearance: Match system", ""),
         ("appearance-light", .theme, "Appearance: Light (Paper)", ""),
         ("appearance-dark", .theme, "Appearance: Dark", ""),
@@ -298,6 +303,29 @@ struct CommandPaletteControllerTests {
         #expect(settings.readingFont == .sans)
         controller.perform("theme-dawn", editor: nil, library: PaletteLibrary())
         #expect(settings.palette == .dawn)
+        controller.perform("toggle-smart-paste", editor: nil, library: PaletteLibrary())
+        #expect(!settings.smartPaste)
+        #expect(!settings.styler(presentation: .rich).convertsPastedHTML, "the toggle reaches the engine")
+        controller.perform("toggle-email-preview", editor: nil, library: PaletteLibrary())
+        #expect(settings.previewVariant == .email)
+        controller.perform("toggle-goal-style", editor: nil, library: PaletteLibrary())
+        #expect(settings.goalStyle == .bar)
+        controller.perform("toggle-goal-scope", editor: nil, library: PaletteLibrary())
+        #expect(settings.goalScope == .daily)
+    }
+
+    @Test("set-goal opens the goal panel over the editor's own window")
+    func setGoalOpensPanel() async throws {
+        let mounted = try await mount("# Goal\n", id: "palette-set-goal")
+        defer { mounted.window.close() }
+        let goals = GoalConfigController(settings: mounted.settings)
+        let controller = CommandPaletteController(
+            settings: mounted.settings, editors: mounted.registry, pasteboard: pasteboard, goals: goals
+        )
+        #expect(controller.perform("set-goal", editor: mounted.chrome, library: PaletteLibrary()))
+        try await waitUntil("the goal panel to open") { goals.isShown }
+        goals.close()
+        #expect(!goals.isShown)
     }
 
     @Test("editor actions reach the editor in the window ⌘K was pressed in")

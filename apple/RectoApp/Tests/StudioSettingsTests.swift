@@ -33,6 +33,10 @@ struct StudioSettingsTests {
         #expect(settings.palette == .twilight)
         #expect(settings.readingFont == .serif)
         #expect(!settings.showOutline, "the web's outline ships hidden")
+        #expect(settings.smartPaste)
+        #expect(settings.previewVariant == .rendered)
+        #expect(settings.wordGoalTarget == 0 && settings.dailyGoalTarget == 0)
+        #expect(settings.wordGoalKind == .atLeast && settings.goalScope == .document && settings.goalStyle == .ring)
     }
 
     @Test("the palette applies only while dark, cycles in the web's order, and persists")
@@ -55,6 +59,16 @@ struct StudioSettingsTests {
         #expect(!light.canCyclePalette)
         light.cyclePalette()
         #expect(light.palette == .moonlit)
+    }
+
+    @Test("goal targets clamp to non-negative integers and persist")
+    func goalTargets() {
+        let settings = settings()
+        settings.setWordGoalTarget(1_234.6)
+        settings.setDailyGoalTarget(-50)
+        #expect(settings.wordGoalTarget == 1_235)
+        #expect(settings.dailyGoalTarget == 0)
+        #expect(self.settings().wordGoalTarget == 1_235)
     }
 
     @Test("the reading font toggles, persists, and reaches the styler across lenses")

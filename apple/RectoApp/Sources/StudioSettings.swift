@@ -67,10 +67,24 @@ final class StudioSettings {
         }
     }
 
+    /// The preview presentation's render, `PreviewVariant` in
+    /// `settings-schema.ts`: the rendered Markdown, or the inbox chrome around
+    /// it. A variant of preview, not a fifth mode (plan 008).
+    enum PreviewVariant: String, CaseIterable {
+        case rendered, email
+    }
+
     enum Key {
         static let appearance = "studio.appearance"
         static let palette = "studio.theme"
         static let readingFont = "studio.readingFont"
+        static let smartPaste = "studio.smartPaste"
+        static let previewVariant = "studio.previewVariant"
+        static let wordGoalTarget = "studio.wordGoalTarget"
+        static let dailyGoalTarget = "studio.dailyGoalTarget"
+        static let wordGoalKind = "studio.wordGoalKind"
+        static let goalScope = "studio.goalScope"
+        static let goalStyle = "studio.goalStyle"
         static let readingScale = "studio.readingScale"
         static let spellcheck = "studio.spellcheck"
         static let typewriter = "studio.typewriter"
@@ -103,6 +117,38 @@ final class StudioSettings {
     /// face on update is not this setting's job.
     var readingFont: ReadingFont {
         didSet { defaults.set(readingFont.rawValue, forKey: Key.readingFont) }
+    }
+
+    /// Rich paste turns HTML (Word, Docs, the web) into Markdown (plan 007).
+    var smartPaste: Bool {
+        didSet { defaults.set(smartPaste, forKey: Key.smartPaste) }
+    }
+
+    var previewVariant: PreviewVariant {
+        didSet { defaults.set(previewVariant.rawValue, forKey: Key.previewVariant) }
+    }
+
+    /// Per-document word goal. 0 = no goal, which hides the widget.
+    private(set) var wordGoalTarget: Int {
+        didSet { defaults.set(wordGoalTarget, forKey: Key.wordGoalTarget) }
+    }
+
+    /// Daily word goal. 0 = no daily goal.
+    private(set) var dailyGoalTarget: Int {
+        didSet { defaults.set(dailyGoalTarget, forKey: Key.dailyGoalTarget) }
+    }
+
+    /// Direction of both goals.
+    var wordGoalKind: GoalKind {
+        didSet { defaults.set(wordGoalKind.rawValue, forKey: Key.wordGoalKind) }
+    }
+
+    var goalScope: GoalScope {
+        didSet { defaults.set(goalScope.rawValue, forKey: Key.goalScope) }
+    }
+
+    var goalStyle: GoalStyle {
+        didSet { defaults.set(goalStyle.rawValue, forKey: Key.goalStyle) }
     }
 
     /// Text-zoom multiplier for the reading column, 0.8…2.0.
@@ -152,6 +198,16 @@ final class StudioSettings {
         appearance = defaults.string(forKey: Key.appearance).flatMap(Appearance.init(rawValue:)) ?? .system
         palette = defaults.string(forKey: Key.palette).flatMap(Palette.init(rawValue:)) ?? .twilight
         readingFont = defaults.string(forKey: Key.readingFont).flatMap(ReadingFont.init(rawValue:)) ?? .serif
+        smartPaste = defaults.object(forKey: Key.smartPaste) as? Bool ?? true
+        previewVariant = defaults.string(forKey: Key.previewVariant)
+            .flatMap(PreviewVariant.init(rawValue:)) ?? .rendered
+        wordGoalTarget = (defaults.object(forKey: Key.wordGoalTarget) as? NSNumber)
+            .map { WritingGoals.clampTarget($0.doubleValue) } ?? 0
+        dailyGoalTarget = (defaults.object(forKey: Key.dailyGoalTarget) as? NSNumber)
+            .map { WritingGoals.clampTarget($0.doubleValue) } ?? 0
+        wordGoalKind = defaults.string(forKey: Key.wordGoalKind).flatMap(GoalKind.init(rawValue:)) ?? .atLeast
+        goalScope = defaults.string(forKey: Key.goalScope).flatMap(GoalScope.init(rawValue:)) ?? .document
+        goalStyle = defaults.string(forKey: Key.goalStyle).flatMap(GoalStyle.init(rawValue:)) ?? .ring
         readingScale = (defaults.object(forKey: Key.readingScale) as? Double)
             .map(Self.clampScale) ?? Self.readingScaleDefault
         spellcheck = defaults.object(forKey: Key.spellcheck) as? Bool ?? true
@@ -263,6 +319,14 @@ final class StudioSettings {
 
     func toggleSpellcheck() { spellcheck.toggle() }
     func toggleReadingFont() { readingFont = readingFont == .serif ? .sans : .serif }
+    func toggleSmartPaste() { smartPaste.toggle() }
+    func togglePreviewVariant() { previewVariant = previewVariant == .email ? .rendered : .email }
+    func toggleGoalStyle() { goalStyle = goalStyle.next }
+    func toggleGoalScope() { goalScope = goalScope.next }
+
+    /// `clampGoalTarget`: a typed goal can never persist negative or fractional.
+    func setWordGoalTarget(_ value: Double) { wordGoalTarget = WritingGoals.clampTarget(value) }
+    func setDailyGoalTarget(_ value: Double) { dailyGoalTarget = WritingGoals.clampTarget(value) }
     func toggleTypewriter() { typewriter.toggle() }
     func toggleToolbar() { showToolbar.toggle() }
     func toggleStatusBar() { showStatusBar.toggle() }
@@ -278,7 +342,8 @@ final class StudioSettings {
             typography: .forPresentation(presentation, scale: readingScale, readingFont: readingFont),
             readingFont: readingFont,
             spellChecking: spellcheck,
-            undo: .external
+            undo: .external,
+            convertsPastedHTML: smartPaste
         )
     }
 }
