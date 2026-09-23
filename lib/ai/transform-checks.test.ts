@@ -49,6 +49,17 @@ describe("transformWarnings", () => {
 		).toEqual(["Expand made it shorter: 9 words became 3."]);
 	});
 
+	it("does not count Markdown syntax as rewritten words", () => {
+		// Dropping a link keeps every word; only the structure check should fire.
+		expect(
+			transformWarnings({
+				presetId: "fix-grammar",
+				original: "Read [the docs](https://example.com) today.",
+				rewritten: "Read the docs today.",
+			}),
+		).toEqual(["Dropped Markdown: 1 link."]);
+	});
+
 	it("flags Markdown the rewrite dropped", () => {
 		expect(
 			transformWarnings({

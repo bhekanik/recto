@@ -10,7 +10,10 @@ import { diffWords } from "diff";
 import type { Root } from "mdast";
 import { visit } from "unist-util-visit";
 
-import { countWords } from "@/lib/markdown/count-words";
+import {
+	countWords,
+	countWordsFromPlainText,
+} from "@/lib/markdown/count-words";
 import { parseMarkdown } from "@/lib/markdown/parse";
 import type { TransformPresetId } from "./instructions";
 
@@ -60,12 +63,26 @@ function droppedMarkdown(original: string, rewritten: string): string | null {
 	return dropped.length > 0 ? `Dropped Markdown: ${dropped.join(", ")}.` : null;
 }
 
+/**
+ * The words a reader sees, one space apart. Diffing the raw Markdown would
+ * count syntax as words: dropping a link's brackets read as a full rewrite.
+ */
+function proseText(markdown: string): string {
+	const words: string[] = [];
+	visit(parseMarkdown(markdown), (node) => {
+		if (node.type === "text" || node.type === "inlineCode")
+			words.push(node.value);
+	});
+	return words.join(" ");
+}
+
 function rewrittenShare(original: string, rewritten: string): number {
-	const total = countWords(original);
+	const before = proseText(original);
+	const total = countWordsFromPlainText(before);
 	if (total === 0) return 0;
-	const removed = diffWords(original, rewritten)
+	const removed = diffWords(before, proseText(rewritten))
 		.filter((part) => part.removed)
-		.reduce((sum, part) => sum + countWords(part.value), 0);
+		.reduce((sum, part) => sum + countWordsFromPlainText(part.value), 0);
 	return removed / total;
 }
 
