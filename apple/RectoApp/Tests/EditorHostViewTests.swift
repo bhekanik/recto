@@ -633,13 +633,18 @@ struct EditorHostViewTests {
         NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
         #expect(coordinator.isSelectionPanelVisible)
         #expect(coordinator.selectionPanelParent === window)
-        let firstPanelNumber = try #require(coordinator.selectionPanelWindow).windowNumber
+        let firstPanel = try #require(coordinator.selectionPanelWindow)
 
         NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: window)
         await drainMainQueue()
         #expect(!coordinator.isSelectionPanelVisible)
         #expect(coordinator.selectionPanelWindow == nil)
-        #expect(!NSApp.windows.contains { $0.windowNumber == firstPanelNumber })
+        // Off screen and detached. Not "absent from NSApp.windows": AppKit drops a
+        // closed window from that list only when its autorelease pool drains,
+        // which made this assertion fail about two runs in three.
+        #expect(!firstPanel.isVisible)
+        #expect(firstPanel.parent == nil)
+        #expect(!(window.childWindows ?? []).contains(firstPanel))
 
         NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
         #expect(coordinator.isSelectionPanelVisible)

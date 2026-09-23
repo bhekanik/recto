@@ -136,7 +136,7 @@ public struct CommitEditRequest: Sendable, Equatable {
 /// so every touch of the client happens on this one actor and the instance is
 /// never handed to another isolation domain.
 public actor ConvexTransport: RectoTransport {
-  private let client: ConvexClientWithAuth<String>
+  let client: ConvexClientWithAuth<String>
 
   public init(deploymentURL: String, authProvider: ConvexTemplateAuthProvider) async {
     let client = ConvexClientWithAuth<String>(
@@ -365,7 +365,7 @@ public actor ConvexTransport: RectoTransport {
 /// `AnyCancellable` is not `Sendable`, but `cancel()` is documented as
 /// thread-safe and the box is only ever touched by the stream's termination
 /// handler — which is exactly where the subscription has to be torn down.
-private final class CancellationBox: @unchecked Sendable {
+final class CancellationBox: @unchecked Sendable {
   private let cancellable: AnyCancellable
 
   init(_ cancellable: AnyCancellable) { self.cancellable = cancellable }

@@ -1,11 +1,13 @@
 import AppKit
 import RectoCore
 import RectoEditor
+import RectoSync
 import SwiftUI
 
 struct CloudDocumentView: View {
     let localId: String
     let registry: DocumentSessionRegistry
+    let api: (any RectoAPI)?
     private let settings: StudioSettings
     @State private var model: CloudDocumentModel?
     @State private var openingError: String?
@@ -17,9 +19,15 @@ struct CloudDocumentView: View {
     /// default; after that only the writer's own choice moves it.
     @State private var chosenPresentation: Presentation?
 
-    init(localId: String, registry: DocumentSessionRegistry, settings: StudioSettings = .shared) {
+    init(
+        localId: String,
+        registry: DocumentSessionRegistry,
+        api: (any RectoAPI)? = nil,
+        settings: StudioSettings = .shared
+    ) {
         self.localId = localId
         self.registry = registry
+        self.api = api
         self.settings = settings
         _chrome = State(initialValue: EditorHostController(settings: settings))
     }
@@ -129,8 +137,12 @@ struct CloudDocumentView: View {
             chrome.undo = { [model] in Task { await model.undo() } }
             chrome.redo = { [model] in Task { await model.redo() } }
             chrome.choosePresentation = choose
+            chrome.cloud = api.map { CloudDocumentContext(api: $0, convexId: model.state.convexId) }
             vim.controller.history = model
             vim.controller.onSave = { Task { await model.save() } }
+        }
+        .onChange(of: model.state.convexId) { _, convexId in
+            chrome.cloud = api.map { CloudDocumentContext(api: $0, convexId: convexId) }
         }
         .onChange(of: settings.spellcheck) { chrome.applySettings() }
         .onChange(of: settings.typewriter) { chrome.applySettings() }
