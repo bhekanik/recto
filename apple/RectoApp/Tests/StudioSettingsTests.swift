@@ -32,6 +32,7 @@ struct StudioSettingsTests {
         #expect(settings.showStatusBar)
         #expect(settings.palette == .twilight)
         #expect(settings.readingFont == .serif)
+        #expect(!settings.showOutline, "the web's outline ships hidden")
     }
 
     @Test("the palette applies only while dark, cycles in the web's order, and persists")
@@ -102,6 +103,7 @@ struct StudioSettingsTests {
         first.toggleTypewriter()
         first.toggleToolbar()
         first.toggleStatusBar()
+        first.toggleOutline()
 
         let second = settings()
         #expect(second.appearance == .light)
@@ -110,6 +112,7 @@ struct StudioSettingsTests {
         #expect(second.typewriter)
         #expect(!second.showToolbar)
         #expect(!second.showStatusBar)
+        #expect(second.showOutline)
     }
 
     @Test("system appearance follows the injected provider until overridden")

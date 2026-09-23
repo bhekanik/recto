@@ -1,10 +1,13 @@
 import Observation
+import RectoCoreJS
 
 /// One row of the palette.
 struct PaletteItem: Identifiable, Equatable, Sendable {
     enum Kind: Equatable, Sendable {
         case action(String)
         case document(localId: String)
+        /// A document heading, for the `go-to-heading` finder.
+        case heading(OutlineHeading)
     }
 
     enum Detail: Equatable, Sendable {

@@ -1,6 +1,8 @@
 import AppKit
+import RectoCoreJS
 import RectoEditor
 import RectoStore
+import RectoSync
 import SwiftUI
 import Testing
 @testable import Recto
@@ -19,9 +21,15 @@ struct CommandRegistryTests {
         ("mode-preview", .modes, "Switch to Preview", "⌃⇧P"),
         ("cycle-next", .modes, "Cycle mode forward", "⌃⇧]"),
         ("cycle-prev", .modes, "Cycle mode backward", "⌃⇧["),
+        ("go-to-heading", .navigate, "Go to heading…", "⌃⇧O"),
+        ("toggle-outline", .navigate, "Toggle outline panel", ""),
         ("undo", .history, "Undo", "⌘Z"),
         ("redo", .history, "Redo", "⌘⇧Z"),
+        ("copy-rich", .copyExport, "Copy as rich text", "⌘⇧C"),
         ("copy-markdown", .copyExport, "Copy as Markdown", "⌘⌥C"),
+        ("export-md", .copyExport, "Export as .md", "⌃⇧E"),
+        ("export-html", .copyExport, "Export as rich text (.html)", "⌃⇧E"),
+        ("export-docx", .copyExport, "Export as Word (.docx)", "⌃⇧E"),
         ("find-replace", .view, "Find & replace", "⌘F"),
         ("toggle-status", .view, "Toggle word count / status bar", "⌃⇧S"),
         ("toggle-focus", .view, "Toggle zen mode", "⌃⇧F"),
@@ -58,6 +66,12 @@ struct CommandRegistryTests {
         #expect(CommandRegistry.action("appearance-dark")?.aliases == ["dark", "night", "twilight"])
         #expect(CommandRegistry.action("undo")?.aliases == [])
         #expect(CommandRegistry.action("open-in-web")?.aliases == ["browser", "website"])
+        #expect(CommandRegistry.action("go-to-heading")?.aliases == ["outline", "jump", "heading", "section", "toc"])
+        #expect(CommandRegistry.action("toggle-outline")?.aliases == ["outline", "table of contents", "toc", "sidebar"])
+        #expect(CommandRegistry.action("copy-rich")?.aliases == ["html", "clipboard"])
+        #expect(CommandRegistry.action("export-md")?.aliases == ["download markdown"])
+        #expect(CommandRegistry.action("export-html")?.aliases == ["download html"])
+        #expect(CommandRegistry.action("export-docx")?.aliases == ["download docx", "word"])
     }
 
     @Test("sections follow SECTION_ORDER and ids are unique")
@@ -238,7 +252,7 @@ struct CommandPaletteControllerTests {
     @Test("sections come in SECTION_ORDER and empty ones are skipped")
     func sectionOrder() {
         let titles = CommandPaletteController.sections(settings: settings(), library: PaletteLibrary()).map(\.title)
-        #expect(titles == ["Documents", "Modes", "History", "Copy/Export", "View", "Theme"])
+        #expect(titles == ["Documents", "Modes", "Navigate", "History", "Copy/Export", "View", "Theme"])
     }
 
     @Test("the dark palette hides while the appearance resolves to light")
@@ -463,7 +477,160 @@ struct CommandPaletteControllerTests {
         #expect(!controller.isOpen)
     }
 
+    // MARK: - P3: navigate and export
+
+    /// A stand-in for the generic call surface: `export-docx`'s palette
+    /// gating only needs an `any RectoAPI` to exist; nothing on it is called.
+    private actor UnusedAPI: RectoAPI {
+        private func unused() -> RemoteCallError {
+            RemoteCallError(code: nil, message: "the tests never call this")
+        }
+
+        func query<T: Decodable & Sendable>(_ name: String, args: [String: ConvexValue]) async throws -> T {
+            throw unused()
+        }
+
+        func subscribe<T: Decodable & Sendable>(_ name: String, args: [String: ConvexValue])
+            -> AsyncThrowingStream<T, any Error>
+        {
+            AsyncThrowingStream { $0.finish(throwing: unused()) }
+        }
+
+        func mutation<T: Decodable & Sendable>(_ name: String, args: [String: ConvexValue]) async throws -> T {
+            throw unused()
+        }
+
+        func action<T: Decodable & Sendable>(_ name: String, args: [String: ConvexValue]) async throws -> T {
+            throw unused()
+        }
+    }
+
+    @Test("toggle-outline flips the setting both document hosts read")
+    func toggleOutline() {
+        let settings = settings()
+        let controller = CommandPaletteController(
+            settings: settings, editors: EditorHostRegistry(), pasteboard: pasteboard
+        )
+        #expect(!settings.showOutline)
+        #expect(controller.perform("toggle-outline", editor: nil, library: PaletteLibrary()))
+        #expect(settings.showOutline)
+        controller.perform("toggle-outline", editor: nil, library: PaletteLibrary())
+        #expect(!settings.showOutline)
+    }
+
+    /// The web's `export-docx` action renders the server's own markdown, so
+    /// the palette offers it only where there is a server document to export —
+    /// the same "absent rather than offered dead" posture as `open-in-web`.
+    @Test("Export as Word appears only for a synced document with a convex id")
+    func exportDocxGatedByCloudDocument() {
+        let editor = EditorHostController(settings: settings())
+        func copyExportIds() -> [String]? {
+            CommandPaletteController.sections(settings: settings(), library: PaletteLibrary(), editor: editor)
+                .first { $0.title == "Copy/Export" }?.items.map(\.id)
+        }
+        #expect(copyExportIds()?.contains("export-docx") == false, "a file document is local")
+        editor.cloud = CloudDocumentContext(api: UnusedAPI(), convexId: nil)
+        #expect(copyExportIds()?.contains("export-docx") == false, "no convex id until the first sync")
+        editor.cloud = CloudDocumentContext(api: UnusedAPI(), convexId: "kd57")
+        #expect(copyExportIds()?.contains("export-docx") == true)
+        #expect(
+            copyExportIds() == ["copy-rich", "copy-markdown", "export-md", "export-html", "export-docx"],
+            "the web's Copy/Export order")
+    }
+
+    @Test("go-to-heading reopens the palette listing only headings, and a chosen heading moves the caret")
+    func goToHeading() async throws {
+        let mounted = try await mount("# One\n\n## Two\n\n### Three\n", id: "palette-go-to-heading")
+        defer { mounted.window.close() }
+        let controller = CommandPaletteController(
+            settings: mounted.settings, editors: mounted.registry, pasteboard: pasteboard
+        )
+        #expect(controller.perform("go-to-heading", editor: mounted.chrome, library: PaletteLibrary()))
+        try await waitUntil("the headings palette to open") { controller.isOpen }
+        let model = try #require(controller.model)
+        #expect(model.visibleSections.map(\.title) == ["Headings"])
+        #expect(model.visibleItems.map(\.label) == ["One", "Two", "Three"])
+        #expect(model.visibleItems.map(\.detail) == [.text("H1"), .text("H2"), .text("H3")])
+
+        model.moveSelection(by: 1)
+        model.runSelected()
+        #expect(!controller.isOpen, "running a heading closes the palette")
+        try await waitUntil("the caret to move to “## Two”") {
+            mounted.textView.selectedRange().location == 7
+        }
+        #expect(mounted.textView.selectedRange().location == 7, "UTF-16 offset of “## Two”")
+    }
+
+    @Test("a heading after frontmatter and an emoji lands on its own line")
+    func goToHeadingAfterFrontmatter() async throws {
+        // Offsets are UTF-16 into the whole source, frontmatter included, since
+        // the editor's string is the source; an astral character before the
+        // heading catches a port counting Characters instead.
+        let markdown = "---\ntitle: Draft 😀\n---\n\nIntro 😀\n\n## Target\n"
+        let mounted = try await mount(markdown, id: "palette-go-frontmatter")
+        defer { mounted.window.close() }
+        let controller = CommandPaletteController(
+            settings: mounted.settings, editors: mounted.registry, pasteboard: pasteboard
+        )
+        #expect(controller.perform("go-to-heading", editor: mounted.chrome, library: PaletteLibrary()))
+        try await waitUntil("the headings palette to open") { controller.isOpen }
+        let model = try #require(controller.model)
+        #expect(model.visibleItems.map(\.label) == ["Target"])
+        model.runSelected()
+        let expected = (markdown as NSString).range(of: "## Target").location
+        try await waitUntil("the caret to reach the heading") {
+            mounted.textView.selectedRange().location == expected
+        }
+        #expect(mounted.textView.selectedRange().location == expected)
+    }
+
+    @Test("go-to-heading with no headings opens nothing; an empty heading keeps its row")
+    func goToHeadingWithoutHeadings() async throws {
+        let empty = try await mount("no headings here", id: "palette-go-empty")
+        defer { empty.window.close() }
+        let controller = CommandPaletteController(
+            settings: empty.settings, editors: empty.registry, pasteboard: pasteboard
+        )
+        #expect(controller.perform("go-to-heading", editor: empty.chrome, library: PaletteLibrary()))
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(!controller.isOpen, "an empty outline has nothing to jump to")
+
+        let untitled = try await mount("# One\n\n##\n", id: "palette-go-untitled")
+        defer { untitled.window.close() }
+        let other = CommandPaletteController(
+            settings: untitled.settings, editors: untitled.registry, pasteboard: pasteboard
+        )
+        #expect(other.perform("go-to-heading", editor: untitled.chrome, library: PaletteLibrary()))
+        try await waitUntil("the headings palette to open") { other.isOpen }
+        #expect(other.model?.visibleItems.map(\.label) == ["One", "(untitled heading)"])
+    }
+
+    @Test("copy-rich puts the rendered HTML and the Markdown source on the pasteboard")
+    func copyRich() async throws {
+        let mounted = try await mount("# Title\n\nbody", id: "palette-copy-rich")
+        defer { mounted.window.close() }
+        let controller = CommandPaletteController(
+            settings: mounted.settings, editors: mounted.registry, pasteboard: pasteboard
+        )
+        #expect(controller.perform("copy-rich", editor: mounted.chrome, library: PaletteLibrary()))
+        try await waitUntil("the HTML render to land") { self.pasteboard.string(forType: .html) != nil }
+        #expect(pasteboard.string(forType: .html) == "<h1>Title</h1>\n<p>body</p>")
+        #expect(pasteboard.string(forType: .string) == "# Title\n\nbody", "the Markdown source rides along")
+    }
+
     // MARK: - Harness
+
+    /// Polls the main queue until `condition` holds; the heading finder and
+    /// copy-rich reach the JS core off the main thread, so a single
+    /// `drainMainQueue` is not a wait long enough to see them land.
+    private func waitUntil(_ description: String, _ condition: @escaping @MainActor () -> Bool) async throws {
+        for _ in 0..<500 {
+            if condition() { return }
+            await drainMainQueue()
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        Issue.record("timed out waiting for \(description)")
+    }
 
     private struct Mounted {
         let settings: StudioSettings

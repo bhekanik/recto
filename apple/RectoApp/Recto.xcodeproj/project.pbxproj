@@ -12,11 +12,13 @@
 		12113DD6A2827A36EAFF075F /* CloudDocumentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29201557E3758137FD48E070 /* CloudDocumentView.swift */; };
 		12C672FD1921110AACD309FA /* MarkdownHandlerSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A9B27E0E9570FB896924145 /* MarkdownHandlerSettingsTests.swift */; };
 		16894C35A6742F13EF48D5D7 /* RectoDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 688482441E8C255771A630E8 /* RectoDocument.swift */; };
+		1804D6CE4FD24A216A3D7617 /* OutlinePanelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F42BFB0AFA4FA2B556E8AA99 /* OutlinePanelTests.swift */; };
 		1ABC8176E2DEE9DC2752BE49 /* RectoHistory in Frameworks */ = {isa = PBXBuildFile; productRef = 128BE45B523D74FA45DD41BB /* RectoHistory */; };
 		1AFE0F46610F4E1A37A062F0 /* PresentationPreferenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 452B50AD957A1DC21F1D722A /* PresentationPreferenceTests.swift */; };
 		21A6C4AB51BF061B6A77E594 /* ApplicationModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C392C824BA3377AB65598207 /* ApplicationModelTests.swift */; };
 		243C0E64708D2DE3071D4BBE /* StudioSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 873CFE9D408A1611A230EF44 /* StudioSettings.swift */; };
 		375DE2A731A46C7AAF29B999 /* RectoEditor in Frameworks */ = {isa = PBXBuildFile; productRef = A060C6A5E130E049277D314E /* RectoEditor */; };
+		37B76FF4F2D5115FA3D9FA37 /* ExportFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D555444683948EF0618D0AE /* ExportFile.swift */; };
 		3A33650ED0EDD6B6845B4946 /* TopFormatToolbarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 081000DF06421E2AB99C4D14 /* TopFormatToolbarTests.swift */; };
 		3B6D75ED64FCB5ADC1495B05 /* CommandPaletteController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 584B9D617349E093DAD17A7F /* CommandPaletteController.swift */; };
 		3CAB53AC97E73959F71428C2 /* CommandPaletteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9162CA095C6BFD74EA02C263 /* CommandPaletteView.swift */; };
@@ -46,11 +48,14 @@
 		AC93C5BC994BDE1833BC6478 /* CommandRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81CED2C605817E35E510AFCB /* CommandRegistry.swift */; };
 		AF3C02D0F992E368A1F8B5BA /* EmailSignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06F1089147A9513D2B76ABDE /* EmailSignInView.swift */; };
 		B24A3B1FC7CA46D45EF1C453 /* OrderedDocumentEditsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA24465686AB4748FE498A70 /* OrderedDocumentEditsTests.swift */; };
+		B4732DE94027E2F60D77FAB1 /* ExportController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E283EF3CBDD2EE8864372778 /* ExportController.swift */; };
 		B4B334E2049526BC4B8A1CE3 /* RectoApplicationModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A3042458E2A75EB3A2D7391 /* RectoApplicationModel.swift */; };
 		B4FE92DC5819552B77D990D4 /* RectoSync in Frameworks */ = {isa = PBXBuildFile; productRef = 84D6ED67B9C0E968AA84A94C /* RectoSync */; };
+		B6F058CCEDBB573B185703E5 /* ExportFileTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A55BCBBDB746B682E175C065 /* ExportFileTests.swift */; };
 		B7C17D95A863AF017CBF8C22 /* RectoApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E4F2E4947A1F0496BA12943 /* RectoApp.swift */; };
 		BD0BB267D3FA29633D32B897 /* VimHistoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EF8528C9DE808904C45C672 /* VimHistoryTests.swift */; };
 		BF7B536CD3D010ADC992918E /* RectoCloudRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A889A25CDE48A7DD348070E0 /* RectoCloudRootView.swift */; };
+		C111D28857D095B976198334 /* OutlinePanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 363C26A512770F4ABD73F2E9 /* OutlinePanel.swift */; };
 		C6E25DBA4B7F8A25D2C0A230 /* CloudLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0312E63D64B606C069224BD2 /* CloudLibraryView.swift */; };
 		CA5CE73AF6951C8A1C0A9874 /* StudioSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E1ECC25183D46D1E47201DE /* StudioSettingsTests.swift */; };
 		D0CB31577F7324EF57F36DB5 /* EditorStatusBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 667B77000492C546D56B2307 /* EditorStatusBar.swift */; };
@@ -61,6 +66,7 @@
 		E2C8A1EB9E80686B323D0A61 /* AppConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E9FB961CB61B80D498AC7F0 /* AppConfiguration.swift */; };
 		E724056F89B96985B9A6DB0B /* EditorStatusBarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 250C2D1E689D4E327F47CA43 /* EditorStatusBarTests.swift */; };
 		EA64B27812C91F17C99640EC /* RectoCore in Frameworks */ = {isa = PBXBuildFile; productRef = 6FE61B5A20173D75973EADEE /* RectoCore */; };
+		F43E7099F20D1ECC414204D9 /* SharedRectoCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9E0596B01A39521DDFD3990 /* SharedRectoCore.swift */; };
 		F5D056FD27B5B132534B6754 /* RectoStore in Frameworks */ = {isa = PBXBuildFile; productRef = F1EB6ECFD9B2455F40C0C47E /* RectoStore */; };
 /* End PBXBuildFile section */
 
@@ -81,6 +87,7 @@
 		081000DF06421E2AB99C4D14 /* TopFormatToolbarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopFormatToolbarTests.swift; sourceTree = "<group>"; };
 		0A8CD39F039EBC275145E44A /* RectoAuth */ = {isa = PBXFileReference; lastKnownFileType = folder; name = RectoAuth; path = ../Packages/RectoAuth; sourceTree = SOURCE_ROOT; };
 		1624C1F53E5C33BDBF21C699 /* r-dark-accent.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "r-dark-accent.png"; sourceTree = "<group>"; };
+		1D555444683948EF0618D0AE /* ExportFile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportFile.swift; sourceTree = "<group>"; };
 		250C2D1E689D4E327F47CA43 /* EditorStatusBarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorStatusBarTests.swift; sourceTree = "<group>"; };
 		26EF72694687925314503054 /* MarkdownHandlerSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownHandlerSettings.swift; sourceTree = "<group>"; };
 		29201557E3758137FD48E070 /* CloudDocumentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudDocumentView.swift; sourceTree = "<group>"; };
@@ -92,6 +99,7 @@
 		2F03D2999A598D80B0686FA9 /* CommandPaletteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandPaletteTests.swift; sourceTree = "<group>"; };
 		3043896BC9224FA46A887898 /* EditorHostViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorHostViewTests.swift; sourceTree = "<group>"; };
 		341717FE9FB8EA699E110104 /* r-dark-paper.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "r-dark-paper.png"; sourceTree = "<group>"; };
+		363C26A512770F4ABD73F2E9 /* OutlinePanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlinePanel.swift; sourceTree = "<group>"; };
 		452B50AD957A1DC21F1D722A /* PresentationPreferenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresentationPreferenceTests.swift; sourceTree = "<group>"; };
 		4BEA2AD7F2D906737F82E9F6 /* EditorHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorHostView.swift; sourceTree = "<group>"; };
 		4CE28505252B3B9A09DBBDA7 /* Recto.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Recto.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -122,6 +130,7 @@
 		974F77168BF315CC83C58C3E /* DocumentLinkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentLinkTests.swift; sourceTree = "<group>"; };
 		9BC4145FD50C0B2E0D076716 /* SHA256SUMS */ = {isa = PBXFileReference; path = SHA256SUMS; sourceTree = "<group>"; };
 		A1016C956B2129F9E615F092 /* OrderedDocumentEdits.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrderedDocumentEdits.swift; sourceTree = "<group>"; };
+		A55BCBBDB746B682E175C065 /* ExportFileTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportFileTests.swift; sourceTree = "<group>"; };
 		A889A25CDE48A7DD348070E0 /* RectoCloudRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RectoCloudRootView.swift; sourceTree = "<group>"; };
 		AEC879F82FF05BFC0DEA9666 /* RectoCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = RectoCore; path = ../Packages/RectoCore; sourceTree = SOURCE_ROOT; };
 		B8DA1AB1DBA751F64421DC99 /* RootLifecycleAttackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootLifecycleAttackTests.swift; sourceTree = "<group>"; };
@@ -136,6 +145,9 @@
 		D09B8E4F436878C6794F11AB /* ReadingTime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingTime.swift; sourceTree = "<group>"; };
 		DA53218E8DA7B61CDFDC0AE8 /* RectoSync */ = {isa = PBXFileReference; lastKnownFileType = folder; name = RectoSync; path = ../Packages/RectoSync; sourceTree = SOURCE_ROOT; };
 		E0B936E706CD1B1EC1FF9571 /* WindowToolbarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowToolbarTests.swift; sourceTree = "<group>"; };
+		E283EF3CBDD2EE8864372778 /* ExportController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportController.swift; sourceTree = "<group>"; };
+		F42BFB0AFA4FA2B556E8AA99 /* OutlinePanelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlinePanelTests.swift; sourceTree = "<group>"; };
+		F9E0596B01A39521DDFD3990 /* SharedRectoCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedRectoCore.swift; sourceTree = "<group>"; };
 		FC238A1AE201F838C026FB1E /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		FD3F7F786A85496318A94A06 /* AppConfigurationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfigurationTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -208,9 +220,12 @@
 				4BEA2AD7F2D906737F82E9F6 /* EditorHostView.swift */,
 				667B77000492C546D56B2307 /* EditorStatusBar.swift */,
 				06F1089147A9513D2B76ABDE /* EmailSignInView.swift */,
+				E283EF3CBDD2EE8864372778 /* ExportController.swift */,
+				1D555444683948EF0618D0AE /* ExportFile.swift */,
 				02B6D7800E92A211EE1A23EB /* HandoffEnvironment.swift */,
 				26EF72694687925314503054 /* MarkdownHandlerSettings.swift */,
 				A1016C956B2129F9E615F092 /* OrderedDocumentEdits.swift */,
+				363C26A512770F4ABD73F2E9 /* OutlinePanel.swift */,
 				76EE13261BC8A4CB8A758876 /* PaletteModel.swift */,
 				8DFB77EE2FCD168B679A47D4 /* PresentationPreference.swift */,
 				D09B8E4F436878C6794F11AB /* ReadingTime.swift */,
@@ -219,6 +234,7 @@
 				A889A25CDE48A7DD348070E0 /* RectoCloudRootView.swift */,
 				688482441E8C255771A630E8 /* RectoDocument.swift */,
 				6E3D324F800F5CE7E4DED32D /* RectoSettingsView.swift */,
+				F9E0596B01A39521DDFD3990 /* SharedRectoCore.swift */,
 				873CFE9D408A1611A230EF44 /* StudioSettings.swift */,
 				6CB4981001B07AA443DF62E5 /* SyncIndicator.swift */,
 				526C9D721D8D013900C03100 /* TopFormatToolbar.swift */,
@@ -274,8 +290,10 @@
 				974F77168BF315CC83C58C3E /* DocumentLinkTests.swift */,
 				3043896BC9224FA46A887898 /* EditorHostViewTests.swift */,
 				250C2D1E689D4E327F47CA43 /* EditorStatusBarTests.swift */,
+				A55BCBBDB746B682E175C065 /* ExportFileTests.swift */,
 				5A9B27E0E9570FB896924145 /* MarkdownHandlerSettingsTests.swift */,
 				BA24465686AB4748FE498A70 /* OrderedDocumentEditsTests.swift */,
+				F42BFB0AFA4FA2B556E8AA99 /* OutlinePanelTests.swift */,
 				452B50AD957A1DC21F1D722A /* PresentationPreferenceTests.swift */,
 				B9F5C256848CE3E71B3FBBF0 /* RectoDocumentTests.swift */,
 				BCEBFE1A5165F1BE37FD346D /* RootForegroundInterleavingTests.swift */,
@@ -408,8 +426,10 @@
 				A7B6B93988B966AC74FECF57 /* DocumentLinkTests.swift in Sources */,
 				50B65633ED8E88066BE2DDC4 /* EditorHostViewTests.swift in Sources */,
 				E724056F89B96985B9A6DB0B /* EditorStatusBarTests.swift in Sources */,
+				B6F058CCEDBB573B185703E5 /* ExportFileTests.swift in Sources */,
 				12C672FD1921110AACD309FA /* MarkdownHandlerSettingsTests.swift in Sources */,
 				B24A3B1FC7CA46D45EF1C453 /* OrderedDocumentEditsTests.swift in Sources */,
+				1804D6CE4FD24A216A3D7617 /* OutlinePanelTests.swift in Sources */,
 				1AFE0F46610F4E1A37A062F0 /* PresentationPreferenceTests.swift in Sources */,
 				763091A8177058FC11D1EE7A /* RectoDocumentTests.swift in Sources */,
 				94CE851A6BF9F407B0C2ED90 /* RootForegroundInterleavingTests.swift in Sources */,
@@ -440,9 +460,12 @@
 				7576DBE4CEA3C712E79E6C84 /* EditorHostView.swift in Sources */,
 				D0CB31577F7324EF57F36DB5 /* EditorStatusBar.swift in Sources */,
 				AF3C02D0F992E368A1F8B5BA /* EmailSignInView.swift in Sources */,
+				B4732DE94027E2F60D77FAB1 /* ExportController.swift in Sources */,
+				37B76FF4F2D5115FA3D9FA37 /* ExportFile.swift in Sources */,
 				87C43C876F634C0552593789 /* HandoffEnvironment.swift in Sources */,
 				A69E275C753052A3B33B0261 /* MarkdownHandlerSettings.swift in Sources */,
 				840F1328B957A05D45E90150 /* OrderedDocumentEdits.swift in Sources */,
+				C111D28857D095B976198334 /* OutlinePanel.swift in Sources */,
 				885D94683237079208EDA687 /* PaletteModel.swift in Sources */,
 				D8373D06A45E37210DF0F78A /* PresentationPreference.swift in Sources */,
 				6AF0A5D2B14051500B0A1D59 /* ReadingTime.swift in Sources */,
@@ -451,6 +474,7 @@
 				BF7B536CD3D010ADC992918E /* RectoCloudRootView.swift in Sources */,
 				16894C35A6742F13EF48D5D7 /* RectoDocument.swift in Sources */,
 				69D25773E0AE440A6159F187 /* RectoSettingsView.swift in Sources */,
+				F43E7099F20D1ECC414204D9 /* SharedRectoCore.swift in Sources */,
 				243C0E64708D2DE3071D4BBE /* StudioSettings.swift in Sources */,
 				914DD232485A7200442F54CF /* SyncIndicator.swift in Sources */,
 				56B00C95C1D0711D83C520C3 /* TopFormatToolbar.swift in Sources */,

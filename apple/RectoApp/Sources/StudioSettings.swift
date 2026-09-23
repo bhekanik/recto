@@ -76,6 +76,7 @@ final class StudioSettings {
         static let typewriter = "studio.typewriter"
         static let showToolbar = "studio.topToolbar"
         static let showStatusBar = "studio.statusBar"
+        static let showOutline = "studio.outline"
     }
 
     /// The web's zoom steps: `READING_SCALE_MIN/MAX/STEP` in `settings-schema.ts`.
@@ -125,6 +126,12 @@ final class StudioSettings {
         didSet { defaults.set(showStatusBar, forKey: Key.showStatusBar) }
     }
 
+    /// The web's outline panel ships hidden (`outlineOpen` in
+    /// `settings-schema.ts`).
+    var showOutline: Bool {
+        didSet { defaults.set(showOutline, forKey: Key.showOutline) }
+    }
+
     /// What the OS is showing right now; only consulted while `appearance` is
     /// `.system`.
     private(set) var systemAppearance: ResolvedAppearance
@@ -151,6 +158,7 @@ final class StudioSettings {
         typewriter = defaults.object(forKey: Key.typewriter) as? Bool ?? false
         showToolbar = defaults.object(forKey: Key.showToolbar) as? Bool ?? true
         showStatusBar = defaults.object(forKey: Key.showStatusBar) as? Bool ?? true
+        showOutline = defaults.object(forKey: Key.showOutline) as? Bool ?? false
     }
 
     // MARK: - Appearance
@@ -258,6 +266,7 @@ final class StudioSettings {
     func toggleTypewriter() { typewriter.toggle() }
     func toggleToolbar() { showToolbar.toggle() }
     func toggleStatusBar() { showStatusBar.toggle() }
+    func toggleOutline() { showOutline.toggle() }
 
     // MARK: - Styler
 
