@@ -1,6 +1,15 @@
 import AppKit
 import RectoEditor
+import RectoSync
 import SwiftUI
+
+/// What a synced document's editor can say to the server beyond sync: the
+/// function-call surface and the document's server id, which stays `nil`
+/// until the first sync publishes it.
+struct CloudDocumentContext {
+    let api: any RectoAPI
+    let convexId: String?
+}
 
 /// What one editor host owns around the text: the writing controls, find,
 /// typewriter scrolling, the settings that live on the text view itself, and
@@ -18,6 +27,8 @@ final class EditorHostController {
     /// Set by the host: the lens is this window's own, so a mode switch from
     /// the palette lands on the window it was pressed in.
     var choosePresentation: (Presentation) -> Void = { _ in }
+    /// Set by the synced host. `nil` for a file document, which is local.
+    var cloud: CloudDocumentContext?
     private(set) var seam: RectoTextView?
     private let registry: EditorHostRegistry
 

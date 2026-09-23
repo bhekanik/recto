@@ -24,7 +24,7 @@ struct CloudLibraryView: View {
             }
         } detail: {
             if let localId = model.selectedDocumentId, let registry = model.registry {
-                CloudDocumentView(localId: localId, registry: registry)
+                CloudDocumentView(localId: localId, registry: registry, api: model.api)
                     .id(localId)
             } else {
                 ContentUnavailableView(

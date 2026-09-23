@@ -15,6 +15,8 @@ final class RectoApplicationModel {
         let sync: SyncEngine
         let registry: DocumentSessionRegistry
         let library: DocumentLibrary
+        /// Function calls for features beyond sync (versions, sharing, AI).
+        var api: (any RectoAPI)? = nil
         var beforeAuthConsumption: (@MainActor @Sendable () async -> Void)? = nil
     }
     enum ForegroundSyncAction: Equatable {
@@ -40,6 +42,7 @@ final class RectoApplicationModel {
     private(set) var registry: DocumentSessionRegistry?
     private(set) var library: DocumentLibrary?
     private(set) var auth: RectoAuth?
+    private(set) var api: (any RectoAPI)?
     /// HTTPS origin of the web app. `nil` disables Open in web.
     var webURL: URL?
     var openURL: (URL) -> Bool = { NSWorkspace.shared.open($0) }
@@ -86,7 +89,8 @@ final class RectoApplicationModel {
             auth.attach(sessions: registry)
 
             install(Components(
-                store: store, auth: auth, sync: sync, registry: registry, library: library))
+                store: store, auth: auth, sync: sync, registry: registry, library: library,
+                api: transport))
             startupState = .ready
             await auth.start()
             await applyPendingOpen()
@@ -302,6 +306,7 @@ final class RectoApplicationModel {
         sync = components.sync
         registry = components.registry
         library = components.library
+        api = components.api
         authStatus = components.auth.status
         observe(
             auth: components.auth,
