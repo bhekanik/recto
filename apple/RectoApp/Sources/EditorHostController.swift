@@ -23,6 +23,7 @@ final class EditorHostController {
     let settings: StudioSettings
     let writingController = RectoWritingController()
     let find = RectoFindController()
+    let decorations = RectoDecorationController()
     let typewriter: RectoTypewriterController
     /// Set by the host: the file document undoes through its `UndoManager`,
     /// the cloud document through its session.
@@ -65,6 +66,7 @@ final class EditorHostController {
         self.seam = seam
         find.attach(to: seam)
         typewriter.attach(to: seam)
+        decorations.attach(to: seam)
         applySettings()
         if seam == nil { registry.remove(self) } else { registry.add(self) }
     }
@@ -94,6 +96,10 @@ final class EditorHostController {
     /// whenever spellcheck or typewriter change.
     func applySettings() {
         typewriter.isEnabled = settings.typewriter
+        decorations.theme = settings.theme
+        // Nothing to dim around in a read-only preview, as on the web.
+        decorations.focusDim = settings.focusDim && currentPresentation() != .preview
+            ? settings.focusDimScope : nil
         guard let textView = seam?.nsTextView else { return }
         // The engine reads its spellcheck policy once, when it builds the view,
         // and from then on keeps a snapshot it takes after each of NSTextView's

@@ -13,6 +13,7 @@ struct EditorHostView: View {
     @State private var vim = VimHostState()
     @State private var zen = ZenMode()
     @State private var wordCount = DocumentWordCount()
+    @State private var lint = ProseLint()
     @AppStorage(PresentationPreference.key) private var storedPresentation: String?
     /// This window's lens. `nil` until it appears, when it takes the stored
     /// default; after that only the writer's own choice moves it.
@@ -78,6 +79,7 @@ struct EditorHostView: View {
             stats: .shared,
             onOpenGoalConfig: { [chrome] in GoalConfigController.shared.open(over: chrome.window) },
             vimController: vim.controller,
+            lint: lint,
             zen: zen,
             onToggleZen: chrome.toggleZen,
             onSelect: choose
@@ -123,6 +125,11 @@ struct EditorHostView: View {
         }
         .modifier(ZenChrome(zen: zen, settings: settings, toolbar: toolbar(styler), statusBar: statusBar(styler)))
         .background { WordCountTracker(storage: storage, count: wordCount) }
+        .background {
+            LintTracker(
+                storage: storage, settings: settings, decorations: chrome.decorations,
+                result: lint, isLintable: presentation != .preview)
+        }
         .onAppear {
             if chosenPresentation == nil {
                 chosenPresentation = PresentationPreference.choice(from: storedPresentation)
@@ -149,12 +156,16 @@ struct EditorHostView: View {
         }
         .onChange(of: presentation) { _, presentation in
             vim.sync(seam: storage.textView, presentation: presentation)
+            chrome.applySettings()
         }
         .onChange(of: ExactMarkdown(document.markdown)) { _, markdown in
             history.adoptExternal(markdown.value)
             chrome.documentTitle = RectoDocumentTitle.derive(markdown.value)
         }
         .onChange(of: settings.spellcheck) { chrome.applySettings() }
+        .onChange(of: settings.focusDim) { chrome.applySettings() }
+        .onChange(of: settings.focusDimScope) { chrome.applySettings() }
+        .onChange(of: settings.theme) { chrome.applySettings() }
         .onChange(of: settings.typewriter) { chrome.applySettings() }
     }
 }

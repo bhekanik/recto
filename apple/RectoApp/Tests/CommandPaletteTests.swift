@@ -38,9 +38,15 @@ struct CommandRegistryTests {
         ("zoom-out", .view, "Decrease text size", ""),
         ("zoom-reset", .view, "Reset text size", ""),
         ("toggle-spellcheck", .view, "Toggle spellcheck", ""),
+        ("toggle-lint-passive", .view, "Lint: toggle passive voice", ""),
+        ("toggle-lint-readability", .view, "Lint: toggle readability", ""),
+        ("toggle-lint-adverb", .view, "Lint: toggle adverbs", ""),
+        ("toggle-lint-weasel", .view, "Lint: toggle weasel words", ""),
         ("toggle-smart-paste", .view, "Toggle smart paste (HTML → Markdown)", ""),
         ("toggle-toolbar", .view, "Toggle formatting toolbar", ""),
         ("toggle-typewriter", .view, "Toggle typewriter scrolling", "⌃⇧T"),
+        ("toggle-focus-dim", .view, "Toggle focus dimming", "⌃⇧D"),
+        ("cycle-dim-scope", .view, "Focus scope: sentence / paragraph", ""),
         ("toggle-email-preview", .view, "Toggle email/inbox preview", ""),
         ("set-goal", .view, "Set word goal…", ""),
         ("toggle-goal-style", .view, "Toggle goal display (ring / bar)", ""),
@@ -303,6 +309,13 @@ struct CommandPaletteControllerTests {
         #expect(settings.readingFont == .sans)
         controller.perform("theme-dawn", editor: nil, library: PaletteLibrary())
         #expect(settings.palette == .dawn)
+        controller.perform("toggle-lint-adverb", editor: nil, library: PaletteLibrary())
+        #expect(!settings.lintCategories.contains(.adverb))
+        #expect(settings.lintCategories == [.passive, .readability, .weasel])
+        controller.perform("toggle-focus-dim", editor: nil, library: PaletteLibrary())
+        #expect(settings.focusDim)
+        controller.perform("cycle-dim-scope", editor: nil, library: PaletteLibrary())
+        #expect(settings.focusDimScope == .paragraph)
         controller.perform("toggle-smart-paste", editor: nil, library: PaletteLibrary())
         #expect(!settings.smartPaste)
         #expect(!settings.styler(presentation: .rich).convertsPastedHTML, "the toggle reaches the engine")
