@@ -23,6 +23,19 @@ public enum ConvexFunction {
   public static let versionsCreate = "versions:create"
   public static let versionsRemove = "versions:remove"
   public static let versionsRename = "versions:rename"
+  public static let reviewAddShare = "review:addShare"
+  public static let reviewListShares = "review:listShares"
+  public static let reviewRevokeShare = "review:revokeShare"
+  public static let reviewDocumentShareState = "review:documentShareState"
+  public static let reviewListOpenBranches = "review:listOpenBranches"
+  public static let reviewGetBranchDiff = "review:getBranchDiff"
+  public static let reviewAcceptBranch = "review:acceptBranch"
+  public static let reviewAcceptHunks = "review:acceptHunks"
+  public static let reviewRejectBranch = "review:rejectBranch"
+  public static let reviewAddComment = "review:addComment"
+  public static let reviewListComments = "review:listComments"
+  public static let reviewSetCommentResolved = "review:setCommentResolved"
+  public static let reviewRemoveComment = "review:removeComment"
 
   /// Every name above, for the contract test that finds each in `convex/`.
   public static let all: [String] = [
@@ -30,6 +43,7 @@ public enum ConvexFunction {
     documentsUpdateCurrentNodeId, documentsUpdateMarkdown, documentsRename,
     documentsRemove, docNodesListSince, docNodesAppend, writingStatsRecord,
     writingStatsList, exportDocx, versionsList, versionsCreate, versionsRemove, versionsRename,
+    reviewAddShare, reviewListShares, reviewRevokeShare, reviewDocumentShareState, reviewListOpenBranches, reviewGetBranchDiff, reviewAcceptBranch, reviewAcceptHunks, reviewRejectBranch, reviewAddComment, reviewListComments, reviewSetCommentResolved, reviewRemoveComment,
   ]
 }
 
