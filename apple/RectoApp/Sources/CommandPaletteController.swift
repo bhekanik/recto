@@ -171,6 +171,10 @@ final class CommandPaletteController {
             if section == .theme, settings.resolvedAppearance == .light {
                 actions = actions.filter { $0.id.hasPrefix("appearance-") }
             }
+            // The history panel is the synced document's; a file has AppKit undo.
+            if section == .history, editor?.openHistory == nil {
+                actions.removeAll { ["checkpoint", "undo-tree", "version-history"].contains($0.id) }
+            }
             // Panes live in the library window; a file document's window has none.
             if section == .panes, editor?.panes == nil {
                 actions.removeAll()
@@ -245,6 +249,13 @@ final class CommandPaletteController {
             editor?.panes?.focus(1)
         case "focus-prev":
             editor?.panes?.focus(-1)
+        case "checkpoint":
+            // After the palette's close, so the name prompt is not modal over it.
+            Task { @MainActor in editor?.checkpoint?() }
+        case "undo-tree":
+            editor?.openHistory?(.tree)
+        case "version-history":
+            editor?.openHistory?(.versions)
         case "undo":
             editor?.undo()
         case "redo":

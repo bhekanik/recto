@@ -670,6 +670,17 @@ public actor DocumentSession {
     await sync?.requestDrain()
   }
 
+  /// Every node of the document's history, oldest first, for the history
+  /// panel's tree.
+  public func historyNodes() -> [DocNode] {
+    nodesById.values.sorted { ($0.createdAt, $0.nodeId) < ($1.createdAt, $1.nodeId) }
+  }
+
+  /// The document's text at `nodeId`, for previews, compares and restores.
+  public func markdown(at nodeId: String) throws -> String {
+    try materialize(nodeId, nodesById)
+  }
+
   /// Caret to restore after a navigation, from the node's stored selection.
   public func selection(at nodeId: String) -> NodeSelection? {
     nodesById[nodeId]?.selection

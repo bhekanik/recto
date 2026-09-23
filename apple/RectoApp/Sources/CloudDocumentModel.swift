@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import RectoCore
 import RectoEditor
+import RectoHistory
 
 @MainActor
 @Observable
@@ -188,6 +189,37 @@ final class CloudDocumentModel {
 
     func redo() async {
         await performNavigation { try await session.redo() }
+    }
+
+    // MARK: - History panel
+
+    func historyNodes() async -> [DocNode] {
+        await session.historyNodes()
+    }
+
+    func markdown(at nodeId: String) async throws -> String {
+        try await session.markdown(at: nodeId)
+    }
+
+    /// A pointer move to any node: the undo tree's click.
+    func navigate(to nodeId: String) async {
+        await performNavigation {
+            try await session.navigate(to: nodeId)
+            return true
+        }
+    }
+
+    /// The web's additive restore (D9): the version's text becomes a new node
+    /// on top of the current one, so nothing after it is lost.
+    func restore(_ nodeId: String) async {
+        do {
+            let text = try await session.markdown(at: nodeId)
+            for storage in allStorages { storage.markdown = text }
+            accept(RectoEditorEdit(markdown: text, structural: true), from: storage)
+            await save()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     func keepLocalBranch() async {

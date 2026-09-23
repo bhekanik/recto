@@ -2,6 +2,7 @@ import AppKit
 import Observation
 import RectoCoreJS
 import RectoEditor
+import RectoHistory
 import SwiftUI
 
 /// The writer's studio knobs, after the web app's `useStudioSettings`: one
@@ -75,12 +76,20 @@ final class StudioSettings {
         case rendered, email
     }
 
+    /// How a compare lays out, `DiffLayout` on the web.
+    enum DiffLayout: String {
+        case inline
+        case sideBySide = "side-by-side"
+    }
+
     enum Key {
         static let appearance = "studio.appearance"
         static let palette = "studio.theme"
         static let readingFont = "studio.readingFont"
         static let smartPaste = "studio.smartPaste"
         static let focusDim = "studio.focusDim"
+        static let diffGranularity = "studio.diffGranularity"
+        static let diffLayout = "studio.diffLayout"
         static let focusDimScope = "studio.focusDimScope"
         static let lint = "studio.lint"
         static func lintCategory(_ category: LintCategory) -> String { "studio.lint.\(category.rawValue)" }
@@ -122,6 +131,15 @@ final class StudioSettings {
     /// face on update is not this setting's job.
     var readingFont: ReadingFont {
         didSet { defaults.set(readingFont.rawValue, forKey: Key.readingFont) }
+    }
+
+    /// Compare splits by word or by line.
+    var diffGranularity: DiffGranularity {
+        didSet { defaults.set(diffGranularity.rawValue, forKey: Key.diffGranularity) }
+    }
+
+    var diffLayout: DiffLayout {
+        didSet { defaults.set(diffLayout.rawValue, forKey: Key.diffLayout) }
     }
 
     /// Dim everything but the sentence or paragraph being written (plan 003).
@@ -228,6 +246,8 @@ final class StudioSettings {
         readingFont = defaults.string(forKey: Key.readingFont).flatMap(ReadingFont.init(rawValue:)) ?? .serif
         smartPaste = defaults.object(forKey: Key.smartPaste) as? Bool ?? true
         focusDim = defaults.object(forKey: Key.focusDim) as? Bool ?? false
+        diffGranularity = defaults.string(forKey: Key.diffGranularity).flatMap(DiffGranularity.init(rawValue:)) ?? .word
+        diffLayout = defaults.string(forKey: Key.diffLayout).flatMap(DiffLayout.init(rawValue:)) ?? .inline
         focusDimScope = defaults.string(forKey: Key.focusDimScope).flatMap(FocusDimScope.init(rawValue:)) ?? .sentence
         lint = defaults.object(forKey: Key.lint) as? Bool ?? false
         lintCategories = Set(LintCategory.allCases.filter {
@@ -355,6 +375,8 @@ final class StudioSettings {
     func toggleReadingFont() { readingFont = readingFont == .serif ? .sans : .serif }
     func toggleSmartPaste() { smartPaste.toggle() }
     func toggleFocusDim() { focusDim.toggle() }
+    func toggleDiffGranularity() { diffGranularity = diffGranularity == .word ? .line : .word }
+    func toggleDiffLayout() { diffLayout = diffLayout == .inline ? .sideBySide : .inline }
     func cycleFocusDimScope() { focusDimScope = focusDimScope == .sentence ? .paragraph : .sentence }
     func toggleLint() { lint.toggle() }
 

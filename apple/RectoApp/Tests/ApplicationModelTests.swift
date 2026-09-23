@@ -3,6 +3,7 @@ import Foundation
 import SwiftUI
 import RectoCore
 import RectoEditor
+import RectoHistory
 import RectoStore
 import RectoSync
 import Testing
@@ -695,5 +696,117 @@ struct PaneViewTests {
         window.makeFirstResponder(left)
         left.insertText("From the left pane.", replacementRange: NSRange(location: 0, length: 0))
         #expect(right.string.contains("From the left pane."), "the other pane has it on the same turn")
+    }
+}
+
+@Suite("document history")
+struct DocumentHistoryTests {
+    private func node(_ id: String, _ parent: String?, at time: Double) -> DocNode {
+        DocNode(nodeId: id, parentNodeId: parent, patch: "{\"from\":0,\"to\":0,\"insert\":\"\"}", createdAt: time)
+    }
+
+    @MainActor
+    @Test("the tree flattens like the web's: first child keeps the column, later branches step right")
+    func flatten() {
+        let rows = DocumentHistoryModel.flatten([
+            node("root", nil, at: 0), node("a", "root", at: 1), node("b", "a", at: 2),
+            node("branch", "root", at: 3), node("c", "b", at: 4),
+        ])
+        #expect(rows.map(\.id) == ["root", "a", "b", "c", "branch"])
+        #expect(rows.map(\.depth) == [0, 0, 0, 0, 1])
+    }
+
+    /// The node whose text is `text`.
+    @MainActor
+    private func node(with text: String, in history: DocumentHistoryModel, of model: CloudDocumentModel) async throws -> String {
+        for row in history.rows where (try? await model.markdown(at: row.id)) == text { return row.id }
+        throw RemoteCallError(code: nil, message: "no node with \(text)")
+    }
+
+    @MainActor
+    @Test("jumping, restoring and comparing work against the node store")
+    func navigateRestoreCompare() async throws {
+        let components = try await makeComponents()
+        let document = try await components.library.createDocument(title: "History")
+        let model = try await CloudDocumentModel.open(localId: document.localId, registry: components.registry)
+        for text in ["first", "first and second"] {
+            model.storage.markdown = text
+            model.accept(RectoEditorEdit(markdown: text, structural: true))
+            await model.save()
+        }
+        let history = DocumentHistoryModel(document: model)
+        await history.reloadNodes()
+        let first = try await node(with: "first", in: history, of: model)
+        let second = try await node(with: "first and second", in: history, of: model)
+        #expect(history.currentNodeId == second)
+
+        await history.toggleCompare(first)
+        await history.toggleCompare(second)
+        #expect(history.compareTexts?.a == "first" && history.compareTexts?.b == "first and second")
+
+        await history.navigate(to: first)
+        #expect(model.storage.markdown == "first")
+        #expect(history.currentNodeId == first)
+
+        await history.navigate(to: second)
+        let before = history.rows.count
+        await history.restore(first)
+        #expect(model.storage.markdown == "first")
+        #expect(history.rows.count == before + 1, "restore adds a node; nothing after it is lost")
+        #expect(history.rows.contains { $0.id == second })
+        await model.close()
+    }
+
+    @MainActor
+    @Test("tagging pushes the edits, then creates a manual version at the head")
+    func tagCurrent() async throws {
+        let components = try await makeComponents()
+        let document = try await components.library.createDocument(title: "Tags")
+        let model = try await CloudDocumentModel.open(localId: document.localId, registry: components.registry)
+        let api = ScriptedAPI()
+        await api.respond(ConvexFunction.versionsList, json: #"[{"_id":"v1","nodeId":"n1","label":"Draft","kind":"manual","createdAt":1}]"#)
+        let history = DocumentHistoryModel(document: model)
+        var synced = false
+        history.followVersions(CloudDocumentContext(api: api, convexId: "doc1", syncForExport: { synced = true; return true }))
+        for _ in 0..<50 where history.versions.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(history.versions.map(\.label) == ["Draft"])
+
+        let tagged = await history.tagCurrent(label: "Before the rewrite")
+        #expect(tagged && synced)
+        let call = try #require(await api.calls(to: ConvexFunction.versionsCreate).first)
+        #expect(call.args["documentId"] == "doc1")
+        #expect(call.args["nodeId"] == .string(model.state.head))
+        #expect(call.args["label"] == "Before the rewrite")
+        #expect(call.args["kind"] == "manual")
+
+        let refusing = DocumentHistoryModel(document: model)
+        refusing.followVersions(CloudDocumentContext(api: api, convexId: "doc1", syncForExport: { false }))
+        #expect(!(await refusing.tagCurrent(label: "x")), "an unsynced head is not tagged")
+        #expect(refusing.errorMessage != nil)
+        await model.close()
+    }
+}
+
+@Suite("auto versions")
+struct AutoVersioningTests {
+    @MainActor
+    @Test("a settled, synced head is tagged once as an Autosave; a moving one is not")
+    func tagsSettledHead() async throws {
+        let api = ScriptedAPI()
+        let auto = AutoVersioning(delay: .milliseconds(30))
+        let cloud = CloudDocumentContext(api: api, convexId: "doc1")
+        auto.headMoved(to: "n1", isSynced: { true }, cloud: cloud)
+        auto.headMoved(to: "n2", isSynced: { true }, cloud: cloud)
+        try await Task.sleep(for: .milliseconds(150))
+        var calls = await api.calls(to: ConvexFunction.versionsCreate)
+        #expect(calls.map { $0.args["nodeId"] } == ["n2"], "only the head that settled")
+        #expect(calls.first?.args["kind"] == "auto")
+        if case .string(let label)? = calls.first?.args["label"] { #expect(label.hasPrefix("Autosave ")) }
+
+        auto.headMoved(to: "n2", isSynced: { true }, cloud: cloud)
+        auto.headMoved(to: "n3", isSynced: { false }, cloud: cloud)
+        try await Task.sleep(for: .milliseconds(150))
+        calls = await api.calls(to: ConvexFunction.versionsCreate)
+        #expect(calls.count == 1, "no duplicate for n2, and an unsynced n3 waits")
     }
 }

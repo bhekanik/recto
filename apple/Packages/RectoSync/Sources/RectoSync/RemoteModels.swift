@@ -19,13 +19,17 @@ public enum ConvexFunction {
 
   // Features beyond sync, called through `RectoAPI`.
   public static let exportDocx = "export:docx"
+  public static let versionsList = "versions:list"
+  public static let versionsCreate = "versions:create"
+  public static let versionsRemove = "versions:remove"
+  public static let versionsRename = "versions:rename"
 
   /// Every name above, for the contract test that finds each in `convex/`.
   public static let all: [String] = [
     documentsList, documentsGet, documentsCreate, documentsCommitEdit,
     documentsUpdateCurrentNodeId, documentsUpdateMarkdown, documentsRename,
     documentsRemove, docNodesListSince, docNodesAppend, writingStatsRecord,
-    writingStatsList, exportDocx,
+    writingStatsList, exportDocx, versionsList, versionsCreate, versionsRemove, versionsRename,
   ]
 }
 
@@ -326,5 +330,32 @@ public struct RemoteWritingStat: Decodable, Sendable, Equatable {
   public init(date: String, words: Double) {
     self.date = date
     self.words = words
+  }
+}
+
+/// A row of `versions.list`: a named point in a document's history.
+public struct RemoteVersion: Decodable, Sendable, Equatable, Identifiable {
+  public enum Kind: String, Decodable, Sendable {
+    case auto
+    case manual
+  }
+
+  public let id: String
+  public let nodeId: String
+  public let label: String
+  public let kind: Kind
+  public let createdAt: Double
+
+  public init(id: String, nodeId: String, label: String, kind: Kind, createdAt: Double) {
+    self.id = id
+    self.nodeId = nodeId
+    self.label = label
+    self.kind = kind
+    self.createdAt = createdAt
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case id = "_id"
+    case nodeId, label, kind, createdAt
   }
 }
