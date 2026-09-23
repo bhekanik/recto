@@ -171,6 +171,10 @@ final class CommandPaletteController {
             if section == .theme, settings.resolvedAppearance == .light {
                 actions = actions.filter { $0.id.hasPrefix("appearance-") }
             }
+            // Panes live in the library window; a file document's window has none.
+            if section == .panes, editor?.panes == nil {
+                actions.removeAll()
+            }
             if section == .copyExport, editor?.cloud?.convexId == nil {
                 actions.removeAll { $0.id == "export-docx" }
             }
@@ -231,6 +235,16 @@ final class CommandPaletteController {
             editor?.cyclePresentation(by: 1)
         case "cycle-prev":
             editor?.cyclePresentation(by: -1)
+        case "split-v":
+            editor?.panes?.split(.columns)
+        case "split-h":
+            editor?.panes?.split(.rows)
+        case "close-pane":
+            editor?.panes?.close()
+        case "focus-next":
+            editor?.panes?.focus(1)
+        case "focus-prev":
+            editor?.panes?.focus(-1)
         case "undo":
             editor?.undo()
         case "redo":

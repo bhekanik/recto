@@ -8,8 +8,13 @@ struct CloudDocumentView: View {
     let localId: String
     let registry: DocumentSessionRegistry
     let api: (any RectoAPI)?
+    /// The window's shared documents and pane commands; `nil` outside panes.
+    let panes: PaneContext?
     private let settings: StudioSettings
     @State private var model: CloudDocumentModel?
+    /// What this view edits: the model's storage, or a mirror of it when
+    /// another pane already shows the document.
+    @State private var storage: RectoTextStorage?
     @State private var openingError: String?
     @State private var chrome: EditorHostController
     @State private var vim = VimHostState()
@@ -26,11 +31,13 @@ struct CloudDocumentView: View {
         localId: String,
         registry: DocumentSessionRegistry,
         api: (any RectoAPI)? = nil,
+        panes: PaneContext? = nil,
         settings: StudioSettings = .shared
     ) {
         self.localId = localId
         self.registry = registry
         self.api = api
+        self.panes = panes
         self.settings = settings
         _chrome = State(initialValue: EditorHostController(settings: settings))
     }
@@ -60,9 +67,19 @@ struct CloudDocumentView: View {
         .onDisappear {
             zen.leave()
             let closing = model
+            let closingStorage = storage
             model = nil
-            Task { await closing?.close() }
+            storage = nil
+            if let documents = panes?.documents {
+                Task { await documents.release(localId, storage: closingStorage) }
+            } else {
+                Task { await closing?.close() }
+            }
         }
+    }
+
+    private func paneStorage(_ model: CloudDocumentModel) -> RectoTextStorage {
+        storage ?? model.storage
     }
 
     private func styler(_ model: CloudDocumentModel) -> MarkdownStyler {
@@ -89,7 +106,7 @@ struct CloudDocumentView: View {
             }
             if styler.presentation == .preview, settings.previewVariant == .email {
                 EmailPreviewChrome(
-                    frontmatter: model.storage.frontmatter, fallbackTitle: model.state.title, theme: styler.theme)
+                    frontmatter: paneStorage(model).frontmatter, fallbackTitle: model.state.title, theme: styler.theme)
             }
             page(model, styler)
             if settings.showStatusBar, !zen.hidesChrome {
@@ -101,12 +118,12 @@ struct CloudDocumentView: View {
             // Synced documents only feed the day's total, as on the web, where
             // every document is synced; a local file's words are not credited.
             WordCountTracker(
-                storage: model.storage, count: wordCount,
+                storage: paneStorage(model), count: wordCount,
                 onCount: { words in WritingStatsModel.shared.noteLiveWords(words) })
         }
         .background {
             LintTracker(
-                storage: model.storage, settings: settings, decorations: chrome.decorations,
+                storage: paneStorage(model), settings: settings, decorations: chrome.decorations,
                 result: lint, isLintable: styler.presentation != .preview)
         }
         .onDisappear { WritingStatsModel.shared.flush() }
@@ -117,6 +134,8 @@ struct CloudDocumentView: View {
             chrome.choosePresentation = choose
             chrome.currentPresentation = { [model] in self.styler(model).presentation }
             chrome.zen = zen
+            chrome.panes = panes?.commands
+            chrome.onFocus = panes?.activate ?? {}
             chrome.cloud = api.map {
                 CloudDocumentContext(api: $0, convexId: model.state.convexId, syncForExport: { await model.syncForExport() })
             }
@@ -132,13 +151,19 @@ struct CloudDocumentView: View {
         .onChange(of: model.state.title) { _, title in
             chrome.documentTitle = title
         }
+        .onChange(of: panes?.isActive) { _, isActive in
+            // Moved here by a command, not a click: give it the keyboard.
+            if isActive == true, let textView = chrome.seam?.nsTextView, textView.window?.firstResponder !== textView {
+                textView.window?.makeFirstResponder(textView)
+            }
+        }
         .onChange(of: settings.spellcheck) { chrome.applySettings() }
         .onChange(of: settings.focusDim) { chrome.applySettings() }
         .onChange(of: settings.focusDimScope) { chrome.applySettings() }
         .onChange(of: settings.theme) { chrome.applySettings() }
         .onChange(of: settings.typewriter) { chrome.applySettings() }
         .onChange(of: styler.presentation) { _, presentation in
-            vim.sync(seam: model.storage.textView, presentation: presentation)
+            vim.sync(seam: paneStorage(model).textView, presentation: presentation)
             chrome.applySettings()
         }
         .navigationTitle(model.state.title)
@@ -162,21 +187,22 @@ struct CloudDocumentView: View {
     private func page(_ model: CloudDocumentModel, _ styler: MarkdownStyler) -> some View {
         HStack(spacing: 0) {
             RectoEditorView(
-                storage: model.storage,
+                storage: paneStorage(model),
                 styler: styler,
                 placeholder: "Start writing…",
                 onAttach: { seam in
                     chrome.attach(seam)
                     vim.sync(seam: seam, presentation: styler.presentation)
                 },
-                onEdit: model.accept,
+                onEdit: { [storage = paneStorage(model)] edit in model.accept(edit, from: storage) },
                 writingController: chrome.writingController
             )
-            .frame(minWidth: 620, minHeight: 500)
+            // Panes share the window, so each may be narrower than a window's page.
+            .frame(minWidth: panes == nil ? 620 : 280, minHeight: panes == nil ? 500 : 200)
             .background(WritingControlsHost(controller: chrome.writingController))
             if settings.showOutline, !zen.hidesChrome {
                 OutlinePanel(
-                    storage: model.storage,
+                    storage: paneStorage(model),
                     theme: styler.theme,
                     jump: { [chrome] heading in chrome.jump(toHeading: heading) },
                     close: { [settings] in settings.toggleOutline() }
@@ -251,6 +277,10 @@ struct CloudDocumentView: View {
     }
 
     private func open() async {
+        if let documents = panes?.documents {
+            await openShared(documents)
+            return
+        }
         await model?.close()
         model = nil
         openingError = nil
@@ -264,6 +294,29 @@ struct CloudDocumentView: View {
                 await opened.close()
                 return
             }
+            model = opened
+        } catch is CancellationError {
+        } catch {
+            openingError = error.localizedDescription
+        }
+    }
+
+    /// Through the window's shared documents, so a second pane on this
+    /// document mirrors the first instead of queuing behind it.
+    private func openShared(_ documents: PaneDocuments) async {
+        if let model {
+            await documents.release(model.localId, storage: storage)
+            self.model = nil
+            storage = nil
+        }
+        openingError = nil
+        do {
+            let (opened, paneStorage) = try await documents.acquire(localId, registry: registry)
+            if Task.isCancelled {
+                await documents.release(localId, storage: paneStorage)
+                return
+            }
+            storage = paneStorage
             model = opened
         } catch is CancellationError {
         } catch {

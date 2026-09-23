@@ -21,6 +21,11 @@ struct CommandRegistryTests {
         ("mode-preview", .modes, "Switch to Preview", "⌃⇧P"),
         ("cycle-next", .modes, "Cycle mode forward", "⌃⇧]"),
         ("cycle-prev", .modes, "Cycle mode backward", "⌃⇧["),
+        ("split-v", .panes, "Split pane — vertical", "⌘\\"),
+        ("split-h", .panes, "Split pane — horizontal", "⌘⇧\\"),
+        ("close-pane", .panes, "Close pane", "⌃⇧W"),
+        ("focus-next", .panes, "Focus next pane", "⌃⇧→"),
+        ("focus-prev", .panes, "Focus previous pane", "⌃⇧←"),
         ("go-to-heading", .navigate, "Go to heading…", "⌃⇧O"),
         ("toggle-outline", .navigate, "Toggle outline panel", ""),
         ("undo", .history, "Undo", "⌘Z"),
@@ -288,7 +293,7 @@ struct CommandPaletteControllerTests {
             #expect(controller.perform(action.id, editor: nil, library: library), "\(action.id)")
         }
         #expect(created == 1)
-        #expect(!controller.perform("split-v", editor: nil, library: library))
+        #expect(!controller.perform("open-in-mac-app", editor: nil, library: library), "a web-only action has no native form")
     }
 
     @Test("settings actions land where the status bar reads them")

@@ -3,6 +3,8 @@ import SwiftUI
 
 struct CloudLibraryView: View {
     let model: RectoApplicationModel
+    @State private var layout = PaneLayout()
+    @State private var documents = PaneDocuments()
     @State private var columnVisibility = NavigationSplitViewVisibility.automatic
     /// What the sidebar was before zen hid it, to put it back after.
     @State private var visibilityBeforeZen: NavigationSplitViewVisibility?
@@ -26,16 +28,19 @@ struct CloudLibraryView: View {
                 }
             }
         } detail: {
-            if let localId = model.selectedDocumentId, let registry = model.registry {
-                CloudDocumentView(localId: localId, registry: registry, api: model.api)
-                    .id(localId)
-            } else {
-                ContentUnavailableView(
-                    "No document selected",
-                    systemImage: "doc.text",
-                    description: Text("Create a document to start writing offline.")
-                )
+            PaneTreeView(node: layout.root) { pane in
+                paneView(pane)
             }
+        }
+        .onAppear {
+            if layout.activePane?.documentId == nil { layout.setActiveDocument(model.selectedDocumentId) }
+        }
+        .onChange(of: model.selectedDocumentId) { _, selected in
+            // The sidebar and the palette open documents in the active pane.
+            if layout.activePane?.documentId != selected { layout.setActiveDocument(selected) }
+        }
+        .onChange(of: layout.activePane?.documentId) { _, active in
+            if model.selectedDocumentId != active { model.selectedDocumentId = active }
         }
         .onPreferenceChange(ZenPreferenceKey.self) { isZen in
             if isZen {
@@ -53,6 +58,48 @@ struct CloudLibraryView: View {
                     .background(.regularMaterial, in: .rect(cornerRadius: 8))
                     .padding()
                     .textSelection(.enabled)
+            }
+        }
+    }
+}
+
+extension CloudLibraryView {
+    private var commands: PaneCommands {
+        PaneCommands(
+            split: { axis in layout.split(axis) },
+            close: { layout.closeActive() },
+            focus: { step in layout.focus(by: step) }
+        )
+    }
+
+    @ViewBuilder
+    private func paneView(_ pane: PaneLayout.Pane) -> some View {
+        let isActive = pane.id == layout.activePaneId
+        let multiple = layout.panes.count > 1
+        Group {
+            if let localId = pane.documentId, let registry = model.registry {
+                CloudDocumentView(
+                    localId: localId, registry: registry, api: model.api,
+                    panes: PaneContext(
+                        documents: documents, paneId: pane.id, isActive: isActive,
+                        activate: { layout.activate(pane.id) }, commands: commands))
+                    .id("\(pane.id)-\(localId)")
+            } else {
+                ContentUnavailableView(
+                    "No document selected",
+                    systemImage: "doc.text",
+                    description: Text(multiple
+                        ? "Pick a document in the sidebar to show it in this pane."
+                        : "Create a document to start writing offline.")
+                )
+                .contentShape(Rectangle())
+                .onTapGesture { layout.activate(pane.id) }
+            }
+        }
+        // With more than one pane, the one the palette and menus act on is marked.
+        .overlay {
+            if multiple, isActive {
+                Rectangle().strokeBorder(Color.accentColor.opacity(0.6), lineWidth: 2).allowsHitTesting(false)
             }
         }
     }
