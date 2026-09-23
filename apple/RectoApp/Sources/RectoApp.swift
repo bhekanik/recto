@@ -130,6 +130,17 @@ private struct StudioCommands: Commands {
             Button("Cycle mode backward") { editors.controller(in: NSApp.keyWindow)?.cyclePresentation(by: -1) }
                 .keyboardShortcut("[", modifiers: [.control, .shift])
             Divider()
+            Button("Split pane — vertical") { editors.controller(in: NSApp.keyWindow)?.panes?.split(.columns) }
+                .keyboardShortcut("\\", modifiers: .command)
+            Button("Split pane — horizontal") { editors.controller(in: NSApp.keyWindow)?.panes?.split(.rows) }
+                .keyboardShortcut("\\", modifiers: [.command, .shift])
+            Button("Close pane") { editors.controller(in: NSApp.keyWindow)?.panes?.close() }
+                .keyboardShortcut("w", modifiers: [.control, .shift])
+            Button("Focus next pane") { editors.controller(in: NSApp.keyWindow)?.panes?.focus(1) }
+                .keyboardShortcut(.rightArrow, modifiers: [.control, .shift])
+            Button("Focus previous pane") { editors.controller(in: NSApp.keyWindow)?.panes?.focus(-1) }
+                .keyboardShortcut(.leftArrow, modifiers: [.control, .shift])
+            Divider()
             Button("Toggle zen mode") { editors.controller(in: NSApp.keyWindow)?.toggleZen() }
                 .keyboardShortcut("f", modifiers: [.control, .shift])
             Button("Toggle body font (sans / serif)", action: settings.toggleReadingFont)

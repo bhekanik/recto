@@ -38,6 +38,12 @@ final class EditorHostController {
     var currentPresentation: () -> Presentation = { .rich }
     /// Set by the host.
     var zen: ZenMode?
+    /// The window's panes, when this editor is one of them.
+    var panes: PaneCommands?
+    /// The writer moved into this editor: a click or a caret move while it is
+    /// first responder. Pane hosts use it to track the active pane.
+    var onFocus: () -> Void = {}
+    private var focusObserver: NSObjectProtocol?
 
     /// `cycle-next` / `cycle-prev`.
     func cyclePresentation(by step: Int) {
@@ -68,6 +74,19 @@ final class EditorHostController {
         typewriter.attach(to: seam)
         decorations.attach(to: seam)
         applySettings()
+        if let focusObserver { NotificationCenter.default.removeObserver(focusObserver) }
+        focusObserver = nil
+        if let textView = seam?.nsTextView {
+            focusObserver = NotificationCenter.default.addObserver(
+                forName: NSTextView.didChangeSelectionNotification, object: textView, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, textView.window?.firstResponder === textView else { return }
+                    self.registry.noteFocused(self)
+                    self.onFocus()
+                }
+            }
+        }
         if seam == nil { registry.remove(self) } else { registry.add(self) }
     }
 
@@ -166,9 +185,22 @@ final class EditorHostRegistry {
         controllers.remove(controller)
     }
 
+    /// The editor in `window` that commands act on: the one holding the
+    /// keyboard, else the one that last did (a pane window has several).
     func controller(in window: NSWindow?) -> EditorHostController? {
         guard let window else { return nil }
-        return controllers.allObjects.first { $0.window === window }
+        let inWindow = controllers.allObjects.filter { $0.window === window }
+        if let typing = inWindow.first(where: { $0.seam?.nsTextView.map { window.firstResponder === $0 } ?? false }) {
+            return typing
+        }
+        if let last = lastFocused, inWindow.contains(where: { $0 === last }) { return last }
+        return inWindow.first
+    }
+
+    private weak var lastFocused: EditorHostController?
+
+    func noteFocused(_ controller: EditorHostController) {
+        lastFocused = controller
     }
 
     /// The window `Window("Recto", id: "cloud-library")` is on screen in, for

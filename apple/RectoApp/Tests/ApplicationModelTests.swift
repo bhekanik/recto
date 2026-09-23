@@ -1,5 +1,8 @@
+import AppKit
 import Foundation
+import SwiftUI
 import RectoCore
+import RectoEditor
 import RectoStore
 import RectoSync
 import Testing
@@ -561,5 +564,136 @@ struct HandoffModelTests {
         }
         #expect(model.errorMessage == nil)
         #expect(model.selectedDocumentId == nil)
+    }
+}
+
+/// Two panes on one document: one model, one ingress, every storage in step.
+@Suite("panes sharing a document")
+struct PaneDocumentTests {
+    @MainActor
+    @Test("a second pane mirrors the first; an edit in either reaches the other at once and persists once")
+    func mirrorsStayInStep() async throws {
+        let components = try await makeComponents()
+        let document = try await components.library.createDocument(title: "Panes")
+        let panes = PaneDocuments()
+        let (first, firstStorage) = try await panes.acquire(document.localId, registry: components.registry)
+        let (second, secondStorage) = try await panes.acquire(document.localId, registry: components.registry)
+        #expect(first === second, "one model per document per window")
+        #expect(firstStorage === first.storage)
+        #expect(secondStorage !== firstStorage)
+
+        secondStorage.markdown = "typed in the second pane"
+        first.accept(RectoEditorEdit(markdown: secondStorage.markdown, structural: false), from: secondStorage)
+        #expect(firstStorage.markdown == "typed in the second pane", "the sibling updates on the same turn")
+
+        firstStorage.markdown = "then the first 🚀"
+        first.accept(RectoEditorEdit(markdown: firstStorage.markdown, structural: false), from: firstStorage)
+        #expect(secondStorage.markdown == "then the first 🚀")
+        await first.save()
+        #expect(try await components.store.document(localId: document.localId)?.displayMarkdown == "then the first 🚀")
+
+        // The session groups quick edits into one step, so where undo lands is
+        // its business; that it lands in every pane is the panes'.
+        await first.undo()
+        #expect(firstStorage.markdown != "then the first 🚀")
+        #expect(secondStorage.markdown == firstStorage.markdown, "history reaches every pane")
+
+        await panes.release(document.localId, storage: secondStorage)
+        #expect(await components.registry.openDocumentIds == [document.localId], "still open for the first pane")
+        await panes.release(document.localId, storage: firstStorage)
+        #expect(await components.registry.openDocumentIds.isEmpty, "the last pane closes it")
+    }
+
+    @MainActor
+    @Test("closing the first pane keeps the second editing")
+    func firstPaneCloses() async throws {
+        let components = try await makeComponents()
+        let document = try await components.library.createDocument(title: "Panes")
+        let panes = PaneDocuments()
+        let (model, firstStorage) = try await panes.acquire(document.localId, registry: components.registry)
+        let (_, secondStorage) = try await panes.acquire(document.localId, registry: components.registry)
+        await panes.release(document.localId, storage: firstStorage)
+
+        secondStorage.markdown = "still writing"
+        model.accept(RectoEditorEdit(markdown: secondStorage.markdown, structural: false), from: secondStorage)
+        await model.save()
+        #expect(try await components.store.document(localId: document.localId)?.displayMarkdown == "still writing")
+        await panes.release(document.localId, storage: secondStorage)
+    }
+}
+
+/// The pane views themselves, in a window, over the in-memory backend.
+@Suite("pane views", .serialized)
+struct PaneViewTests {
+    @MainActor
+    private final class Harness {
+        var layout: PaneLayout
+        init(_ documentId: String) { layout = PaneLayout(documentId: documentId) }
+    }
+
+    @MainActor
+    private struct PaneHost: View {
+        let harness: Harness
+        let documents: PaneDocuments
+        let registry: DocumentSessionRegistry
+        let settings: StudioSettings
+
+        var body: some View {
+            PaneTreeView(node: harness.layout.root) { pane in
+                if let localId = pane.documentId {
+                    CloudDocumentView(
+                        localId: localId, registry: registry,
+                        panes: PaneContext(
+                            documents: documents, paneId: pane.id,
+                            isActive: pane.id == harness.layout.activePaneId,
+                            activate: {}, commands: PaneCommands()),
+                        settings: settings)
+                        .id("\(pane.id)-\(localId)")
+                }
+            }
+            .frame(width: 1_000, height: 600)
+        }
+    }
+
+    private func textViews(in view: NSView) -> [NSTextView] {
+        (view as? NSTextView).map { [$0] } ?? view.subviews.flatMap(textViews)
+    }
+
+    @MainActor
+    @Test("a vertical split shows two editors side by side, and typing in one shows in the other")
+    func splitEditsBoth() async throws {
+        _ = NSApplication.shared
+        let components = try await makeComponents()
+        let document = try await components.library.createDocument(title: "Split")
+        let defaults = UserDefaults(suiteName: "com.bhekani.recto.tests.panes")!
+        defaults.removePersistentDomain(forName: "com.bhekani.recto.tests.panes")
+        let settings = StudioSettings(defaults: defaults, systemAppearance: { .dark })
+        let harness = Harness(document.localId)
+        harness.layout.split(.columns)
+        let documents = PaneDocuments()
+        let host = NSHostingView(rootView: PaneHost(
+            harness: harness, documents: documents, registry: components.registry, settings: settings))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1_000, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderBack(nil)
+        defer { window.contentView = nil; window.close() }
+
+        var views: [NSTextView] = []
+        for _ in 0..<200 {
+            host.layoutSubtreeIfNeeded()
+            views = textViews(in: host).filter { $0.isEditable }
+            if views.count == 2 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(views.count == 2, "one editor per pane")
+        let frames = views.map { $0.convert($0.bounds, to: nil) }.sorted { $0.minX < $1.minX }
+        #expect(frames.count == 2 && frames[0].maxX <= frames[1].minX + 1, "side by side: \(frames)")
+
+        let left = views.min { $0.convert($0.bounds, to: nil).minX < $1.convert($1.bounds, to: nil).minX }!
+        let right = views.first { $0 !== left }!
+        window.makeFirstResponder(left)
+        left.insertText("From the left pane.", replacementRange: NSRange(location: 0, length: 0))
+        #expect(right.string.contains("From the left pane."), "the other pane has it on the same turn")
     }
 }

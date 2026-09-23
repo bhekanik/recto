@@ -12,6 +12,12 @@ final class CloudDocumentModel {
     private(set) var errorMessage: String?
     private(set) var isEditable = true
 
+    /// Extra editors on this document: a second pane in the same window. The
+    /// engine attaches one view per storage and the session accepts one
+    /// editor ingress per document, so a sibling pane gets its own storage and
+    /// this model keeps every storage in step and funnels all their edits
+    /// through its one ordered ingress.
+    private var mirrors: [RectoTextStorage] = []
     private let session: DocumentSession
     private let registry: DocumentSessionRegistry
     private let edits: OrderedDocumentEdits
@@ -119,14 +125,37 @@ final class CloudDocumentModel {
     }
 
     func accept(_ edit: RectoEditorEdit) {
+        accept(edit, from: storage)
+    }
+
+    /// An edit typed into `source`. The other storages take it at once, on
+    /// this turn, so a writer switching panes never types over stale text;
+    /// then it joins the ordered queue like any edit.
+    func accept(_ edit: RectoEditorEdit, from source: RectoTextStorage) {
         let markdown = edit.markdown
-        guard !(markdown as NSString).isEqual(to: storage.markdown)
+        guard !(markdown as NSString).isEqual(to: source.markdown)
             || !(markdown as NSString).isEqual(to: state.markdown)
         else { return }
+        for sibling in allStorages where sibling !== source {
+            sibling.markdown = markdown
+        }
         if !edits.accept(markdown: markdown, structural: edit.structural) {
-            storage.markdown = edits.lastAcceptedMarkdown
+            for storage in allStorages { storage.markdown = edits.lastAcceptedMarkdown }
         }
     }
+
+    /// A storage for another pane on this document, starting where the others are.
+    func makeMirror() -> RectoTextStorage {
+        let mirror = RectoTextStorage(documentId: "\(localId)#\(UUID().uuidString)", markdown: storage.markdown)
+        mirrors.append(mirror)
+        return mirror
+    }
+
+    func removeMirror(_ mirror: RectoTextStorage) {
+        mirrors.removeAll { $0 === mirror }
+    }
+
+    private var allStorages: [RectoTextStorage] { [storage] + mirrors }
 
     /// `:w`. Drain what the editor produced and force-commit the session's
     /// draft, the same thing closing the window does short of releasing it.
@@ -216,7 +245,7 @@ final class CloudDocumentModel {
         state = updated
         guard edits.pendingCount == 0 else { return }
         edits.adoptAuthoritativeMarkdown(updated.markdown)
-        if !(storage.markdown as NSString).isEqual(to: updated.markdown) {
+        for storage in allStorages where !(storage.markdown as NSString).isEqual(to: updated.markdown) {
             storage.markdown = updated.markdown
         }
     }
