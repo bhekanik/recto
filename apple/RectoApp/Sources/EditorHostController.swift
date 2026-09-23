@@ -38,6 +38,10 @@ final class EditorHostController {
     var currentPresentation: () -> Presentation = { .rich }
     /// Set by the host.
     var zen: ZenMode?
+    /// Set by the synced host: open the history panel on a view, and tag a
+    /// version. File documents have AppKit undo and no history panel.
+    var openHistory: ((HistoryView) -> Void)?
+    var checkpoint: (() -> Void)?
     /// The window's panes, when this editor is one of them.
     var panes: PaneCommands?
     /// The writer moved into this editor: a click or a caret move while it is

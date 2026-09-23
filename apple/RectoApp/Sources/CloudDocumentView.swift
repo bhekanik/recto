@@ -21,6 +21,9 @@ struct CloudDocumentView: View {
     @State private var zen = ZenMode()
     @State private var wordCount = DocumentWordCount()
     @State private var lint = ProseLint()
+    @State private var historyView: HistoryView?
+    @State private var history: DocumentHistoryModel?
+    @State private var autoVersions = AutoVersioning()
     @Environment(\.rectoWebOrigin) private var webOrigin
     @AppStorage(PresentationPreference.key) private var storedPresentation: String?
     /// This window's lens. `nil` until it appears, when it takes the stored
@@ -66,6 +69,7 @@ struct CloudDocumentView: View {
         }
         .onDisappear {
             zen.leave()
+            autoVersions.stop()
             let closing = model
             let closingStorage = storage
             model = nil
@@ -128,35 +132,8 @@ struct CloudDocumentView: View {
         }
         .onDisappear { WritingStatsModel.shared.flush() }
         .preference(key: ZenPreferenceKey.self, value: zen.isOn)
-        .onAppear {
-            chrome.undo = { [model] in Task { await model.undo() } }
-            chrome.redo = { [model] in Task { await model.redo() } }
-            chrome.choosePresentation = choose
-            chrome.currentPresentation = { [model] in self.styler(model).presentation }
-            chrome.zen = zen
-            chrome.panes = panes?.commands
-            chrome.onFocus = panes?.activate ?? {}
-            chrome.cloud = api.map {
-                CloudDocumentContext(api: $0, convexId: model.state.convexId, syncForExport: { await model.syncForExport() })
-            }
-            chrome.documentTitle = model.state.title
-            vim.controller.history = model
-            vim.controller.onSave = { Task { await model.save() } }
-        }
-        .onChange(of: model.state.convexId) { _, convexId in
-            chrome.cloud = api.map {
-                CloudDocumentContext(api: $0, convexId: convexId, syncForExport: { await model.syncForExport() })
-            }
-        }
-        .onChange(of: model.state.title) { _, title in
-            chrome.documentTitle = title
-        }
-        .onChange(of: panes?.isActive) { _, isActive in
-            // Moved here by a command, not a click: give it the keyboard.
-            if isActive == true, let textView = chrome.seam?.nsTextView, textView.window?.firstResponder !== textView {
-                textView.window?.makeFirstResponder(textView)
-            }
-        }
+        .onAppear { wire(model) }
+        .modifier(DocumentChanges(model: model, react: { react($0, model) }, panesActive: panes?.isActive, historyView: historyView))
         .onChange(of: settings.spellcheck) { chrome.applySettings() }
         .onChange(of: settings.focusDim) { chrome.applySettings() }
         .onChange(of: settings.focusDimScope) { chrome.applySettings() }
@@ -170,6 +147,57 @@ struct CloudDocumentView: View {
         // No window-toolbar undo/redo: TopFormatToolbar owns the buttons (web
         // parity) and the Edit menu owns the chords, dispatched through
         // EditorHostRegistry so ⌘Z still undoes in this window.
+    }
+
+
+    /// Hook the window's chrome up to this document.
+    private func wire(_ model: CloudDocumentModel) {
+        chrome.undo = { [model] in Task { await model.undo() } }
+        chrome.redo = { [model] in Task { await model.redo() } }
+        chrome.choosePresentation = choose
+        chrome.currentPresentation = { [model] in self.styler(model).presentation }
+        chrome.zen = zen
+        chrome.panes = panes?.commands
+        chrome.openHistory = { view in historyView = historyView == view ? nil : view }
+        chrome.checkpoint = { [model] in checkpoint(model) }
+        chrome.onFocus = panes?.activate ?? {}
+        chrome.cloud = cloudContext(model, convexId: model.state.convexId)
+        chrome.documentTitle = model.state.title
+        vim.controller.history = model
+        vim.controller.onSave = { Task { await model.save() } }
+    }
+
+    private func cloudContext(_ model: CloudDocumentModel, convexId: String?) -> CloudDocumentContext? {
+        api.map { CloudDocumentContext(api: $0, convexId: convexId, syncForExport: { await model.syncForExport() }) }
+    }
+
+    private func react(_ change: DocumentChanges.Change, _ model: CloudDocumentModel) {
+        switch change {
+        case .convexId(let convexId):
+            chrome.cloud = cloudContext(model, convexId: convexId)
+            history?.followVersions(chrome.cloud)
+        case .title(let title):
+            chrome.documentTitle = title
+        case .head:
+            if let history { Task { await history.reloadNodes() } }
+            autoVersions.headMoved(
+                to: model.state.head, isSynced: { [model] in model.state.syncState == .synced }, cloud: chrome.cloud)
+        case .historyView(let view):
+            if view == nil {
+                history?.stop()
+                history = nil
+            } else if history == nil {
+                let opened = DocumentHistoryModel(document: model)
+                history = opened
+                opened.followVersions(chrome.cloud)
+                Task { await opened.reloadNodes() }
+            }
+        case .activated:
+            // Moved here by a command, not a click: give it the keyboard.
+            if let textView = chrome.seam?.nsTextView, textView.window?.firstResponder !== textView {
+                textView.window?.makeFirstResponder(textView)
+            }
+        }
     }
 
     @ViewBuilder
@@ -200,6 +228,9 @@ struct CloudDocumentView: View {
             // Panes share the window, so each may be narrower than a window's page.
             .frame(minWidth: panes == nil ? 620 : 280, minHeight: panes == nil ? 500 : 200)
             .background(WritingControlsHost(controller: chrome.writingController))
+            if let history, historyView != nil, !zen.hidesChrome {
+                HistoryPanel(history: history, settings: settings, theme: styler.theme, view: $historyView)
+            }
             if settings.showOutline, !zen.hidesChrome {
                 OutlinePanel(
                     storage: paneStorage(model),
@@ -324,6 +355,21 @@ struct CloudDocumentView: View {
         }
     }
 
+    /// The web's `handleCheckpoint`: name it, then tag the current node.
+    private func checkpoint(_ model: CloudDocumentModel) {
+        guard let label = TextPrompt.ask(
+            "Name this version", defaultValue: "Checkpoint \(Date().formatted(date: .abbreviated, time: .shortened))")
+        else { return }
+        let tagger = history ?? DocumentHistoryModel(document: model)
+        tagger.followVersions(chrome.cloud)
+        Task {
+            if !(await tagger.tagCurrent(label: label.isEmpty ? "Checkpoint" : label)), let message = tagger.errorMessage {
+                ExportController.presentError("Couldn't create the version.", RemoteCallError(code: nil, message: message), window: chrome.window)
+            }
+            if tagger !== history { tagger.stop() }
+        }
+    }
+
     private func openInWeb(convexId: String?) {
         guard let origin = webOrigin, let convexId,
               let url = DocumentLink.webURL(origin: origin, convexId: convexId)
@@ -351,5 +397,31 @@ private struct OpenInWebButton: View {
         .disabled(!enabled)
         .help(help)
         .accessibilityLabel("Open in web app")
+    }
+}
+
+/// The document changes a synced host reacts to, as one modifier so the host's
+/// body stays within what the type checker will take.
+private struct DocumentChanges: ViewModifier {
+    enum Change {
+        case convexId(String?)
+        case title(String)
+        case head
+        case historyView(HistoryView?)
+        case activated
+    }
+
+    let model: CloudDocumentModel
+    let react: (Change) -> Void
+    let panesActive: Bool?
+    let historyView: HistoryView?
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: model.state.convexId) { _, id in react(.convexId(id)) }
+            .onChange(of: model.state.title) { _, title in react(.title(title)) }
+            .onChange(of: model.state.head) { react(.head) }
+            .onChange(of: historyView) { _, view in react(.historyView(view)) }
+            .onChange(of: panesActive) { _, active in if active == true { react(.activated) } }
     }
 }

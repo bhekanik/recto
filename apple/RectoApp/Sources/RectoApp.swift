@@ -105,6 +105,13 @@ private struct StudioCommands: Commands {
             }
             .keyboardShortcut("z", modifiers: [.command, .shift])
         }
+        // Right after Save, so ⌘S reaches Save in a file document's window
+        // (Save is enabled there and first) and the checkpoint in the synced
+        // library's (where Save has no document and is disabled).
+        CommandGroup(after: .saveItem) {
+            Button("Create version / checkpoint") { editors.controller(in: NSApp.keyWindow)?.checkpoint?() }
+                .keyboardShortcut("s")
+        }
         CommandGroup(after: .toolbar) {
             Button(CommandPaletteController.placeholder) {
                 palette.open(library: library)
@@ -140,6 +147,11 @@ private struct StudioCommands: Commands {
                 .keyboardShortcut(.rightArrow, modifiers: [.control, .shift])
             Button("Focus previous pane") { editors.controller(in: NSApp.keyWindow)?.panes?.focus(-1) }
                 .keyboardShortcut(.leftArrow, modifiers: [.control, .shift])
+            Divider()
+            Button("Open undo-tree visualizer") { editors.controller(in: NSApp.keyWindow)?.openHistory?(.tree) }
+                .keyboardShortcut("u", modifiers: [.control, .shift])
+            Button("Open version history") { editors.controller(in: NSApp.keyWindow)?.openHistory?(.versions) }
+                .keyboardShortcut("h", modifiers: [.control, .shift])
             Divider()
             Button("Toggle zen mode") { editors.controller(in: NSApp.keyWindow)?.toggleZen() }
                 .keyboardShortcut("f", modifiers: [.control, .shift])
