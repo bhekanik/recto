@@ -34,6 +34,8 @@ struct StudioSettingsTests {
         #expect(settings.readingFont == .serif)
         #expect(!settings.showOutline, "the web's outline ships hidden")
         #expect(settings.smartPaste)
+        #expect(!settings.focusDim && settings.focusDimScope == .sentence)
+        #expect(!settings.lint && settings.lintCategories.count == 4, "linter off, every category ready")
         #expect(settings.previewVariant == .rendered)
         #expect(settings.wordGoalTarget == 0 && settings.dailyGoalTarget == 0)
         #expect(settings.wordGoalKind == .atLeast && settings.goalScope == .document && settings.goalStyle == .ring)

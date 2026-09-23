@@ -287,6 +287,18 @@ final class CommandPaletteController {
             editor?.toggleZen()
         case "toggle-font":
             settings.toggleReadingFont()
+        case "toggle-lint-passive":
+            settings.toggleLintCategory(.passive)
+        case "toggle-lint-readability":
+            settings.toggleLintCategory(.readability)
+        case "toggle-lint-adverb":
+            settings.toggleLintCategory(.adverb)
+        case "toggle-lint-weasel":
+            settings.toggleLintCategory(.weasel)
+        case "toggle-focus-dim":
+            settings.toggleFocusDim()
+        case "cycle-dim-scope":
+            settings.cycleFocusDimScope()
         case "toggle-smart-paste":
             settings.toggleSmartPaste()
         case "toggle-email-preview":

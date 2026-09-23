@@ -15,7 +15,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/bhekanik/swift-markdown-engine",
       "state" : {
-        "revision" : "3dcf1bad8ea15500bfcfe5977f9db2c9308e383e"
+        "revision" : "c528eb6b18ef579a36c27c5e17ebf88d5b0e6b0e"
       }
     }
   ],

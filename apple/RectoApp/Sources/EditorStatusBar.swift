@@ -24,6 +24,8 @@ struct EditorStatusBar<Trailing: View>: View {
     /// lens is `.vim`; only this bar observes its status, so a mode change
     /// re-renders the footer and not the host.
     var vimController: RectoVimController? = nil
+    /// The window's lint result, for the count beside the lint toggle.
+    var lint: ProseLint? = nil
     /// The window's zen state, for the zen button. `nil` hides the button.
     var zen: ZenMode? = nil
     /// Toggles zen for this bar's own window. The host owns the window, and
@@ -45,7 +47,7 @@ struct EditorStatusBar<Trailing: View>: View {
             // The right side keeps its natural width; the mode ring gives way
             // first, dropping its labels, as the web's does below `sm`.
             HStack(spacing: 8) {
-                StudioControls(settings: settings, theme: theme)
+                StudioControls(settings: settings, lint: lint, theme: theme)
                 WritingProgress(
                     settings: settings, wordCount: wordCount, stats: stats, theme: theme,
                     onOpenConfig: onOpenGoalConfig)
@@ -83,6 +85,7 @@ extension EditorStatusBar where Trailing == EmptyView {
         stats: WritingStatsModel? = nil,
         onOpenGoalConfig: @escaping () -> Void = {},
         vimController: RectoVimController? = nil,
+        lint: ProseLint? = nil,
         zen: ZenMode? = nil,
         onToggleZen: @escaping () -> Void = {},
         onSelect: @escaping (Presentation) -> Void
@@ -96,6 +99,7 @@ extension EditorStatusBar where Trailing == EmptyView {
             stats: stats,
             onOpenGoalConfig: onOpenGoalConfig,
             vimController: vimController,
+            lint: lint,
             zen: zen,
             onToggleZen: onToggleZen,
             onSelect: onSelect,
@@ -110,6 +114,7 @@ extension EditorStatusBar where Trailing == EmptyView {
 /// reachable from the command palette on the web, which is the contract.
 private struct StudioControls: View {
     let settings: StudioSettings
+    let lint: ProseLint?
     let theme: RectoEditorTheme
 
     var body: some View {
@@ -182,6 +187,20 @@ private struct StudioControls: View {
                 action: settings.toggleSpellcheck
             )
 
+            iconButton(
+                "text.viewfinder",
+                help: "Prose linter: \(settings.lint ? "On" : "Off")",
+                accessibility: "Toggle prose linter",
+                isOn: settings.lint,
+                action: settings.toggleLint
+            )
+            if settings.lint, let count = lint?.count, count > 0 {
+                Text(verbatim: count.formatted())
+                    .monospacedDigit()
+                    .foregroundStyle(Color(nsColor: theme.ink3))
+                    .help("\(count.formatted()) prose \(count == 1 ? "suggestion" : "suggestions")")
+            }
+
             StatusDivider(theme: theme)
 
             iconButton(
@@ -191,6 +210,28 @@ private struct StudioControls: View {
                 isOn: settings.typewriter,
                 action: settings.toggleTypewriter
             )
+            iconButton(
+                "highlighter",
+                help: "Focus dimming: \(settings.focusDim ? "On" : "Off")",
+                accessibility: "Toggle focus dimming",
+                isOn: settings.focusDim,
+                action: settings.toggleFocusDim
+            )
+            if settings.focusDim {
+                Button(action: settings.cycleFocusDimScope) {
+                    Text(settings.focusDimScope == .sentence ? "sentence" : "paragraph")
+                        .lineLimit(1)
+                        .fixedSize()
+                        .padding(.horizontal, 6)
+                        .frame(height: 22)
+                        .foregroundStyle(Color(nsColor: theme.ink3))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .focusable(false)
+                .help("Focus scope: \(settings.focusDimScope == .sentence ? "Sentence" : "Paragraph") — click to switch")
+                .accessibilityLabel("Cycle focus dim scope")
+            }
         }
     }
 

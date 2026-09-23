@@ -167,6 +167,19 @@ public struct RectoTextView {
     /// its frame and styling. Exists only while a non-bar shape is active.
     public var vimCaretOverlay: VimCaretOverlayView? { controller.vimCaretOverlay }
 
+    /// Focus dimming's lit source range: layout fragments that miss it draw
+    /// dimmed. Owned by ``RectoDecorationController``.
+    public var focusLitRange: NSRange? {
+        get { controller.focusLitRange }
+        nonmutating set { controller.focusLitRange = newValue }
+    }
+
+    /// Wavy underlines the engine draws under source ranges (prose lint).
+    public var underlines: [MarkdownUnderline] {
+        get { controller.underlines }
+        nonmutating set { controller.underlines = newValue }
+    }
+
     func installTextFinderResponder(_ responder: any MarkdownTextFinderActionResponder) {
         controller.textFinderActionResponder = responder
     }

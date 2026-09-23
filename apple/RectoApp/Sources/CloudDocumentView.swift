@@ -15,6 +15,7 @@ struct CloudDocumentView: View {
     @State private var vim = VimHostState()
     @State private var zen = ZenMode()
     @State private var wordCount = DocumentWordCount()
+    @State private var lint = ProseLint()
     @Environment(\.rectoWebOrigin) private var webOrigin
     @AppStorage(PresentationPreference.key) private var storedPresentation: String?
     /// This window's lens. `nil` until it appears, when it takes the stored
@@ -103,6 +104,11 @@ struct CloudDocumentView: View {
                 storage: model.storage, count: wordCount,
                 onCount: { words in WritingStatsModel.shared.noteLiveWords(words) })
         }
+        .background {
+            LintTracker(
+                storage: model.storage, settings: settings, decorations: chrome.decorations,
+                result: lint, isLintable: styler.presentation != .preview)
+        }
         .onDisappear { WritingStatsModel.shared.flush() }
         .preference(key: ZenPreferenceKey.self, value: zen.isOn)
         .onAppear {
@@ -127,9 +133,13 @@ struct CloudDocumentView: View {
             chrome.documentTitle = title
         }
         .onChange(of: settings.spellcheck) { chrome.applySettings() }
+        .onChange(of: settings.focusDim) { chrome.applySettings() }
+        .onChange(of: settings.focusDimScope) { chrome.applySettings() }
+        .onChange(of: settings.theme) { chrome.applySettings() }
         .onChange(of: settings.typewriter) { chrome.applySettings() }
         .onChange(of: styler.presentation) { _, presentation in
             vim.sync(seam: model.storage.textView, presentation: presentation)
+            chrome.applySettings()
         }
         .navigationTitle(model.state.title)
         // No window-toolbar undo/redo: TopFormatToolbar owns the buttons (web
@@ -193,6 +203,7 @@ struct CloudDocumentView: View {
             stats: .shared,
             onOpenGoalConfig: { [chrome] in GoalConfigController.shared.open(over: chrome.window) },
             vimController: vim.controller,
+            lint: lint,
             zen: zen,
             onToggleZen: chrome.toggleZen,
             onSelect: choose

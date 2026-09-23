@@ -1,5 +1,6 @@
 import AppKit
 import Observation
+import RectoCoreJS
 import RectoEditor
 import SwiftUI
 
@@ -79,6 +80,10 @@ final class StudioSettings {
         static let palette = "studio.theme"
         static let readingFont = "studio.readingFont"
         static let smartPaste = "studio.smartPaste"
+        static let focusDim = "studio.focusDim"
+        static let focusDimScope = "studio.focusDimScope"
+        static let lint = "studio.lint"
+        static func lintCategory(_ category: LintCategory) -> String { "studio.lint.\(category.rawValue)" }
         static let previewVariant = "studio.previewVariant"
         static let wordGoalTarget = "studio.wordGoalTarget"
         static let dailyGoalTarget = "studio.dailyGoalTarget"
@@ -117,6 +122,29 @@ final class StudioSettings {
     /// face on update is not this setting's job.
     var readingFont: ReadingFont {
         didSet { defaults.set(readingFont.rawValue, forKey: Key.readingFont) }
+    }
+
+    /// Dim everything but the sentence or paragraph being written (plan 003).
+    var focusDim: Bool {
+        didSet { defaults.set(focusDim, forKey: Key.focusDim) }
+    }
+
+    var focusDimScope: FocusDimScope {
+        didSet { defaults.set(focusDimScope.rawValue, forKey: Key.focusDimScope) }
+    }
+
+    /// The prose linter's master switch; off until the writer wants it (plan 004).
+    var lint: Bool {
+        didSet { defaults.set(lint, forKey: Key.lint) }
+    }
+
+    /// Per-category switches, all on, so turning the linter on shows everything.
+    private(set) var lintCategories: Set<LintCategory> {
+        didSet {
+            for category in LintCategory.allCases {
+                defaults.set(lintCategories.contains(category), forKey: Key.lintCategory(category))
+            }
+        }
     }
 
     /// Rich paste turns HTML (Word, Docs, the web) into Markdown (plan 007).
@@ -199,6 +227,12 @@ final class StudioSettings {
         palette = defaults.string(forKey: Key.palette).flatMap(Palette.init(rawValue:)) ?? .twilight
         readingFont = defaults.string(forKey: Key.readingFont).flatMap(ReadingFont.init(rawValue:)) ?? .serif
         smartPaste = defaults.object(forKey: Key.smartPaste) as? Bool ?? true
+        focusDim = defaults.object(forKey: Key.focusDim) as? Bool ?? false
+        focusDimScope = defaults.string(forKey: Key.focusDimScope).flatMap(FocusDimScope.init(rawValue:)) ?? .sentence
+        lint = defaults.object(forKey: Key.lint) as? Bool ?? false
+        lintCategories = Set(LintCategory.allCases.filter {
+            defaults.object(forKey: Key.lintCategory($0)) as? Bool ?? true
+        })
         previewVariant = defaults.string(forKey: Key.previewVariant)
             .flatMap(PreviewVariant.init(rawValue:)) ?? .rendered
         wordGoalTarget = (defaults.object(forKey: Key.wordGoalTarget) as? NSNumber)
@@ -320,6 +354,17 @@ final class StudioSettings {
     func toggleSpellcheck() { spellcheck.toggle() }
     func toggleReadingFont() { readingFont = readingFont == .serif ? .sans : .serif }
     func toggleSmartPaste() { smartPaste.toggle() }
+    func toggleFocusDim() { focusDim.toggle() }
+    func cycleFocusDimScope() { focusDimScope = focusDimScope == .sentence ? .paragraph : .sentence }
+    func toggleLint() { lint.toggle() }
+
+    func toggleLintCategory(_ category: LintCategory) {
+        if lintCategories.contains(category) {
+            lintCategories.remove(category)
+        } else {
+            lintCategories.insert(category)
+        }
+    }
     func togglePreviewVariant() { previewVariant = previewVariant == .email ? .rendered : .email }
     func toggleGoalStyle() { goalStyle = goalStyle.next }
     func toggleGoalScope() { goalScope = goalScope.next }
