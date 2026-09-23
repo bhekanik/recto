@@ -10,22 +10,37 @@ import Testing
 @Suite("Editor status bar", .serialized)
 @MainActor
 struct EditorStatusBarTests {
+    /// A host as the windows build one: the tracker counts in the background
+    /// and the bar only shows the number.
     private struct Host: View {
         let storage: RectoTextStorage
         let settings: StudioSettings
         let counter: WordCounter
+        @State private var wordCount = DocumentWordCount()
 
         var body: some View {
             EditorStatusBar(
                 presentation: .rich,
                 isEditable: true,
-                storage: storage,
+                wordCount: wordCount,
                 settings: settings,
                 theme: .twilight,
-                wordCounter: counter,
                 onSelect: { _ in }
             )
+            .background { WordCountTracker(storage: storage, count: wordCount, counter: counter) }
         }
+    }
+
+    @Test("session words count up from the first count and never go negative")
+    func sessionWords() {
+        let count = DocumentWordCount()
+        #expect(count.sessionWords == 0)
+        count.update(100)
+        #expect(count.sessionWords == 0)
+        count.update(130)
+        #expect(count.sessionWords == 30)
+        count.update(80)
+        #expect(count.sessionWords == 0)
     }
 
     /// Counting a long document costs more than a keystroke may, so the label

@@ -322,4 +322,9 @@ public struct UpdateMarkdownResponse: Decodable, Sendable, Equatable {
 public struct RemoteWritingStat: Decodable, Sendable, Equatable {
   public let date: String
   public let words: Double
+
+  public init(date: String, words: Double) {
+    self.date = date
+    self.words = words
+  }
 }

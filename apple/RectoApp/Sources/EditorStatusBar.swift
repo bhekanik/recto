@@ -3,24 +3,23 @@ import RectoCoreJS
 import RectoEditor
 import SwiftUI
 
-/// Counts prose words in a markdown string. Injected so a test can watch how
-/// often the label recounts; the app uses `WordCount.count`.
-typealias WordCounter = @Sendable (String) -> Int
-
 /// The footer under the editor, after the web app's status bar: the mode
 /// switcher on the left; the studio controls, word count, reading time and
 /// sync state on the right, in the web's order, in the editor's palette.
 ///
-/// Takes the storage rather than its markdown so that only `WordCountLabel`
-/// observes the text: the host's body, and with it the editor's update pass,
-/// stays out of the keystroke path.
+/// Takes the window's word count rather than the text: the host's tracker
+/// counts, and only the labels that show a number observe it.
 struct EditorStatusBar<Trailing: View>: View {
     let presentation: Presentation
     let isEditable: Bool
-    let storage: RectoTextStorage
+    let wordCount: DocumentWordCount
     let settings: StudioSettings
     let theme: RectoEditorTheme
-    var wordCounter: WordCounter = WordCount.count
+    /// The day's words and the streak. `nil` hides them (a file document's
+    /// window before sign-in has no one to credit).
+    var stats: WritingStatsModel? = nil
+    /// Opens the goal settings; set by the host, which owns the window.
+    var onOpenGoalConfig: () -> Void = {}
     /// The window's vim layer. Its mode line sits right of the ring while the
     /// lens is `.vim`; only this bar observes its status, so a mode change
     /// re-renders the footer and not the host.
@@ -47,12 +46,15 @@ struct EditorStatusBar<Trailing: View>: View {
             // first, dropping its labels, as the web's does below `sm`.
             HStack(spacing: 8) {
                 StudioControls(settings: settings, theme: theme)
+                WritingProgress(
+                    settings: settings, wordCount: wordCount, stats: stats, theme: theme,
+                    onOpenConfig: onOpenGoalConfig)
                 if let zen {
                     StatusDivider(theme: theme)
                     ZenButton(zen: zen, theme: theme, action: onToggleZen)
                 }
                 StatusDivider(theme: theme)
-                WordCountLabel(storage: storage, ink: theme.ink3, counter: wordCounter)
+                WordCountLabel(count: wordCount, ink: theme.ink3)
                 if Trailing.self != EmptyView.self {
                     StatusDot(theme: theme)
                     trailing()
@@ -75,10 +77,11 @@ extension EditorStatusBar where Trailing == EmptyView {
     init(
         presentation: Presentation,
         isEditable: Bool,
-        storage: RectoTextStorage,
+        wordCount: DocumentWordCount,
         settings: StudioSettings,
         theme: RectoEditorTheme,
-        wordCounter: @escaping WordCounter = WordCount.count,
+        stats: WritingStatsModel? = nil,
+        onOpenGoalConfig: @escaping () -> Void = {},
         vimController: RectoVimController? = nil,
         zen: ZenMode? = nil,
         onToggleZen: @escaping () -> Void = {},
@@ -87,10 +90,11 @@ extension EditorStatusBar where Trailing == EmptyView {
         self.init(
             presentation: presentation,
             isEditable: isEditable,
-            storage: storage,
+            wordCount: wordCount,
             settings: settings,
             theme: theme,
-            wordCounter: wordCounter,
+            stats: stats,
+            onOpenGoalConfig: onOpenGoalConfig,
             vimController: vimController,
             zen: zen,
             onToggleZen: onToggleZen,
@@ -238,6 +242,109 @@ private struct StudioControls: View {
     }
 }
 
+/// Session words, the streak and the goal widget, in the web's order and with
+/// its rules: each shows only when it has something to say, never nags, and
+/// the goal widget appears only once a goal is set (the palette's `set-goal`
+/// reaches the settings either way).
+private struct WritingProgress: View {
+    let settings: StudioSettings
+    let wordCount: DocumentWordCount
+    let stats: WritingStatsModel?
+    let theme: RectoEditorTheme
+    let onOpenConfig: () -> Void
+
+    private var target: Int {
+        settings.goalScope == .daily ? settings.dailyGoalTarget : settings.wordGoalTarget
+    }
+
+    private var goalWords: Int {
+        let live = wordCount.value ?? 0
+        guard settings.goalScope == .daily else { return live }
+        return stats?.todayWords(liveDocumentWords: live) ?? live
+    }
+
+    /// The web's `goalLabel`.
+    private var goalLabel: String {
+        let prefix = settings.goalScope == .daily ? "Daily goal" : "Goal"
+        return "\(prefix): \(goalWords.formatted()) / \(target.formatted()) words"
+    }
+
+    var body: some View {
+        let session = wordCount.sessionWords
+        let streak = stats?.streakDays ?? 0
+        if session > 0 || streak > 0 {
+            StatusDivider(theme: theme)
+            HStack(spacing: 8) {
+                if session > 0 {
+                    Text(verbatim: "+\(session.formatted())")
+                        .help("\(session.formatted()) words written this session")
+                }
+                if streak > 0 {
+                    HStack(spacing: 4) {
+                        Image(systemName: "flame")
+                            .foregroundStyle(Color(nsColor: theme.accent))
+                        Text(verbatim: String(streak))
+                    }
+                    .help("\(streak)-day writing streak")
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("\(streak)-day writing streak")
+                }
+            }
+            .monospacedDigit()
+            .foregroundStyle(Color(nsColor: theme.ink3))
+        }
+        if target > 0 {
+            StatusDivider(theme: theme)
+            Button(action: onOpenConfig) {
+                GoalIndicator(
+                    style: settings.goalStyle,
+                    progress: WritingGoals.progress(words: goalWords, target: target, kind: settings.wordGoalKind),
+                    theme: theme
+                )
+                .frame(height: 22)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .focusable(false)
+            .help(goalLabel)
+            .accessibilityLabel(goalLabel)
+        }
+    }
+}
+
+/// The web's `GoalIndicator`: a 14 pt ring or a thin bar, accent while
+/// underway and the second accent once met.
+private struct GoalIndicator: View {
+    let style: GoalStyle
+    let progress: GoalProgress
+    let theme: RectoEditorTheme
+
+    private var fill: Color {
+        Color(nsColor: progress.met ? theme.accent2 : theme.accent)
+    }
+
+    var body: some View {
+        switch style {
+        case .ring:
+            ZStack {
+                Circle().stroke(Color(nsColor: theme.line), lineWidth: 2)
+                Circle()
+                    .trim(from: 0, to: progress.ratio)
+                    .stroke(fill, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+            }
+            .frame(width: 14, height: 14)
+        case .bar:
+            Capsule()
+                .fill(Color(nsColor: theme.line))
+                .frame(width: 40, height: 5)
+                .overlay(alignment: .leading) {
+                    Capsule().fill(fill).frame(width: 40 * progress.ratio, height: 5)
+                }
+        }
+    }
+}
+
 /// The web's zen button (lucide `SquareDashed`).
 private struct ZenButton: View {
     let zen: ZenMode
@@ -282,21 +389,12 @@ private struct StatusDot: View {
     }
 }
 
-/// The prose word count, kept off the typing path.
-///
-/// `WordCount.count` takes ~7 ms on an 85k-character document in Release and
-/// the editor's whole per-keystroke budget is 8 ms, so the count never runs
-/// synchronously with an edit. The first appearance counts at once so the bar
-/// never shows empty; after that each change waits 200 ms and counts on a
-/// utility-priority task. `task(id:)` cancels the pending wait on every
-/// keystroke, so a typing burst costs the main thread nothing and produces one
-/// count after the last key. The previous number stays up until the new one
-/// lands.
+/// The window's word count and reading time. Only this label observes the
+/// count, so a new number re-renders the footer's trailing figures, not the
+/// bar.
 private struct WordCountLabel: View {
-    let storage: RectoTextStorage
+    let count: DocumentWordCount
     let ink: NSColor
-    let counter: WordCounter
-    @State private var count: Int?
 
     /// "1,000 words" measured in the monospaced-digit face the label renders
     /// in — the proportional face is narrower, so a floor measured there let
@@ -309,45 +407,17 @@ private struct WordCountLabel: View {
     }()
 
     var body: some View {
-        let markdown = storage.markdown
-        return HStack(spacing: 8) {
-            if let count {
-                Text("^[\(count) word](inflect: true)")
+        HStack(spacing: 8) {
+            if let value = count.value {
+                Text("^[\(value) word](inflect: true)")
                     .frame(minWidth: Self.wordCountMinWidth, alignment: .trailing)
                 Text(verbatim: "·")
-                Text(ReadingTime.format(minutes: ReadingTime.minutes(wordCount: count)))
+                Text(ReadingTime.format(minutes: ReadingTime.minutes(wordCount: value)))
             }
         }
         .monospacedDigit()
         .foregroundStyle(Color(nsColor: ink))
         .help("Estimated reading time")
-        .task(id: MarkdownBytes(markdown)) {
-            if count == nil {
-                count = counter(markdown)
-                return
-            }
-            try? await Task.sleep(for: .milliseconds(200))
-            guard !Task.isCancelled else { return }
-            let markdown = markdown
-            let counter = counter
-            let next = await Task.detached(priority: .utility) { counter(markdown) }.value
-            guard !Task.isCancelled else { return }
-            count = next
-        }
-    }
-}
-
-/// Equality by bytes, the way `RectoTextStorage` compares: an unchanged string
-/// is a pointer check, a changed one a length check before any memcmp.
-private struct MarkdownBytes: Equatable {
-    let value: String
-
-    init(_ value: String) {
-        self.value = value
-    }
-
-    static func == (lhs: Self, rhs: Self) -> Bool {
-        (lhs.value as NSString).isEqual(to: rhs.value)
     }
 }
 

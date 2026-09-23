@@ -14,6 +14,7 @@ struct CloudDocumentView: View {
     @State private var chrome: EditorHostController
     @State private var vim = VimHostState()
     @State private var zen = ZenMode()
+    @State private var wordCount = DocumentWordCount()
     @Environment(\.rectoWebOrigin) private var webOrigin
     @AppStorage(PresentationPreference.key) private var storedPresentation: String?
     /// This window's lens. `nil` until it appears, when it takes the stored
@@ -81,54 +82,28 @@ struct CloudDocumentView: View {
     private func editor(_ model: CloudDocumentModel) -> some View {
         let styler = styler(model)
         return VStack(spacing: 0) {
-            if model.state.syncState == .diverged {
-                divergenceBanner(model)
-            } else if let error = model.editError {
-                statusBanner(error, color: .red)
-            } else if model.state.syncState == .failed {
-                statusBanner("Sync failed. Your changes remain on this Mac.", color: .orange)
-            }
+            banner(model)
             if settings.showToolbar, !zen.hidesChrome {
                 toolbar(styler)
             }
-            HStack(spacing: 0) {
-                RectoEditorView(
-                    storage: model.storage,
-                    styler: styler,
-                    placeholder: "Start writing…",
-                    onAttach: { seam in
-                        chrome.attach(seam)
-                        vim.sync(seam: seam, presentation: styler.presentation)
-                    },
-                    onEdit: model.accept,
-                    writingController: chrome.writingController
-                )
-                .frame(minWidth: 620, minHeight: 500)
-                .background(WritingControlsHost(controller: chrome.writingController))
-                if settings.showOutline, !zen.hidesChrome {
-                    OutlinePanel(
-                        storage: model.storage,
-                        theme: styler.theme,
-                        jump: { [chrome] heading in chrome.jump(toHeading: heading) },
-                        close: { [settings] in settings.toggleOutline() }
-                    )
-                }
+            if styler.presentation == .preview, settings.previewVariant == .email {
+                EmailPreviewChrome(
+                    frontmatter: model.storage.frontmatter, fallbackTitle: model.state.title, theme: styler.theme)
             }
+            page(model, styler)
             if settings.showStatusBar, !zen.hidesChrome {
                 statusBar(model, styler)
             }
         }
-        .overlay(alignment: .top) {
-            if zen.showsOverlayChrome, settings.showToolbar {
-                toolbar(styler).onHover(perform: zen.pointerOverChrome)
-            }
+        .modifier(ZenChrome(zen: zen, settings: settings, toolbar: toolbar(styler), statusBar: statusBar(model, styler)))
+        .background {
+            // Synced documents only feed the day's total, as on the web, where
+            // every document is synced; a local file's words are not credited.
+            WordCountTracker(
+                storage: model.storage, count: wordCount,
+                onCount: { words in WritingStatsModel.shared.noteLiveWords(words) })
         }
-        .overlay(alignment: .bottom) {
-            if zen.showsOverlayChrome, settings.showStatusBar {
-                statusBar(model, styler).onHover(perform: zen.pointerOverChrome)
-            }
-        }
-        .animation(.easeOut(duration: 0.15), value: zen.showsOverlayChrome)
+        .onDisappear { WritingStatsModel.shared.flush() }
         .preference(key: ZenPreferenceKey.self, value: zen.isOn)
         .onAppear {
             chrome.undo = { [model] in Task { await model.undo() } }
@@ -162,6 +137,44 @@ struct CloudDocumentView: View {
         // EditorHostRegistry so ⌘Z still undoes in this window.
     }
 
+    @ViewBuilder
+    private func banner(_ model: CloudDocumentModel) -> some View {
+        if model.state.syncState == .diverged {
+            divergenceBanner(model)
+        } else if let error = model.editError {
+            statusBanner(error, color: .red)
+        } else if model.state.syncState == .failed {
+            statusBanner("Sync failed. Your changes remain on this Mac.", color: .orange)
+        }
+    }
+
+    /// The text, and the outline beside it when shown.
+    private func page(_ model: CloudDocumentModel, _ styler: MarkdownStyler) -> some View {
+        HStack(spacing: 0) {
+            RectoEditorView(
+                storage: model.storage,
+                styler: styler,
+                placeholder: "Start writing…",
+                onAttach: { seam in
+                    chrome.attach(seam)
+                    vim.sync(seam: seam, presentation: styler.presentation)
+                },
+                onEdit: model.accept,
+                writingController: chrome.writingController
+            )
+            .frame(minWidth: 620, minHeight: 500)
+            .background(WritingControlsHost(controller: chrome.writingController))
+            if settings.showOutline, !zen.hidesChrome {
+                OutlinePanel(
+                    storage: model.storage,
+                    theme: styler.theme,
+                    jump: { [chrome] heading in chrome.jump(toHeading: heading) },
+                    close: { [settings] in settings.toggleOutline() }
+                )
+            }
+        }
+    }
+
     private func toolbar(_ styler: MarkdownStyler) -> some View {
         TopFormatToolbar(
             theme: styler.theme,
@@ -174,9 +187,11 @@ struct CloudDocumentView: View {
         EditorStatusBar(
             presentation: styler.presentation,
             isEditable: model.isEditable,
-            storage: model.storage,
+            wordCount: wordCount,
             settings: settings,
             theme: styler.theme,
+            stats: .shared,
+            onOpenGoalConfig: { [chrome] in GoalConfigController.shared.open(over: chrome.window) },
             vimController: vim.controller,
             zen: zen,
             onToggleZen: chrome.toggleZen,

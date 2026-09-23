@@ -103,3 +103,28 @@ struct ZenPreferenceKey: PreferenceKey {
         value = value || nextValue()
     }
 }
+
+/// Zen's chrome: while the page is alone, the toolbar and status bar come back
+/// over it (not into the layout, so the text does not jump) when zen reveals
+/// them, and stay while the pointer is on them.
+struct ZenChrome<Toolbar: View, StatusBar: View>: ViewModifier {
+    let zen: ZenMode
+    let settings: StudioSettings
+    let toolbar: Toolbar
+    let statusBar: StatusBar
+
+    func body(content: Content) -> some View {
+        content
+            .overlay(alignment: .top) {
+                if zen.showsOverlayChrome, settings.showToolbar {
+                    toolbar.onHover(perform: zen.pointerOverChrome)
+                }
+            }
+            .overlay(alignment: .bottom) {
+                if zen.showsOverlayChrome, settings.showStatusBar {
+                    statusBar.onHover(perform: zen.pointerOverChrome)
+                }
+            }
+            .animation(.easeOut(duration: 0.15), value: zen.showsOverlayChrome)
+    }
+}

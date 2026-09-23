@@ -224,7 +224,22 @@ final class RectoApplicationModel {
     }
 
     func leaveActive() async {
+        WritingStatsModel.shared.flush()
         await registry?.flushAll()
+    }
+
+    /// The server's daily totals while signed in, so days written on other
+    /// devices count toward the streak here too.
+    private func followWritingStats(_ status: AuthStatus) {
+        guard case .signedIn = status, let api else {
+            WritingStatsModel.shared.stopFollowingRemote()
+            return
+        }
+        Task { [api] in
+            let days: AsyncThrowingStream<[RemoteWritingStat], any Error> =
+                await api.subscribe(ConvexFunction.writingStatsList, args: [:])
+            WritingStatsModel.shared.followRemote(days)
+        }
     }
 
     func enterForeground() async {
@@ -267,6 +282,7 @@ final class RectoApplicationModel {
 
     func receiveAuthStatus(_ status: AuthStatus) async {
         authStatus = status
+        followWritingStats(status)
         if case .signedOut = status { emailChallenge = nil }
         await refreshDocuments()
     }
@@ -301,6 +317,11 @@ final class RectoApplicationModel {
     }
 
     private func install(_ components: Components) {
+        let statsStore = components.store
+        WritingStatsModel.shared.install(
+            read: { try await statsStore.writingStats() },
+            record: { date, words in try? await statsStore.recordWritingStat(date: date, words: words) }
+        )
         store = components.store
         auth = components.auth
         sync = components.sync

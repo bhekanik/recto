@@ -73,6 +73,12 @@ struct StylerTests {
         }
     }
 
+    @Test("smart paste reaches the engine, on by default")
+    func smartPaste() {
+        #expect(MarkdownStyler().engineConfiguration().convertsPastedHTML)
+        #expect(!MarkdownStyler(convertsPastedHTML: false).engineConfiguration().convertsPastedHTML)
+    }
+
     @Test("Recto owns undo, so the engine registers nothing")
     func undoIsExternal() {
         #expect(MarkdownStyler().engineConfiguration().undo == .external)
