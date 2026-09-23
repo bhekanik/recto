@@ -153,6 +153,16 @@ private struct StudioCommands: Commands {
             Button("Open version history") { editors.controller(in: NSApp.keyWindow)?.openHistory?(.versions) }
                 .keyboardShortcut("h", modifiers: [.control, .shift])
             Divider()
+            Button("Transform selection with AI…") { editors.controller(in: NSApp.keyWindow)?.ai?.transform() }
+                .keyboardShortcut("i", modifiers: [.control, .shift])
+                .disabled(!settings.aiEnabled)
+            Button("AI review (comments)…") { editors.controller(in: NSApp.keyWindow)?.ai?.critique() }
+                .keyboardShortcut("j", modifiers: [.control, .shift])
+                .disabled(!settings.aiEnabled)
+            Button("Related passages from past drafts…") { editors.controller(in: NSApp.keyWindow)?.ai?.related() }
+                .keyboardShortcut("k", modifiers: [.control, .shift])
+                .disabled(!settings.aiEnabled)
+            Divider()
             Button("Toggle zen mode") { editors.controller(in: NSApp.keyWindow)?.toggleZen() }
                 .keyboardShortcut("f", modifiers: [.control, .shift])
             Button("Toggle body font (sans / serif)", action: settings.toggleReadingFont)

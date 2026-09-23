@@ -18,6 +18,19 @@ public enum ConvexFunction {
   public static let writingStatsList = "writingStats:list"
 
   // Features beyond sync, called through `RectoAPI`.
+  public static let aiConsentGet = "ai/consent:get"
+  public static let aiConsentAccept = "ai/consent:accept"
+  public static let aiConsentRevoke = "ai/consent:revoke"
+  public static let aiCredentialsStatus = "ai/credentials:status"
+  public static let aiCredentialsSaveKey = "ai/credentials:saveKey"
+  public static let aiCredentialsRemove = "ai/credentials:remove"
+  public static let aiTransformRun = "ai/transform:run"
+  public static let aiReviewRun = "ai/review:run"
+  public static let aiEmbedRun = "ai/embed:run"
+  public static let aiRunsLatestRecoverable = "ai/runs:latestRecoverable"
+  public static let aiRunsAcknowledge = "ai/runs:acknowledge"
+  public static let embeddingsSearchByVector = "embeddings:searchByVector"
+  public static let embeddingsReplaceChunks = "embeddings:replaceChunks"
   public static let exportDocx = "export:docx"
   public static let versionsList = "versions:list"
   public static let versionsCreate = "versions:create"
@@ -44,6 +57,7 @@ public enum ConvexFunction {
     documentsRemove, docNodesListSince, docNodesAppend, writingStatsRecord,
     writingStatsList, exportDocx, versionsList, versionsCreate, versionsRemove, versionsRename,
     reviewAddShare, reviewListShares, reviewRevokeShare, reviewDocumentShareState, reviewListOpenBranches, reviewGetBranchDiff, reviewAcceptBranch, reviewAcceptHunks, reviewRejectBranch, reviewAddComment, reviewListComments, reviewSetCommentResolved, reviewRemoveComment,
+    aiConsentGet, aiConsentAccept, aiConsentRevoke, aiCredentialsStatus, aiCredentialsSaveKey, aiCredentialsRemove, aiTransformRun, aiReviewRun, aiEmbedRun, aiRunsLatestRecoverable, aiRunsAcknowledge, embeddingsSearchByVector, embeddingsReplaceChunks,
   ]
 }
 

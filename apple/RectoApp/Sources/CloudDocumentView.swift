@@ -28,6 +28,7 @@ struct CloudDocumentView: View {
     @State private var showsComments = false
     @State private var showsSharing = false
     @State private var review: ReviewSurfaceModel?
+    @State private var ai: AIController?
     @Environment(\.rectoWebOrigin) private var webOrigin
     @AppStorage(PresentationPreference.key) private var storedPresentation: String?
     /// This window's lens. `nil` until it appears, when it takes the stored
@@ -141,6 +142,24 @@ struct CloudDocumentView: View {
         .background {
             CommentHighlightTracker(storage: paneStorage(model), comments: comments, decorations: chrome.decorations)
         }
+        .sheet(isPresented: Binding(get: { ai?.sheet != nil }, set: { if !$0 { ai?.sheet = nil } })) {
+            if let ai { AISheetView(ai: ai, settings: settings) }
+        }
+        .alert(ai?.message?.title ?? "", isPresented: Binding(
+            get: { ai?.message != nil }, set: { if !$0 { ai?.message = nil } }
+        )) {
+            if ai?.message?.opensReview == true {
+                Button("Open review") { chrome.review?.openReview(); showsComments = true }
+            }
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(ai?.message?.body ?? "")
+        }
+        .alert("AI", isPresented: Binding(
+            get: { ai?.errorMessage != nil }, set: { if !$0 { ai?.errorMessage = nil } }
+        )) {} message: {
+            Text(ai?.errorMessage ?? "")
+        }
         .sheet(isPresented: $showsSharing) {
             ShareSheet(title: model.state.title, cloud: chrome.cloud, dismiss: { showsSharing = false })
         }
@@ -186,6 +205,11 @@ struct CloudDocumentView: View {
             showsComments = true
             comments.focusedId = id
         }
+        let controller = AIController(settings: settings, chrome: chrome, model: model, storage: { paneStorage(model) })
+        ai = controller
+        chrome.ai = AIHooks(
+            toggle: controller.toggle, transform: controller.beginTransform,
+            critique: controller.critique, related: controller.findRelated, reindex: controller.reindex)
         chrome.review = ReviewHooks(
             openSharing: { showsSharing = true },
             openReview: {
@@ -230,6 +254,12 @@ struct CloudDocumentView: View {
                 opened.followVersions(chrome.cloud)
                 Task { await opened.reloadNodes() }
             }
+        case .opened:
+            if let offset = panes?.pendingJump {
+                // A citation: land on it once the text is on screen.
+                DispatchQueue.main.async { chrome.jump(to: NSRange(location: offset, length: 0)) }
+                panes?.clearJump()
+            }
         case .activated:
             // Moved here by a command, not a click: give it the keyboard.
             if let textView = chrome.seam?.nsTextView, textView.window?.firstResponder !== textView {
@@ -266,6 +296,11 @@ struct CloudDocumentView: View {
             // Panes share the window, so each may be narrower than a window's page.
             .frame(minWidth: panes == nil ? 620 : 280, minHeight: panes == nil ? 500 : 200)
             .background(WritingControlsHost(controller: chrome.writingController))
+            if let ai, ai.showsRelated, !zen.hidesChrome {
+                RelatedPanel(ai: ai, theme: styler.theme) { passage in
+                    panes?.openDocument(passage.documentId, Int(passage.charStart))
+                }
+            }
             if showsComments, !zen.hidesChrome {
                 CommentsPanel(
                     comments: comments, theme: styler.theme,
@@ -453,6 +488,7 @@ private struct DocumentChanges: ViewModifier {
         case head
         case historyView(HistoryView?)
         case activated
+        case opened
     }
 
     let model: CloudDocumentModel
@@ -467,5 +503,6 @@ private struct DocumentChanges: ViewModifier {
             .onChange(of: model.state.head) { react(.head) }
             .onChange(of: historyView) { _, view in react(.historyView(view)) }
             .onChange(of: panesActive) { _, active in if active == true { react(.activated) } }
+            .onAppear { react(.opened) }
     }
 }

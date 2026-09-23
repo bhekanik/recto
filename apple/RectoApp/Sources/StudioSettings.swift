@@ -76,6 +76,11 @@ final class StudioSettings {
         case rendered, email
     }
 
+    /// How an accepted AI transform lands: shown with Keep / Reject, or applied.
+    enum AITransformMode: String {
+        case pending, replace
+    }
+
     /// How a compare lays out, `DiffLayout` on the web.
     enum DiffLayout: String {
         case inline
@@ -89,6 +94,8 @@ final class StudioSettings {
         static let smartPaste = "studio.smartPaste"
         static let focusDim = "studio.focusDim"
         static let diffGranularity = "studio.diffGranularity"
+        static let aiEnabled = "studio.aiEnabled"
+        static let aiTransformMode = "studio.aiTransformMode"
         static let diffLayout = "studio.diffLayout"
         static let focusDimScope = "studio.focusDimScope"
         static let lint = "studio.lint"
@@ -131,6 +138,15 @@ final class StudioSettings {
     /// face on update is not this setting's job.
     var readingFont: ReadingFont {
         didSet { defaults.set(readingFont.rawValue, forKey: Key.readingFont) }
+    }
+
+    /// AI is opt-in, off until the writer turns it on and accepts the notice.
+    var aiEnabled: Bool {
+        didSet { defaults.set(aiEnabled, forKey: Key.aiEnabled) }
+    }
+
+    var aiTransformMode: AITransformMode {
+        didSet { defaults.set(aiTransformMode.rawValue, forKey: Key.aiTransformMode) }
     }
 
     /// Compare splits by word or by line.
@@ -246,6 +262,8 @@ final class StudioSettings {
         readingFont = defaults.string(forKey: Key.readingFont).flatMap(ReadingFont.init(rawValue:)) ?? .serif
         smartPaste = defaults.object(forKey: Key.smartPaste) as? Bool ?? true
         focusDim = defaults.object(forKey: Key.focusDim) as? Bool ?? false
+        aiEnabled = defaults.object(forKey: Key.aiEnabled) as? Bool ?? false
+        aiTransformMode = defaults.string(forKey: Key.aiTransformMode).flatMap(AITransformMode.init(rawValue:)) ?? .pending
         diffGranularity = defaults.string(forKey: Key.diffGranularity).flatMap(DiffGranularity.init(rawValue:)) ?? .word
         diffLayout = defaults.string(forKey: Key.diffLayout).flatMap(DiffLayout.init(rawValue:)) ?? .inline
         focusDimScope = defaults.string(forKey: Key.focusDimScope).flatMap(FocusDimScope.init(rawValue:)) ?? .sentence
@@ -375,6 +393,7 @@ final class StudioSettings {
     func toggleReadingFont() { readingFont = readingFont == .serif ? .sans : .serif }
     func toggleSmartPaste() { smartPaste.toggle() }
     func toggleFocusDim() { focusDim.toggle() }
+    func toggleAITransformMode() { aiTransformMode = aiTransformMode == .pending ? .replace : .pending }
     func toggleDiffGranularity() { diffGranularity = diffGranularity == .word ? .line : .word }
     func toggleDiffLayout() { diffLayout = diffLayout == .inline ? .sideBySide : .inline }
     func cycleFocusDimScope() { focusDimScope = focusDimScope == .sentence ? .paragraph : .sentence }

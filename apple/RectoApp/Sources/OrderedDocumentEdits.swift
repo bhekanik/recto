@@ -16,6 +16,8 @@ final class OrderedDocumentEdits: ObservableObject, EditorIngressCoordinating {
         var structural: Bool
         var generation: Int
         var wordCount: Int
+        /// Names the node this change becomes (`ai:<label>`); nil is the device's.
+        var origin: String? = nil
     }
 
     typealias Submit = @Sendable (Change) async throws -> Void
@@ -100,7 +102,9 @@ final class OrderedDocumentEdits: ObservableObject, EditorIngressCoordinating {
     }
 
     @discardableResult
-    func accept(markdown: String, selection: NodeSelection? = nil, structural: Bool = false) -> Bool {
+    func accept(
+        markdown: String, selection: NodeSelection? = nil, structural: Bool = false, origin: String? = nil
+    ) -> Bool {
         guard isAccepting else { return false }
         do {
             let wordCount = countWords(markdown)
@@ -122,7 +126,8 @@ final class OrderedDocumentEdits: ObservableObject, EditorIngressCoordinating {
                 selection: selection,
                 structural: structural,
                 generation: generation,
-                wordCount: wordCount
+                wordCount: wordCount,
+                origin: origin
             )
             continuation.yield(change)
             enqueueTitle(change)

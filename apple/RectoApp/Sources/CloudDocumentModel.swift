@@ -107,7 +107,8 @@ final class CloudDocumentModel {
                 markdown: change.markdown,
                 selection: change.selection,
                 structural: change.structural,
-                generation: change.generation
+                generation: change.generation,
+                origin: change.origin
             )
         }
         stateTask = Task { [weak self] in
@@ -132,7 +133,7 @@ final class CloudDocumentModel {
     /// An edit typed into `source`. The other storages take it at once, on
     /// this turn, so a writer switching panes never types over stale text;
     /// then it joins the ordered queue like any edit.
-    func accept(_ edit: RectoEditorEdit, from source: RectoTextStorage) {
+    func accept(_ edit: RectoEditorEdit, from source: RectoTextStorage, origin: String? = nil) {
         let markdown = edit.markdown
         guard !(markdown as NSString).isEqual(to: source.markdown)
             || !(markdown as NSString).isEqual(to: state.markdown)
@@ -140,7 +141,7 @@ final class CloudDocumentModel {
         for sibling in allStorages where sibling !== source {
             sibling.markdown = markdown
         }
-        if !edits.accept(markdown: markdown, structural: edit.structural) {
+        if !edits.accept(markdown: markdown, structural: edit.structural, origin: origin) {
             for storage in allStorages { storage.markdown = edits.lastAcceptedMarkdown }
         }
     }

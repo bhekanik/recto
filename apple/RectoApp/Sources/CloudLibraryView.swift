@@ -5,6 +5,8 @@ struct CloudLibraryView: View {
     let model: RectoApplicationModel
     @State private var layout = PaneLayout()
     @State private var documents = PaneDocuments()
+    /// A citation to land on once its document opens.
+    @State private var pendingJump: (localId: String, offset: Int)?
     @State private var columnVisibility = NavigationSplitViewVisibility.automatic
     /// What the sidebar was before zen hid it, to put it back after.
     @State private var visibilityBeforeZen: NavigationSplitViewVisibility?
@@ -64,6 +66,15 @@ struct CloudLibraryView: View {
 }
 
 extension CloudLibraryView {
+    private func openCitation(_ convexId: String, _ offset: Int) {
+        guard let localId = model.documents.first(where: { $0.convexId == convexId })?.localId else {
+            model.errorMessage = "That draft isn't on this Mac yet."
+            return
+        }
+        pendingJump = (localId, offset)
+        layout.setActiveDocument(localId)
+    }
+
     private var commands: PaneCommands {
         PaneCommands(
             split: { axis in layout.split(axis) },
@@ -82,7 +93,10 @@ extension CloudLibraryView {
                     localId: localId, registry: registry, api: model.api,
                     panes: PaneContext(
                         documents: documents, paneId: pane.id, isActive: isActive,
-                        activate: { layout.activate(pane.id) }, commands: commands))
+                        activate: { layout.activate(pane.id) }, commands: commands,
+                        openDocument: openCitation,
+                        pendingJump: isActive && pendingJump?.localId == localId ? pendingJump?.offset : nil,
+                        clearJump: { pendingJump = nil }))
                     .id("\(pane.id)-\(localId)")
             } else {
                 ContentUnavailableView(

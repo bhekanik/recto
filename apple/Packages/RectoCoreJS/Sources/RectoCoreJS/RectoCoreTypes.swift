@@ -91,3 +91,16 @@ public enum RectoCoreError: Error, CustomStringConvertible {
         }
     }
 }
+
+/// One window of a document for embedding. `charStart`/`charEnd` are UTF-16.
+public struct TextChunk: Sendable, Equatable {
+    public let charStart: Int
+    public let charEnd: Int
+    public let text: String
+
+    public init(charStart: Int, charEnd: Int, text: String) {
+        self.charStart = charStart
+        self.charEnd = charEnd
+        self.text = text
+    }
+}

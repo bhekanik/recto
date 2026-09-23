@@ -175,6 +175,11 @@ final class CommandPaletteController {
             if section == .history, editor?.openHistory == nil {
                 actions.removeAll { ["checkpoint", "undo-tree", "version-history"].contains($0.id) }
             }
+            // AI is opt-in: while it is off, or where there is no synced
+            // document, the switch is the one AI command (the web's rule).
+            if section == .ai, !settings.aiEnabled || editor?.ai == nil {
+                actions = actions.filter { $0.id == "toggle-ai" }
+            }
             // Sharing, comments and suggestions need the server.
             if section == .review, editor?.review == nil {
                 actions.removeAll()
@@ -268,6 +273,18 @@ final class CommandPaletteController {
             editor?.review?.toggleComments()
         case "add-comment":
             editor?.review?.addComment()
+        case "toggle-ai":
+            if let toggle = editor?.ai?.toggle { toggle() } else { settings.aiEnabled.toggle() }
+        case "toggle-transform-mode":
+            settings.toggleAITransformMode()
+        case "ai-transform":
+            editor?.ai?.transform()
+        case "ai-critique":
+            editor?.ai?.critique()
+        case "ai-related":
+            editor?.ai?.related()
+        case "ai-reindex":
+            editor?.ai?.reindex()
         case "undo":
             editor?.undo()
         case "redo":

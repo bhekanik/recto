@@ -246,6 +246,35 @@ public final class RectoCore: @unchecked Sendable {
         return settled
     }
 
+    /// `lib/ai/chunk.ts`: paragraph windows (~1,500 characters, one paragraph of
+    /// overlap) for related-passage search. Offsets are UTF-16 into `markdown`.
+    public func chunk(_ markdown: String) async throws -> [TextChunk] {
+        try await array("chunk", [.string(markdown)]) { dictionary in
+            guard let start = dictionary["charStart"] as? NSNumber,
+                  let end = dictionary["charEnd"] as? NSNumber,
+                  let text = dictionary["text"] as? String
+            else { return nil }
+            return TextChunk(charStart: start.intValue, charEnd: end.intValue, text: text)
+        }
+    }
+
+    /// `lib/ai/transform-checks`: what a finished AI transform broke, as the
+    /// sentences the web shows beside Keep and Reject. `presetId` is nil for a
+    /// free-text instruction.
+    public func transformWarnings(
+        original: String, rewritten: String, presetId: String?
+    ) async throws -> [String] {
+        try await run("transformWarnings") { engine in
+            let result = try Self.call(
+                engine, "transformWarnings",
+                [.string(original), .string(rewritten), presetId.map(Argument.string) ?? .null])
+            guard result.isArray, let elements = result.toArray() as? [String] else {
+                throw RectoCoreError.unexpectedResult(call: "transformWarnings", detail: "a non-string array")
+            }
+            return elements
+        }
+    }
+
     /// Consecutive written days counting back from `today`, which is a local
     /// calendar key (`"YYYY-MM-DD"`), not an instant.
     public func streak(_ days: [WritingDay], today: String) async throws -> Int {
@@ -265,9 +294,11 @@ public final class RectoCore: @unchecked Sendable {
         case string(String)
         case strings([String])
         case days([WritingDay])
+        case null
 
         var bridged: Any {
             switch self {
+            case .null: return NSNull()
             case .string(let value): return value
             case .strings(let values): return values
             case .days(let days):

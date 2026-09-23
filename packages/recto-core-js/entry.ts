@@ -8,6 +8,9 @@
  * deliberately NOT reachable from here (see README).
  */
 
+import { type Chunk, chunk } from "@/lib/ai/chunk";
+import type { TransformPresetId } from "@/lib/ai/instructions";
+import { transformWarnings } from "@/lib/ai/transform-checks";
 import { analyze } from "@/lib/lint/analyze";
 import { ALL_CATEGORIES, type LintOptions } from "@/lib/lint/types";
 import { countWords } from "@/lib/markdown/count-words";
@@ -125,6 +128,29 @@ const RectoCore = {
 			requireString(markdown, "lint", "markdown"),
 			toLintOptions(categories),
 		);
+	},
+
+	/** Paragraph windows for related-passage search (`lib/ai/chunk.ts`), UTF-16 offsets. */
+	chunk(markdown: string): Chunk[] {
+		return chunk(requireString(markdown, "chunk", "markdown"));
+	},
+
+	/**
+	 * `lib/ai/transform-checks`: what a finished AI transform broke, as plain
+	 * sentences. `presetId` is null for a free-text instruction.
+	 */
+	transformWarnings(
+		original: string,
+		rewritten: string,
+		presetId?: string | null,
+	): string[] {
+		return transformWarnings({
+			original: requireString(original, "transformWarnings", "original"),
+			rewritten: requireString(rewritten, "transformWarnings", "rewritten"),
+			// SAFETY: an unknown id only means no preset-specific check applies,
+			// which is exactly the free-text behaviour.
+			presetId: (presetId ?? undefined) as TransformPresetId | undefined,
+		});
 	},
 
 	/** Current writing streak in days, counting back from `today` ("YYYY-MM-DD"). */

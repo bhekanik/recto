@@ -146,4 +146,32 @@ struct RectoCoreTests {
         #expect(core.version.contains("+"))
         #expect(core.loadDuration > 0)
     }
+
+    @Test("transform warnings are the web's, for presets and free text")
+    func transformWarnings() async throws {
+        #expect(try await core.transformWarnings(
+            original: "Their going to the store tomorow, and me too.",
+            rewritten: "They're going to the store tomorrow, and me too.",
+            presetId: "fix-grammar").isEmpty)
+        #expect(try await core.transformWarnings(
+            original: "A short line.",
+            rewritten: "A considerably longer line than the one before it.",
+            presetId: "tighten") == ["Tighten made it longer: 3 words became 9."])
+        #expect(try await core.transformWarnings(
+            original: "A line.", rewritten: "Here's the tightened version:\n\nA line.",
+            presetId: nil) == ["Starts with a note from the model, not your text."])
+    }
+
+    @Test("chunks are the web's windows, and slice back to their text")
+    func chunks() async throws {
+        #expect(try await core.chunk("   \n\n  \n").isEmpty)
+        let paragraph = String(repeating: "Sentence with 😀 in it. ", count: 30)
+        let markdown = [paragraph, paragraph, paragraph].joined(separator: "\n\n")
+        let chunks = try await core.chunk(markdown)
+        #expect(chunks.count > 1)
+        for chunk in chunks {
+            #expect((markdown as NSString).substring(with: NSRange(location: chunk.charStart, length: chunk.charEnd - chunk.charStart)) == chunk.text)
+        }
+        #expect(chunks[1].charStart < chunks[0].charEnd, "one paragraph of overlap")
+    }
 }

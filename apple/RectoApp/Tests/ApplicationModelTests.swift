@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import SwiftUI
 import RectoCore
+import RectoCoreJS
 import RectoEditor
 import RectoHistory
 import RectoStore
@@ -808,5 +809,124 @@ struct AutoVersioningTests {
         try await Task.sleep(for: .milliseconds(150))
         calls = await api.calls(to: ConvexFunction.versionsCreate)
         #expect(calls.count == 1, "no duplicate for n2, and an unsynced n3 waits")
+    }
+}
+
+@Suite("AI", .serialized)
+struct AITests {
+    @MainActor
+    private func setUp(_ text: String) async throws -> (CloudDocumentModel, AIController, ScriptedAPI, StudioSettings) {
+        let components = try await makeComponents()
+        let document = try await components.library.createDocument(title: "AI")
+        let model = try await CloudDocumentModel.open(localId: document.localId, registry: components.registry)
+        model.storage.markdown = text
+        model.accept(RectoEditorEdit(markdown: text, structural: true))
+        await model.save()
+        let api = ScriptedAPI()
+        await api.respond(ConvexFunction.aiConsentGet, json: #"{"version":1,"acceptedAt":5}"#)
+        await api.respond(ConvexFunction.aiRunsAcknowledge, json: #"{"acknowledged":true}"#)
+        let defaults = UserDefaults(suiteName: "com.bhekani.recto.tests.ai")!
+        defaults.removePersistentDomain(forName: "com.bhekani.recto.tests.ai")
+        let settings = StudioSettings(defaults: defaults, systemAppearance: { .dark })
+        let chrome = EditorHostController(settings: settings, registry: EditorHostRegistry())
+        chrome.cloud = CloudDocumentContext(api: api, convexId: "doc1", syncForExport: { true })
+        let ai = AIController(settings: settings, chrome: chrome, model: model, storage: { model.storage })
+        return (model, ai, api, settings)
+    }
+
+    @MainActor
+    private func waitFor(_ condition: () -> Bool) async throws {
+        for _ in 0..<200 where !condition() { try await Task.sleep(for: .milliseconds(10)) }
+    }
+
+    @Test("the source hash is the server's: SHA-256 hex of the UTF-8")
+    func hash() {
+        #expect(AIClient.sha256("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+    }
+
+    @MainActor
+    @Test("a transform is fenced to the synced head, claimed, then applied as an ai: node; Reject undoes it")
+    func transform() async throws {
+        let (model, ai, api, _) = try await setUp("Keep this. Very really wordy sentence here. And this.")
+        await api.respond(ConvexFunction.aiTransformRun, json: #"{"kind":"generated","output":"Wordy sentence.","runId":"r1"}"#)
+        let selected = (model.storage.markdown as NSString).range(of: "Very really wordy sentence here.")
+        ai.beginTransform(on: selected)
+        try await waitFor { ai.sheet == .transform }
+        #expect(ai.sheet == .transform)
+
+        let source = model.storage.markdown
+        await ai.runTransform(instruction: TransformPreset.all[0].prompt, presetId: "tighten")
+        #expect(model.storage.markdown == "Keep this. Wordy sentence. And this.\n", "canonical Markdown ends with a newline, as on the web")
+        let run = try #require(await api.calls(to: ConvexFunction.aiTransformRun).first)
+        #expect(run.args["sourceHash"] == .string(AIClient.sha256(source)))
+        #expect(run.args["selection"] == "Very really wordy sentence here.")
+        #expect(run.args["platform"] == "mac")
+        #expect(await api.calls(to: ConvexFunction.aiRunsAcknowledge).first?.args["requestId"] == run.args["requestId"])
+        #expect(await model.historyNodes().last?.origin == "ai:Tighten")
+        guard case .done(_, _, let awaiting) = ai.transformState else { Issue.record("not done"); return }
+        #expect(awaiting, "pending is the default mode")
+
+        await ai.reject()
+        #expect(model.storage.markdown == source)
+        await model.close()
+    }
+
+    @MainActor
+    @Test("the server's refusals open the right sheet or say why")
+    func refusals() async throws {
+        let (model, ai, api, _) = try await setUp("Some text to change.")
+        let range = NSRange(location: 0, length: 4)
+        for (code, expected) in [("ai_credential_required", AIController.Sheet.key), ("ai_consent_required", .consent)] {
+            await api.fail(ConvexFunction.aiTransformRun, RemoteCallError(code: code, message: code))
+            ai.beginTransform(on: range)
+            try await waitFor { ai.sheet == .transform }
+            await ai.runTransform(instruction: "x", presetId: nil)
+            #expect(ai.sheet == expected, "\(code)")
+        }
+        await api.fail(ConvexFunction.aiTransformRun, RemoteCallError(code: "document_shared", message: "shared"))
+        ai.beginTransform(on: range)
+        try await waitFor { ai.sheet == .transform }
+        await ai.runTransform(instruction: "x", presetId: nil)
+        #expect(ai.errorMessage == "AI is off on shared documents.")
+        #expect(model.storage.markdown == "Some text to change.", "nothing applied")
+        await model.close()
+    }
+
+    @MainActor
+    @Test("a leftover run is claimed first; one still running blocks the new request")
+    func leftoverRun() async throws {
+        let (model, _, api, _) = try await setUp("Text.")
+        let client = AIClient(cloud: CloudDocumentContext(api: api, convexId: "doc1"))
+        await api.respond(ConvexFunction.aiRunsLatestRecoverable, json: #"{"requestId":"old","status":"succeeded"}"#)
+        try await client.clearLeftoverRun(documentId: "doc1", kind: "transform")
+        #expect(await api.calls(to: ConvexFunction.aiRunsAcknowledge).first?.args["requestId"] == "old")
+        await api.respond(ConvexFunction.aiRunsLatestRecoverable, json: #"{"requestId":"busy","status":"provider_started"}"#)
+        await #expect(throws: AIClient.Failure.self) { try await client.clearLeftoverRun(documentId: "doc1", kind: "review") }
+        await model.close()
+    }
+
+    @MainActor
+    @Test("re-indexing sends one vector per chunk with its offsets")
+    func reindex() async throws {
+        let (model, _, api, _) = try await setUp(String(repeating: "A paragraph of words. ", count: 60) + "\n\nSecond paragraph.")
+        await api.respond(ConvexFunction.aiEmbedRun, json: "[[0.1,0.2],[0.3,0.4],[0.5,0.6]]")
+        let client = AIClient(cloud: CloudDocumentContext(api: api, convexId: "doc1", syncForExport: { true }))
+        let source = try await client.source(head: { model.state.head }, markdown: { model.storage.markdown })
+        let chunks = try await SharedRectoCore.core().chunk(source.markdown)
+        await api.respond(ConvexFunction.aiEmbedRun, json: "[" + Array(repeating: "[0.1,0.2]", count: chunks.count).joined(separator: ",") + "]")
+        #expect(try await client.reindex(source) == chunks.count)
+        let replace = try #require(await api.calls(to: ConvexFunction.embeddingsReplaceChunks).first)
+        #expect(replace.args["embeddedNodeId"] == .string(model.state.head))
+        guard case .array(let sent)? = replace.args["chunks"] else { Issue.record("no chunks"); return }
+        #expect(sent.count == chunks.count)
+        await model.close()
+    }
+
+    @MainActor
+    @Test("the related query is the section at the caret")
+    func section() async throws {
+        let text = "# One\n\nFirst.\n\n## Sub\n\nNested.\n\n# Two\n\nSecond."
+        #expect(try await AIController.section(at: (text as NSString).range(of: "Nested").location, in: text) == "## Sub\n\nNested.")
+        #expect(try await AIController.section(at: 8, in: text) == "# One\n\nFirst.\n\n## Sub\n\nNested.")
     }
 }
