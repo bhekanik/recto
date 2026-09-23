@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import MarkdownEngine
+import RectoCore
 import RectoEditor
 import SwiftUI
 
@@ -86,19 +87,29 @@ struct EditorHostView: View {
             if settings.showToolbar, !zen.hidesChrome {
                 toolbar(styler)
             }
-            RectoEditorView(
-                storage: storage,
-                styler: styler,
-                placeholder: "Start writing…",
-                onAttach: { seam in
-                    chrome.attach(seam)
-                    vim.sync(seam: seam, presentation: presentation)
-                },
-                onEdit: history.accept,
-                writingController: chrome.writingController
-            )
-            .frame(minWidth: 720, minHeight: 540)
-            .background(WritingControlsHost(controller: chrome.writingController))
+            HStack(spacing: 0) {
+                RectoEditorView(
+                    storage: storage,
+                    styler: styler,
+                    placeholder: "Start writing…",
+                    onAttach: { seam in
+                        chrome.attach(seam)
+                        vim.sync(seam: seam, presentation: presentation)
+                    },
+                    onEdit: history.accept,
+                    writingController: chrome.writingController
+                )
+                .frame(minWidth: 720, minHeight: 540)
+                .background(WritingControlsHost(controller: chrome.writingController))
+                if settings.showOutline, !zen.hidesChrome {
+                    OutlinePanel(
+                        storage: storage,
+                        theme: styler.theme,
+                        jump: { [chrome] heading in chrome.jump(toHeading: heading) },
+                        close: { [settings] in settings.toggleOutline() }
+                    )
+                }
+            }
             if settings.showStatusBar, !zen.hidesChrome {
                 statusBar(styler)
             }
@@ -124,6 +135,7 @@ struct EditorHostView: View {
             chrome.choosePresentation = choose
             chrome.currentPresentation = { presentation }
             chrome.zen = zen
+            chrome.documentTitle = RectoDocumentTitle.derive(document.markdown)
             vim.controller.history = history
             vim.controller.typewriter = chrome.typewriter
             vim.controller.onSave = {
@@ -142,6 +154,7 @@ struct EditorHostView: View {
         }
         .onChange(of: ExactMarkdown(document.markdown)) { _, markdown in
             history.adoptExternal(markdown.value)
+            chrome.documentTitle = RectoDocumentTitle.derive(markdown.value)
         }
         .onChange(of: settings.spellcheck) { chrome.applySettings() }
         .onChange(of: settings.typewriter) { chrome.applySettings() }

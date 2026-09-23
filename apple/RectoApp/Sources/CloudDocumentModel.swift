@@ -140,6 +140,19 @@ final class CloudDocumentModel {
         }
     }
 
+    /// `:w`, then wait for the sync state to reach `.synced`, polling the
+    /// session's published state for at most `timeout`. `false` offline or on
+    /// a sync failure, which leaves the server behind this Mac.
+    func syncForExport(timeout: Duration = .seconds(5)) async -> Bool {
+        await save()
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline {
+            if edits.pendingCount == 0, state.syncState == .synced { return true }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        return edits.pendingCount == 0 && state.syncState == .synced
+    }
+
     func undo() async {
         await performNavigation { try await session.undo() }
     }

@@ -91,19 +91,29 @@ struct CloudDocumentView: View {
             if settings.showToolbar, !zen.hidesChrome {
                 toolbar(styler)
             }
-            RectoEditorView(
-                storage: model.storage,
-                styler: styler,
-                placeholder: "Start writing…",
-                onAttach: { seam in
-                    chrome.attach(seam)
-                    vim.sync(seam: seam, presentation: styler.presentation)
-                },
-                onEdit: model.accept,
-                writingController: chrome.writingController
-            )
-            .frame(minWidth: 620, minHeight: 500)
-            .background(WritingControlsHost(controller: chrome.writingController))
+            HStack(spacing: 0) {
+                RectoEditorView(
+                    storage: model.storage,
+                    styler: styler,
+                    placeholder: "Start writing…",
+                    onAttach: { seam in
+                        chrome.attach(seam)
+                        vim.sync(seam: seam, presentation: styler.presentation)
+                    },
+                    onEdit: model.accept,
+                    writingController: chrome.writingController
+                )
+                .frame(minWidth: 620, minHeight: 500)
+                .background(WritingControlsHost(controller: chrome.writingController))
+                if settings.showOutline, !zen.hidesChrome {
+                    OutlinePanel(
+                        storage: model.storage,
+                        theme: styler.theme,
+                        jump: { [chrome] heading in chrome.jump(toHeading: heading) },
+                        close: { [settings] in settings.toggleOutline() }
+                    )
+                }
+            }
             if settings.showStatusBar, !zen.hidesChrome {
                 statusBar(model, styler)
             }
@@ -126,12 +136,20 @@ struct CloudDocumentView: View {
             chrome.choosePresentation = choose
             chrome.currentPresentation = { [model] in self.styler(model).presentation }
             chrome.zen = zen
-            chrome.cloud = api.map { CloudDocumentContext(api: $0, convexId: model.state.convexId) }
+            chrome.cloud = api.map {
+                CloudDocumentContext(api: $0, convexId: model.state.convexId, syncForExport: { await model.syncForExport() })
+            }
+            chrome.documentTitle = model.state.title
             vim.controller.history = model
             vim.controller.onSave = { Task { await model.save() } }
         }
         .onChange(of: model.state.convexId) { _, convexId in
-            chrome.cloud = api.map { CloudDocumentContext(api: $0, convexId: convexId) }
+            chrome.cloud = api.map {
+                CloudDocumentContext(api: $0, convexId: convexId, syncForExport: { await model.syncForExport() })
+            }
+        }
+        .onChange(of: model.state.title) { _, title in
+            chrome.documentTitle = title
         }
         .onChange(of: settings.spellcheck) { chrome.applySettings() }
         .onChange(of: settings.typewriter) { chrome.applySettings() }

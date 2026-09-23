@@ -16,6 +16,17 @@ public enum ConvexFunction {
   public static let docNodesAppend = "docNodes:append"
   public static let writingStatsRecord = "writingStats:record"
   public static let writingStatsList = "writingStats:list"
+
+  // Features beyond sync, called through `RectoAPI`.
+  public static let exportDocx = "export:docx"
+
+  /// Every name above, for the contract test that finds each in `convex/`.
+  public static let all: [String] = [
+    documentsList, documentsGet, documentsCreate, documentsCommitEdit,
+    documentsUpdateCurrentNodeId, documentsUpdateMarkdown, documentsRename,
+    documentsRemove, docNodesListSince, docNodesAppend, writingStatsRecord,
+    writingStatsList, exportDocx,
+  ]
 }
 
 /// A deterministic refusal from the server (`convex/documents.ts`, `refuse()`).

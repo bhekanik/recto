@@ -1,4 +1,5 @@
 import AppKit
+import RectoCoreJS
 import RectoEditor
 import RectoSync
 import SwiftUI
@@ -9,6 +10,9 @@ import SwiftUI
 struct CloudDocumentContext {
     let api: any RectoAPI
     let convexId: String?
+    /// Push this Mac's edits and wait for the server to hold them. `true` when
+    /// it does; anything the server renders (the `.docx`) is its own copy.
+    var syncForExport: @MainActor () async -> Bool = { true }
 }
 
 /// What one editor host owns around the text: the writing controls, find,
@@ -42,6 +46,11 @@ final class EditorHostController {
     func toggleZen() {
         zen?.toggle(in: window)
     }
+
+    /// The document's title, for export filenames and the HTML `<title>`:
+    /// the synced document's server title, or the file document's derived one.
+    /// Set by the host alongside `cloud`.
+    var documentTitle: String = ""
     private(set) var seam: RectoTextView?
     private let registry: EditorHostRegistry
 
@@ -67,6 +76,19 @@ final class EditorHostController {
     /// not removed, so the view's string is the Markdown source in every
     /// presentation.
     var markdown: String? { seam?.text }
+
+    /// The web's `onJumpToHeading`: place the caret at the heading's offset —
+    /// UTF-16 source units, which is what the outline reports and the editor
+    /// speaks — and bring it on screen through the engine's scroll path, the
+    /// one TextKit 2 route plan 024 allows. The typewriter layer hears the
+    /// selection change and centers the line itself when it is on.
+    func jump(toHeading heading: OutlineHeading) {
+        guard let seam else { return }
+        let range = NSRange(location: heading.offset, length: 0)
+        seam.selectedRange = range
+        _ = seam.scroll(range: range, position: .center)
+        _ = seam.focus()
+    }
 
     /// Push the settings that reach into the live text view. Run on attach and
     /// whenever spellcheck or typewriter change.

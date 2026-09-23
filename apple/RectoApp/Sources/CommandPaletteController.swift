@@ -1,4 +1,5 @@
 import AppKit
+import RectoCoreJS
 import RectoEditor
 import RectoStore
 import SwiftUI
@@ -38,6 +39,9 @@ final class CommandPaletteController {
     private let editors: EditorHostRegistry
     private let pasteboard: NSPasteboard
     private var panel: PalettePanel?
+    /// The model the open panel shows, for the headings finder's tests; `nil`
+    /// while no palette is up.
+    private(set) var model: PaletteModel?
     private weak var parent: NSWindow?
     private var observers: [NSObjectProtocol] = []
 
@@ -63,14 +67,56 @@ final class CommandPaletteController {
         if window !== keyWindow { window.makeKeyAndOrderFront(nil) }
         let editor = editors.controller(in: window)
         let model = PaletteModel(
-            sections: Self.sections(settings: settings, library: library),
+            sections: Self.sections(settings: settings, library: library, editor: editor),
             run: { [weak self] item in self?.run(item, editor: editor, library: library) },
             close: { [weak self] in self?.close() }
         )
+        present(model: model, over: window)
+    }
+
+    /// `go-to-heading`: the palette again, listing only this document's
+    /// headings (the web's headings scope). The command palette closes itself
+    /// as soon as `perform` returns, so this is called on a later run-loop
+    /// turn and never has to tear down the panel that asked for it.
+    ///
+    /// A document with no headings opens nothing — there is nothing to jump
+    /// to, and an empty palette would only say so.
+    func openHeadingFinder(over editor: EditorHostController, library: PaletteLibrary) async {
+        guard !isOpen, let window = editor.window, let markdown = editor.markdown else { return }
+        let headings: [OutlineHeading]
+        do {
+            headings = try await SharedRectoCore.core().parseOutline(markdown)
+        } catch {
+            ExportController.presentError("Couldn't read the outline.", error, window: window)
+            return
+        }
+        guard !headings.isEmpty else { return }
+        let items = headings.map { heading in
+            PaletteItem(
+                id: "heading-\(heading.index)",
+                kind: .heading(heading),
+                label: heading.text.isEmpty ? "(untitled heading)" : heading.text,
+                detail: .text("H\(heading.depth)"),
+                searchValue: "heading \(heading.text) h\(heading.depth)"
+            )
+        }
+        let model = PaletteModel(
+            sections: [PaletteSection(title: "Headings", items: items)],
+            run: { [weak self] item in self?.run(item, editor: editor, library: library) },
+            close: { [weak self] in self?.close() }
+        )
+        present(model: model, over: window)
+    }
+
+    /// The panel a palette lives in: the borderless key panel, sized over its
+    /// parent and observing it. Both palettes — commands and headings — are
+    /// the same panel, which is why there is never but one at a time.
+    private func present(model: PaletteModel, over window: NSWindow) {
         let panel = PalettePanel(onCancel: { [weak self] in self?.close() })
         panel.appearance = NSAppearance(named: settings.resolvedAppearance == .dark ? .darkAqua : .aqua)
         panel.contentView = NSHostingView(rootView: CommandPaletteView(model: model, theme: settings.theme))
         self.panel = panel
+        self.model = model
         parent = window
         layoutPanel()
         window.addChildWindow(panel, ordered: .above)
@@ -95,6 +141,7 @@ final class CommandPaletteController {
     private func tearDown(restoringKey: Bool) {
         guard let panel else { return }
         self.panel = nil
+        self.model = nil
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
         observers.removeAll()
         parent?.removeChildWindow(panel)
@@ -108,11 +155,21 @@ final class CommandPaletteController {
     /// The web's palette body: `SECTION_ORDER`, Documents first with "New
     /// document" then the library, and the dark-only theme hidden while the
     /// appearance resolves to light (Paper is the one light palette).
-    static func sections(settings: StudioSettings, library: PaletteLibrary) -> [PaletteSection] {
+    /// `export-docx` needs a synced document with a convex id — the server
+    /// exports its own markdown — so it is absent without one, the way the
+    /// web hides "Open in Recto app" off macOS.
+    static func sections(
+        settings: StudioSettings,
+        library: PaletteLibrary,
+        editor: EditorHostController? = nil
+    ) -> [PaletteSection] {
         CommandSection.allCases.compactMap { section in
             var actions = CommandRegistry.actions(in: section)
             if section == .theme, settings.resolvedAppearance == .light {
                 actions = actions.filter { $0.id.hasPrefix("appearance-") }
+            }
+            if section == .copyExport, editor?.cloud?.convexId == nil {
+                actions.removeAll { $0.id == "export-docx" }
             }
             var items = actions.map(PaletteItem.init(action:))
             if section == .documents {
@@ -141,6 +198,8 @@ final class CommandPaletteController {
             perform(id, editor: editor, library: library)
         case let .document(localId):
             library.open(localId)
+        case let .heading(heading):
+            editor?.jump(toHeading: heading)
         }
     }
 
@@ -177,8 +236,48 @@ final class CommandPaletteController {
             guard let markdown = editor?.markdown else { return true }
             pasteboard.clearContents()
             pasteboard.setString(markdown, forType: .string)
+        case "copy-rich":
+            guard let editor, let markdown = editor.markdown else { return true }
+            let window = editor.window
+            Task { await ExportController.copyRich(markdown: markdown, pasteboard: pasteboard, window: window) }
+        case "export-md":
+            guard let editor, let markdown = editor.markdown else { return true }
+            // Deferred past this palette's own close, so the save panel the
+            // export opens is not modal on top of a palette that is about to
+            // disappear — the web's download begins after the palette is gone.
+            let title = editor.documentTitle
+            let window = editor.window
+            Task { @MainActor in
+                ExportController.exportMarkdown(markdown: markdown, title: title, window: window)
+            }
+        case "export-html":
+            guard let editor, let markdown = editor.markdown else { return true }
+            let title = editor.documentTitle
+            let window = editor.window
+            Task { await ExportController.exportHtml(markdown: markdown, title: title, window: window) }
+        case "export-docx":
+            guard let editor,
+                let cloud = editor.cloud,
+                let convexId = cloud.convexId
+            else { return true }
+            let title = editor.documentTitle
+            let window = editor.window
+            Task { @MainActor in
+                await ExportController.exportDocx(cloud: cloud, convexId: convexId, title: title, window: window)
+            }
         case "find-replace":
             editor?.showFindAndReplace()
+        case "go-to-heading":
+            guard let editor else { return true }
+            // Deferred so the command palette's own close (which runs the
+            // moment this returns) is not the one that tears down the heading
+            // finder the gesture is about to open.
+            Task { @MainActor [weak self, weak editor] in
+                guard let self, let editor else { return }
+                await self.openHeadingFinder(over: editor, library: library)
+            }
+        case "toggle-outline":
+            settings.toggleOutline()
         case "toggle-status":
             settings.toggleStatusBar()
         case "toggle-focus":
