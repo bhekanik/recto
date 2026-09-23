@@ -29,6 +29,19 @@ final class EditorHostController {
     var choosePresentation: (Presentation) -> Void = { _ in }
     /// Set by the synced host. `nil` for a file document, which is local.
     var cloud: CloudDocumentContext?
+    /// Set by the host: the lens this window shows right now.
+    var currentPresentation: () -> Presentation = { .rich }
+    /// Set by the host.
+    var zen: ZenMode?
+
+    /// `cycle-next` / `cycle-prev`.
+    func cyclePresentation(by step: Int) {
+        choosePresentation(PresentationPreference.cycled(from: currentPresentation(), by: step))
+    }
+
+    func toggleZen() {
+        zen?.toggle(in: window)
+    }
     private(set) var seam: RectoTextView?
     private let registry: EditorHostRegistry
 

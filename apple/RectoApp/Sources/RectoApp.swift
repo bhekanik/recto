@@ -123,6 +123,16 @@ private struct StudioCommands: Commands {
                 .keyboardShortcut("m", modifiers: [.control, .shift])
             Button("Switch to Vim") { editors.choosePresentation(.vim, in: NSApp.keyWindow) }
                 .keyboardShortcut("v", modifiers: [.control, .shift])
+            Button("Switch to Preview") { editors.choosePresentation(.preview, in: NSApp.keyWindow) }
+                .keyboardShortcut("p", modifiers: [.control, .shift])
+            Button("Cycle mode forward") { editors.controller(in: NSApp.keyWindow)?.cyclePresentation(by: 1) }
+                .keyboardShortcut("]", modifiers: [.control, .shift])
+            Button("Cycle mode backward") { editors.controller(in: NSApp.keyWindow)?.cyclePresentation(by: -1) }
+                .keyboardShortcut("[", modifiers: [.control, .shift])
+            Divider()
+            Button("Toggle zen mode") { editors.controller(in: NSApp.keyWindow)?.toggleZen() }
+                .keyboardShortcut("f", modifiers: [.control, .shift])
+            Button("Toggle body font (sans / serif)", action: settings.toggleReadingFont)
             Divider()
             Button("Toggle formatting toolbar", action: settings.toggleToolbar)
             Button("Toggle word count / status bar", action: settings.toggleStatusBar)

@@ -80,6 +80,51 @@ public struct RectoEditorTheme: Sendable, Equatable {
         caret: .oklch(0.92, 0.04, 285)
     )
 
+    /// Aurora — teal and aqua-mint (`palette.aurora` in `packages/design-tokens`).
+    public static let aurora = RectoEditorTheme(
+        canvas: .oklch(0.18, 0.022, 202),
+        sheet: .oklch(0.215, 0.024, 202),
+        raised: .oklch(0.255, 0.026, 200),
+        ink: .oklch(0.94, 0.012, 200),
+        ink2: .oklch(0.79, 0.016, 200),
+        ink3: .oklch(0.665, 0.018, 200),
+        line: .oklch(0.33, 0.022, 200),
+        accent: .oklch(0.78, 0.115, 178),
+        accent2: .oklch(0.8, 0.1, 205),
+        selection: NSColor.oklch(0.78, 0.115, 178).withAlphaComponent(0.24),
+        caret: .oklch(0.93, 0.05, 190)
+    )
+
+    /// Dawn — charcoal and rose-lavender (`palette.dawn`).
+    public static let dawn = RectoEditorTheme(
+        canvas: .oklch(0.185, 0.016, 330),
+        sheet: .oklch(0.22, 0.018, 331),
+        raised: .oklch(0.26, 0.02, 332),
+        ink: .oklch(0.94, 0.01, 330),
+        ink2: .oklch(0.79, 0.014, 330),
+        ink3: .oklch(0.665, 0.016, 330),
+        line: .oklch(0.33, 0.018, 330),
+        accent: .oklch(0.78, 0.09, 350),
+        accent2: .oklch(0.78, 0.08, 300),
+        selection: NSColor.oklch(0.78, 0.09, 350).withAlphaComponent(0.24),
+        caret: .oklch(0.93, 0.04, 345)
+    )
+
+    /// Moonlit — near-black and silver-cyan (`palette.moonlit`).
+    public static let moonlit = RectoEditorTheme(
+        canvas: .oklch(0.155, 0.014, 250),
+        sheet: .oklch(0.195, 0.016, 250),
+        raised: .oklch(0.235, 0.018, 250),
+        ink: .oklch(0.94, 0.01, 250),
+        ink2: .oklch(0.79, 0.014, 250),
+        ink3: .oklch(0.66, 0.016, 250),
+        line: .oklch(0.31, 0.018, 250),
+        accent: .oklch(0.82, 0.08, 210),
+        accent2: .oklch(0.83, 0.08, 215),
+        selection: NSColor.oklch(0.82, 0.08, 210).withAlphaComponent(0.22),
+        caret: .oklch(0.94, 0.03, 230)
+    )
+
     /// Paper — the light palette shipping at launch.
     public static let paper = RectoEditorTheme(
         canvas: .oklch(0.975, 0.008, 85),

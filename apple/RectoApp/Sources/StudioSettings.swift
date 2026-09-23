@@ -45,8 +45,32 @@ final class StudioSettings {
         case light, dark
     }
 
+    /// The web's `THEMES`: soft dark palettes, in cycle order. They apply only
+    /// while the appearance resolves to dark; light is always Paper (ADR-20).
+    enum Palette: String, CaseIterable {
+        case twilight, aurora, dawn, moonlit
+
+        var label: String { rawValue.capitalized }
+
+        @MainActor var colors: RectoEditorTheme {
+            switch self {
+            case .twilight: .twilight
+            case .aurora: .aurora
+            case .dawn: .dawn
+            case .moonlit: .moonlit
+            }
+        }
+
+        var next: Palette {
+            let all = Palette.allCases
+            return all[((all.firstIndex(of: self) ?? 0) + 1) % all.count]
+        }
+    }
+
     enum Key {
         static let appearance = "studio.appearance"
+        static let palette = "studio.theme"
+        static let readingFont = "studio.readingFont"
         static let readingScale = "studio.readingScale"
         static let spellcheck = "studio.spellcheck"
         static let typewriter = "studio.typewriter"
@@ -67,6 +91,17 @@ final class StudioSettings {
 
     var appearance: Appearance {
         didSet { defaults.set(appearance.rawValue, forKey: Key.appearance) }
+    }
+
+    var palette: Palette {
+        didSet { defaults.set(palette.rawValue, forKey: Key.palette) }
+    }
+
+    /// Serif by default on the Mac, unlike the web's sans: Source Serif 4 is
+    /// what the native editor was designed around, and changing a writer's
+    /// face on update is not this setting's job.
+    var readingFont: ReadingFont {
+        didSet { defaults.set(readingFont.rawValue, forKey: Key.readingFont) }
     }
 
     /// Text-zoom multiplier for the reading column, 0.8…2.0.
@@ -108,6 +143,8 @@ final class StudioSettings {
         readSystemAppearance = systemAppearance
         self.systemAppearance = systemAppearance()
         appearance = defaults.string(forKey: Key.appearance).flatMap(Appearance.init(rawValue:)) ?? .system
+        palette = defaults.string(forKey: Key.palette).flatMap(Palette.init(rawValue:)) ?? .twilight
+        readingFont = defaults.string(forKey: Key.readingFont).flatMap(ReadingFont.init(rawValue:)) ?? .serif
         readingScale = (defaults.object(forKey: Key.readingScale) as? Double)
             .map(Self.clampScale) ?? Self.readingScaleDefault
         spellcheck = defaults.object(forKey: Key.spellcheck) as? Bool ?? true
@@ -126,16 +163,22 @@ final class StudioSettings {
         }
     }
 
-    /// Paper is the one light palette and Twilight the one dark palette so far,
-    /// so the appearance decides the theme outright.
     var theme: RectoEditorTheme {
-        resolvedAppearance == .dark ? .twilight : .paper
+        resolvedAppearance == .dark ? palette.colors : .paper
     }
 
     /// `THEMES.find(...).label` on the web; Paper while light, like the web's
     /// status bar reports.
     var themeLabel: String {
-        resolvedAppearance == .dark ? "Twilight" : "Paper"
+        resolvedAppearance == .dark ? palette.label : "Paper"
+    }
+
+    /// The dark palettes only exist while dark, so the control does nothing in light.
+    var canCyclePalette: Bool { resolvedAppearance == .dark }
+
+    func cyclePalette() {
+        guard canCyclePalette else { return }
+        palette = palette.next
     }
 
     /// For `.preferredColorScheme` at each window's root, so the chrome follows
@@ -211,6 +254,7 @@ final class StudioSettings {
     // MARK: - Toggles
 
     func toggleSpellcheck() { spellcheck.toggle() }
+    func toggleReadingFont() { readingFont = readingFont == .serif ? .sans : .serif }
     func toggleTypewriter() { typewriter.toggle() }
     func toggleToolbar() { showToolbar.toggle() }
     func toggleStatusBar() { showStatusBar.toggle() }
@@ -222,7 +266,8 @@ final class StudioSettings {
         MarkdownStyler(
             presentation: presentation,
             theme: theme,
-            typography: .forPresentation(presentation, scale: readingScale),
+            typography: .forPresentation(presentation, scale: readingScale, readingFont: readingFont),
+            readingFont: readingFont,
             spellChecking: spellcheck,
             undo: .external
         )

@@ -163,6 +163,12 @@ final class CommandPaletteController {
             editor?.choosePresentation(.raw)
         case "mode-vim":
             editor?.choosePresentation(.vim)
+        case "mode-preview":
+            editor?.choosePresentation(.preview)
+        case "cycle-next":
+            editor?.cyclePresentation(by: 1)
+        case "cycle-prev":
+            editor?.cyclePresentation(by: -1)
         case "undo":
             editor?.undo()
         case "redo":
@@ -175,6 +181,10 @@ final class CommandPaletteController {
             editor?.showFindAndReplace()
         case "toggle-status":
             settings.toggleStatusBar()
+        case "toggle-focus":
+            editor?.toggleZen()
+        case "toggle-font":
+            settings.toggleReadingFont()
         case "zoom-in":
             settings.zoomIn()
         case "zoom-out":
@@ -194,9 +204,13 @@ final class CommandPaletteController {
         case "appearance-dark":
             settings.appearance = .dark
         case "theme-twilight":
-            // Twilight is the only dark palette, so it is already in force
-            // whenever this item is offered; the web's setTheme is a no-op then too.
-            break
+            settings.palette = .twilight
+        case "theme-aurora":
+            settings.palette = .aurora
+        case "theme-dawn":
+            settings.palette = .dawn
+        case "theme-moonlit":
+            settings.palette = .moonlit
         default:
             return false
         }

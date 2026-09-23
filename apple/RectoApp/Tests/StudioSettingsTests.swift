@@ -30,6 +30,43 @@ struct StudioSettingsTests {
         #expect(!settings.typewriter)
         #expect(settings.showToolbar)
         #expect(settings.showStatusBar)
+        #expect(settings.palette == .twilight)
+        #expect(settings.readingFont == .serif)
+    }
+
+    @Test("the palette applies only while dark, cycles in the web's order, and persists")
+    func paletteFollowsAppearance() {
+        let dark = settings(systemAppearance: .dark)
+        #expect(dark.canCyclePalette)
+        dark.cyclePalette()
+        #expect(dark.palette == .aurora)
+        #expect(dark.theme == .aurora)
+        #expect(dark.themeLabel == "Aurora")
+        dark.cyclePalette(); dark.cyclePalette(); dark.cyclePalette()
+        #expect(dark.palette == .twilight)
+        dark.palette = .moonlit
+        #expect(settings(systemAppearance: .dark).palette == .moonlit)
+
+        let light = settings(systemAppearance: .light)
+        #expect(light.palette == .moonlit)
+        #expect(light.theme == .paper)
+        #expect(light.themeLabel == "Paper")
+        #expect(!light.canCyclePalette)
+        light.cyclePalette()
+        #expect(light.palette == .moonlit)
+    }
+
+    @Test("the reading font toggles, persists, and reaches the styler across lenses")
+    func readingFont() {
+        let settings = settings()
+        settings.toggleReadingFont()
+        #expect(settings.readingFont == .sans)
+        #expect(self.settings().readingFont == .sans)
+        #expect(settings.styler(presentation: .rich).typography.family == RectoFonts.sansFamily)
+        #expect(settings.styler(presentation: .raw).typography.family == RectoFonts.sourceFamily)
+        #expect(settings.styler(presentation: .raw).presenting(.rich).typography.family == RectoFonts.sansFamily)
+        settings.toggleReadingFont()
+        #expect(settings.styler(presentation: .rich).typography.family == RectoFonts.proseFamily)
     }
 
     @Test("unreadable stored values fall back per key, not all at once")

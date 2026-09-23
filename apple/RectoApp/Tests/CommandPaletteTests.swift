@@ -16,11 +16,16 @@ struct CommandRegistryTests {
         ("mode-rich", .modes, "Switch to Rich text", "⌃⇧R"),
         ("mode-raw", .modes, "Switch to Raw Markdown", "⌃⇧M"),
         ("mode-vim", .modes, "Switch to Vim", "⌃⇧V"),
+        ("mode-preview", .modes, "Switch to Preview", "⌃⇧P"),
+        ("cycle-next", .modes, "Cycle mode forward", "⌃⇧]"),
+        ("cycle-prev", .modes, "Cycle mode backward", "⌃⇧["),
         ("undo", .history, "Undo", "⌘Z"),
         ("redo", .history, "Redo", "⌘⇧Z"),
         ("copy-markdown", .copyExport, "Copy as Markdown", "⌘⌥C"),
         ("find-replace", .view, "Find & replace", "⌘F"),
         ("toggle-status", .view, "Toggle word count / status bar", "⌃⇧S"),
+        ("toggle-focus", .view, "Toggle zen mode", "⌃⇧F"),
+        ("toggle-font", .view, "Toggle body font (sans / serif)", ""),
         ("zoom-in", .view, "Increase text size", ""),
         ("zoom-out", .view, "Decrease text size", ""),
         ("zoom-reset", .view, "Reset text size", ""),
@@ -31,6 +36,9 @@ struct CommandRegistryTests {
         ("appearance-light", .theme, "Appearance: Light (Paper)", ""),
         ("appearance-dark", .theme, "Appearance: Dark", ""),
         ("theme-twilight", .theme, "Theme: Twilight", ""),
+        ("theme-aurora", .theme, "Theme: Aurora", ""),
+        ("theme-dawn", .theme, "Theme: Dawn", ""),
+        ("theme-moonlit", .theme, "Theme: Moonlit", ""),
     ]
 
     @Test("the registry is exactly the expected native subset, in the web's order")
@@ -236,7 +244,10 @@ struct CommandPaletteControllerTests {
     @Test("the dark palette hides while the appearance resolves to light")
     func themeSectionFollowsAppearance() {
         let dark = CommandPaletteController.sections(settings: settings(systemAppearance: .dark), library: PaletteLibrary())
-        #expect(dark.last?.items.map(\.id) == ["appearance-system", "appearance-light", "appearance-dark", "theme-twilight"])
+        #expect(dark.last?.items.map(\.id) == [
+            "appearance-system", "appearance-light", "appearance-dark",
+            "theme-twilight", "theme-aurora", "theme-dawn", "theme-moonlit",
+        ])
         let light = CommandPaletteController.sections(settings: settings(systemAppearance: .light), library: PaletteLibrary())
         #expect(light.last?.items.map(\.id) == ["appearance-system", "appearance-light", "appearance-dark"])
     }
@@ -269,6 +280,10 @@ struct CommandPaletteControllerTests {
         #expect(settings.appearance == .light)
         controller.perform("toggle-typewriter", editor: nil, library: PaletteLibrary())
         #expect(settings.typewriter)
+        controller.perform("toggle-font", editor: nil, library: PaletteLibrary())
+        #expect(settings.readingFont == .sans)
+        controller.perform("theme-dawn", editor: nil, library: PaletteLibrary())
+        #expect(settings.palette == .dawn)
     }
 
     @Test("editor actions reach the editor in the window ⌘K was pressed in")
@@ -291,7 +306,13 @@ struct CommandPaletteControllerTests {
         controller.perform("mode-raw", editor: editor, library: PaletteLibrary())
         controller.perform("mode-vim", editor: editor, library: PaletteLibrary())
         controller.perform("mode-rich", editor: editor, library: PaletteLibrary())
-        #expect(log == ["undo", "redo", "mode:raw", "mode:vim", "mode:rich"], "mode switches go to this window's lens, not a global")
+        controller.perform("mode-preview", editor: editor, library: PaletteLibrary())
+        mounted.chrome.currentPresentation = { .preview }
+        controller.perform("cycle-next", editor: editor, library: PaletteLibrary())
+        controller.perform("cycle-prev", editor: editor, library: PaletteLibrary())
+        #expect(log == [
+            "undo", "redo", "mode:raw", "mode:vim", "mode:rich", "mode:preview", "mode:rich", "mode:vim",
+        ], "mode switches go to this window's lens, not a global")
         controller.perform("copy-markdown", editor: editor, library: PaletteLibrary())
         #expect(pasteboard.string(forType: .string) == "# Title\n\nbody")
     }

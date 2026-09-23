@@ -25,6 +25,11 @@ struct EditorStatusBar<Trailing: View>: View {
     /// lens is `.vim`; only this bar observes its status, so a mode change
     /// re-renders the footer and not the host.
     var vimController: RectoVimController? = nil
+    /// The window's zen state, for the zen button. `nil` hides the button.
+    var zen: ZenMode? = nil
+    /// Toggles zen for this bar's own window. The host owns the window, and
+    /// `NSApp.keyWindow` is nil whenever the app is not frontmost.
+    var onToggleZen: () -> Void = {}
     /// The writer picked a lens, by button or by its shortcut.
     let onSelect: (Presentation) -> Void
     @ViewBuilder let trailing: () -> Trailing
@@ -38,13 +43,23 @@ struct EditorStatusBar<Trailing: View>: View {
                 VimStatusView(status: vimController.status, theme: theme)
             }
             Spacer(minLength: 0)
-            StudioControls(settings: settings, theme: theme)
-            StatusDivider(theme: theme)
-            WordCountLabel(storage: storage, ink: theme.ink3, counter: wordCounter)
-            if Trailing.self != EmptyView.self {
-                StatusDot(theme: theme)
-                trailing()
+            // The right side keeps its natural width; the mode ring gives way
+            // first, dropping its labels, as the web's does below `sm`.
+            HStack(spacing: 8) {
+                StudioControls(settings: settings, theme: theme)
+                if let zen {
+                    StatusDivider(theme: theme)
+                    ZenButton(zen: zen, theme: theme, action: onToggleZen)
+                }
+                StatusDivider(theme: theme)
+                WordCountLabel(storage: storage, ink: theme.ink3, counter: wordCounter)
+                if Trailing.self != EmptyView.self {
+                    StatusDot(theme: theme)
+                    trailing()
+                }
             }
+            .fixedSize()
+            .layoutPriority(1)
         }
         .font(.system(size: 12))
         .padding(.horizontal, 12)
@@ -65,6 +80,8 @@ extension EditorStatusBar where Trailing == EmptyView {
         theme: RectoEditorTheme,
         wordCounter: @escaping WordCounter = WordCount.count,
         vimController: RectoVimController? = nil,
+        zen: ZenMode? = nil,
+        onToggleZen: @escaping () -> Void = {},
         onSelect: @escaping (Presentation) -> Void
     ) {
         self.init(
@@ -75,6 +92,8 @@ extension EditorStatusBar where Trailing == EmptyView {
             theme: theme,
             wordCounter: wordCounter,
             vimController: vimController,
+            zen: zen,
+            onToggleZen: onToggleZen,
             onSelect: onSelect,
             trailing: EmptyView.init
         )
@@ -98,20 +117,34 @@ private struct StudioControls: View {
                 accessibility: "Appearance: \(settings.appearance.label). Click to change appearance",
                 action: settings.cycleAppearance
             )
-            // Twilight is the only dark palette so far and Paper the only light
-            // one, so there is nothing to cycle to yet; the control reports the
-            // palette in force the way the web does when it is disabled.
             labelButton(
                 settings.themeLabel,
                 symbol: "paintpalette",
-                help: settings.resolvedAppearance == .dark
-                    ? "Palette: Twilight — no other dark palette yet"
+                help: settings.canCyclePalette
+                    ? "Palette: \(settings.themeLabel) — click to cycle"
                     : "Palette: Paper — the other palettes need a dark appearance",
-                accessibility: "Palette: \(settings.themeLabel)",
-                action: {}
+                accessibility: "Palette: \(settings.themeLabel). Click to change palette",
+                action: settings.cyclePalette
             )
-            .disabled(true)
-            .opacity(0.6)
+            .disabled(!settings.canCyclePalette)
+            .opacity(settings.canCyclePalette ? 1 : 0.6)
+
+            StatusDivider(theme: theme)
+
+            Button(action: settings.toggleReadingFont) {
+                Text(settings.readingFont == .serif ? "Serif" : "Sans")
+                    .font(.custom(
+                        settings.readingFont == .serif ? RectoFonts.proseFamily : RectoFonts.sansFamily,
+                        size: 12))
+                    .padding(.horizontal, 8)
+                    .frame(height: 22)
+                    .foregroundStyle(Color(nsColor: theme.ink3))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .focusable(false)
+            .help("Body font: \(settings.readingFont == .serif ? "Serif" : "Sans") — click to switch")
+            .accessibilityLabel("Toggle body font")
 
             StatusDivider(theme: theme)
 
@@ -121,6 +154,8 @@ private struct StudioControls: View {
                 Button(action: settings.zoomReset) {
                     Text(verbatim: "\(settings.zoomPercent)%")
                         .monospacedDigit()
+                        .lineLimit(1)
+                        .fixedSize()
                         .frame(minWidth: 30)
                         .foregroundStyle(Color(nsColor: theme.ink3))
                         .contentShape(Rectangle())
@@ -167,6 +202,8 @@ private struct StudioControls: View {
                 Image(systemName: symbol)
                     .foregroundStyle(Color(nsColor: theme.accent))
                 Text(title)
+                    .lineLimit(1)
+                    .fixedSize()
             }
             .padding(.horizontal, 8)
             .frame(height: 22)
@@ -198,6 +235,28 @@ private struct StudioControls: View {
         .help(help)
         .accessibilityLabel(accessibility)
         .accessibilityAddTraits(isOn ? .isSelected : [])
+    }
+}
+
+/// The web's zen button (lucide `SquareDashed`).
+private struct ZenButton: View {
+    let zen: ZenMode
+    let theme: RectoEditorTheme
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "square.dashed")
+                .font(.system(size: 12))
+                .frame(width: 24, height: 24)
+                .foregroundStyle(Color(nsColor: zen.isOn ? theme.accent : theme.ink3))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .help("Zen mode (hide everything but the page)")
+        .accessibilityLabel("Toggle zen mode")
+        .accessibilityAddTraits(zen.isOn ? .isSelected : [])
     }
 }
 
@@ -300,19 +359,27 @@ private struct ModeSwitcher: View {
     let theme: RectoEditorTheme
     let onSelect: (Presentation) -> Void
 
-    /// The web's `MODE_RING`: rich, raw, vim, then preview. Preview only appears
-    /// for a read-only document, where it is the state rather than a choice.
-    private var ring: [Presentation] {
-        isEditable ? PresentationPreference.choices : PresentationPreference.choices + [.preview]
-    }
+    private var ring: [Presentation] { PresentationPreference.ring }
 
     var body: some View {
+        ViewThatFits(in: .horizontal) {
+            buttons(labelled: true)
+            buttons(labelled: false)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Editor mode")
+    }
+
+    private func buttons(labelled: Bool) -> some View {
         HStack(spacing: 2) {
             ForEach(ring, id: \.self) { mode in
                 Button {
                     onSelect(mode)
                 } label: {
                     Label(mode.label, systemImage: mode.symbol)
+                        .labelStyle(.adaptive(labelled))
+                        .lineLimit(1)
+                        .fixedSize()
                         .padding(.horizontal, 8)
                         .frame(height: 22)
                         .background(
@@ -332,8 +399,6 @@ private struct ModeSwitcher: View {
                 .accessibilityAddTraits(mode == active ? .isSelected : [])
             }
         }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Editor mode")
     }
 
     /// The tokens' `accent-wash`: accent at 0.15 alpha. The theme has no slot
@@ -371,7 +436,7 @@ private extension Presentation {
         case .rich: KeyboardShortcut("r", modifiers: [.control, .shift])
         case .raw: KeyboardShortcut("m", modifiers: [.control, .shift])
         case .vim: KeyboardShortcut("v", modifiers: [.control, .shift])
-        case .preview: nil
+        case .preview: KeyboardShortcut("p", modifiers: [.control, .shift])
         }
     }
 
@@ -381,7 +446,26 @@ private extension Presentation {
         case .rich: "Rich text (⌃⇧R)"
         case .raw: "Raw Markdown (⌃⇧M)"
         case .vim: "Vim (⌃⇧V)"
-        case .preview: "Preview"
+        case .preview: "Preview (⌃⇧P)"
         }
+    }
+}
+
+/// Title and icon, or the icon alone when the bar is too narrow for titles.
+private struct AdaptiveLabelStyle: LabelStyle {
+    let showsTitle: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        if showsTitle {
+            Label(configuration)
+        } else {
+            configuration.icon
+        }
+    }
+}
+
+private extension LabelStyle where Self == AdaptiveLabelStyle {
+    static func adaptive(_ showsTitle: Bool) -> AdaptiveLabelStyle {
+        AdaptiveLabelStyle(showsTitle: showsTitle)
     }
 }

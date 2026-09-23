@@ -14,6 +14,8 @@ import CoreText
 public enum RectoFonts {
     /// Source Serif 4 — prose.
     public static let proseFamily = "Source Serif 4"
+    /// The web's sans body face (`--font-app-sans`), for the reading-font toggle.
+    public static let sansFamily = "Figtree"
     /// JetBrains Mono — Markdown source, code blocks, inline code.
     public static let sourceFamily = "JetBrains Mono"
 
@@ -22,6 +24,8 @@ public enum RectoFonts {
         "SourceSerif4-BoldIt", "SourceSerif4-Semibold",
         "JetBrainsMono-Regular", "JetBrainsMono-Italic",
         "JetBrainsMono-Bold", "JetBrainsMono-BoldItalic",
+        "Figtree-Regular", "Figtree-Italic", "Figtree-SemiBold",
+        "Figtree-Bold", "Figtree-BoldItalic",
     ]
 
     private static var didRegister = false

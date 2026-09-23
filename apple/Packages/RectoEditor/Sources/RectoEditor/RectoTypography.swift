@@ -50,6 +50,10 @@ public struct RectoTypography: Sendable, Equatable {
     /// Source Serif 4, 19 pt — rich and preview.
     public static let prose = RectoTypography(family: RectoFonts.proseFamily, baseSize: 19)
 
+    /// Figtree at the prose metrics: the web's sans reading font. Same size and
+    /// rhythm as the serif so toggling moves no line breaks it does not have to.
+    public static let proseSans = RectoTypography(family: RectoFonts.sansFamily, baseSize: 19)
+
     /// JetBrains Mono, 17.5 pt — raw. Headings still change weight and size so
     /// the source has structure, but far less than in prose: source is read as
     /// source.
@@ -61,9 +65,13 @@ public struct RectoTypography: Sendable, Equatable {
         tracking: 0
     )
 
-    /// The scale for a presentation, at the reader's text size.
-    public static func forPresentation(_ presentation: Presentation, scale: CGFloat = 1) -> RectoTypography {
-        var typography = presentation.usesProseScale ? Self.prose : Self.source
+    /// The scale for a presentation, at the reader's text size. The reading
+    /// font picks the prose face; source is always monospaced.
+    public static func forPresentation(
+        _ presentation: Presentation, scale: CGFloat = 1, readingFont: ReadingFont = .serif
+    ) -> RectoTypography {
+        let prose = readingFont == .sans ? Self.proseSans : Self.prose
+        var typography = presentation.usesProseScale ? prose : Self.source
         typography.scale = min(max(scale, 0.8), 2.0)
         return typography
     }
@@ -91,4 +99,10 @@ public struct RectoTypography: Sendable, Equatable {
             ? .monospacedSystemFont(ofSize: resolvedSize, weight: .regular)
             : .systemFont(ofSize: resolvedSize)
     }
+}
+
+/// The writing body's typeface: the web's `ReadingFont`.
+public enum ReadingFont: String, Sendable, CaseIterable {
+    case sans
+    case serif
 }

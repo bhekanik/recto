@@ -50,6 +50,29 @@ struct StylerTests {
         #expect(styler.presenting(.preview).typography.family == RectoFonts.proseFamily)
     }
 
+    @Test("the sans reading font is Figtree at the prose metrics, and survives a lens switch")
+    func sansReadingFont() {
+        #expect(RectoFonts.isAvailable(RectoFonts.sansFamily))
+        #expect(RectoTypography.proseSans.bodyFont.familyName == RectoFonts.sansFamily)
+        #expect(RectoTypography.proseSans.baseSize == RectoTypography.prose.baseSize)
+
+        let sans = MarkdownStyler(presentation: .rich, readingFont: .sans)
+        #expect(sans.typography.family == RectoFonts.sansFamily)
+        #expect(sans.presenting(.raw).typography.family == RectoFonts.sourceFamily)
+        #expect(sans.presenting(.raw).presenting(.preview).typography.family == RectoFonts.sansFamily)
+    }
+
+    @Test("the dark palettes are distinct and keep the ink ramp readable on the sheet")
+    func darkPalettes() {
+        let palettes: [RectoEditorTheme] = [.twilight, .aurora, .dawn, .moonlit]
+        #expect(Set(palettes.map(\.styleRevision)).count == 4)
+        for palette in palettes {
+            let ink = palette.ink.usingColorSpace(.sRGB)!.brightnessComponent
+            let sheet = palette.sheet.usingColorSpace(.sRGB)!.brightnessComponent
+            #expect(ink - sheet > 0.6)
+        }
+    }
+
     @Test("Recto owns undo, so the engine registers nothing")
     func undoIsExternal() {
         #expect(MarkdownStyler().engineConfiguration().undo == .external)

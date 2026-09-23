@@ -13,6 +13,7 @@ struct CloudDocumentView: View {
     @State private var openingError: String?
     @State private var chrome: EditorHostController
     @State private var vim = VimHostState()
+    @State private var zen = ZenMode()
     @Environment(\.rectoWebOrigin) private var webOrigin
     @AppStorage(PresentationPreference.key) private var storedPresentation: String?
     /// This window's lens. `nil` until it appears, when it takes the stored
@@ -55,6 +56,7 @@ struct CloudDocumentView: View {
             await open()
         }
         .onDisappear {
+            zen.leave()
             let closing = model
             model = nil
             Task { await closing?.close() }
@@ -71,7 +73,9 @@ struct CloudDocumentView: View {
 
     private func choose(_ presentation: Presentation) {
         chosenPresentation = presentation
-        storedPresentation = presentation.rawValue
+        if PresentationPreference.isStorable(presentation) {
+            storedPresentation = presentation.rawValue
+        }
     }
 
     private func editor(_ model: CloudDocumentModel) -> some View {
@@ -84,12 +88,8 @@ struct CloudDocumentView: View {
             } else if model.state.syncState == .failed {
                 statusBanner("Sync failed. Your changes remain on this Mac.", color: .orange)
             }
-            if settings.showToolbar {
-                TopFormatToolbar(
-                    theme: styler.theme,
-                    presentation: styler.presentation,
-                    actions: chrome.formatToolbarActions
-                )
+            if settings.showToolbar, !zen.hidesChrome {
+                toolbar(styler)
             }
             RectoEditorView(
                 storage: model.storage,
@@ -104,39 +104,28 @@ struct CloudDocumentView: View {
             )
             .frame(minWidth: 620, minHeight: 500)
             .background(WritingControlsHost(controller: chrome.writingController))
-            if settings.showStatusBar {
-                EditorStatusBar(
-                    presentation: styler.presentation,
-                    isEditable: model.isEditable,
-                    storage: model.storage,
-                    settings: settings,
-                    theme: styler.theme,
-                    vimController: vim.controller,
-                    onSelect: choose
-                ) {
-                    HStack(spacing: 8) {
-                        OpenInWebButton(
-                            enabled: WebHandoff.isEnabled(
-                                convexId: model.state.convexId, webOrigin: webOrigin),
-                            help: WebHandoff.disabledReason(
-                                convexId: model.state.convexId, webOrigin: webOrigin),
-                            theme: styler.theme
-                        ) {
-                            openInWeb(convexId: model.state.convexId)
-                        }
-                        SyncIndicator(
-                            state: model.state.syncState,
-                            pendingCount: model.pendingEditCount,
-                            theme: styler.theme
-                        )
-                    }
-                }
+            if settings.showStatusBar, !zen.hidesChrome {
+                statusBar(model, styler)
             }
         }
+        .overlay(alignment: .top) {
+            if zen.showsOverlayChrome, settings.showToolbar {
+                toolbar(styler).onHover(perform: zen.pointerOverChrome)
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if zen.showsOverlayChrome, settings.showStatusBar {
+                statusBar(model, styler).onHover(perform: zen.pointerOverChrome)
+            }
+        }
+        .animation(.easeOut(duration: 0.15), value: zen.showsOverlayChrome)
+        .preference(key: ZenPreferenceKey.self, value: zen.isOn)
         .onAppear {
             chrome.undo = { [model] in Task { await model.undo() } }
             chrome.redo = { [model] in Task { await model.redo() } }
             chrome.choosePresentation = choose
+            chrome.currentPresentation = { [model] in self.styler(model).presentation }
+            chrome.zen = zen
             chrome.cloud = api.map { CloudDocumentContext(api: $0, convexId: model.state.convexId) }
             vim.controller.history = model
             vim.controller.onSave = { Task { await model.save() } }
@@ -153,6 +142,45 @@ struct CloudDocumentView: View {
         // No window-toolbar undo/redo: TopFormatToolbar owns the buttons (web
         // parity) and the Edit menu owns the chords, dispatched through
         // EditorHostRegistry so ⌘Z still undoes in this window.
+    }
+
+    private func toolbar(_ styler: MarkdownStyler) -> some View {
+        TopFormatToolbar(
+            theme: styler.theme,
+            presentation: styler.presentation,
+            actions: chrome.formatToolbarActions
+        )
+    }
+
+    private func statusBar(_ model: CloudDocumentModel, _ styler: MarkdownStyler) -> some View {
+        EditorStatusBar(
+            presentation: styler.presentation,
+            isEditable: model.isEditable,
+            storage: model.storage,
+            settings: settings,
+            theme: styler.theme,
+            vimController: vim.controller,
+            zen: zen,
+            onToggleZen: chrome.toggleZen,
+            onSelect: choose
+        ) {
+            HStack(spacing: 8) {
+                OpenInWebButton(
+                    enabled: WebHandoff.isEnabled(
+                        convexId: model.state.convexId, webOrigin: webOrigin),
+                    help: WebHandoff.disabledReason(
+                        convexId: model.state.convexId, webOrigin: webOrigin),
+                    theme: styler.theme
+                ) {
+                    openInWeb(convexId: model.state.convexId)
+                }
+                SyncIndicator(
+                    state: model.state.syncState,
+                    pendingCount: model.pendingEditCount,
+                    theme: styler.theme
+                )
+            }
+        }
     }
 
     private func divergenceBanner(_ model: CloudDocumentModel) -> some View {
