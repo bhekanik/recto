@@ -39,6 +39,7 @@
 		914DD232485A7200442F54CF /* SyncIndicator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CB4981001B07AA443DF62E5 /* SyncIndicator.swift */; };
 		94CE851A6BF9F407B0C2ED90 /* RootForegroundInterleavingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCEBFE1A5165F1BE37FD346D /* RootForegroundInterleavingTests.swift */; };
 		9A0126F78D54CBD645461F94 /* VimPresentationHostTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59B4F0B273ADA1DDC96FDDD0 /* VimPresentationHostTests.swift */; };
+		9FB703FFE9E9279098841DC8 /* ZenMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA3A74D0D69F9E702408570F /* ZenMode.swift */; };
 		A69E275C753052A3B33B0261 /* MarkdownHandlerSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26EF72694687925314503054 /* MarkdownHandlerSettings.swift */; };
 		A7B6B93988B966AC74FECF57 /* DocumentLinkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 974F77168BF315CC83C58C3E /* DocumentLinkTests.swift */; };
 		AA66841AEE7747CE3146A7BA /* WindowToolbarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0B936E706CD1B1EC1FF9571 /* WindowToolbarTests.swift */; };
@@ -55,6 +56,7 @@
 		D0CB31577F7324EF57F36DB5 /* EditorStatusBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 667B77000492C546D56B2307 /* EditorStatusBar.swift */; };
 		D55F86FAC4D81DFAFF619FBE /* VimUndoRegimeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD732FDE9A42768F4D278301 /* VimUndoRegimeTests.swift */; };
 		D8373D06A45E37210DF0F78A /* PresentationPreference.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DFB77EE2FCD168B679A47D4 /* PresentationPreference.swift */; };
+		DAA7CABAF7A809203F3E3E91 /* ZenModeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60B94F31BA7DC9B46D6FD841 /* ZenModeTests.swift */; };
 		E02A3B1FE8A01024A31CBDC5 /* WritingControlsHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = C23DDE416656399FB4E41FEF /* WritingControlsHost.swift */; };
 		E2C8A1EB9E80686B323D0A61 /* AppConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E9FB961CB61B80D498AC7F0 /* AppConfiguration.swift */; };
 		E724056F89B96985B9A6DB0B /* EditorStatusBarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 250C2D1E689D4E327F47CA43 /* EditorStatusBarTests.swift */; };
@@ -99,6 +101,7 @@
 		59B4F0B273ADA1DDC96FDDD0 /* VimPresentationHostTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VimPresentationHostTests.swift; sourceTree = "<group>"; };
 		5A9B27E0E9570FB896924145 /* MarkdownHandlerSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownHandlerSettingsTests.swift; sourceTree = "<group>"; };
 		5EF8528C9DE808904C45C672 /* VimHistoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VimHistoryTests.swift; sourceTree = "<group>"; };
+		60B94F31BA7DC9B46D6FD841 /* ZenModeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZenModeTests.swift; sourceTree = "<group>"; };
 		65710FD2CFB1ED4E06D82FE9 /* r-mono.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "r-mono.png"; sourceTree = "<group>"; };
 		667B77000492C546D56B2307 /* EditorStatusBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorStatusBar.swift; sourceTree = "<group>"; };
 		688482441E8C255771A630E8 /* RectoDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RectoDocument.swift; sourceTree = "<group>"; };
@@ -128,6 +131,7 @@
 		C23DDE416656399FB4E41FEF /* WritingControlsHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WritingControlsHost.swift; sourceTree = "<group>"; };
 		C392C824BA3377AB65598207 /* ApplicationModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplicationModelTests.swift; sourceTree = "<group>"; };
 		C81BEB51E9CAED45132B82D2 /* RectoStore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = RectoStore; path = ../Packages/RectoStore; sourceTree = SOURCE_ROOT; };
+		CA3A74D0D69F9E702408570F /* ZenMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZenMode.swift; sourceTree = "<group>"; };
 		CD732FDE9A42768F4D278301 /* VimUndoRegimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VimUndoRegimeTests.swift; sourceTree = "<group>"; };
 		D09B8E4F436878C6794F11AB /* ReadingTime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingTime.swift; sourceTree = "<group>"; };
 		DA53218E8DA7B61CDFDC0AE8 /* RectoSync */ = {isa = PBXFileReference; lastKnownFileType = folder; name = RectoSync; path = ../Packages/RectoSync; sourceTree = SOURCE_ROOT; };
@@ -219,6 +223,7 @@
 				6CB4981001B07AA443DF62E5 /* SyncIndicator.swift */,
 				526C9D721D8D013900C03100 /* TopFormatToolbar.swift */,
 				C23DDE416656399FB4E41FEF /* WritingControlsHost.swift */,
+				CA3A74D0D69F9E702408570F /* ZenMode.swift */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
@@ -281,6 +286,7 @@
 				59B4F0B273ADA1DDC96FDDD0 /* VimPresentationHostTests.swift */,
 				CD732FDE9A42768F4D278301 /* VimUndoRegimeTests.swift */,
 				E0B936E706CD1B1EC1FF9571 /* WindowToolbarTests.swift */,
+				60B94F31BA7DC9B46D6FD841 /* ZenModeTests.swift */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -414,6 +420,7 @@
 				9A0126F78D54CBD645461F94 /* VimPresentationHostTests.swift in Sources */,
 				D55F86FAC4D81DFAFF619FBE /* VimUndoRegimeTests.swift in Sources */,
 				AA66841AEE7747CE3146A7BA /* WindowToolbarTests.swift in Sources */,
+				DAA7CABAF7A809203F3E3E91 /* ZenModeTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -448,6 +455,7 @@
 				914DD232485A7200442F54CF /* SyncIndicator.swift in Sources */,
 				56B00C95C1D0711D83C520C3 /* TopFormatToolbar.swift in Sources */,
 				E02A3B1FE8A01024A31CBDC5 /* WritingControlsHost.swift in Sources */,
+				9FB703FFE9E9279098841DC8 /* ZenMode.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

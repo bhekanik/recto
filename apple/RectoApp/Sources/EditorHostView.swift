@@ -10,6 +10,7 @@ struct EditorHostView: View {
     @StateObject private var history: DocumentUndoHistory
     @State private var chrome: EditorHostController
     @State private var vim = VimHostState()
+    @State private var zen = ZenMode()
     @AppStorage(PresentationPreference.key) private var storedPresentation: String?
     /// This window's lens. `nil` until it appears, when it takes the stored
     /// default; after that only the writer's own choice moves it.
@@ -52,18 +53,38 @@ struct EditorHostView: View {
 
     private func choose(_ presentation: Presentation) {
         chosenPresentation = presentation
-        storedPresentation = presentation.rawValue
+        if PresentationPreference.isStorable(presentation) {
+            storedPresentation = presentation.rawValue
+        }
+    }
+
+    private func toolbar(_ styler: MarkdownStyler) -> some View {
+        TopFormatToolbar(
+            theme: styler.theme,
+            presentation: styler.presentation,
+            actions: chrome.formatToolbarActions
+        )
+    }
+
+    private func statusBar(_ styler: MarkdownStyler) -> some View {
+        EditorStatusBar(
+            presentation: styler.presentation,
+            isEditable: isEditable,
+            storage: storage,
+            settings: settings,
+            theme: styler.theme,
+            vimController: vim.controller,
+            zen: zen,
+            onToggleZen: chrome.toggleZen,
+            onSelect: choose
+        )
     }
 
     var body: some View {
         let styler = settings.styler(presentation: presentation)
         VStack(spacing: 0) {
-            if settings.showToolbar {
-                TopFormatToolbar(
-                    theme: styler.theme,
-                    presentation: styler.presentation,
-                    actions: chrome.formatToolbarActions
-                )
+            if settings.showToolbar, !zen.hidesChrome {
+                toolbar(styler)
             }
             RectoEditorView(
                 storage: storage,
@@ -78,18 +99,21 @@ struct EditorHostView: View {
             )
             .frame(minWidth: 720, minHeight: 540)
             .background(WritingControlsHost(controller: chrome.writingController))
-            if settings.showStatusBar {
-                EditorStatusBar(
-                    presentation: styler.presentation,
-                    isEditable: isEditable,
-                    storage: storage,
-                    settings: settings,
-                    theme: styler.theme,
-                    vimController: vim.controller,
-                    onSelect: choose
-                )
+            if settings.showStatusBar, !zen.hidesChrome {
+                statusBar(styler)
             }
         }
+        .overlay(alignment: .top) {
+            if zen.showsOverlayChrome, settings.showToolbar {
+                toolbar(styler).onHover(perform: zen.pointerOverChrome)
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if zen.showsOverlayChrome, settings.showStatusBar {
+                statusBar(styler).onHover(perform: zen.pointerOverChrome)
+            }
+        }
+        .animation(.easeOut(duration: 0.15), value: zen.showsOverlayChrome)
         .onAppear {
             if chosenPresentation == nil {
                 chosenPresentation = PresentationPreference.choice(from: storedPresentation)
@@ -98,6 +122,8 @@ struct EditorHostView: View {
             chrome.undo = { [history] in history.undoManager.undo() }
             chrome.redo = { [history] in history.undoManager.redo() }
             chrome.choosePresentation = choose
+            chrome.currentPresentation = { presentation }
+            chrome.zen = zen
             vim.controller.history = history
             vim.controller.typewriter = chrome.typewriter
             vim.controller.onSave = {
@@ -107,6 +133,7 @@ struct EditorHostView: View {
             }
         }
         .onDisappear {
+            zen.leave()
             vim.sync(seam: nil, presentation: presentation)
             history.detach()
         }

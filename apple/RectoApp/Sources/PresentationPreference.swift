@@ -8,9 +8,24 @@ import RectoEditor
 enum PresentationPreference {
     static let key = "editor.presentation"
 
-    /// What the writer can pick, in the web's `MODE_RING` order. Preview is not
-    /// a choice: it is what a read-only document gets, whatever is stored.
+    /// The lenses a new window may open in, in the web's `MODE_RING` order.
+    /// Preview is switchable but never stored: a window opened read-only
+    /// because the last one was previewed would look broken.
     static let choices: [Presentation] = [.rich, .raw, .vim]
+
+    /// The web's `MODE_RING`: every lens the switcher and the cycle chords reach.
+    static let ring: [Presentation] = choices + [.preview]
+
+    /// `nextMode` / `prevMode` in `lib/modes/types.ts`.
+    static func cycled(from current: Presentation, by step: Int) -> Presentation {
+        let index = ring.firstIndex(of: current) ?? 0
+        return ring[((index + step) % ring.count + ring.count) % ring.count]
+    }
+
+    /// Whether choosing `presentation` should become the next window's default.
+    static func isStorable(_ presentation: Presentation) -> Bool {
+        choices.contains(presentation)
+    }
 
     /// The stored raw value as a choice. Absent, unknown or unpickable → rich.
     static func choice(from stored: String?) -> Presentation {

@@ -3,10 +3,13 @@ import SwiftUI
 
 struct CloudLibraryView: View {
     let model: RectoApplicationModel
+    @State private var columnVisibility = NavigationSplitViewVisibility.automatic
+    /// What the sidebar was before zen hid it, to put it back after.
+    @State private var visibilityBeforeZen: NavigationSplitViewVisibility?
 
     var body: some View {
         @Bindable var model = model
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             List(model.documents, id: \.localId, selection: $model.selectedDocumentId) { document in
                 DocumentRow(document: document)
                     .tag(document.localId)
@@ -32,6 +35,15 @@ struct CloudLibraryView: View {
                     systemImage: "doc.text",
                     description: Text("Create a document to start writing offline.")
                 )
+            }
+        }
+        .onPreferenceChange(ZenPreferenceKey.self) { isZen in
+            if isZen {
+                visibilityBeforeZen = visibilityBeforeZen ?? columnVisibility
+                columnVisibility = .detailOnly
+            } else if let previous = visibilityBeforeZen {
+                columnVisibility = previous
+                visibilityBeforeZen = nil
             }
         }
         .overlay(alignment: .bottom) {

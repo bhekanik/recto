@@ -20,6 +20,8 @@ public struct MarkdownStyler: Sendable, Equatable {
     public var theme: RectoEditorTheme
     /// Type scale. Defaults to the one the presentation implies.
     public var typography: RectoTypography
+    /// The prose face, kept here so a lens switch rebuilds the right scale.
+    public var readingFont: ReadingFont
     /// Width of the centred writing column. `nil` fills the view.
     public var readingWidth: CGFloat?
     /// Spelling and grammar squiggles. The engine reads this when it builds
@@ -33,13 +35,15 @@ public struct MarkdownStyler: Sendable, Equatable {
         presentation: Presentation = .rich,
         theme: RectoEditorTheme = .twilight,
         typography: RectoTypography? = nil,
+        readingFont: ReadingFont = .serif,
         readingWidth: CGFloat? = 720,
         spellChecking: Bool = true,
         undo: UndoPolicy = .external
     ) {
         self.presentation = presentation
         self.theme = theme
-        self.typography = typography ?? .forPresentation(presentation)
+        self.readingFont = readingFont
+        self.typography = typography ?? .forPresentation(presentation, readingFont: readingFont)
         self.readingWidth = readingWidth
         self.spellChecking = spellChecking
         self.undo = undo
@@ -50,7 +54,8 @@ public struct MarkdownStyler: Sendable, Equatable {
     public func presenting(_ presentation: Presentation) -> MarkdownStyler {
         var copy = self
         copy.presentation = presentation
-        copy.typography = .forPresentation(presentation, scale: typography.scale)
+        copy.typography = .forPresentation(
+            presentation, scale: typography.scale, readingFont: readingFont)
         return copy
     }
 

@@ -52,7 +52,23 @@ struct PresentationPreferenceTests {
     @Test("the ring is the web's order and a stored vim decodes to vim")
     func vimIsAChoice() {
         #expect(PresentationPreference.choices == [.rich, .raw, .vim])
+        #expect(PresentationPreference.ring == [.rich, .raw, .vim, .preview])
         #expect(PresentationPreference.choice(from: "vim") == .vim)
+    }
+
+    @Test("cycling walks MODE_RING both ways and wraps")
+    func cycling() {
+        #expect(PresentationPreference.cycled(from: .rich, by: 1) == .raw)
+        #expect(PresentationPreference.cycled(from: .vim, by: 1) == .preview)
+        #expect(PresentationPreference.cycled(from: .preview, by: 1) == .rich)
+        #expect(PresentationPreference.cycled(from: .rich, by: -1) == .preview)
+        #expect(PresentationPreference.cycled(from: .raw, by: -1) == .rich)
+    }
+
+    @Test("preview is switchable but never becomes the next window's default")
+    func previewIsNotStored() {
+        #expect(!PresentationPreference.isStorable(.preview))
+        #expect(PresentationPreference.choices.allSatisfy(PresentationPreference.isStorable))
     }
 
     @Test("a window's own choice outranks the stored default", arguments: PresentationPreference.choices)
