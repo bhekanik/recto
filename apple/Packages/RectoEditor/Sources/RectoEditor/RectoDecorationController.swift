@@ -34,6 +34,34 @@ public final class RectoDecorationController: NSObject {
         }
     }
 
+    /// A located comment: its source range, its id, and whether it is the one
+    /// the comments panel has in focus.
+    public struct CommentMark: Equatable, Sendable {
+        public var range: NSRange
+        public var id: String
+        public var isFocused: Bool
+
+        public init(range: NSRange, id: String, isFocused: Bool = false) {
+            self.range = range
+            self.id = id
+            self.isFocused = isFocused
+        }
+    }
+
+    /// The web's `comment-wash` / `comment-wash-strong` tokens.
+    static func commentWash(focused: Bool, dark: Bool) -> NSColor {
+        (dark ? NSColor.oklch(0.82, 0.09, 195) : NSColor.oklch(0.55, 0.1, 195))
+            .withAlphaComponent(focused ? 0.28 : 0.16)
+    }
+
+    public var commentMarks: [CommentMark] = [] {
+        didSet { if commentMarks != oldValue { apply() } }
+    }
+
+    /// A click landed inside a comment's highlight: the web's
+    /// `dispatchOpenComment`, so the embedder can open the panel on it.
+    public var onOpenComment: ((String) -> Void)?
+
     /// The web's `.recto-lint--*` colours (`packages/design-tokens`), dark and light.
     static func lintColor(_ category: String, dark: Bool) -> NSColor {
         switch (category, dark) {
@@ -71,6 +99,7 @@ public final class RectoDecorationController: NSObject {
     /// What this controller set, so clearing never touches another owner's
     /// rendering attributes (marked text, say).
     private var appliedDim: [NSRange] = []
+    private var appliedComments: [NSRange] = []
 
     public override init() {
         super.init()
@@ -93,7 +122,10 @@ public final class RectoDecorationController: NSObject {
         observers.append(center.addObserver(
             forName: NSTextView.didChangeSelectionNotification, object: textView, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { if self?.focusDim != nil { self?.apply() } }
+            MainActor.assumeIsolated {
+                if self?.focusDim != nil { self?.apply() }
+                self?.openCommentUnderClick()
+            }
         })
         if let storage = textView.textStorage {
             observers.append(center.addObserver(
@@ -128,20 +160,36 @@ public final class RectoDecorationController: NSObject {
         seam = nil
     }
 
+    /// A mouse click (not a caret moved by typing) that lands inside a comment.
+    private func openCommentUnderClick() {
+        guard let onOpenComment, let textView,
+              let type = NSApp.currentEvent?.type, type == .leftMouseDown || type == .leftMouseUp
+        else { return }
+        let caret = textView.selectedRange()
+        guard caret.length == 0,
+              let mark = commentMarks.first(where: { NSLocationInRange(caret.location, $0.range) })
+        else { return }
+        onOpenComment(mark.id)
+    }
+
     /// Carry the lint marks through an edit so the underlines stay on their
     /// words while typing; the embedder's next lint pass replaces them. A
     /// mark the edit touched is dropped rather than guessed at.
     private func textDidChange(editedRange: NSRange, delta: Int) {
         let oldEnd = NSMaxRange(editedRange) - delta
         let editStart = editedRange.location
-        lintMarks = lintMarks.compactMap { mark in
-            if NSMaxRange(mark.range) <= editStart { return mark }
-            if mark.range.location >= oldEnd {
-                var moved = mark
-                moved.range.location += delta
-                return moved
-            }
+        func shift(_ range: NSRange) -> NSRange? {
+            if NSMaxRange(range) <= editStart { return range }
+            if range.location >= oldEnd { return NSRange(location: range.location + delta, length: range.length) }
             return nil
+        }
+        lintMarks = lintMarks.compactMap { mark in
+            shift(mark.range).map { var moved = mark; moved.range = $0; return moved }
+        }
+        // A comment the edit touched keeps its highlight until the embedder
+        // relocates it from the new text; it is only shifted when untouched.
+        commentMarks = commentMarks.compactMap { mark in
+            shift(mark.range).map { var moved = mark; moved.range = $0; return moved }
         }
         // Rendering attributes are laid down against TextKit's own locations;
         // lay them again once this edit has been processed.
@@ -176,6 +224,10 @@ public final class RectoDecorationController: NSObject {
         }
 
         let dark = theme.sheet.usingColorSpace(.sRGB).map { $0.brightnessComponent < 0.5 } ?? true
+        for mark in commentMarks where NSMaxRange(mark.range) <= text.length && mark.range.length > 0 {
+            setRendering([.backgroundColor: Self.commentWash(focused: mark.isFocused, dark: dark)], for: mark.range)
+            appliedComments.append(mark.range)
+        }
         seam.underlines = lintMarks
             .filter { NSMaxRange($0.range) <= text.length && $0.range.length > 0 }
             .map { MarkdownUnderline(range: $0.range, color: Self.lintColor($0.category, dark: dark)) }
@@ -187,7 +239,11 @@ public final class RectoDecorationController: NSObject {
         for range in appliedDim {
             removeRendering(.foregroundColor, for: clamp(range, to: length))
         }
+        for range in appliedComments {
+            removeRendering(.backgroundColor, for: clamp(range, to: length))
+        }
         appliedDim.removeAll()
+        appliedComments.removeAll()
     }
 
     private func clamp(_ range: NSRange, to length: Int) -> NSRange {

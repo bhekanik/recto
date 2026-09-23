@@ -151,6 +151,18 @@ struct DecorationControllerTests {
         ])
     }
 
+    @Test("comment highlights paint their range and follow edits before them")
+    func commentHighlights() throws {
+        let mounted = try mount()
+        defer { mounted.harness.tearDown() }
+        let word = range("Third", in: mounted)
+        mounted.decorations.commentMarks = [.init(range: word, id: "c1")]
+        #expect(renderingColor(at: word.location + 1, in: mounted, key: .backgroundColor) != nil)
+        #expect(renderingColor(at: word.location - 3, in: mounted, key: .backgroundColor) == nil)
+        mounted.textView.insertText("Hi ", replacementRange: NSRange(location: 0, length: 0))
+        #expect(mounted.decorations.commentMarks.first?.range.location == word.location + 3)
+    }
+
     @Test("detaching turns the engine's dimming off")
     func detachClears() throws {
         let mounted = try mount()

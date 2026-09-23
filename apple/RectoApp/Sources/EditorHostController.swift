@@ -4,6 +4,14 @@ import RectoEditor
 import RectoSync
 import SwiftUI
 
+/// The review actions a synced host carries out.
+struct ReviewHooks {
+    var openSharing: () -> Void
+    var openReview: () -> Void
+    var toggleComments: () -> Void
+    var addComment: () -> Void
+}
+
 /// What a synced document's editor can say to the server beyond sync: the
 /// function-call surface and the document's server id, which stays `nil`
 /// until the first sync publishes it.
@@ -42,6 +50,8 @@ final class EditorHostController {
     /// version. File documents have AppKit undo and no history panel.
     var openHistory: ((HistoryView) -> Void)?
     var checkpoint: (() -> Void)?
+    /// Set by the synced host: sharing, comments and suggestions.
+    var review: ReviewHooks?
     /// The window's panes, when this editor is one of them.
     var panes: PaneCommands?
     /// The writer moved into this editor: a click or a caret move while it is
@@ -108,8 +118,12 @@ final class EditorHostController {
     /// one TextKit 2 route plan 024 allows. The typewriter layer hears the
     /// selection change and centers the line itself when it is on.
     func jump(toHeading heading: OutlineHeading) {
+        jump(to: NSRange(location: heading.offset, length: 0))
+    }
+
+    /// Select `range` and bring it to the middle of the view.
+    func jump(to range: NSRange) {
         guard let seam else { return }
-        let range = NSRange(location: heading.offset, length: 0)
         seam.selectedRange = range
         _ = seam.scroll(range: range, position: .center)
         _ = seam.focus()

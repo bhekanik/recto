@@ -24,6 +24,10 @@ struct CloudDocumentView: View {
     @State private var historyView: HistoryView?
     @State private var history: DocumentHistoryModel?
     @State private var autoVersions = AutoVersioning()
+    @State private var comments = CommentsModel()
+    @State private var showsComments = false
+    @State private var showsSharing = false
+    @State private var review: ReviewSurfaceModel?
     @Environment(\.rectoWebOrigin) private var webOrigin
     @AppStorage(PresentationPreference.key) private var storedPresentation: String?
     /// This window's lens. `nil` until it appears, when it takes the stored
@@ -70,6 +74,7 @@ struct CloudDocumentView: View {
         .onDisappear {
             zen.leave()
             autoVersions.stop()
+            comments.stop()
             let closing = model
             let closingStorage = storage
             model = nil
@@ -133,6 +138,20 @@ struct CloudDocumentView: View {
         .onDisappear { WritingStatsModel.shared.flush() }
         .preference(key: ZenPreferenceKey.self, value: zen.isOn)
         .onAppear { wire(model) }
+        .background {
+            CommentHighlightTracker(storage: paneStorage(model), comments: comments, decorations: chrome.decorations)
+        }
+        .sheet(isPresented: $showsSharing) {
+            ShareSheet(title: model.state.title, cloud: chrome.cloud, dismiss: { showsSharing = false })
+        }
+        .sheet(isPresented: Binding(get: { review != nil }, set: { if !$0 { review?.stop(); review = nil } })) {
+            if let review {
+                ReviewSurface(review: review, settings: settings, theme: styler.theme, dismiss: {
+                    review.stop()
+                    self.review = nil
+                })
+            }
+        }
         .modifier(DocumentChanges(model: model, react: { react($0, model) }, panesActive: panes?.isActive, historyView: historyView))
         .onChange(of: settings.spellcheck) { chrome.applySettings() }
         .onChange(of: settings.focusDim) { chrome.applySettings() }
@@ -162,6 +181,24 @@ struct CloudDocumentView: View {
         chrome.checkpoint = { [model] in checkpoint(model) }
         chrome.onFocus = panes?.activate ?? {}
         chrome.cloud = cloudContext(model, convexId: model.state.convexId)
+        comments.follow(chrome.cloud)
+        chrome.decorations.onOpenComment = { id in
+            showsComments = true
+            comments.focusedId = id
+        }
+        chrome.review = ReviewHooks(
+            openSharing: { showsSharing = true },
+            openReview: {
+                let surface = ReviewSurfaceModel()
+                surface.follow(chrome.cloud)
+                review = surface
+            },
+            toggleComments: { showsComments.toggle() },
+            addComment: { [model] in
+                let storage = paneStorage(model)
+                comments.startDraft(markdown: storage.markdown, selection: chrome.seam?.selectedRange ?? NSRange())
+                if comments.draft != nil { showsComments = true }
+            })
         chrome.documentTitle = model.state.title
         vim.controller.history = model
         vim.controller.onSave = { Task { await model.save() } }
@@ -176,6 +213,7 @@ struct CloudDocumentView: View {
         case .convexId(let convexId):
             chrome.cloud = cloudContext(model, convexId: convexId)
             history?.followVersions(chrome.cloud)
+            comments.follow(chrome.cloud)
         case .title(let title):
             chrome.documentTitle = title
         case .head:
@@ -228,6 +266,12 @@ struct CloudDocumentView: View {
             // Panes share the window, so each may be narrower than a window's page.
             .frame(minWidth: panes == nil ? 620 : 280, minHeight: panes == nil ? 500 : 200)
             .background(WritingControlsHost(controller: chrome.writingController))
+            if showsComments, !zen.hidesChrome {
+                CommentsPanel(
+                    comments: comments, theme: styler.theme,
+                    jump: { [chrome] range in chrome.jump(to: range) },
+                    close: { showsComments = false })
+            }
             if let history, historyView != nil, !zen.hidesChrome {
                 HistoryPanel(history: history, settings: settings, theme: styler.theme, view: $historyView)
             }

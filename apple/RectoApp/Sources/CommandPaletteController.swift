@@ -175,6 +175,10 @@ final class CommandPaletteController {
             if section == .history, editor?.openHistory == nil {
                 actions.removeAll { ["checkpoint", "undo-tree", "version-history"].contains($0.id) }
             }
+            // Sharing, comments and suggestions need the server.
+            if section == .review, editor?.review == nil {
+                actions.removeAll()
+            }
             // Panes live in the library window; a file document's window has none.
             if section == .panes, editor?.panes == nil {
                 actions.removeAll()
@@ -256,6 +260,14 @@ final class CommandPaletteController {
             editor?.openHistory?(.tree)
         case "version-history":
             editor?.openHistory?(.versions)
+        case "manage-sharing":
+            editor?.review?.openSharing()
+        case "review-surface":
+            editor?.review?.openReview()
+        case "toggle-comments":
+            editor?.review?.toggleComments()
+        case "add-comment":
+            editor?.review?.addComment()
         case "undo":
             editor?.undo()
         case "redo":
