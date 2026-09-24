@@ -34,6 +34,8 @@ const CHROME = {
 	onToggleLint: () => {},
 	lintCount: 0,
 	typewriter: false,
+	focusBlur: false,
+	onToggleFocusBlur: () => {},
 	onToggleTypewriter: () => {},
 	focusDim: false,
 	onToggleFocusDim: () => {},

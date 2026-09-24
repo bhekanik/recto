@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { Mode } from "@/lib/modes/types";
-import { isFindKey, shouldInterceptFind } from "./app-shortcuts";
+import {
+	type AppShortcutAction,
+	createAppShortcutHandler,
+	isFindKey,
+	shouldInterceptFind,
+} from "./app-shortcuts";
 
 function findEvent(overrides: Partial<KeyboardEvent> = {}): KeyboardEvent {
 	return {
@@ -44,5 +49,21 @@ describe("shouldInterceptFind", () => {
 
 	it("non-find keys never intercept, even in editable lenses", () => {
 		expect(shouldInterceptFind(findEvent({ key: "g" }), "rich")).toBe(false);
+	});
+});
+
+describe("focus blur chord", () => {
+	it("Ctrl+Shift+B toggles focus blur, as ⌃⇧B does in the Mac app", () => {
+		const actions: AppShortcutAction[] = [];
+		const handle = createAppShortcutHandler((action) => actions.push(action));
+		const event = new KeyboardEvent("keydown", {
+			key: "B",
+			ctrlKey: true,
+			shiftKey: true,
+			cancelable: true,
+		});
+		handle(event);
+		expect(actions).toEqual([{ type: "toggle-focus-blur" }]);
+		expect(event.defaultPrevented).toBe(true);
 	});
 });

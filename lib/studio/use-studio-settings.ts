@@ -92,6 +92,8 @@ export type StudioSettingsApi = StudioSettings & {
 	toggleGoalScope: () => void;
 	toggleTypewriter: () => void;
 	toggleFocusDim: () => void;
+	toggleFocusBlur: () => void;
+	toggleQuietChrome: () => void;
 	setFocusDimScope: (scope: FocusScope) => void;
 	cycleFocusDimScope: () => void;
 	toggleLint: () => void;
@@ -251,6 +253,14 @@ export function useStudioSettings(): StudioSettingsApi {
 		setSettings((s) => ({ ...s, focusDim: !s.focusDim }));
 	}, []);
 
+	const toggleFocusBlur = useCallback(() => {
+		setSettings((s) => ({ ...s, focusBlur: !s.focusBlur }));
+	}, []);
+
+	const toggleQuietChrome = useCallback(() => {
+		setSettings((s) => ({ ...s, quietChrome: !s.quietChrome }));
+	}, []);
+
 	const setFocusDimScope = useCallback((focusDimScope: FocusScope) => {
 		setSettings((s) => ({ ...s, focusDimScope }));
 	}, []);
@@ -341,6 +351,8 @@ export function useStudioSettings(): StudioSettingsApi {
 		toggleGoalScope,
 		toggleTypewriter,
 		toggleFocusDim,
+		toggleFocusBlur,
+		toggleQuietChrome,
 		setFocusDimScope,
 		cycleFocusDimScope,
 		toggleLint,

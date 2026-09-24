@@ -1,6 +1,7 @@
 "use client";
 
 import type { Id } from "@/convex/_generated/dataModel";
+import { dispatchFormat, type FormatCommand } from "@/lib/editor/format";
 import type { ExportSource } from "@/lib/export";
 import {
 	copyAsMarkdown,
@@ -11,7 +12,7 @@ import {
 } from "@/lib/export";
 import { macAppDocumentURL } from "@/lib/handoff/document-link";
 import type { HistoryController } from "@/lib/history/use-document-history";
-import type { ActionId } from "@/lib/keyboard/actions";
+import type { ActionId, FormatActionId } from "@/lib/keyboard/actions";
 import {
 	dispatchModeSwitch,
 	resolveModeAction,
@@ -204,6 +205,9 @@ export function createActionMap(
 		"toggle-toolbar": () => settings.toggleTopToolbar(),
 		"toggle-typewriter": () => settings.toggleTypewriter(),
 		"toggle-focus-dim": () => settings.toggleFocusDim(),
+		"toggle-focus-blur": () => settings.toggleFocusBlur(),
+		"toggle-quiet-chrome": () => settings.toggleQuietChrome(),
+		...formatActions(),
 		"cycle-dim-scope": () => settings.cycleFocusDimScope(),
 		"toggle-email-preview": () => settings.togglePreviewVariant(),
 		"set-goal": () => setGoalConfigOpen(true),
@@ -216,5 +220,24 @@ export function createActionMap(
 		"theme-aurora": () => settings.setTheme("aurora"),
 		"theme-dawn": () => settings.setTheme("dawn"),
 		"theme-moonlit": () => settings.setTheme("moonlit"),
+	};
+}
+
+/** The palette's Format entries: each runs the toolbar's command on the active pane. */
+function formatActions(): Record<FormatActionId, () => void> {
+	const format = (command: FormatCommand) => () => dispatchFormat(command);
+	return {
+		"format-bold": format("bold"),
+		"format-italic": format("italic"),
+		"format-strike": format("strike"),
+		"format-code": format("code"),
+		"format-link": format("link"),
+		"format-h1": format("h1"),
+		"format-h2": format("h2"),
+		"format-h3": format("h3"),
+		"format-quote": format("quote"),
+		"format-bulletList": format("bulletList"),
+		"format-orderedList": format("orderedList"),
+		"format-codeBlock": format("codeBlock"),
 	};
 }

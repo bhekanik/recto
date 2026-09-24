@@ -86,6 +86,14 @@ describe("coerceSettings", () => {
 		expect(result.lint).toBe(true);
 	});
 
+	it("focus blur ships off and quiet chrome on, as in the Mac app, and bad values fall back", () => {
+		expect(DEFAULTS.focusBlur).toBe(false);
+		expect(DEFAULTS.quietChrome).toBe(true);
+		const coerced = coerceSettings({ focusBlur: true, quietChrome: "no" });
+		expect(coerced.focusBlur).toBe(true);
+		expect(coerced.quietChrome).toBe(true);
+	});
+
 	it("clamps the reading scale into range", () => {
 		expect(coerceSettings({ readingScale: 99 }, DEFAULTS).readingScale).toBe(
 			READING_SCALE_MAX,

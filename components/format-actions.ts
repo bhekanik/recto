@@ -17,7 +17,8 @@ import {
 import type { FormatCommand } from "@/lib/editor/format";
 
 export type FormatAction = {
-	command: FormatCommand;
+	/** Every toolbar command but paragraph, which the toolbar has no button for. */
+	command: Exclude<FormatCommand, "paragraph">;
 	label: string;
 	icon: LucideIcon;
 };

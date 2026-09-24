@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { BLOCK_ACTIONS, INLINE_ACTIONS } from "@/components/format-actions";
+import { FORMAT_EVENT } from "@/lib/editor/format";
 import { SWITCH_MODE_EVENT } from "@/lib/events";
 import { ACTIONS, type ActionId } from "@/lib/keyboard/actions";
 import { type ActionMapDeps, createActionMap } from "./action-map";
@@ -27,6 +29,8 @@ function makeDeps(overrides: Partial<ActionMapDeps> = {}): ActionMapDeps {
 			toggleTopToolbar: vi.fn(),
 			toggleTypewriter: vi.fn(),
 			toggleFocusDim: vi.fn(),
+			toggleFocusBlur: vi.fn(),
+			toggleQuietChrome: vi.fn(),
 			cycleFocusDimScope: vi.fn(),
 			togglePreviewVariant: vi.fn(),
 			toggleGoalStyle: vi.fn(),
@@ -145,6 +149,35 @@ describe("createActionMap", () => {
 		map["toggle-lint-weasel"]();
 		expect(deps.settings.toggleLintCategory).toHaveBeenCalledWith("weasel");
 		expect(deps.settings.toggleLintCategory).toHaveBeenCalledTimes(4);
+	});
+
+	it("focus blur and quiet chrome toggle their settings", () => {
+		const deps = makeDeps();
+		const map = createActionMap(deps);
+		map["toggle-focus-blur"]();
+		expect(deps.settings.toggleFocusBlur).toHaveBeenCalledTimes(1);
+		map["toggle-quiet-chrome"]();
+		expect(deps.settings.toggleQuietChrome).toHaveBeenCalledTimes(1);
+	});
+
+	it("Format actions fire the toolbar's command at the active editor", () => {
+		const commands: string[] = [];
+		const listener = (event: Event) =>
+			commands.push((event as CustomEvent<{ command: string }>).detail.command);
+		window.addEventListener(FORMAT_EVENT, listener);
+		const map = createActionMap(makeDeps());
+		map["format-bold"]();
+		map["format-h2"]();
+		map["format-codeBlock"]();
+		window.removeEventListener(FORMAT_EVENT, listener);
+		expect(commands).toEqual(["bold", "h2", "codeBlock"]);
+	});
+
+	it("every toolbar button has a Format action in the palette", () => {
+		const ids = new Set(ACTIONS.map((a) => a.id));
+		for (const action of [...INLINE_ACTIONS, ...BLOCK_ACTIONS]) {
+			expect(ids.has(`format-${action.command}`)).toBe(true);
+		}
 	});
 
 	it("history actions go through the live controller and panel", () => {

@@ -24,6 +24,7 @@ export type AppShortcutAction =
 	| { type: "toggle-focus" }
 	| { type: "toggle-typewriter" }
 	| { type: "toggle-focus-dim" }
+	| { type: "toggle-focus-blur" }
 	| { type: "open-go-to-heading" }
 	| { type: "toggle-outline" }
 	| { type: "find-replace" }
@@ -238,6 +239,12 @@ export function createAppShortcutHandler(
 			event.preventDefault();
 			event.stopPropagation();
 			onAction({ type: "toggle-focus-dim" });
+			return;
+		}
+		if (matchCtrlShift(event, "b")) {
+			event.preventDefault();
+			event.stopPropagation();
+			onAction({ type: "toggle-focus-blur" });
 			return;
 		}
 		// AI (plan 009) — the studio handlers no-op when AI features are disabled.

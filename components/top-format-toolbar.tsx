@@ -8,6 +8,7 @@ import {
 	INLINE_ACTIONS,
 } from "@/components/format-actions";
 import { dispatchFormat } from "@/lib/editor/format";
+import { withShortcut } from "@/lib/keyboard/actions";
 import { cn } from "@/lib/utils";
 
 type TopFormatToolbarProps = {
@@ -34,7 +35,7 @@ function FormatButton({ action }: { action: FormatAction }) {
 	return (
 		<button
 			type="button"
-			title={action.label}
+			title={withShortcut(action.label, `format-${action.command}`)}
 			aria-label={action.label}
 			// Keep the editor's focus + selection when pressing a toolbar button.
 			onPointerDown={(event) => event.preventDefault()}
@@ -70,7 +71,7 @@ export function TopFormatToolbar({
 		>
 			<button
 				type="button"
-				title="Undo"
+				title={withShortcut("Undo", "undo")}
 				aria-label="Undo"
 				onPointerDown={(e) => e.preventDefault()}
 				onClick={onUndo}
@@ -80,7 +81,7 @@ export function TopFormatToolbar({
 			</button>
 			<button
 				type="button"
-				title="Redo"
+				title={withShortcut("Redo", "redo")}
 				aria-label="Redo"
 				onPointerDown={(e) => e.preventDefault()}
 				onClick={onRedo}

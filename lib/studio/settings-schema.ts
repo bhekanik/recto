@@ -117,6 +117,13 @@ export type StudioSettings = {
 	focusDim: boolean;
 	/** Granularity of the focus-dim highlight (A/B toggle). */
 	focusDimScope: FocusScope;
+	/**
+	 * Focus blur — the caret's block sharp and centred, every other block blurred
+	 * more the further away it is. Brings typewriter scrolling with it while on.
+	 */
+	focusBlur: boolean;
+	/** Fade the toolbar and status bar while typing; the pointer brings them back. */
+	quietChrome: boolean;
 	/** Prose linter on/off (plan 004) — opt-in highlight-only, off by default. */
 	lint: boolean;
 	/** Per-category lint toggles (passive / readability / adverb / weasel). */
@@ -157,6 +164,9 @@ export const DEFAULTS: StudioSettings = {
 	typewriter: false,
 	focusDim: false,
 	focusDimScope: "sentence",
+	focusBlur: false,
+	// On, as in the Mac app: while the writer is in the sentence, the chrome is not.
+	quietChrome: true,
 	// Prose linter is opt-in — off by default (highlighting fights minimalism); all
 	// categories on once enabled, each individually toggleable.
 	lint: false,
@@ -328,6 +338,12 @@ export function coerceSettings(
 				: parsed.focusDimScope === "sentence"
 					? "sentence"
 					: base.focusDimScope,
+		focusBlur:
+			typeof parsed.focusBlur === "boolean" ? parsed.focusBlur : base.focusBlur,
+		quietChrome:
+			typeof parsed.quietChrome === "boolean"
+				? parsed.quietChrome
+				: base.quietChrome,
 		lint: typeof parsed.lint === "boolean" ? parsed.lint : base.lint,
 		lintCategories:
 			parsed.lintCategories === undefined
