@@ -44,8 +44,7 @@ struct EditorStatusBar<Trailing: View>: View {
                 VimStatusView(status: vimController.status, theme: theme)
             }
             Spacer(minLength: 0)
-            // The right side keeps its natural width; the mode ring gives way
-            // first, dropping its labels, as the web's does below `sm`.
+            // The right side keeps its natural width; the spacer gives way first.
             HStack(spacing: 8) {
                 StudioControls(settings: settings, lint: lint, theme: theme)
                 WritingProgress(
@@ -65,12 +64,14 @@ struct EditorStatusBar<Trailing: View>: View {
             .fixedSize()
             .layoutPriority(1)
         }
-        .font(.system(size: 12))
+        .font(.system(size: 11.5))
         .padding(.horizontal, 12)
         .frame(height: 28)
-        .background(Color(nsColor: theme.raised))
+        // The sheet's colour with a faint hairline: the bar belongs to the
+        // page instead of sitting under it as a second surface.
+        .background(Color(nsColor: theme.sheet))
         .overlay(alignment: .top) {
-            Color(nsColor: theme.line).frame(height: 1)
+            Color(nsColor: theme.line.withAlphaComponent(0.55)).frame(height: 1)
         }
     }
 }
@@ -119,16 +120,16 @@ private struct StudioControls: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            labelButton(
-                settings.appearance.label,
-                symbol: settings.appearance.symbol,
+            // Icons only: both are set once and then left alone, so their
+            // names are tooltips rather than words competing with the count.
+            iconButton(
+                settings.appearance.symbol,
                 help: "Appearance: \(settings.appearance.label) — click to cycle",
                 accessibility: "Appearance: \(settings.appearance.label). Click to change appearance",
                 action: settings.cycleAppearance
             )
-            labelButton(
-                settings.themeLabel,
-                symbol: "paintpalette",
+            iconButton(
+                "paintpalette",
                 help: settings.canCyclePalette
                     ? "Palette: \(settings.themeLabel) — click to cycle"
                     : "Palette: Paper — the other palettes need a dark appearance",
@@ -233,32 +234,6 @@ private struct StudioControls: View {
                 .accessibilityLabel("Cycle focus dim scope")
             }
         }
-    }
-
-    private func labelButton(
-        _ title: String,
-        symbol: String,
-        help: String,
-        accessibility: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                Image(systemName: symbol)
-                    .foregroundStyle(Color(nsColor: theme.accent))
-                Text(title)
-                    .lineLimit(1)
-                    .fixedSize()
-            }
-            .padding(.horizontal, 8)
-            .frame(height: 22)
-            .foregroundStyle(Color(nsColor: theme.ink3))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .focusable(false)
-        .help(help)
-        .accessibilityLabel(accessibility)
     }
 
     private func iconButton(
@@ -473,10 +448,10 @@ private struct ModeSwitcher: View {
     private var ring: [Presentation] { PresentationPreference.ring }
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            buttons(labelled: true)
-            buttons(labelled: false)
-        }
+        // Icons, with the mode's name and chord in the tooltip (design §4.1):
+        // the lens is chosen rarely and read constantly, so the active wash
+        // says enough.
+        buttons(labelled: false)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Editor mode")
     }
