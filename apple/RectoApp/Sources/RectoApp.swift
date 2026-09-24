@@ -213,6 +213,7 @@ private struct StudioCommands: Commands {
             Button("Toggle word count / status bar", action: settings.toggleStatusBar)
                 .keyboardShortcut("s", modifiers: [.control, .shift])
             Button("Toggle quiet chrome while typing", action: settings.toggleQuietChrome)
+            Button("Toggle page sheet", action: settings.toggleSheet)
             Button("Toggle typewriter scrolling", action: settings.toggleTypewriter)
                 .keyboardShortcut("t", modifiers: [.control, .shift])
             Button("Toggle focus dimming", action: settings.toggleFocusDim)

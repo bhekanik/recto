@@ -128,6 +128,8 @@ struct CloudDocumentView: View {
             }
         }
         .modifier(ZenChrome(zen: zen, settings: settings, toolbar: toolbar(styler), statusBar: statusBar(model, styler)))
+        // Under the title bar too, so the glow starts at the window's top edge.
+        .background { DocumentBackdrop(theme: styler.theme, showsSheet: styler.showsSheet).ignoresSafeArea() }
         .background {
             // Synced documents only feed the day's total, as on the web, where
             // every document is synced; a local file's words are not credited.

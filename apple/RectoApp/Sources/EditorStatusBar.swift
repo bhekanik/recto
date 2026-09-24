@@ -67,9 +67,8 @@ struct EditorStatusBar<Trailing: View>: View {
         .font(.system(size: 11.5))
         .padding(.horizontal, 12)
         .frame(height: 28)
-        // The sheet's colour with a faint hairline: the bar belongs to the
-        // page instead of sitting under it as a second surface.
-        .background(Color(nsColor: theme.sheet))
+        // No fill, a faint hairline: the host's backdrop shows through, so the
+        // bar belongs to the page instead of sitting under it as a surface.
         .overlay(alignment: .top) {
             Color(nsColor: theme.line.withAlphaComponent(0.55)).frame(height: 1)
         }

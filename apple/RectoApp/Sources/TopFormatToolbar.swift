@@ -117,9 +117,8 @@ struct TopFormatToolbar: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity)
-        // The page's own colour: the bar reads as part of the sheet, not a band
-        // across it.
-        .background(Color(nsColor: theme.sheet))
+        // No fill of its own: the host's backdrop (the atmosphere, or the flat
+        // sheet) shows through, so the bar is part of the page, not a band.
         .opacity(isEnabled ? 1 : 0.4)
         .disabled(!isEnabled)
         .accessibilityElement(children: .contain)

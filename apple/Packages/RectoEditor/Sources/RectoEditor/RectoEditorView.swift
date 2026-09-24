@@ -57,7 +57,13 @@ public struct RectoEditorView: View {
             if let header { DocumentHeaderView(frontmatter: header, styler: styler) }
             editor
         }
-        .background(Color(nsColor: styler.theme.sheet))
+        .background {
+            if styler.showsSheet, let width = styler.sheetWidth {
+                WritingSheet(theme: styler.theme, width: width)
+            } else {
+                Color(nsColor: styler.theme.sheet)
+            }
+        }
         .onAppear {
             writingController?.update(storage: storage, presentation: styler.presentation)
         }

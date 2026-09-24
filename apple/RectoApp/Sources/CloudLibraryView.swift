@@ -65,10 +65,9 @@ struct CloudLibraryView: View {
             PaneTreeView(node: layout.root) { pane in
                 paneView(pane)
             }
-            // The title bar in the page's colour, so the window is one sheet
-            // rather than a grey band over a navy page.
-            .toolbarBackground(Color(nsColor: theme.sheet), for: .windowToolbar)
-            .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
+            // No title-bar fill: the document's backdrop runs up under it, so
+            // the window is one surface rather than a grey band over the page.
+            .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         }
         .onAppear {
             if layout.activePane?.documentId == nil { layout.setActiveDocument(model.selectedDocumentId) }

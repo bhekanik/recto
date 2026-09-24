@@ -177,6 +177,8 @@ enum CommandRegistry {
                       aliases: ["lint", "prose", "suggestions", "style"], shortcut: ""),
         CommandAction(id: "toggle-quiet-chrome", label: "Toggle quiet chrome while typing", section: .view,
                       aliases: ["fade", "hide toolbar", "distraction", "quiet"], shortcut: ""),
+        CommandAction(id: "toggle-sheet", label: "Toggle page sheet", section: .view,
+                      aliases: ["page", "paper", "atmosphere", "flat", "background"], shortcut: ""),
     ]
 
     /// The formatting toolbar's buttons, in its order, as `format-<id>`.

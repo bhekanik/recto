@@ -133,6 +133,8 @@ struct EditorHostView: View {
             }
         }
         .modifier(ZenChrome(zen: zen, settings: settings, toolbar: toolbar(styler), statusBar: statusBar(styler)))
+        // Under the title bar too, so the glow starts at the window's top edge.
+        .background { DocumentBackdrop(theme: styler.theme, showsSheet: styler.showsSheet).ignoresSafeArea() }
         .background { WordCountTracker(storage: storage, count: wordCount) }
         .background {
             LintTracker(
