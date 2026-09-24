@@ -100,7 +100,7 @@ These are described in `plans/010-review-collaboration.md` and are CREATED there
 
 ### Conventions this plan MUST follow
 
-- **Bun** for everything (`bun run …`, `bunx convex …`). Project CLAUDE.md: prefer Bun.
+- **Bun** for everything (`bun run …`, `bunx convex …`). Project AGENTS.md: prefer Bun.
 - **Convex is the only write path.** AI comments and the AI suggestion branch are created EXCLUSIVELY through 010's Convex mutations. The Next.js review route only calls the LLM and returns JSON — it performs NO Convex writes.
 - **Reuse the OpenRouter wiring** (`openRouter()` + `requireUser()` + `AI_CHAT_MODEL` + `reasoning:{enabled:false}`). Do NOT add a new provider, SDK, or key.
 - **AI stays opt-in / keyboard-summoned** — the review flow is reachable only when `settings.aiEnabled` is true AND the doc is the owner's own un-shared doc (the 010 no-AI-on-shared gate). Owner-initiated only; never auto-run.

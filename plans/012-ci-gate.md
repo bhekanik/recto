@@ -45,7 +45,7 @@ why it executes first.
   no live Convex deployment.
 - `next build` reads `NEXT_PUBLIC_CONVEX_URL` and the Clerk publishable key from
   env; locally these come from `.env.local` (gitignored, never committed).
-- Runtime/package manager is Bun (repo convention — see `CLAUDE.md`).
+- Runtime/package manager is Bun (repo convention — see `AGENTS.md`).
 
 ## Commands you will need
 

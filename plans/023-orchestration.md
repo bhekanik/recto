@@ -103,7 +103,7 @@ Cap: at most 6 workers in flight; the orchestrator reviews every diff.
   attribution, no Co-Authored-By. Push the branch and open a PR with `gh pr
   create --base main` titled `023/<slug>: <what>`; PR body = the report
   below. Do not merge.
-- Repo rules: `AGENTS.md`, `CLAUDE.md` (Bun, no vite for app code, shadcn
+- Repo rules: `AGENTS.md` (Bun, shadcn
   primitives), `docs/blueprint/README.md` locked decisions except where plan
   023 reverses them (D13 light theme, native apps).
 - Before reporting: `bun run typecheck && bun run biome && bun run test`

@@ -242,7 +242,7 @@ Settings reach deep panes via `lib/studio/settings-context.tsx`
 464–470, CodeMirror at lines 473–483) and already reads settings via context
 (line 60). The live document text the writer sees is `markdown` (line 93:
 `const markdown = paneMarkdown ?? sync?.markdown ?? "";`). **Critical Recto rule
-(from `CLAUDE.md` / blueprint 05): the editor owns live state; you must NOT bind
+(from `AGENTS.md` / blueprint 05): the editor owns live state; you must NOT bind
 the editor value to a reactive query.** The linter is read-only of the editor's
 *current* text, so:
 - Source the text to analyze from the editor handle's `getCanonicalMarkdown()`
@@ -277,7 +277,7 @@ backgrounds that change box size).
 | Build        | `bun run build`                                     | exit 0, compiles               |
 | Dev (manual) | `bun run dev`                                       | studio at localhost            |
 
-(Use `bun` / `bunx`, never `npm`/`npx` — see `CLAUDE.md`.)
+(Use `bun` / `bunx`, never `npm`/`npx` — see `AGENTS.md`.)
 
 ## Suggested executor toolkit
 

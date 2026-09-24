@@ -208,7 +208,7 @@ pane which lens is live. The "open search" handler will follow this exact shape.
 
 ### Conventions that apply
 
-- **Bun** for all commands (see `CLAUDE.md`). Gates: `bun run typecheck`,
+- **Bun** for all commands (see `AGENTS.md`). Gates: `bun run typecheck`,
   `bun run biome`, `bun run test`, `bun run build`, `bun run dev`.
 - **TS strict, ESM.** Prefer built-ins + battle-tested libs — here that means
   `@codemirror/search` (do NOT hand-roll search/replace).

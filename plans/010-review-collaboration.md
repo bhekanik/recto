@@ -158,7 +158,7 @@ const history = useDocumentHistory({ documentId, getEditorHandle,
 
 ### Conventions this plan MUST follow
 
-- **Bun** for everything (`bun run …`, `bunx convex …`). CLAUDE.md: prefer Bun.
+- **Bun** for everything (`bun run …`, `bunx convex …`). AGENTS.md: prefer Bun.
 - **Convex is the only write path.** Every new function authorizes via `requireUserId` or the new `requireDocumentAccess` — never an unauthenticated mutation.
 - **Editor owns live state** — never bind an editor's value to a reactive `useQuery`. The reviewer editor seeds once and appends nodes; it does not re-seed from the owner's reactive markdown.
 - **shadcn primitives, dark-only OKLCH tokens** (`var(--color-…)`, `var(--space-…)`). Compose existing `recto-panel`/`recto-item`/`recto-scrim`/`recto-kbd` classes; do not introduce new color values except the diff add/del OKLCH literals already used in `history-panel.tsx`.

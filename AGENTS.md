@@ -1,5 +1,10 @@
 # Recto — Agent conventions
 
+## Tooling
+
+- Bun is the package manager and script runner: `bun run <script>`, `bunx <pkg>`, never npm/npx.
+- `bun run test` runs Vitest plus one `bun test` file (`spikes/undo-tree/tests/convex.bun.test.ts`). Other gates: `bun run typecheck`, `bun run test:e2e`.
+
 ## UI components (ADR-18)
 
 - **Use shadcn/ui** for all UI. Primitives live in `components/ui/`.
@@ -18,14 +23,14 @@
 ## Canonical markdown
 
 - All MDAST ↔ string crossing in `lib/markdown/` only.
-- Round-trip gate: `lib/markdown/corpus.test.ts` (25 cases × 5 assertions).
+- Round-trip gate: `lib/markdown/corpus.test.ts` (cases in `lib/markdown/corpus/`).
 
-## Editor modes (Phase 2)
+## Editor modes
 
-- Four modes: rich (Milkdown), raw/vim (CodeMirror 6), preview (sanitized HTML).
-- Switch-on-mode: `flushSync()` → export caret → remount from canonical markdown (`components/studio-shell.tsx`).
+- Four modes (`lib/modes/types.ts`): rich (Milkdown), raw and vim (CodeMirror 6), preview (sanitized HTML).
+- Switch-on-mode: export canonical markdown and caret from the outgoing handle → flush history and markdown → remount the new mode from canonical markdown (`switchMode` in `components/workspace/pane-editor.tsx`).
 - Shared handle API: `lib/editor/handle.ts`. App shortcuts: `lib/keyboard/app-shortcuts.ts` (`⌘K` palette, `Alt+1–4` modes).
-- Live two-pane bridge is Phase 3 only — do not port `BridgeCoordinator` / `recreateTransform` yet.
+- Live two-pane bridge: `lib/bridge/` (coordinator, `recreateTransform`-based raw → rich propagation).
 
 ## Sync (D11)
 
