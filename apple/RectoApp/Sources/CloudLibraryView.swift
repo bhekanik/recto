@@ -1,3 +1,5 @@
+import AppKit
+import RectoEditor
 import RectoStore
 import SwiftUI
 
@@ -17,20 +19,34 @@ struct CloudLibraryView: View {
     /// list keeps the keyboard while the writer browses.
     @State private var editorWantsKeyboard = true
 
+    private var theme: RectoEditorTheme { StudioSettings.shared.theme }
+
     var body: some View {
         @Bindable var model = model
         NavigationSplitView(columnVisibility: $columnVisibility) {
             List(model.documents, id: \.localId, selection: $model.selectedDocumentId) { document in
+                let isSelected = document.localId == model.selectedDocumentId
                 DocumentRow(document: document)
                     .tag(document.localId)
+                    .background(SystemSelectionHidden())
+                    // The design's accent wash instead of the system's solid
+                    // highlight, deeper while the list has the keyboard so the
+                    // writer can see where typing would go.
+                    .listRowBackground(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(Color(nsColor: theme.accent.withAlphaComponent(
+                                isSelected ? (documentsFocused ? 0.26 : 0.15) : 0)))
+                            .padding(.horizontal, 8)
+                    )
             }
+            .scrollContentBackground(.hidden)
+            .background(Color(nsColor: theme.canvas))
             .focused($documentsFocused)
             // Return opens the highlighted document for writing.
             .onKeyPress(.return) {
                 model.request(.focusEditor)
                 return .handled
             }
-            .tint(Color(nsColor: StudioSettings.shared.theme.accent))
             .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 380)
             .navigationTitle("Documents")
             .toolbar {
@@ -49,6 +65,10 @@ struct CloudLibraryView: View {
             PaneTreeView(node: layout.root) { pane in
                 paneView(pane)
             }
+            // The title bar in the page's colour, so the window is one sheet
+            // rather than a grey band over a navy page.
+            .toolbarBackground(Color(nsColor: theme.sheet), for: .windowToolbar)
+            .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
         }
         .onAppear {
             if layout.activePane?.documentId == nil { layout.setActiveDocument(model.selectedDocumentId) }
@@ -205,6 +225,27 @@ private struct DocumentRow: View {
         case .syncing: "Syncing"
         case .diverged: "Needs review"
         case .failed: "Sync failed, changes remain local"
+        }
+    }
+}
+
+/// Turns off the sidebar table's own selection highlight so the row's
+/// ``listRowBackground`` is the selection. macOS draws that highlight in the
+/// system accent with white text on top, which no palette's accent carries at
+/// a readable contrast; SwiftUI has no modifier for it, so this reaches the
+/// table from inside a row.
+private struct SystemSelectionHidden: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { Probe() }
+    func updateNSView(_ view: NSView, context: Context) {}
+
+    private final class Probe: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            var ancestor = superview
+            while let view = ancestor, !(view is NSTableView) { ancestor = view.superview }
+            if let table = ancestor as? NSTableView, table.selectionHighlightStyle != .none {
+                table.selectionHighlightStyle = .none
+            }
         }
     }
 }

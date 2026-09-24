@@ -13,7 +13,7 @@ import Testing
 @Suite("Keyboard navigation", .serialized)
 @MainActor
 struct KeyboardNavigationTests {
-    private func signedInLibrary(documents: Int) async throws -> (RectoApplicationModel, NSWindow) {
+    private func signedInLibrary(documents: Int, key: Bool = true) async throws -> (RectoApplicationModel, NSWindow) {
         _ = NSApplication.shared
         let store = try RectoStore.inMemory()
         let origin = try await SyncEngine.resolveOrigin(store: store)
@@ -36,7 +36,7 @@ struct KeyboardNavigationTests {
             contentRect: NSRect(x: 0, y: 0, width: 1100, height: 760),
             styleMask: [.titled, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         window.contentView = NSHostingView(rootView: RectoCloudRootView(model: model))
-        window.makeKeyAndOrderFront(nil)
+        if key { window.makeKeyAndOrderFront(nil) } else { window.orderFront(nil) }
         return (model, window)
     }
 
@@ -74,6 +74,19 @@ struct KeyboardNavigationTests {
         #expect(window.firstResponder === text, "nothing takes it back once the window settles")
     }
 
+    @Test("the text keeps the keyboard when the window becomes key after it opened")
+    func keyLater() async throws {
+        // A launch: the window is on screen before the app is active, and
+        // takes key status only when activation arrives.
+        let (_, window) = try await signedInLibrary(documents: 2, key: false)
+        defer { window.orderOut(nil) }
+        let text = try #require(await editor(in: window))
+        await settle()
+        window.makeKeyAndOrderFront(nil)
+        await settle()
+        #expect(window.firstResponder === text, "\(String(describing: window.firstResponder))")
+    }
+
     @Test("Go to document list, browse with the list focused, then back to the text")
     func listAndBack() async throws {
         let (model, window) = try await signedInLibrary(documents: 2)
@@ -84,6 +97,8 @@ struct KeyboardNavigationTests {
         model.request(.focusDocuments)
         #expect(await until { window.firstResponder is NSTableView },
                 "the list has the keyboard: \(String(describing: window.firstResponder))")
+        #expect((window.firstResponder as? NSTableView)?.selectionHighlightStyle == NSTableView.SelectionHighlightStyle.none,
+                "the row's accent wash is the selection, not the system's blue")
 
         // Browsing: another document opens in the pane, the list keeps the keyboard.
         let other = try #require(model.documents.first { $0.localId != model.selectedDocumentId })
