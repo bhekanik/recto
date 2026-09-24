@@ -250,8 +250,8 @@ final class StudioSettings {
     }
 
     /// The writing column as a sheet on the palette's atmosphere (design
-    /// §2's signature), or the sheet colour edge to edge. Native only; on by
-    /// default.
+    /// §2's signature), or the sheet colour edge to edge. Native only; off by
+    /// default: the writer preferred the flat page to a card with a shadow.
     var showsSheet: Bool {
         didSet { defaults.set(showsSheet, forKey: Key.showsSheet) }
     }
@@ -310,7 +310,7 @@ final class StudioSettings {
         showStatusBar = defaults.object(forKey: Key.showStatusBar) as? Bool ?? true
         showOutline = defaults.object(forKey: Key.showOutline) as? Bool ?? false
         quietChrome = defaults.object(forKey: Key.quietChrome) as? Bool ?? true
-        showsSheet = defaults.object(forKey: Key.showsSheet) as? Bool ?? true
+        showsSheet = defaults.object(forKey: Key.showsSheet) as? Bool ?? false
         compactStatusBar = defaults.object(forKey: Key.compactStatusBar) as? Bool ?? true
     }
 
