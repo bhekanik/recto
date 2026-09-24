@@ -97,6 +97,7 @@ final class EditorHostController {
         find.attach(to: seam)
         typewriter.attach(to: seam)
         decorations.attach(to: seam)
+        quiet.follow(seam?.nsTextView)
         applySettings()
         if let focusObserver { NotificationCenter.default.removeObserver(focusObserver) }
         focusObserver = nil
@@ -113,6 +114,9 @@ final class EditorHostController {
         }
         if seam == nil { registry.remove(self) } else { registry.add(self) }
     }
+
+    /// Whether the writer is typing, for the chrome to step back.
+    let quiet = QuietChrome()
 
     /// The window this editor is on screen in, while it is.
     var window: NSWindow? { seam?.nsTextView?.window }

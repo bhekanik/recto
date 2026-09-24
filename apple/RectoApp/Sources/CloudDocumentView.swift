@@ -113,6 +113,7 @@ struct CloudDocumentView: View {
             DocumentBanner(model: model)
             if settings.showToolbar, !zen.hidesChrome {
                 toolbar(styler)
+                    .modifier(QuietChromeFade(quiet: chrome.quiet, settings: settings))
             }
             if styler.presentation == .preview, settings.previewVariant == .email {
                 EmailPreviewChrome(
@@ -121,6 +122,7 @@ struct CloudDocumentView: View {
             page(model, styler)
             if settings.showStatusBar, !zen.hidesChrome {
                 statusBar(model, styler)
+                    .modifier(QuietChromeFade(quiet: chrome.quiet, settings: settings, quietOpacity: 0.3))
             }
         }
         .modifier(ZenChrome(zen: zen, settings: settings, toolbar: toolbar(styler), statusBar: statusBar(model, styler)))
