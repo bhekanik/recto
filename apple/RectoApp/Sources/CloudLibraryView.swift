@@ -18,26 +18,40 @@ struct CloudLibraryView: View {
     /// selection made by arrowing through the list leaves it false, so the
     /// list keeps the keyboard while the writer browses.
     @State private var editorWantsKeyboard = true
+    @State private var searchQuery = ""
+    @FocusState private var searchFocused: Bool
 
     private var theme: RectoEditorTheme { StudioSettings.shared.theme }
 
     var body: some View {
         @Bindable var model = model
         NavigationSplitView(columnVisibility: $columnVisibility) {
-            List(model.documents, id: \.localId, selection: $model.selectedDocumentId) { document in
-                let isSelected = document.localId == model.selectedDocumentId
-                DocumentRow(document: document)
-                    .tag(document.localId)
-                    .background(SystemSelectionHidden())
-                    // The design's accent wash instead of the system's solid
-                    // highlight, deeper while the list has the keyboard so the
-                    // writer can see where typing would go.
-                    .listRowBackground(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(Color(nsColor: theme.accent.withAlphaComponent(
-                                isSelected ? (documentsFocused ? 0.26 : 0.15) : 0)))
-                            .padding(.horizontal, 8)
-                    )
+            let groups = LibraryGroups.groups(model.documents, matching: searchQuery)
+            List(selection: $model.selectedDocumentId) {
+                ForEach(groups, id: \.title) { group in
+                    Section {
+                        ForEach(group.documents, id: \.localId) { document in
+                            documentRow(document)
+                        }
+                    } header: {
+                        Text(group.title)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .overlay {
+                if groups.isEmpty, !searchQuery.isEmpty {
+                    ContentUnavailableView.search(text: searchQuery)
+                }
+            }
+            .searchable(text: $searchQuery, placement: .sidebar, prompt: "Search")
+            .searchFocused($searchFocused)
+            // Return in the search field opens the first match for writing.
+            .onSubmit(of: .search) {
+                guard let first = groups.first?.documents.first else { return }
+                model.selectedDocumentId = first.localId
+                model.request(.focusEditor)
             }
             .scrollContentBackground(.hidden)
             .background(Color(nsColor: theme.canvas))
@@ -105,6 +119,22 @@ struct CloudLibraryView: View {
 }
 
 extension CloudLibraryView {
+    private func documentRow(_ document: DocumentRecord) -> some View {
+        let isSelected = document.localId == model.selectedDocumentId
+        return DocumentRow(document: document)
+            .tag(document.localId)
+            .background(SystemSelectionHidden())
+            // The design's accent wash instead of the system's solid
+            // highlight, deeper while the list has the keyboard so the
+            // writer can see where typing would go.
+            .listRowBackground(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color(nsColor: theme.accent.withAlphaComponent(
+                        isSelected ? (documentsFocused ? 0.26 : 0.15) : 0)))
+                    .padding(.horizontal, 8)
+            )
+    }
+
     private func handle(_ request: RectoApplicationModel.KeyboardRequest.Kind) {
         switch request {
         case .focusDocuments:
@@ -114,6 +144,9 @@ extension CloudLibraryView {
             editorWantsKeyboard = true
         case .toggleSidebar:
             columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
+        case .focusSearch:
+            if columnVisibility == .detailOnly { columnVisibility = .all }
+            searchFocused = true
         }
     }
 

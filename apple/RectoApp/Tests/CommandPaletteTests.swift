@@ -257,11 +257,12 @@ struct CommandPaletteControllerTests {
         ])
         let documents = CommandPaletteController.sections(settings: settings(), library: library).first
         #expect(documents?.items.map(\.label) == [
-            "New document", "Go to document list", "Toggle sidebar", "Settings…", "Sign out", "Notes", "Draft",
+            "New document", "Go to document list", "Search documents", "Toggle sidebar", "Settings…", "Sign out",
+            "Notes", "Draft",
         ])
-        #expect(documents?.items[5].kind == .document(localId: "a"))
-        #expect(documents?.items[5].detail == .text("1,234 w"))
-        #expect(documents?.items[5].searchValue == "document Notes")
+        #expect(documents?.items[6].kind == .document(localId: "a"))
+        #expect(documents?.items[6].detail == .text("1,234 w"))
+        #expect(documents?.items[6].searchValue == "document Notes")
     }
 
     @Test("Open in web app appears in Documents only when the handoff is available")
@@ -270,7 +271,7 @@ struct CommandPaletteControllerTests {
             record("a", "Notes", words: 1),
         ], canOpenInWeb: true)
         let shown = CommandPaletteController.sections(settings: settings(), library: available).first
-        let native = ["go-to-documents", "toggle-sidebar", "open-settings", "sign-out"]
+        let native = ["go-to-documents", "search-documents", "toggle-sidebar", "open-settings", "sign-out"]
         #expect(shown?.items.map(\.id) == ["new-document", "open-in-web"] + native + ["document-a"])
 
         // An unsigned build, or a document with no convex id yet: the command

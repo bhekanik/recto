@@ -128,6 +128,18 @@ struct KeyboardNavigationTests {
                 "\(String(describing: window.firstResponder))")
     }
 
+    @Test("Search documents puts the keyboard in the sidebar's search field")
+    func searchField() async throws {
+        let (model, window) = try await signedInLibrary(documents: 2)
+        defer { window.orderOut(nil) }
+        _ = try #require(await editor(in: window))
+        model.request(.focusSearch)
+        // A search field edits through the window's field editor.
+        #expect(await until {
+            ((window.firstResponder as? NSTextView)?.delegate as? NSSearchField) != nil
+        }, "\(String(describing: window.firstResponder))")
+    }
+
     @Test("a new document is ready to type in")
     func newDocumentTakesTheKeyboard() async throws {
         let (model, window) = try await signedInLibrary(documents: 1)

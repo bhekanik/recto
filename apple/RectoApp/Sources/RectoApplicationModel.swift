@@ -44,6 +44,7 @@ final class RectoApplicationModel {
             case focusDocuments
             case focusEditor
             case toggleSidebar
+            case focusSearch
         }
 
         let kind: Kind

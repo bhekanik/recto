@@ -166,6 +166,8 @@ enum CommandRegistry {
                       aliases: ["sidebar", "library", "files", "notes", "focus"], shortcut: "⌃⌘1"),
         CommandAction(id: "go-to-editor", label: "Go to editor", section: .documents,
                       aliases: ["text", "page", "write", "focus", "type"], shortcut: "⌃⌘2"),
+        CommandAction(id: "search-documents", label: "Search documents", section: .documents,
+                      aliases: ["find", "filter", "library", "sidebar"], shortcut: "⇧⌘F"),
         CommandAction(id: "toggle-sidebar", label: "Toggle sidebar", section: .documents,
                       aliases: ["library", "document list", "hide", "show"], shortcut: "⌃⌘S"),
         CommandAction(id: "open-settings", label: "Settings…", section: .documents,

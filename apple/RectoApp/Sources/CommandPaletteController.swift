@@ -22,6 +22,7 @@ struct PaletteLibrary {
     var focusDocuments: () -> Void = {}
     var focusEditor: () -> Void = {}
     var toggleSidebar: () -> Void = {}
+    var focusSearch: () -> Void = {}
     var signOut: () -> Void = {}
 }
 
@@ -201,7 +202,9 @@ final class CommandPaletteController {
             }
             // The sidebar and the account are the library window's.
             if section == .documents, !library.isSignedIn {
-                actions.removeAll { ["go-to-documents", "toggle-sidebar", "sign-out"].contains($0.id) }
+                actions.removeAll {
+                    ["go-to-documents", "search-documents", "toggle-sidebar", "sign-out"].contains($0.id)
+                }
             }
             if section == .documents, editor == nil {
                 actions.removeAll { $0.id == "go-to-editor" }
@@ -263,6 +266,8 @@ final class CommandPaletteController {
             }
         case "toggle-sidebar":
             library.toggleSidebar()
+        case "search-documents":
+            Task { @MainActor in library.focusSearch() }
         case "open-settings":
             Task { @MainActor in
                 NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)

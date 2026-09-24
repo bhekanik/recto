@@ -142,6 +142,12 @@ private struct StudioCommands: Commands {
                 }
             }
             .keyboardShortcut("2", modifiers: [.control, .command])
+            Button("Search documents") {
+                openWindow(id: "cloud-library")
+                model.request(.focusSearch)
+            }
+            .keyboardShortcut("f", modifiers: [.command, .shift])
+            .disabled(!isSignedIn)
             Button("Go to heading…") { perform("go-to-heading") }
                 .keyboardShortcut("o", modifiers: [.control, .shift])
         }
@@ -280,6 +286,10 @@ private struct StudioCommands: Commands {
             },
             focusEditor: { [model] in model.request(.focusEditor) },
             toggleSidebar: { [model] in model.request(.toggleSidebar) },
+            focusSearch: { [model] in
+                openWindow(id: "cloud-library")
+                model.request(.focusSearch)
+            },
             signOut: { [model] in Task { await model.signOut() } }
         )
     }
