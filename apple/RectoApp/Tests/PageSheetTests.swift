@@ -13,13 +13,13 @@ struct PageSheetTests {
         return StudioSettings(defaults: defaults, systemAppearance: { .dark })
     }
 
-    @Test("on by default, reaches the styler, and toggles")
+    @Test("off by default, reaches the styler, and toggles")
     func setting() {
         let settings = settings()
-        #expect(settings.showsSheet)
-        #expect(settings.styler(presentation: .rich).showsSheet)
-        settings.toggleSheet()
+        #expect(!settings.showsSheet)
         #expect(!settings.styler(presentation: .rich).showsSheet)
+        settings.toggleSheet()
+        #expect(settings.styler(presentation: .rich).showsSheet)
         #expect(CommandRegistry.action("toggle-sheet") != nil)
     }
 
