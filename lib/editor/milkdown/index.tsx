@@ -42,10 +42,12 @@ import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import type { BridgeSession } from "@/lib/bridge/coordinator";
 
 import { BRIDGE_META } from "@/lib/bridge/protocol";
+import { blocksInRamp, focusBlurStyle } from "@/lib/editor/focus-blur";
 import { activeFocusRange, type FocusScope } from "@/lib/editor/focus-range";
 import type { FormatCommand } from "@/lib/editor/format";
 import type { EditorHandle } from "@/lib/editor/handle";
 import { isImageFile } from "@/lib/editor/image-upload";
+import { glideCaretToCentre } from "@/lib/editor/typewriter-glide";
 import type { LintIssue } from "@/lib/lint";
 import {
 	composeFrontmatter,
@@ -149,10 +151,48 @@ function centerCaret(view: PMEditorView): void {
 	} catch {
 		return;
 	}
-	const caretMidY = (coords.top + coords.bottom) / 2;
-	const rect = scroller.getBoundingClientRect();
-	const viewportMidY = rect.top + rect.height / 2;
-	scroller.scrollTop += caretMidY - viewportMidY;
+	glideCaretToCentre(scroller, coords.top, coords.bottom);
+}
+
+/** Containers whose children blur one by one, so a long list isn't one block. */
+const BLUR_EXPANDED = new Set(["bullet_list", "ordered_list", "blockquote"]);
+
+/**
+ * Focus blur's decorations: the caret's block sharp and highlighted, its
+ * neighbours blurred by distance. Blocks past the ramp carry nothing; the
+ * `recto-focus-blur` container blurs them to the maximum in CSS.
+ */
+function focusBlurDecorations(state: PMEditorState): DecorationSet {
+	const blocks: { from: number; to: number }[] = [];
+	state.doc.forEach((node, offset) => {
+		if (BLUR_EXPANDED.has(node.type.name) && node.childCount > 0) {
+			node.forEach((child, childOffset) => {
+				const from = offset + 1 + childOffset;
+				blocks.push({ from, to: from + child.nodeSize });
+			});
+		} else {
+			blocks.push({ from: offset, to: offset + node.nodeSize });
+		}
+	});
+	const head = state.selection.head;
+	let active = blocks.findIndex(
+		(block) => head > block.from && head < block.to,
+	);
+	if (active < 0) active = blocks.findLastIndex((block) => block.from <= head);
+	const decorations = blocksInRamp(blocks.length, active).flatMap(
+		({ index, distance }) => {
+			const block = blocks[index];
+			if (!block) return [];
+			return Decoration.node(
+				block.from,
+				block.to,
+				distance === 0
+					? { class: "recto-blur-active", style: focusBlurStyle(0) }
+					: { style: focusBlurStyle(distance) },
+			);
+		},
+	);
+	return DecorationSet.create(state.doc, decorations);
 }
 
 /**
@@ -194,6 +234,7 @@ type InnerProps = {
 	typewriter?: boolean;
 	focusDim?: boolean;
 	focusDimScope?: FocusScope;
+	focusBlur?: boolean;
 	/** Smart paste — convert pasted rich HTML into canonical Markdown (plan 007). */
 	smartPaste?: boolean;
 	/** Upload a pasted/dropped image and resolve to a servable URL + alt (plan 008). */
@@ -209,6 +250,7 @@ const MilkdownEditorInner = forwardRef<MilkdownEditorHandle, InnerProps>(
 			typewriter = false,
 			focusDim = false,
 			focusDimScope = "sentence",
+			focusBlur = false,
 			smartPaste = true,
 			onUploadImage,
 		},
@@ -231,6 +273,7 @@ const MilkdownEditorInner = forwardRef<MilkdownEditorHandle, InnerProps>(
 		const typewriterRef = useRef(typewriter);
 		const focusDimRef = useRef(focusDim);
 		const focusScopeRef = useRef<FocusScope>(focusDimScope);
+		const focusBlurRef = useRef(focusBlur);
 		// handlePaste reads the live setting via a ref so toggling smart-paste never
 		// rebuilds the ProseMirror editor.
 		const smartPasteRef = useRef(smartPaste);
@@ -255,6 +298,7 @@ const MilkdownEditorInner = forwardRef<MilkdownEditorHandle, InnerProps>(
 		typewriterRef.current = typewriter;
 		focusDimRef.current = focusDim;
 		focusScopeRef.current = focusDimScope;
+		focusBlurRef.current = focusBlur;
 		smartPasteRef.current = smartPaste;
 		onUploadImageRef.current = onUploadImage;
 
@@ -361,9 +405,19 @@ const MilkdownEditorInner = forwardRef<MilkdownEditorHandle, InnerProps>(
 							new Plugin({
 								key: focusPluginKey,
 								props: {
-									attributes: (): { [name: string]: string } =>
-										focusDimRef.current ? { class: "recto-focus-dim" } : {},
+									attributes: (): { [name: string]: string } => {
+										const classes = [
+											// Blur takes the place of dimming while both are on.
+											focusDimRef.current &&
+												!focusBlurRef.current &&
+												"recto-focus-dim",
+											focusBlurRef.current && "recto-focus-blur",
+										].filter(Boolean);
+										return classes.length ? { class: classes.join(" ") } : {};
+									},
 									decorations: (state) => {
+										if (focusBlurRef.current)
+											return focusBlurDecorations(state);
 										if (!focusDimRef.current) return DecorationSet.empty;
 										const range = activeRichRange(state, focusScopeRef.current);
 										if (!range || range.to <= range.from) {
@@ -434,7 +488,7 @@ const MilkdownEditorInner = forwardRef<MilkdownEditorHandle, InnerProps>(
 			} catch {
 				// editor still mounting — the plugin reads live refs on its first render
 			}
-		}, [typewriter, focusDim, focusDimScope]);
+		}, [typewriter, focusDim, focusDimScope, focusBlur]);
 
 		useImperativeHandle(ref, () => ({
 			seed(markdown: string, opts?: { programmatic?: boolean }) {
@@ -683,6 +737,8 @@ type MilkdownEditorProps = {
 	typewriter?: boolean;
 	focusDim?: boolean;
 	focusDimScope?: FocusScope;
+	/** Focus blur — every block but the caret's blurred by distance. */
+	focusBlur?: boolean;
 	/** Smart paste — convert pasted rich HTML into canonical Markdown (plan 007). */
 	smartPaste?: boolean;
 	/** Upload a pasted/dropped image and resolve to a servable URL + alt (plan 008). */
@@ -701,6 +757,7 @@ export const MilkdownEditor = forwardRef<
 		typewriter,
 		focusDim,
 		focusDimScope,
+		focusBlur,
 		smartPaste,
 		onUploadImage,
 	},
@@ -717,6 +774,7 @@ export const MilkdownEditor = forwardRef<
 					typewriter={typewriter}
 					focusDim={focusDim}
 					focusDimScope={focusDimScope}
+					focusBlur={focusBlur}
 					smartPaste={smartPaste}
 					onUploadImage={onUploadImage}
 				/>

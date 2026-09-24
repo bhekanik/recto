@@ -60,6 +60,7 @@ import { useAiFeatures } from "@/lib/studio/use-ai-features";
 import { useCommentHighlights } from "@/lib/studio/use-comment-highlights";
 import { useIsMobile } from "@/lib/studio/use-is-mobile";
 import { useOutline } from "@/lib/studio/use-outline";
+import { useQuietChrome } from "@/lib/studio/use-quiet-chrome";
 import { useResolvedAppearance } from "@/lib/studio/use-resolved-appearance";
 import {
 	READING_SCALE_MAX,
@@ -144,6 +145,8 @@ function StudioWorkspace() {
 	// idle (and stay revealed while the pointer is over the chrome). Also takes
 	// the page fullscreen; leaving fullscreen leaves zen.
 	const { zen, setZen, chromeRevealed, chromeHoverProps } = useZenMode();
+	// Zen already hides the chrome; quiet chrome is for the everyday window.
+	const quiet = useQuietChrome(settings.quietChrome && !zen);
 
 	const activeLeaf = workspace ? getActiveLeaf(workspace) : null;
 	const activeMode = activeLeaf?.mode ?? "rich";
@@ -596,6 +599,9 @@ function StudioWorkspace() {
 					case "toggle-focus-dim":
 						dispatchRef.current("toggle-focus-dim");
 						return;
+					case "toggle-focus-blur":
+						dispatchRef.current("toggle-focus-blur");
+						return;
 					case "open-go-to-heading":
 						dispatchRef.current("go-to-heading");
 						return;
@@ -635,16 +641,25 @@ function StudioWorkspace() {
 
 	const showEmpty = documents !== undefined && documents.length === 0;
 	const chromeHidden = zen && !chromeRevealed;
+	// Quiet chrome fades slowly out and quickly back, like the Mac app. The status
+	// bar keeps a trace: the word count and saved state are safety nets.
+	const quietFade = quiet
+		? "duration-[450ms] ease-in-out"
+		: "duration-[200ms] ease-in-out";
 
 	const topChromeClass = cn(
 		"z-30 flex flex-col transition-[transform,opacity] duration-[var(--motion-base)] ease-[var(--ease-out)] motion-reduce:transition-none",
 		zen ? "fixed inset-x-0 top-0" : "shrink-0",
 		chromeHidden && "pointer-events-none -translate-y-full opacity-0",
+		!zen && quietFade,
+		quiet && "opacity-0",
 	);
 	const bottomChromeClass = cn(
 		"z-30 transition-[transform,opacity] duration-[var(--motion-base)] ease-[var(--ease-out)] motion-reduce:transition-none",
 		zen ? "fixed inset-x-0 bottom-0" : "shrink-0",
 		chromeHidden && "pointer-events-none translate-y-full opacity-0",
+		!zen && quietFade,
+		quiet && "opacity-30",
 	);
 
 	return (
@@ -854,6 +869,11 @@ function StudioWorkspace() {
 							focusDim={settings.focusDim}
 							onToggleFocusDim={() => {
 								settings.toggleFocusDim();
+								dispatchFocusEditor();
+							}}
+							focusBlur={settings.focusBlur}
+							onToggleFocusBlur={() => {
+								settings.toggleFocusBlur();
 								dispatchFocusEditor();
 							}}
 							focusDimScope={settings.focusDimScope}

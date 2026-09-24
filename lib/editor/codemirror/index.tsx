@@ -21,9 +21,11 @@ import { getCM, Vim, vim } from "@replit/codemirror-vim";
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import type { BridgeSession } from "@/lib/bridge/coordinator";
 import { bridgeOrigin } from "@/lib/bridge/protocol";
+import { blocksInRamp, focusBlurStyle } from "@/lib/editor/focus-blur";
 import { activeFocusRange, type FocusScope } from "@/lib/editor/focus-range";
 import type { FormatCommand } from "@/lib/editor/format";
 import type { EditorHandle } from "@/lib/editor/handle";
+import { glideCaretToCentre } from "@/lib/editor/typewriter-glide";
 import { HISTORY_REDO_EVENT, HISTORY_UNDO_EVENT } from "@/lib/events";
 import type { LintIssue } from "@/lib/lint";
 import { markdownFromHtml, normalizeMarkdown } from "@/lib/markdown";
@@ -65,6 +67,8 @@ type CodeMirrorEditorProps = {
 	focusDim?: boolean;
 	/** Granularity of the focus-dim highlight. */
 	focusDimScope?: FocusScope;
+	/** Focus blur — every line but the caret's blurred by distance. */
+	focusBlur?: boolean;
 	/** Upload a pasted/dropped image and resolve to a servable URL + alt (plan 008). */
 	onUploadImage?: (file: File | Blob) => Promise<{ url: string; alt: string }>;
 };
@@ -88,8 +92,10 @@ function buildFocusExtension(
 	typewriter: boolean,
 	focusDim: boolean,
 	scope: FocusScope,
+	focusBlur = false,
 ): Extension {
 	const computeDeco = (view: EditorView): DecorationSet => {
+		if (focusBlur) return focusBlurLines(view);
 		if (!focusDim) return Decoration.none;
 		const range = activeFocusRange(
 			view.state.doc.toString(),
@@ -123,23 +129,69 @@ function buildFocusExtension(
 				const sel = u.view.state.selection.main;
 				// iA caveat: never recenter while a selection is being made/extended.
 				if (!sel.empty) return;
-				const head = sel.head;
-				// Dispatching a scroll effect synchronously inside update() throws
-				// ("calls get during an update") — defer to the next frame.
-				requestAnimationFrame(() => {
-					u.view.dispatch({
-						effects: EditorView.scrollIntoView(head, { y: "center" }),
-					});
-				});
+				// Measuring inside update() throws ("calls get during an update") —
+				// defer to the next frame.
+				requestAnimationFrame(() => glideToCaret(u.view));
 			}
 		},
 	);
 
 	const containerClass = EditorView.editorAttributes.of({
-		class: focusDim ? "recto-focus-dim" : "",
+		// Blur takes the place of dimming while both are on.
+		class: focusBlur ? "recto-focus-blur" : focusDim ? "recto-focus-dim" : "",
 	});
 
 	return [dimPlugin, typewriterPlugin, containerClass];
+}
+
+/**
+ * Focus blur for the source lenses: the caret's line sharp and highlighted, the
+ * lines around it blurred by distance (blank lines don't count). Lines past the
+ * ramp carry nothing; `.recto-focus-blur` blurs them to the maximum in CSS.
+ */
+function focusBlurLines(view: EditorView): DecorationSet {
+	const doc = view.state.doc;
+	const activeLine = doc.lineAt(view.state.selection.main.head).number;
+	const isBlank = (index: number) => doc.line(index + 1).text.trim() === "";
+	return Decoration.set(
+		blocksInRamp(doc.lines, activeLine - 1, isBlank).map(
+			({ index, distance }) =>
+				Decoration.line(
+					distance === 0
+						? {
+								class: "recto-blur-active",
+								attributes: { style: focusBlurStyle(0) },
+							}
+						: { attributes: { style: focusBlurStyle(distance) } },
+				).range(doc.line(index + 1).from),
+		),
+	);
+}
+
+/** Glide the editor's scroller so the caret line sits in the middle. */
+function glideToCaret(view: EditorView): void {
+	const coords = view.coordsAtPos(view.state.selection.main.head);
+	const scroller = scrollerFor(view.scrollDOM);
+	if (!coords || !scroller) return;
+	glideCaretToCentre(scroller, coords.top, coords.bottom);
+}
+
+/** The element that actually scrolls: CodeMirror's own, or the pane around it. */
+function scrollerFor(el: HTMLElement): HTMLElement | null {
+	let node: HTMLElement | null = el;
+	while (node) {
+		const overflowY = window.getComputedStyle(node).overflowY;
+		if (
+			(overflowY === "auto" ||
+				overflowY === "scroll" ||
+				overflowY === "overlay") &&
+			node.scrollHeight > node.clientHeight
+		) {
+			return node;
+		}
+		node = node.parentElement;
+	}
+	return null;
 }
 
 function mapVimMode(mode: string): VimSubMode {
@@ -348,6 +400,7 @@ export const CodeMirrorEditor = forwardRef<
 		typewriter = false,
 		focusDim = false,
 		focusDimScope = "sentence",
+		focusBlur = false,
 		onUploadImage,
 	},
 	ref,
@@ -375,6 +428,8 @@ export const CodeMirrorEditor = forwardRef<
 	focusDimRef.current = focusDim;
 	const focusScopeRef = useRef<FocusScope>(focusDimScope);
 	focusScopeRef.current = focusDimScope;
+	const focusBlurRef = useRef(focusBlur);
+	focusBlurRef.current = focusBlur;
 
 	onChangeRef.current = onChange;
 	onVimModeChangeRef.current = onVimModeChange;
@@ -411,6 +466,7 @@ export const CodeMirrorEditor = forwardRef<
 					typewriterRef.current,
 					focusDimRef.current,
 					focusScopeRef.current,
+					focusBlurRef.current,
 				),
 			),
 			drawSelection(),
@@ -536,21 +592,15 @@ export const CodeMirrorEditor = forwardRef<
 		if (!view) return;
 		view.dispatch({
 			effects: focusCompartmentRef.current.reconfigure(
-				buildFocusExtension(typewriter, focusDim, focusDimScope),
+				buildFocusExtension(typewriter, focusDim, focusDimScope, focusBlur),
 			),
 		});
 		// Reconfiguring rebuilds the plugins but doesn't re-fire their update(); when
 		// typewriter is freshly on, center the current caret right away.
 		if (typewriter && view.state.selection.main.empty) {
-			requestAnimationFrame(() => {
-				view.dispatch({
-					effects: EditorView.scrollIntoView(view.state.selection.main.head, {
-						y: "center",
-					}),
-				});
-			});
+			requestAnimationFrame(() => glideToCaret(view));
 		}
-	}, [typewriter, focusDim, focusDimScope]);
+	}, [typewriter, focusDim, focusDimScope, focusBlur]);
 
 	useImperativeHandle(ref, () => ({
 		seed(markdownText: string, opts?: { programmatic?: boolean }) {

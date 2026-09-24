@@ -617,6 +617,37 @@
 	}
 }
 
+/* Focus blur (after the Mac app): the caret's block sharp on a soft band, every
+   other block blurred by distance. Decorations set an inline filter on the blocks
+   near the caret; everything past the ramp takes the maximum from here, so the
+   editors only ever decorate a handful of blocks.
+   PM: top-level blocks, and the items of lists and quotes one by one.
+   CM: lines. */
+.ProseMirror.recto-focus-blur,
+.recto-focus-blur .cm-content {
+	--focus-blur-max: 3px;
+}
+.ProseMirror.recto-focus-blur > :not(ul, ol, blockquote),
+.ProseMirror.recto-focus-blur > :is(ul, ol, blockquote) > *,
+.recto-focus-blur .cm-line {
+	filter: blur(var(--focus-blur-max));
+	transition: filter var(--motion-fast) var(--ease-out);
+}
+.ProseMirror.recto-focus-blur .recto-blur-active,
+.recto-focus-blur .cm-line.recto-blur-active {
+	/* A band wider than the text without moving it: the shadow paints the margin. */
+	background: var(--color-accent-wash);
+	box-shadow: 0 0 0 0.5rem var(--color-accent-wash);
+	border-radius: var(--radius-sm);
+}
+@media (prefers-reduced-motion: reduce) {
+	.ProseMirror.recto-focus-blur > :not(ul, ol, blockquote),
+	.ProseMirror.recto-focus-blur > :is(ul, ol, blockquote) > *,
+	.recto-focus-blur .cm-line {
+		transition: none;
+	}
+}
+
 /* Prose-lint highlights (plan 004) — display-only wavy underlines, shared by both
    editors (CM marks and PM inline decorations carry the same class names). Underline
    only so the highlight never reflows the text. Per-category colour from OKLCH tokens. */

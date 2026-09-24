@@ -2,6 +2,7 @@
 
 import {
 	AlignVerticalJustifyCenter,
+	Aperture,
 	AppWindowMac,
 	Eye,
 	FileCode,
@@ -21,6 +22,7 @@ import {
 } from "lucide-react";
 
 import { GoalPopover } from "@/components/goal-popover";
+import { type ActionId, withShortcut } from "@/lib/keyboard/actions";
 import { formatReadingTime } from "@/lib/markdown";
 import { MODE_RING, type Mode, modeToLabel } from "@/lib/modes/types";
 import type { GoalKind, GoalProgress } from "@/lib/stats/streak";
@@ -41,6 +43,14 @@ const APPEARANCE_ICON: Record<Appearance, typeof Type> = {
 	system: Monitor,
 	light: Sun,
 	dark: Moon,
+};
+
+/** Each mode button's palette action, whose chord its tooltip teaches. */
+const MODE_ACTION: Record<Mode, ActionId> = {
+	rich: "mode-rich",
+	raw: "mode-raw",
+	vim: "mode-vim",
+	preview: "mode-preview",
 };
 
 const MODE_ICON: Record<Mode, typeof Type> = {
@@ -90,6 +100,8 @@ export type StatusBarProps = {
 	onToggleTypewriter: () => void;
 	focusDim: boolean;
 	onToggleFocusDim: () => void;
+	focusBlur: boolean;
+	onToggleFocusBlur: () => void;
 	focusDimScope: FocusScope;
 	onCycleDimScope: () => void;
 	zen: boolean;
@@ -210,7 +222,7 @@ function ModeSwitcher({
 						key={m}
 						type="button"
 						aria-pressed={active}
-						title={modeToLabel(m)}
+						title={withShortcut(modeToLabel(m), MODE_ACTION[m])}
 						onClick={() => onModeChange(m)}
 						className={cn(
 							"flex h-6 items-center gap-1.5 rounded-[var(--radius-sm)] px-2 text-[length:var(--text-ui-sm)] transition-colors duration-[var(--motion-instant)]",
@@ -319,6 +331,8 @@ export function StatusBar({
 	onToggleTypewriter,
 	focusDim,
 	onToggleFocusDim,
+	focusBlur,
+	onToggleFocusBlur,
 	focusDimScope,
 	onCycleDimScope,
 	zen,
@@ -497,7 +511,10 @@ export function StatusBar({
 						className={cn(iconBtn, typewriter && "text-[var(--color-accent)]")}
 						onClick={onToggleTypewriter}
 						aria-pressed={typewriter}
-						title={`Typewriter scrolling: ${typewriter ? "On" : "Off"}`}
+						title={withShortcut(
+							`Typewriter scrolling: ${typewriter ? "On" : "Off"}`,
+							"toggle-typewriter",
+						)}
 						aria-label="Toggle typewriter scrolling"
 					>
 						<AlignVerticalJustifyCenter aria-hidden className="size-[15px]" />
@@ -507,10 +524,26 @@ export function StatusBar({
 						className={cn(iconBtn, focusDim && "text-[var(--color-accent)]")}
 						onClick={onToggleFocusDim}
 						aria-pressed={focusDim}
-						title={`Focus dimming: ${focusDim ? "On" : "Off"}`}
+						title={withShortcut(
+							`Focus dimming: ${focusDim ? "On" : "Off"}`,
+							"toggle-focus-dim",
+						)}
 						aria-label="Toggle focus dimming"
 					>
 						<Highlighter aria-hidden className="size-[15px]" />
+					</button>
+					<button
+						type="button"
+						className={cn(iconBtn, focusBlur && "text-[var(--color-accent)]")}
+						onClick={onToggleFocusBlur}
+						aria-pressed={focusBlur}
+						title={withShortcut(
+							`Focus blur: ${focusBlur ? "On" : "Off"}`,
+							"toggle-focus-blur",
+						)}
+						aria-label="Toggle focus blur"
+					>
+						<Aperture aria-hidden className="size-[15px]" />
 					</button>
 					{focusDim && (
 						<button
@@ -593,7 +626,10 @@ export function StatusBar({
 					className={iconBtn}
 					onClick={onToggleZen}
 					aria-pressed={zen}
-					title="Zen mode (hide everything but the page)"
+					title={withShortcut(
+						"Zen mode (hide everything but the page)",
+						"toggle-focus",
+					)}
 					aria-label="Toggle zen mode"
 				>
 					<SquareDashed aria-hidden className="size-[15px]" />

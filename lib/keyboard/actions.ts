@@ -8,6 +8,7 @@
 export type ActionSection =
 	| "Documents"
 	| "Modes"
+	| "Format"
 	| "Panes"
 	| "Navigate"
 	| "History"
@@ -69,6 +70,9 @@ export type ActionId =
 	| "toggle-toolbar"
 	| "toggle-typewriter"
 	| "toggle-focus-dim"
+	| "toggle-focus-blur"
+	| "toggle-quiet-chrome"
+	| FormatActionId
 	| "cycle-dim-scope"
 	| "toggle-email-preview"
 	| "set-goal"
@@ -82,6 +86,21 @@ export type ActionId =
 	| "theme-dawn"
 	| "theme-moonlit";
 
+/** The formatting toolbar's commands, as `format-<command>` (the Mac app's ids). */
+export type FormatActionId =
+	| "format-bold"
+	| "format-italic"
+	| "format-strike"
+	| "format-code"
+	| "format-link"
+	| "format-h1"
+	| "format-h2"
+	| "format-h3"
+	| "format-quote"
+	| "format-bulletList"
+	| "format-orderedList"
+	| "format-codeBlock";
+
 export type ActionDef = {
 	id: ActionId;
 	label: string;
@@ -93,6 +112,38 @@ export type ActionDef = {
 const M = "⌘";
 const S = "⇧";
 const A = "⌥";
+
+/**
+ * The formatting toolbar's buttons, in its order. The chords are Milkdown's
+ * (commonmark + gfm keymaps), so they apply in the Rich lens.
+ */
+const FORMAT_ACTIONS: ActionDef[] = (
+	[
+		["format-bold", "Bold", "B", ""],
+		["format-italic", "Italic", "I", ""],
+		["format-strike", "Strikethrough", "X", "alt"],
+		["format-code", "Inline code", "E", ""],
+		["format-link", "Link", "", ""],
+		["format-h1", "Heading 1", "1", "alt"],
+		["format-h2", "Heading 2", "2", "alt"],
+		["format-h3", "Heading 3", "3", "alt"],
+		["format-quote", "Quote", "B", "shift"],
+		["format-bulletList", "Bullet list", "8", "alt"],
+		["format-orderedList", "Numbered list", "7", "alt"],
+		["format-codeBlock", "Code block", "C", "alt"],
+	] as const
+).map(([id, label, key, extra]) => ({
+	id,
+	label,
+	section: "Format",
+	aliases: ["format", "markdown"],
+	shortcut: key
+		? {
+				mac: `${extra === "alt" ? A : extra === "shift" ? S : ""}${M}${key}`,
+				other: `Ctrl+${extra === "alt" ? "Alt+" : extra === "shift" ? "Shift+" : ""}${key}`,
+			}
+		: { mac: "", other: "" },
+}));
 
 export const ACTIONS: ActionDef[] = [
 	{
@@ -149,6 +200,7 @@ export const ACTIONS: ActionDef[] = [
 		section: "Modes",
 		shortcut: { mac: "Ctrl+⇧+[", other: "Ctrl+Shift+[" },
 	},
+	...FORMAT_ACTIONS,
 	{
 		id: "split-v",
 		label: "Split pane — vertical",
@@ -462,6 +514,20 @@ export const ACTIONS: ActionDef[] = [
 		shortcut: { mac: "Ctrl+⇧+D", other: "Ctrl+Shift+D" },
 	},
 	{
+		id: "toggle-focus-blur",
+		label: "Toggle focus blur",
+		section: "View",
+		aliases: ["blur", "typewriter", "focus", "current line", "zen"],
+		shortcut: { mac: "Ctrl+⇧+B", other: "Ctrl+Shift+B" },
+	},
+	{
+		id: "toggle-quiet-chrome",
+		label: "Toggle quiet chrome while typing",
+		section: "View",
+		aliases: ["fade", "hide toolbar", "distraction", "quiet"],
+		shortcut: { mac: "", other: "" },
+	},
+	{
 		id: "cycle-dim-scope",
 		label: "Focus scope: sentence / paragraph",
 		section: "View",
@@ -557,6 +623,7 @@ export const ACTIONS: ActionDef[] = [
 export const SECTION_ORDER: ActionSection[] = [
 	"Documents",
 	"Modes",
+	"Format",
 	"Panes",
 	"Navigate",
 	"History",
@@ -573,4 +640,14 @@ const isMac =
 
 export function shortcutHint(def: ActionDef): string {
 	return isMac ? def.shortcut.mac : def.shortcut.other;
+}
+
+/**
+ * A tooltip that teaches the chord: "Bold (⌘B)", or the text alone when the
+ * action has none.
+ */
+export function withShortcut(text: string, id: ActionId): string {
+	const def = ACTIONS.find((action) => action.id === id);
+	const hint = def ? shortcutHint(def) : "";
+	return hint ? `${text} (${hint})` : text;
 }

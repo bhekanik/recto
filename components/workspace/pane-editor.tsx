@@ -100,13 +100,15 @@ export function PaneEditor({
 		typewriter,
 		focusDim,
 		focusDimScope,
+		focusBlur,
 		lint,
 		lintCategories,
 	} = useStudioSettingsContext();
 	// Typewriter fights the mobile soft keyboard (which manages the viewport
 	// itself), so disable centering on phones; dimming stays on for all viewports.
+	// Focus blur brings typewriter scrolling with it: the sharp line stays put.
 	const isMobile = useIsMobile();
-	const typewriterEffective = typewriter && !isMobile;
+	const typewriterEffective = (typewriter || focusBlur) && !isMobile;
 	const richRef = useRef<MilkdownEditorHandle>(null);
 	const cmRef = useRef<CodeMirrorEditorHandle>(null);
 	const [vimSubMode, setVimSubMode] = useState<VimSubMode>("normal");
@@ -634,6 +636,7 @@ export function PaneEditor({
 								typewriter={typewriterEffective}
 								focusDim={focusDim}
 								focusDimScope={focusDimScope}
+								focusBlur={focusBlur}
 								smartPaste={smartPaste}
 								onUploadImage={handleUploadImage}
 								className="milkdown"
@@ -652,6 +655,7 @@ export function PaneEditor({
 							typewriter={typewriterEffective}
 							focusDim={focusDim}
 							focusDimScope={focusDimScope}
+							focusBlur={focusBlur}
 							onUploadImage={handleUploadImage}
 							className={`codemirror ${surfaceClass} font-[family-name:var(--font-mono)] text-[length:var(--text-body)]`}
 						/>
