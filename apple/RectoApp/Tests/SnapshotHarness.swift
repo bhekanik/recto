@@ -130,12 +130,13 @@ struct SnapshotHarness {
         textView.scrollRangeToVisible(NSRange(location: 0, length: 0))
         textView.enclosingScrollView?.contentView.scroll(to: .zero)
 
+        let previousAppearance = settings.appearance
+        defer { settings.appearance = previousAppearance }
         for appearance in [StudioSettings.Appearance.dark, .light] {
             settings.appearance = appearance
             try await Task.sleep(for: .milliseconds(900))
             try await capture(window, name: "library-\(appearance.rawValue)", in: dir)
         }
-        settings.appearance = .system
         window.orderOut(nil)
     }
 

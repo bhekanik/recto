@@ -31,7 +31,7 @@ final class QuietChrome {
         }
     }
 
-    private func observe(_ event: NSEvent) {
+    func observe(_ event: NSEvent) {
         guard let textView, let window = textView.window, event.window === window else { return }
         switch event.type {
         case .keyDown:
@@ -64,11 +64,14 @@ struct QuietChromeFade: ViewModifier {
     /// How far it fades. The status bar keeps a trace: the word count and the
     /// saved state are safety nets (blueprint P6), dimmed, never gone.
     var quietOpacity: Double = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
         let isQuiet = settings.quietChrome && quiet.isQuiet
         content
             .opacity(isQuiet ? quietOpacity : 1)
-            .animation(.easeInOut(duration: isQuiet ? 0.45 : 0.2), value: isQuiet)
+            .animation(
+                reduceMotion ? nil : .easeInOut(duration: isQuiet ? 0.45 : 0.2),
+                value: isQuiet)
     }
 }

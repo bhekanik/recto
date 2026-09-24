@@ -518,10 +518,11 @@ private struct DocumentCloudStatus: View {
             }
             SyncIndicator(
                 state: isSaving && !savingIsSlow ? .synced : model.state.syncState,
-                pendingCount: savingIsSlow ? model.pendingEditCount : 0,
+                pendingCount: savingIsSlow ? pendingCount : 0,
                 theme: theme
             )
         }
+        .onReceive(model.pendingEditCounts) { pendingCount = $0 }
         .task(id: isSaving) {
             savingIsSlow = false
             guard isSaving else { return }
@@ -537,9 +538,10 @@ private struct DocumentCloudStatus: View {
     static let savingDelay: Duration = .seconds(1)
 
     @State private var savingIsSlow = false
+    @State private var pendingCount = 0
 
     private var isSaving: Bool {
-        guard model.pendingEditCount == 0 else { return true }
+        guard pendingCount == 0 else { return true }
         switch model.state.syncState {
         case .pending, .syncing: return true
         case .synced, .failed, .diverged: return false
