@@ -109,6 +109,19 @@ struct SnapshotHarness {
             try await Task.sleep(for: .milliseconds(900))
             try await capture(window, name: "library-\(appearance.rawValue)", in: dir)
         }
+
+        // The status bar's Display panel, on its own.
+        settings.appearance = .dark
+        let panel = NSPanel(
+            contentRect: NSRect(x: 200, y: 200, width: 280, height: 460),
+            styleMask: [.titled, .utilityWindow], backing: .buffered, defer: false)
+        panel.appearance = NSAppearance(named: .darkAqua)
+        panel.contentView = NSHostingView(rootView: DisplaySettingsPanel(settings: settings, lint: nil))
+        panel.setContentSize(panel.contentView!.fittingSize)
+        panel.orderFront(nil)
+        try await Task.sleep(for: .milliseconds(400))
+        try await capture(panel, name: "display-panel", in: dir)
+        panel.orderOut(nil)
         window.orderOut(nil)
     }
 

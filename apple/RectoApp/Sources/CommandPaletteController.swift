@@ -275,6 +275,8 @@ final class CommandPaletteController {
             settings.toggleQuietChrome()
         case "toggle-sheet":
             settings.toggleSheet()
+        case "toggle-compact-status":
+            settings.toggleCompactStatusBar()
         case let id where id.hasPrefix("format-"):
             guard let action = FormatToolbarAction.all.first(where: { "format-\($0.id)" == id }) else { return false }
             editor?.format(action.command)

@@ -39,4 +39,13 @@ struct PageSheetTests {
         #expect(RectoEditorTheme.paper.isLight)
         #expect(!RectoEditorTheme.twilight.isLight)
     }
+
+    @Test("the compact status bar is on by default and toggles from the menu and ⌘K")
+    func compactStatusBar() {
+        let settings = settings()
+        #expect(settings.compactStatusBar)
+        settings.toggleCompactStatusBar()
+        #expect(!settings.compactStatusBar)
+        #expect(CommandRegistry.action("toggle-compact-status") != nil)
+    }
 }

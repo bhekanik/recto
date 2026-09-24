@@ -44,24 +44,14 @@ struct EditorStatusBar<Trailing: View>: View {
                 VimStatusView(status: vimController.status, theme: theme)
             }
             Spacer(minLength: 0)
-            // The right side keeps its natural width; the spacer gives way first.
-            HStack(spacing: 8) {
-                StudioControls(settings: settings, lint: lint, theme: theme)
-                WritingProgress(
-                    settings: settings, wordCount: wordCount, stats: stats, theme: theme,
-                    onOpenConfig: onOpenGoalConfig)
-                if let zen {
-                    StatusDivider(theme: theme)
-                    ZenButton(zen: zen, theme: theme, action: onToggleZen)
-                }
-                StatusDivider(theme: theme)
-                WordCountLabel(count: wordCount, ink: theme.ink3)
-                if Trailing.self != EmptyView.self {
-                    StatusDot(theme: theme)
-                    trailing()
-                }
+            // The spacer gives way first; then, in a narrow pane, the right
+            // side drops what matters least rather than forcing the pane wider
+            // than its split (which pushed the text out of its column).
+            ViewThatFits(in: .horizontal) {
+                trailingControls(.full)
+                trailingControls(.withoutProgress)
+                trailingControls(.essentials)
             }
-            .fixedSize()
             .layoutPriority(1)
         }
         .font(.system(size: 11.5))
@@ -72,6 +62,52 @@ struct EditorStatusBar<Trailing: View>: View {
         .overlay(alignment: .top) {
             Color(nsColor: theme.line.withAlphaComponent(0.55)).frame(height: 1)
         }
+    }
+}
+
+extension EditorStatusBar {
+    /// How much of the right side fits, widest first.
+    enum Density {
+        case full
+        case withoutProgress
+        case essentials
+    }
+
+    @ViewBuilder
+    func trailingControls(_ density: Density) -> some View {
+        let inline = !settings.compactStatusBar && density == .full
+        HStack(spacing: 8) {
+            if inline {
+                StudioControls(settings: settings, lint: lint, theme: theme)
+            }
+            if density == .full {
+                WritingProgress(
+                    settings: settings, wordCount: wordCount, stats: stats, theme: theme,
+                    onOpenConfig: onOpenGoalConfig)
+            }
+            if inline, let zen {
+                StatusDivider(theme: theme)
+                ZenButton(zen: zen, theme: theme, action: onToggleZen)
+            }
+            if density != .essentials {
+                StatusDivider(theme: theme)
+                WordCountLabel(count: wordCount, ink: theme.ink3)
+            }
+            if Trailing.self != EmptyView.self {
+                if density != .essentials { StatusDot(theme: theme) }
+                trailing()
+            }
+            // The display controls behind one button, zen last, where a
+            // pointer heading for the corner finds them.
+            if !inline {
+                StatusDivider(theme: theme)
+                DisplaySettingsButton(settings: settings, lint: lint, theme: theme)
+                if let zen {
+                    ZenButton(zen: zen, theme: theme, action: onToggleZen)
+                }
+            }
+        }
+        .fixedSize()
     }
 }
 
