@@ -57,10 +57,12 @@
 		82D138B8CC8E0043435622E1 /* ProseLinting.swift in Sources */ = {isa = PBXBuildFile; fileRef = D88EC0199D3061B9D5A33378 /* ProseLinting.swift */; };
 		840F1328B957A05D45E90150 /* OrderedDocumentEdits.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1016C956B2129F9E615F092 /* OrderedDocumentEdits.swift */; };
 		84424EF9E12A3D7DE5AD6CA2 /* RectoAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 4DC894E55209EEC836FC3509 /* RectoAuth */; };
+		86122FF82C29BCF53F7C770C /* AppearanceSettingsTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED6923F868328DA6A34A2A21 /* AppearanceSettingsTab.swift */; };
 		87C43C876F634C0552593789 /* HandoffEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02B6D7800E92A211EE1A23EB /* HandoffEnvironment.swift */; };
 		885D94683237079208EDA687 /* PaletteModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76EE13261BC8A4CB8A758876 /* PaletteModel.swift */; };
 		8BA51F3A687B1F9F12CCE8D9 /* LibraryGroupsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D870252B3C23A258E900482 /* LibraryGroupsTests.swift */; };
 		8C67170EE9A465BCAA518CC2 /* CloudDocumentModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8589138DCF2864A8EC5C41C9 /* CloudDocumentModel.swift */; };
+		8FCB07B23C1B40C5410F8531 /* ShortcutsSettingsTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6899B36A8CB8DE765028572D /* ShortcutsSettingsTab.swift */; };
 		914DD232485A7200442F54CF /* SyncIndicator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CB4981001B07AA443DF62E5 /* SyncIndicator.swift */; };
 		94CE851A6BF9F407B0C2ED90 /* RootForegroundInterleavingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCEBFE1A5165F1BE37FD346D /* RootForegroundInterleavingTests.swift */; };
 		966C39C0B62ECA5F5C349E5B /* OfflineTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36A1E659419C4C6FEBDA5FBE /* OfflineTransport.swift */; };
@@ -70,6 +72,7 @@
 		9FB703FFE9E9279098841DC8 /* ZenMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA3A74D0D69F9E702408570F /* ZenMode.swift */; };
 		A00A4B74222E46F4A09BFD3F /* WordCountTracking.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9368B38C653A8BC56D4AB7AA /* WordCountTracking.swift */; };
 		A27999E05D5E6B25C82E7734 /* HistoryPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FE2398821A83F66312028FC /* HistoryPanel.swift */; };
+		A347F6A7844DF668348C8C80 /* WritingSettingsTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74A4C6FC5F98C41BD07E4141 /* WritingSettingsTab.swift */; };
 		A69E275C753052A3B33B0261 /* MarkdownHandlerSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26EF72694687925314503054 /* MarkdownHandlerSettings.swift */; };
 		A769940BFFE515C5B4C758E2 /* QuietChromeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A191B57376848CDC3A511CE6 /* QuietChromeTests.swift */; };
 		A7B6B93988B966AC74FECF57 /* DocumentLinkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 974F77168BF315CC83C58C3E /* DocumentLinkTests.swift */; };
@@ -104,6 +107,8 @@
 		E64E7A5238B9F99D7115731B /* PaneDocuments.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D788A596A6070EF76840A51 /* PaneDocuments.swift */; };
 		E724056F89B96985B9A6DB0B /* EditorStatusBarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 250C2D1E689D4E327F47CA43 /* EditorStatusBarTests.swift */; };
 		EA64B27812C91F17C99640EC /* RectoCore in Frameworks */ = {isa = PBXBuildFile; productRef = 6FE61B5A20173D75973EADEE /* RectoCore */; };
+		ED99C6449F2609A3250222DB /* WindowSettingsTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 519EB914F6100E0B9B31F0D5 /* WindowSettingsTab.swift */; };
+		ED9D34A38A2C7FFAFF7329B3 /* GeneralSettingsTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E8BFA6E14BB3BA48D1DF795 /* GeneralSettingsTab.swift */; };
 		EF27CFAA742758F792BC9CA4 /* ReviewSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C4971B2E8CE1588AA6D8A24 /* ReviewSurface.swift */; };
 		F43E7099F20D1ECC414204D9 /* SharedRectoCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9E0596B01A39521DDFD3990 /* SharedRectoCore.swift */; };
 		F5D056FD27B5B132534B6754 /* RectoStore in Frameworks */ = {isa = PBXBuildFile; productRef = F1EB6ECFD9B2455F40C0C47E /* RectoStore */; };
@@ -156,6 +161,7 @@
 		4CE28505252B3B9A09DBBDA7 /* Recto.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Recto.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		4E0A8E79DC64FF5787876A8E /* AIController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIController.swift; sourceTree = "<group>"; };
 		4FE2398821A83F66312028FC /* HistoryPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryPanel.swift; sourceTree = "<group>"; };
+		519EB914F6100E0B9B31F0D5 /* WindowSettingsTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowSettingsTab.swift; sourceTree = "<group>"; };
 		526C9D721D8D013900C03100 /* TopFormatToolbar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopFormatToolbar.swift; sourceTree = "<group>"; };
 		5607FF90F1BEA6D3ED8F410D /* DocumentLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentLink.swift; sourceTree = "<group>"; };
 		567434CEB53FD3D963A11A1A /* ScriptedAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptedAPI.swift; sourceTree = "<group>"; };
@@ -168,10 +174,13 @@
 		667B77000492C546D56B2307 /* EditorStatusBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorStatusBar.swift; sourceTree = "<group>"; };
 		67216D44DCCB2A2048FEAC8A /* PaneTreeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaneTreeView.swift; sourceTree = "<group>"; };
 		688482441E8C255771A630E8 /* RectoDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RectoDocument.swift; sourceTree = "<group>"; };
+		6899B36A8CB8DE765028572D /* ShortcutsSettingsTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutsSettingsTab.swift; sourceTree = "<group>"; };
 		68F202CDD0816F399DD891A8 /* GoalConfigController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoalConfigController.swift; sourceTree = "<group>"; };
 		6C4971B2E8CE1588AA6D8A24 /* ReviewSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewSurface.swift; sourceTree = "<group>"; };
 		6CB4981001B07AA443DF62E5 /* SyncIndicator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncIndicator.swift; sourceTree = "<group>"; };
 		6E3D324F800F5CE7E4DED32D /* RectoSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RectoSettingsView.swift; sourceTree = "<group>"; };
+		6E8BFA6E14BB3BA48D1DF795 /* GeneralSettingsTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeneralSettingsTab.swift; sourceTree = "<group>"; };
+		74A4C6FC5F98C41BD07E4141 /* WritingSettingsTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WritingSettingsTab.swift; sourceTree = "<group>"; };
 		76CCA8C9943CBC9CB2C0C048 /* RectoEditor */ = {isa = PBXFileReference; lastKnownFileType = folder; name = RectoEditor; path = ../Packages/RectoEditor; sourceTree = SOURCE_ROOT; };
 		76EE13261BC8A4CB8A758876 /* PaletteModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaletteModel.swift; sourceTree = "<group>"; };
 		788C99D87920A5A0188A723E /* TypingLatencyBench.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypingLatencyBench.swift; sourceTree = "<group>"; };
@@ -226,6 +235,7 @@
 		E0B936E706CD1B1EC1FF9571 /* WindowToolbarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowToolbarTests.swift; sourceTree = "<group>"; };
 		E2487F991B53EE441E06C072 /* CommentAnchor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommentAnchor.swift; sourceTree = "<group>"; };
 		E283EF3CBDD2EE8864372778 /* ExportController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportController.swift; sourceTree = "<group>"; };
+		ED6923F868328DA6A34A2A21 /* AppearanceSettingsTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearanceSettingsTab.swift; sourceTree = "<group>"; };
 		F42BFB0AFA4FA2B556E8AA99 /* OutlinePanelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlinePanelTests.swift; sourceTree = "<group>"; };
 		F9E0596B01A39521DDFD3990 /* SharedRectoCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedRectoCore.swift; sourceTree = "<group>"; };
 		FC238A1AE201F838C026FB1E /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
@@ -292,6 +302,7 @@
 				4E0A8E79DC64FF5787876A8E /* AIController.swift */,
 				8556E1FF3EF270A44B2B3CD9 /* AIViews.swift */,
 				7E9FB961CB61B80D498AC7F0 /* AppConfiguration.swift */,
+				ED6923F868328DA6A34A2A21 /* AppearanceSettingsTab.swift */,
 				11E155B5B97B250D91DD9A8D /* AutoVersioning.swift */,
 				8589138DCF2864A8EC5C41C9 /* CloudDocumentModel.swift */,
 				29201557E3758137FD48E070 /* CloudDocumentView.swift */,
@@ -313,6 +324,7 @@
 				06F1089147A9513D2B76ABDE /* EmailSignInView.swift */,
 				E283EF3CBDD2EE8864372778 /* ExportController.swift */,
 				1D555444683948EF0618D0AE /* ExportFile.swift */,
+				6E8BFA6E14BB3BA48D1DF795 /* GeneralSettingsTab.swift */,
 				68F202CDD0816F399DD891A8 /* GoalConfigController.swift */,
 				02B6D7800E92A211EE1A23EB /* HandoffEnvironment.swift */,
 				4FE2398821A83F66312028FC /* HistoryPanel.swift */,
@@ -338,12 +350,15 @@
 				A1343FDACCCA7D5AB919528A /* ReviewSurfaceModel.swift */,
 				F9E0596B01A39521DDFD3990 /* SharedRectoCore.swift */,
 				CC8432E87A3091E60E7F62FB /* ShareSheet.swift */,
+				6899B36A8CB8DE765028572D /* ShortcutsSettingsTab.swift */,
 				873CFE9D408A1611A230EF44 /* StudioSettings.swift */,
 				6CB4981001B07AA443DF62E5 /* SyncIndicator.swift */,
 				526C9D721D8D013900C03100 /* TopFormatToolbar.swift */,
+				519EB914F6100E0B9B31F0D5 /* WindowSettingsTab.swift */,
 				9368B38C653A8BC56D4AB7AA /* WordCountTracking.swift */,
 				C23DDE416656399FB4E41FEF /* WritingControlsHost.swift */,
 				15D45A5C4EDBD6AFF00A8600 /* WritingGoals.swift */,
+				74A4C6FC5F98C41BD07E4141 /* WritingSettingsTab.swift */,
 				203C1E04C76AF6896D9C490A /* WritingStatsModel.swift */,
 				CA3A74D0D69F9E702408570F /* ZenMode.swift */,
 			);
@@ -586,6 +601,7 @@
 				71009928A5A0B0C16073882C /* AIController.swift in Sources */,
 				DB1507CE201C207D5F146FB6 /* AIViews.swift in Sources */,
 				E2C8A1EB9E80686B323D0A61 /* AppConfiguration.swift in Sources */,
+				86122FF82C29BCF53F7C770C /* AppearanceSettingsTab.swift in Sources */,
 				0F27E87B51814B552083A0D6 /* AutoVersioning.swift in Sources */,
 				8C67170EE9A465BCAA518CC2 /* CloudDocumentModel.swift in Sources */,
 				12113DD6A2827A36EAFF075F /* CloudDocumentView.swift in Sources */,
@@ -607,6 +623,7 @@
 				AF3C02D0F992E368A1F8B5BA /* EmailSignInView.swift in Sources */,
 				B4732DE94027E2F60D77FAB1 /* ExportController.swift in Sources */,
 				37B76FF4F2D5115FA3D9FA37 /* ExportFile.swift in Sources */,
+				ED9D34A38A2C7FFAFF7329B3 /* GeneralSettingsTab.swift in Sources */,
 				74962DA097DE9EA1CEC32AA3 /* GoalConfigController.swift in Sources */,
 				87C43C876F634C0552593789 /* HandoffEnvironment.swift in Sources */,
 				A27999E05D5E6B25C82E7734 /* HistoryPanel.swift in Sources */,
@@ -632,12 +649,15 @@
 				12EA8C3D97683280072BB04A /* ReviewSurfaceModel.swift in Sources */,
 				52E85FE562A8560BA614392A /* ShareSheet.swift in Sources */,
 				F43E7099F20D1ECC414204D9 /* SharedRectoCore.swift in Sources */,
+				8FCB07B23C1B40C5410F8531 /* ShortcutsSettingsTab.swift in Sources */,
 				243C0E64708D2DE3071D4BBE /* StudioSettings.swift in Sources */,
 				914DD232485A7200442F54CF /* SyncIndicator.swift in Sources */,
 				56B00C95C1D0711D83C520C3 /* TopFormatToolbar.swift in Sources */,
+				ED99C6449F2609A3250222DB /* WindowSettingsTab.swift in Sources */,
 				A00A4B74222E46F4A09BFD3F /* WordCountTracking.swift in Sources */,
 				E02A3B1FE8A01024A31CBDC5 /* WritingControlsHost.swift in Sources */,
 				17680E8E8E1700E0B1E8BC4F /* WritingGoals.swift in Sources */,
+				A347F6A7844DF668348C8C80 /* WritingSettingsTab.swift in Sources */,
 				D0FE0DD743EAFF6392F14E52 /* WritingStatsModel.swift in Sources */,
 				9FB703FFE9E9279098841DC8 /* ZenMode.swift in Sources */,
 			);

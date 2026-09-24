@@ -245,6 +245,31 @@ struct StudioSettingsTests {
     func appearanceSymbolsResolve(appearance: StudioSettings.Appearance) {
         #expect(NSImage(systemSymbolName: appearance.symbol, accessibilityDescription: nil) != nil)
     }
+
+    @Test("the Settings slider clamps the text size to the zoom range and persists it")
+    func readingScaleSlider() {
+        let settings = settings()
+        settings.setReadingScale(1.234)
+        #expect(settings.readingScale == 1.23)
+        settings.setReadingScale(9)
+        #expect(settings.readingScale == StudioSettings.readingScaleMax)
+        settings.setReadingScale(0.1)
+        #expect(settings.readingScale == StudioSettings.readingScaleMin)
+        #expect(self.settings().readingScale == StudioSettings.readingScaleMin)
+    }
+
+    @Test("the Shortcuts tab lists every chord, menu-only ones included, and filters by label or alias")
+    func shortcutsTab() {
+        let listed = ShortcutsSettingsTab.sections(matching: "").flatMap(\.actions).map(\.id)
+        let chorded = CommandRegistry.allActions.filter { !CommandRegistry.shortcut(for: $0.id).isEmpty }.map(\.id)
+        #expect(listed == chorded)
+        #expect(listed.contains("zoom-in"), "⌘= lives in nativeShortcuts, not on the action")
+        let blur = ShortcutsSettingsTab.sections(matching: "  BLUR ").flatMap(\.actions).map(\.id)
+        #expect(blur == ["toggle-focus-blur"])
+        #expect(ShortcutsSettingsTab.sections(matching: "sidebar").flatMap(\.actions).map(\.id)
+            .contains("go-to-documents"), "matches an alias")
+        #expect(ShortcutsSettingsTab.sections(matching: "zzz").isEmpty)
+    }
 }
 
 @Suite("Reading time")

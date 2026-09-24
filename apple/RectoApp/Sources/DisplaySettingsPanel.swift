@@ -132,7 +132,7 @@ struct DisplaySettingsPanel: View {
 
 /// The dark palettes as swatches: each one's sheet with its accent. Light is
 /// always Paper, so the row rests disabled while the appearance is light.
-private struct PaletteSwatches: View {
+struct PaletteSwatches: View {
     @Bindable var settings: StudioSettings
 
     var body: some View {

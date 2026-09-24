@@ -41,7 +41,9 @@ struct RectoApp: App {
         .windowResizability(.contentMinSize)
 
         Settings {
-            RectoSettingsView()
+            StudioAppearance(settings: settings) {
+                RectoSettingsView(settings: settings)
+            }
         }
     }
 }

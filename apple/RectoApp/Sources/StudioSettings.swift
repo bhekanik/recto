@@ -413,6 +413,11 @@ final class StudioSettings {
         readingScale = Self.readingScaleDefault
     }
 
+    /// The Settings slider's setter: any value, clamped like a zoom step.
+    func setReadingScale(_ value: Double) {
+        readingScale = Self.clampScale(value)
+    }
+
     /// `clampScale` in `settings-schema.ts`: clamp, then round to two places so
     /// the displayed percentage never shows float drift.
     static func clampScale(_ value: Double) -> Double {
