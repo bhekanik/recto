@@ -173,6 +173,13 @@ describe("createActionMap", () => {
 		expect(commands).toEqual(["bold", "h2", "codeBlock"]);
 	});
 
+	it("Code block shows no chord: ⌘⌥C is Copy as Markdown", () => {
+		const codeBlock = ACTIONS.find((a) => a.id === "format-codeBlock");
+		const copyMarkdown = ACTIONS.find((a) => a.id === "copy-markdown");
+		expect(codeBlock?.shortcut).toEqual({ mac: "", other: "" });
+		expect(copyMarkdown?.shortcut.mac).toBe("⌘⌥C");
+	});
+
 	it("every toolbar button has a Format action in the palette", () => {
 		const ids = new Set(ACTIONS.map((a) => a.id));
 		for (const action of [...INLINE_ACTIONS, ...BLOCK_ACTIONS]) {
