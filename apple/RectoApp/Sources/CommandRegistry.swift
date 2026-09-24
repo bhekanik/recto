@@ -179,6 +179,8 @@ enum CommandRegistry {
                       aliases: ["lint", "prose", "suggestions", "style"], shortcut: ""),
         CommandAction(id: "toggle-quiet-chrome", label: "Toggle quiet chrome while typing", section: .view,
                       aliases: ["fade", "hide toolbar", "distraction", "quiet"], shortcut: ""),
+        CommandAction(id: "toggle-focus-blur", label: "Toggle focus blur", section: .view,
+                      aliases: ["blur", "typewriter", "focus", "current line", "zen"], shortcut: "⌃⇧B"),
         CommandAction(id: "toggle-compact-status", label: "Toggle compact status bar", section: .view,
                       aliases: ["status bar", "display", "aa", "controls", "clutter"], shortcut: ""),
         CommandAction(id: "toggle-sheet", label: "Toggle page sheet", section: .view,

@@ -225,6 +225,8 @@ private struct StudioCommands: Commands {
                 .keyboardShortcut("t", modifiers: [.control, .shift])
             Button("Toggle focus dimming", action: settings.toggleFocusDim)
                 .keyboardShortcut("d", modifiers: [.control, .shift])
+            Button("Toggle focus blur", action: settings.toggleFocusBlur)
+                .keyboardShortcut("b", modifiers: [.control, .shift])
             Button("Toggle prose linter", action: settings.toggleLint)
             Button("Toggle spellcheck", action: settings.toggleSpellcheck)
             Divider()

@@ -110,6 +110,18 @@ struct SnapshotHarness {
             try await capture(window, name: "library-\(appearance.rawValue)", in: dir)
         }
 
+        // Focus blur, the caret mid-document.
+        settings.appearance = .dark
+        settings.focusBlur = true
+        defer { settings.focusBlur = false }
+        window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(textView)
+        let middle = (textView.string as NSString).range(of: "When I started").location
+        textView.setSelectedRange(NSRange(location: middle + 20, length: 0))
+        try await Task.sleep(for: .milliseconds(900))
+        try await capture(window, name: "focus-blur", in: dir)
+        settings.focusBlur = false
+
         // The status bar's Display panel, on its own.
         settings.appearance = .dark
         let panel = NSPanel(

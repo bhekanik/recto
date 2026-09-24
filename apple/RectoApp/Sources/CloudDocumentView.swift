@@ -183,6 +183,7 @@ struct CloudDocumentView: View {
         .onChange(of: settings.focusDimScope) { chrome.applySettings() }
         .onChange(of: settings.theme) { chrome.applySettings() }
         .onChange(of: settings.typewriter) { chrome.applySettings() }
+        .onChange(of: settings.focusBlur) { chrome.applySettings() }
         .onChange(of: styler.presentation) { _, presentation in
             vim.sync(seam: paneStorage(model).textView, presentation: presentation)
             chrome.applySettings()

@@ -23,6 +23,11 @@ public final class RectoTypewriterController {
         }
     }
 
+    /// How long the page glides to put a new line at the centre, like paper
+    /// advancing in a typewriter. `0` jumps (the default, and what tests use);
+    /// Reduce Motion always jumps.
+    public var glideDuration: TimeInterval = 0
+
     private var seam: RectoTextView?
     private weak var textView: NSTextView?
     private weak var scrollView: NSScrollView?
@@ -217,7 +222,31 @@ public final class RectoTypewriterController {
 
         needsRecenter = false
         recenterCount += 1
+        guard glideDuration > 0,
+              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+              let clipView, let scrollView
+        else {
+            _ = seam.scroll(range: textView.selectedRange(), position: .center)
+            return
+        }
+        // Let the engine find the centred position (it settles TextKit's
+        // estimated layout on the way), then start from where the page was and
+        // glide there. Same run-loop turn, so the jump is never drawn.
+        let start = clipView.bounds.origin
         _ = seam.scroll(range: textView.selectedRange(), position: .center)
+        let target = clipView.bounds.origin
+        let distance = abs(target.y - start.y)
+        // A long way (search, a jump to a heading) goes straight there.
+        guard distance > 0.5, distance < clipView.bounds.height else { return }
+        clipView.setBoundsOrigin(start)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = glideDuration
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            context.allowsImplicitAnimation = true
+            clipView.animator().setBoundsOrigin(target)
+        } completionHandler: {
+            MainActor.assumeIsolated { scrollView.reflectScrolledClipView(clipView) }
+        }
     }
 
     private func updateTextContainerInset() {

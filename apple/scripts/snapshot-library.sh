@@ -37,5 +37,5 @@ trap 'kill $loop 2>/dev/null; wait $loop 2>/dev/null; rm -f "$dir"/*.done' EXIT
 TEST_RUNNER_RECTO_SNAPSHOT_DIR="$dir" \
 xcodebuild -project "$repo/apple/RectoApp/Recto.xcodeproj" -scheme Recto -configuration Debug \
 	-destination 'platform=macOS' -derivedDataPath "$derived" CODE_SIGNING_ALLOWED=NO \
-	test -only-testing:RectoTests/SnapshotHarness 2>&1 | grep -E "error:|✘|Test run with" || true
+	test -only-testing:RectoTests/SnapshotHarness 2>&1 | grep -E "error:|✘|Test run with|BLUR" || true
 ls "$dir"/*.png

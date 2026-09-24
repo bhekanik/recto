@@ -76,6 +76,7 @@ struct DisplaySettingsPanel: View {
                 toggle("Spellcheck", isOn: $settings.spellcheck, command: "toggle-spellcheck")
                 toggle(lintLabel, isOn: $settings.lint, command: "toggle-lint")
                 toggle("Typewriter scrolling", isOn: $settings.typewriter, command: "toggle-typewriter")
+                toggle("Focus blur", isOn: $settings.focusBlur, command: "toggle-focus-blur")
                 toggle("Focus dimming", isOn: $settings.focusDim, command: "toggle-focus-dim")
                 if settings.focusDim {
                     Picker("Dim around the", selection: $settings.focusDimScope) {

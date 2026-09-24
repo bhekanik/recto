@@ -280,6 +280,8 @@ final class CommandPaletteController {
             settings.toggleQuietChrome()
         case "toggle-sheet":
             settings.toggleSheet()
+        case "toggle-focus-blur":
+            settings.toggleFocusBlur()
         case "toggle-compact-status":
             settings.toggleCompactStatusBar()
         case let id where id.hasPrefix("format-"):
