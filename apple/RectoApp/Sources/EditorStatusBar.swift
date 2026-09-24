@@ -159,7 +159,8 @@ private struct StudioControls: View {
             StatusDivider(theme: theme)
 
             HStack(spacing: 2) {
-                iconButton("minus", help: "Smaller text", accessibility: "Decrease text size", action: settings.zoomOut)
+                iconButton("minus", help: CommandRegistry.help("Smaller text", command: "zoom-out"),
+                           accessibility: "Decrease text size", action: settings.zoomOut)
                     .disabled(!settings.canZoomOut)
                 Button(action: settings.zoomReset) {
                     Text(verbatim: "\(settings.zoomPercent)%")
@@ -172,9 +173,10 @@ private struct StudioControls: View {
                 }
                 .buttonStyle(.plain)
                 .focusable(false)
-                .help("Reset text size")
+                .help(CommandRegistry.help("Reset text size", command: "zoom-reset"))
                 .accessibilityLabel("Reset text size")
-                iconButton("plus", help: "Bigger text", accessibility: "Increase text size", action: settings.zoomIn)
+                iconButton("plus", help: CommandRegistry.help("Bigger text", command: "zoom-in"),
+                           accessibility: "Increase text size", action: settings.zoomIn)
                     .disabled(!settings.canZoomIn)
             }
 
@@ -206,14 +208,16 @@ private struct StudioControls: View {
 
             iconButton(
                 "arrow.up.and.down.text.horizontal",
-                help: "Typewriter scrolling: \(settings.typewriter ? "On" : "Off")",
+                help: CommandRegistry.help(
+                    "Typewriter scrolling: \(settings.typewriter ? "On" : "Off")", command: "toggle-typewriter"),
                 accessibility: "Toggle typewriter scrolling",
                 isOn: settings.typewriter,
                 action: settings.toggleTypewriter
             )
             iconButton(
                 "highlighter",
-                help: "Focus dimming: \(settings.focusDim ? "On" : "Off")",
+                help: CommandRegistry.help(
+                    "Focus dimming: \(settings.focusDim ? "On" : "Off")", command: "toggle-focus-dim"),
                 accessibility: "Toggle focus dimming",
                 isOn: settings.focusDim,
                 action: settings.toggleFocusDim
@@ -377,7 +381,7 @@ private struct ZenButton: View {
         }
         .buttonStyle(.plain)
         .focusable(false)
-        .help("Zen mode (hide everything but the page)")
+        .help(CommandRegistry.help("Zen mode (hide everything but the page)", command: "toggle-focus"))
         .accessibilityLabel("Toggle zen mode")
         .accessibilityAddTraits(zen.isOn ? .isSelected : [])
     }
@@ -433,7 +437,7 @@ private struct WordCountLabel: View {
         }
         .monospacedDigit()
         .foregroundStyle(Color(nsColor: ink))
-        .help("Estimated reading time")
+        .help(CommandRegistry.help("Estimated reading time. Hide the bar", command: "toggle-status"))
     }
 }
 
@@ -529,10 +533,10 @@ private extension Presentation {
     /// Tooltip. Names the chord.
     var help: String {
         switch self {
-        case .rich: "Rich text (⌃⇧R)"
-        case .raw: "Raw Markdown (⌃⇧M)"
-        case .vim: "Vim (⌃⇧V)"
-        case .preview: "Preview (⌃⇧P)"
+        case .rich: CommandRegistry.help(label, command: "mode-rich")
+        case .raw: CommandRegistry.help(label, command: "mode-raw")
+        case .vim: CommandRegistry.help(label, command: "mode-vim")
+        case .preview: CommandRegistry.help(label, command: "mode-preview")
         }
     }
 }

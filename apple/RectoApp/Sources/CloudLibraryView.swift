@@ -38,9 +38,11 @@ struct CloudLibraryView: View {
                     Button("New document", systemImage: "square.and.pencil") {
                         Task { await model.createDocument() }
                     }
+                    .help(CommandRegistry.help("New document", command: "new-document"))
                     Button("Sign out", systemImage: "rectangle.portrait.and.arrow.right") {
                         Task { await model.signOut() }
                     }
+                    .help("Sign out")
                 }
             }
         } detail: {
@@ -136,7 +138,7 @@ extension CloudLibraryView {
                     systemImage: "doc.text",
                     description: Text(multiple
                         ? "Pick a document in the sidebar to show it in this pane."
-                        : "Create a document to start writing offline.")
+                        : "Press ⌘N to start a document. ⌘K finds every command.")
                 )
                 .contentShape(Rectangle())
                 .onTapGesture { layout.activate(pane.id) }

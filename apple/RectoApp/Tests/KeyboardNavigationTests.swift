@@ -171,6 +171,80 @@ struct KeyboardNavigationTests {
     }
 }
 
+@Suite("Shortcut hints")
+@MainActor
+struct ShortcutHintTests {
+    /// "⌘⇧Z" and "⇧⌘Z" are one chord: modifiers as a set, then the key.
+    private static func normalized(_ glyphs: String) -> String {
+        let modifiers = "⌃⌥⇧⌘".filter { glyphs.contains($0) }
+        let key = glyphs.filter { !"⌃⌥⇧⌘".contains($0) }.uppercased()
+        return modifiers + key
+    }
+
+    private static func menuChords() -> [String: String] {
+        var chords: [String: String] = [:]
+        func walk(_ menu: NSMenu) {
+            for item in menu.items {
+                if let submenu = item.submenu { walk(submenu) }
+                guard !item.keyEquivalent.isEmpty else { continue }
+                let flags = item.keyEquivalentModifierMask
+                var glyphs = ""
+                if flags.contains(.control) { glyphs += "⌃" }
+                if flags.contains(.option) { glyphs += "⌥" }
+                // AppKit stores ⇧⌘Z as "Z" with the shift flag, or as "Z" alone.
+                if flags.contains(.shift) || item.keyEquivalent != item.keyEquivalent.lowercased() { glyphs += "⇧" }
+                if flags.contains(.command) { glyphs += "⌘" }
+                let key: String = switch item.keyEquivalent {
+                case String(UnicodeScalar(NSRightArrowFunctionKey)!): "→"
+                case String(UnicodeScalar(NSLeftArrowFunctionKey)!): "←"
+                default: item.keyEquivalent
+                }
+                chords[normalized(glyphs + key)] = item.title
+            }
+        }
+        if let menu = NSApp.mainMenu { walk(menu) }
+        return chords
+    }
+
+    @Test("every chord a hint shows is one the menus answer")
+    func hintsAreReal() {
+        let chords = Self.menuChords()
+        #expect(!chords.isEmpty, "the test host has the app's menus")
+        // ⌘K opens the palette the hints are shown in; ⌘F is the find bar's
+        // own key, answered by the text view.
+        let answeredElsewhere: Set<String> = ["find-replace"]
+        var missing: [String] = []
+        for action in CommandRegistry.allActions where !answeredElsewhere.contains(action.id) {
+            let chord = CommandRegistry.shortcut(for: action.id)
+            guard !chord.isEmpty else { continue }
+            if chords[Self.normalized(chord)] == nil { missing.append("\(action.id) \(chord)") }
+        }
+        #expect(missing.isEmpty, "\(missing)")
+    }
+
+    @Test("⌃⇧E opens the palette on the export commands")
+    func exportChooser() {
+        let name = "com.bhekani.recto.tests.shortcut-hints"
+        let defaults = UserDefaults(suiteName: name)!
+        defaults.removePersistentDomain(forName: name)
+        let settings = StudioSettings(defaults: defaults, systemAppearance: { .dark })
+        let editor = EditorHostController(settings: settings)
+        let model = PaletteModel(
+            sections: CommandPaletteController.sections(settings: settings, library: PaletteLibrary(), editor: editor),
+            run: { _ in }, close: {})
+        model.query = "Export as"
+        #expect(model.visibleItems.map(\.id) == ["export-md", "export-html"],
+                "Word export needs a synced document, so this editor has two")
+    }
+
+    @Test("tooltips name the chord")
+    func tooltips() {
+        #expect(CommandRegistry.help("Bold", command: "format-bold") == "Bold (⌘B)")
+        #expect(CommandRegistry.help("Bigger text", command: "zoom-in") == "Bigger text (⌘=)")
+        #expect(CommandRegistry.help("Link", command: "format-link") == "Link")
+    }
+}
+
 @Suite("Palette covers the whole app")
 @MainActor
 struct PaletteCoverageTests {

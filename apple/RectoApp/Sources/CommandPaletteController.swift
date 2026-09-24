@@ -70,7 +70,9 @@ final class CommandPaletteController {
     /// that hosts it when the key window is a popover, or over the library when
     /// the key window has no editor at all (Settings). A second ⌘K while it is
     /// up leaves it up, like the web.
-    func open(over keyWindow: NSWindow? = NSApp.keyWindow, library: PaletteLibrary) {
+    /// - Parameter query: Opens already filtered, e.g. "Export as" for the web's
+    ///   ⌃⇧E, which offers the export commands.
+    func open(over keyWindow: NSWindow? = NSApp.keyWindow, library: PaletteLibrary, query: String = "") {
         guard !isOpen, let window = editors.surfaceWindow(for: keyWindow) else { return }
         if window !== keyWindow { window.makeKeyAndOrderFront(nil) }
         let editor = editors.controller(in: window)
@@ -79,6 +81,7 @@ final class CommandPaletteController {
             run: { [weak self] item in self?.run(item, editor: editor, library: library) },
             close: { [weak self] in self?.close() }
         )
+        model.query = query
         present(model: model, over: window)
     }
 

@@ -104,7 +104,7 @@ struct EditorHostView: View {
                 RectoEditorView(
                     storage: storage,
                     styler: styler,
-                    placeholder: "Start writing…",
+                    placeholder: "Start writing…   ⌘K for commands",
                     onAttach: { seam in
                         chrome.attach(seam)
                         vim.sync(seam: seam, presentation: presentation)

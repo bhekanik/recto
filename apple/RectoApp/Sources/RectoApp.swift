@@ -108,6 +108,24 @@ private struct StudioCommands: Commands {
         // Right after Save, so ⌘S reaches Save in a file document's window
         // (Save is enabled there and first) and the checkpoint in the synced
         // library's (where Save has no document and is disabled).
+        // ⌘N makes what the palette's New document makes: a synced document
+        // when signed in, a Markdown file otherwise; ⌥⌘N is always a file.
+        CommandGroup(replacing: .newItem) {
+            Button("New document") { perform("new-document") }
+                .keyboardShortcut("n")
+            Button("New Markdown file") { NSDocumentController.shared.newDocument(nil) }
+                .keyboardShortcut("n", modifiers: [.command, .option])
+        }
+        // The web's document-scope copy and export chords.
+        CommandGroup(after: .pasteboard) {
+            Divider()
+            Button("Copy as rich text") { perform("copy-rich") }
+                .keyboardShortcut("c", modifiers: [.command, .shift])
+            Button("Copy as Markdown") { perform("copy-markdown") }
+                .keyboardShortcut("c", modifiers: [.command, .option])
+            Button("Export…") { palette.open(library: library, query: "Export as") }
+                .keyboardShortcut("e", modifiers: [.control, .shift])
+        }
         SidebarCommands()
         CommandGroup(after: .sidebar) {
             Button("Go to document list") {
@@ -124,6 +142,8 @@ private struct StudioCommands: Commands {
                 }
             }
             .keyboardShortcut("2", modifiers: [.control, .command])
+            Button("Go to heading…") { perform("go-to-heading") }
+                .keyboardShortcut("o", modifiers: [.control, .shift])
         }
         CommandMenu("Format") {
             ForEach(FormatToolbarAction.all) { action in
@@ -200,10 +220,19 @@ private struct StudioCommands: Commands {
             Button("Toggle prose linter", action: settings.toggleLint)
             Button("Toggle spellcheck", action: settings.toggleSpellcheck)
             Divider()
+            // The system's zoom chords, as browsers and Pages use them.
             Button("Increase text size", action: settings.zoomIn)
+                .keyboardShortcut("=")
             Button("Decrease text size", action: settings.zoomOut)
+                .keyboardShortcut("-")
             Button("Reset text size", action: settings.zoomReset)
+                .keyboardShortcut("0")
         }
+    }
+
+    /// A palette command from a menu chord, against the key window's editor.
+    private func perform(_ id: String) {
+        palette.perform(id, editor: editors.controller(in: NSApp.keyWindow), library: library)
     }
 
     private var isSignedIn: Bool {

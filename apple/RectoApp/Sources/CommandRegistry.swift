@@ -192,6 +192,24 @@ enum CommandRegistry {
         (actions + nativeActions).filter { $0.section == section }
     }
 
+    /// Chords the Mac's menus add where the web has none.
+    static let nativeShortcuts: [String: String] = [
+        "zoom-in": "⌘=", "zoom-out": "⌘-", "zoom-reset": "⌘0",
+    ]
+
+    /// The chord for a command, as the palette and tooltips print it, or "".
+    static func shortcut(for id: String) -> String {
+        let chord = action(id)?.shortcut ?? ""
+        return chord.isEmpty ? nativeShortcuts[id] ?? "" : chord
+    }
+
+    /// A tooltip that teaches the chord: "Bold (⌘B)", or the text alone when
+    /// the command has none.
+    static func help(_ text: String, command id: String) -> String {
+        let chord = shortcut(for: id)
+        return chord.isEmpty ? text : "\(text) (\(chord))"
+    }
+
     static func action(_ id: String) -> CommandAction? {
         allActions.first { $0.id == id }
     }

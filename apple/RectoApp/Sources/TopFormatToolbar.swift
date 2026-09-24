@@ -26,7 +26,8 @@ extension FormatToolbarAction {
     }
 
     /// Milkdown's commonmark and GFM keymaps (`Mod-b`, `Mod-Alt-1`, …), the
-    /// chords the web editor answers. Link has none: ⌘K is the palette.
+    /// chords the web editor answers. Link has none: ⌘K is the palette. Code
+    /// block has none: Milkdown's ⌥⌘C is the web's app-level Copy as Markdown.
     nonisolated var shortcut: (key: Character, modifiers: EventModifiers)? {
         switch id {
         case "bold": ("b", .command)
@@ -39,7 +40,6 @@ extension FormatToolbarAction {
         case "quote": ("b", [.command, .shift])
         case "bulletList": ("8", [.command, .option])
         case "orderedList": ("7", [.command, .option])
-        case "codeBlock": ("c", [.command, .option])
         default: nil
         }
     }
@@ -107,8 +107,8 @@ struct TopFormatToolbar: View {
 
     var body: some View {
         HStack(spacing: 2) {
-            button(label: "Undo", glyph: .symbol("arrow.uturn.backward"), action: actions.undo)
-            button(label: "Redo", glyph: .symbol("arrow.uturn.forward"), action: actions.redo)
+            button(label: "Undo", command: "undo", glyph: .symbol("arrow.uturn.backward"), action: actions.undo)
+            button(label: "Redo", command: "redo", glyph: .symbol("arrow.uturn.forward"), action: actions.redo)
             divider
             ForEach(Self.inlineActions, content: formatButton)
             divider
@@ -127,10 +127,14 @@ struct TopFormatToolbar: View {
     }
 
     private func formatButton(_ action: FormatToolbarAction) -> some View {
-        button(label: action.label, glyph: action.glyph) { actions.format(action.command) }
+        button(label: action.label, command: "format-\(action.id)", glyph: action.glyph) {
+            actions.format(action.command)
+        }
     }
 
-    private func button(label: String, glyph: FormatToolbarAction.Glyph, action: @escaping () -> Void) -> some View {
+    private func button(
+        label: String, command: String, glyph: FormatToolbarAction.Glyph, action: @escaping () -> Void
+    ) -> some View {
         Button(action: action) {
             Group {
                 switch glyph {
@@ -149,7 +153,7 @@ struct TopFormatToolbar: View {
         // The web's `onPointerDown preventDefault`: the editor keeps focus and
         // its selection while a button is pressed.
         .focusable(false)
-        .help(label)
+        .help(CommandRegistry.help(label, command: command))
         .accessibilityLabel(label)
     }
 
