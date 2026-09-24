@@ -106,11 +106,12 @@ struct CommandRegistryTests {
     @Test("sections follow SECTION_ORDER and ids are unique")
     func orderAndUniqueness() {
         #expect(CommandSection.allCases.map(\.rawValue) == [
-            "Documents", "Modes", "Panes", "Navigate", "History", "Review", "AI", "Copy/Export", "View", "Theme",
+            "Documents", "Modes", "Format", "Panes", "Navigate", "History", "Review", "AI", "Copy/Export", "View",
+            "Theme",
         ])
-        let order = CommandRegistry.actions.map { CommandSection.allCases.firstIndex(of: $0.section)! }
+        let order = CommandRegistry.allActions.map { CommandSection.allCases.firstIndex(of: $0.section)! }
         #expect(order == order.sorted())
-        #expect(Set(CommandRegistry.actions.map(\.id)).count == CommandRegistry.actions.count)
+        #expect(Set(CommandRegistry.allActions.map(\.id)).count == CommandRegistry.allActions.count)
     }
 }
 
@@ -241,11 +242,11 @@ struct CommandPaletteControllerTests {
         )
     }
 
-    @Test("signed out, Documents holds only New document")
+    @Test("signed out, Documents holds New document and Settings")
     func signedOutDocuments() {
         let sections = CommandPaletteController.sections(settings: settings(), library: PaletteLibrary())
         #expect(sections.first?.title == "Documents")
-        #expect(sections.first?.items.map(\.id) == ["new-document"])
+        #expect(sections.first?.items.map(\.id) == ["new-document", "open-settings"])
         #expect(sections.first?.items.first?.detail == .shortcut("⌘N"))
     }
 
@@ -255,10 +256,12 @@ struct CommandPaletteControllerTests {
             record("a", "Notes", words: 1_234), record("b", "Draft", words: 7),
         ])
         let documents = CommandPaletteController.sections(settings: settings(), library: library).first
-        #expect(documents?.items.map(\.label) == ["New document", "Notes", "Draft"])
-        #expect(documents?.items[1].kind == .document(localId: "a"))
-        #expect(documents?.items[1].detail == .text("1,234 w"))
-        #expect(documents?.items[1].searchValue == "document Notes")
+        #expect(documents?.items.map(\.label) == [
+            "New document", "Go to document list", "Toggle sidebar", "Settings…", "Sign out", "Notes", "Draft",
+        ])
+        #expect(documents?.items[5].kind == .document(localId: "a"))
+        #expect(documents?.items[5].detail == .text("1,234 w"))
+        #expect(documents?.items[5].searchValue == "document Notes")
     }
 
     @Test("Open in web app appears in Documents only when the handoff is available")
@@ -267,7 +270,8 @@ struct CommandPaletteControllerTests {
             record("a", "Notes", words: 1),
         ], canOpenInWeb: true)
         let shown = CommandPaletteController.sections(settings: settings(), library: available).first
-        #expect(shown?.items.map(\.id) == ["new-document", "open-in-web", "document-a"])
+        let native = ["go-to-documents", "toggle-sidebar", "open-settings", "sign-out"]
+        #expect(shown?.items.map(\.id) == ["new-document", "open-in-web"] + native + ["document-a"])
 
         // An unsigned build, or a document with no convex id yet: the command
         // is absent rather than offered dead, so nothing lies about why.
@@ -275,7 +279,7 @@ struct CommandPaletteControllerTests {
             record("a", "Notes", words: 1),
         ], canOpenInWeb: false)
         let hidden = CommandPaletteController.sections(settings: settings(), library: unavailable).first
-        #expect(hidden?.items.map(\.id) == ["new-document", "document-a"])
+        #expect(hidden?.items.map(\.id) == ["new-document"] + native + ["document-a"])
     }
 
     @Test("sections come in SECTION_ORDER and empty ones are skipped")
@@ -302,7 +306,7 @@ struct CommandPaletteControllerTests {
         )
         var created = 0
         let library = PaletteLibrary(isSignedIn: true, create: { created += 1 })
-        for action in CommandRegistry.actions {
+        for action in CommandRegistry.allActions {
             #expect(controller.perform(action.id, editor: nil, library: library), "\(action.id)")
         }
         #expect(created == 1)

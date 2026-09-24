@@ -118,6 +118,31 @@ final class EditorHostController {
     /// Whether the writer is typing, for the chrome to step back.
     let quiet = QuietChrome()
 
+    /// Give the text the keyboard, from a menu, the palette or a window
+    /// opening. `false` when the editor is not on screen yet.
+    @discardableResult
+    func focusText() -> Bool {
+        guard let textView = seam?.nsTextView, let window = textView.window else { return false }
+        if window.firstResponder !== textView { window.makeFirstResponder(textView) }
+        return true
+    }
+
+    /// ``focusText()`` once the text view is in its window. On a window's
+    /// first appearance that is several turns after the editor attaches, so
+    /// this waits for it, briefly (about a second), then gives up.
+    func focusTextWhenOnScreen(then done: @escaping () -> Void = {}) {
+        Task { @MainActor [weak self] in
+            for _ in 0..<60 {
+                guard let self else { return }
+                if self.focusText() {
+                    done()
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(16))
+            }
+        }
+    }
+
     /// The window this editor is on screen in, while it is.
     var window: NSWindow? { seam?.nsTextView?.window }
 

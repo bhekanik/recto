@@ -1,9 +1,10 @@
-/// The palette's sections, in the web's `SECTION_ORDER`. Sections with no
-/// native action yet (Panes, Navigate, Review, AI) keep their slot so the
-/// order matches when they fill in.
+/// The palette's sections, in the web's `SECTION_ORDER`, plus Format, which
+/// is native only: the web formats from its toolbar and Milkdown's chords,
+/// the Mac from the palette too.
 enum CommandSection: String, CaseIterable, Sendable {
     case documents = "Documents"
     case modes = "Modes"
+    case format = "Format"
     case panes = "Panes"
     case navigate = "Navigate"
     case history = "History"
@@ -156,11 +157,46 @@ enum CommandRegistry {
                       aliases: ["silver", "cyan", "minimal", "appearance", "palette", "colour"], shortcut: ""),
     ]
 
+    /// Mac-only commands: what the web does with a click or has no need of —
+    /// the sidebar, the formatting toolbar, the status bar's native toggles —
+    /// so the whole app is reachable from the keyboard. Shortcuts are the
+    /// menu's chords; the Format chords are Milkdown's, which the web uses.
+    static let nativeActions: [CommandAction] = [
+        CommandAction(id: "go-to-documents", label: "Go to document list", section: .documents,
+                      aliases: ["sidebar", "library", "files", "notes", "focus"], shortcut: "⌃⌘1"),
+        CommandAction(id: "go-to-editor", label: "Go to editor", section: .documents,
+                      aliases: ["text", "page", "write", "focus", "type"], shortcut: "⌃⌘2"),
+        CommandAction(id: "toggle-sidebar", label: "Toggle sidebar", section: .documents,
+                      aliases: ["library", "document list", "hide", "show"], shortcut: "⌃⌘S"),
+        CommandAction(id: "open-settings", label: "Settings…", section: .documents,
+                      aliases: ["preferences", "markdown files", "default app"], shortcut: "⌘,"),
+        CommandAction(id: "sign-out", label: "Sign out", section: .documents,
+                      aliases: ["log out", "account", "switch account"], shortcut: ""),
+    ] + formatActions + [
+        CommandAction(id: "toggle-lint", label: "Toggle prose linter", section: .view,
+                      aliases: ["lint", "prose", "suggestions", "style"], shortcut: ""),
+        CommandAction(id: "toggle-quiet-chrome", label: "Toggle quiet chrome while typing", section: .view,
+                      aliases: ["fade", "hide toolbar", "distraction", "quiet"], shortcut: ""),
+    ]
+
+    /// The formatting toolbar's buttons, in its order, as `format-<id>`.
+    static let formatActions: [CommandAction] = FormatToolbarAction.all
+        .map { action in
+            CommandAction(
+                id: "format-\(action.id)", label: action.label, section: .format,
+                aliases: ["format", "markdown"], shortcut: action.shortcutGlyphs)
+        }
+
+    /// The web's actions and the Mac's own, each section's web entries first.
+    static let allActions: [CommandAction] = CommandSection.allCases.flatMap { section in
+        (actions + nativeActions).filter { $0.section == section }
+    }
+
     static func action(_ id: String) -> CommandAction? {
-        actions.first { $0.id == id }
+        allActions.first { $0.id == id }
     }
 
     static func actions(in section: CommandSection) -> [CommandAction] {
-        actions.filter { $0.section == section }
+        allActions.filter { $0.section == section }
     }
 }

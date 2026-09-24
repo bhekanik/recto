@@ -18,6 +18,9 @@ struct EditorHostView: View {
     /// This window's lens. `nil` until it appears, when it takes the stored
     /// default; after that only the writer's own choice moves it.
     @State private var chosenPresentation: Presentation?
+    /// The window opens with the keyboard in the text, once; after that the
+    /// writer's own focus moves stand.
+    @State private var tookInitialKeyboard = false
     private let settings: StudioSettings
     private let isEditable: Bool
 
@@ -105,6 +108,10 @@ struct EditorHostView: View {
                     onAttach: { seam in
                         chrome.attach(seam)
                         vim.sync(seam: seam, presentation: presentation)
+                        if seam != nil, !tookInitialKeyboard {
+                            tookInitialKeyboard = true
+                            chrome.focusTextWhenOnScreen()
+                        }
                     },
                     onEdit: history.accept,
                     writingController: chrome.writingController

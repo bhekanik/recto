@@ -108,6 +108,28 @@ private struct StudioCommands: Commands {
         // Right after Save, so ⌘S reaches Save in a file document's window
         // (Save is enabled there and first) and the checkpoint in the synced
         // library's (where Save has no document and is disabled).
+        SidebarCommands()
+        CommandGroup(after: .sidebar) {
+            Button("Go to document list") {
+                openWindow(id: "cloud-library")
+                model.request(.focusDocuments)
+            }
+            .keyboardShortcut("1", modifiers: [.control, .command])
+            .disabled(!isSignedIn)
+            Button("Go to editor") {
+                if isSignedIn, editors.libraryWindow === NSApp.keyWindow {
+                    model.request(.focusEditor)
+                } else {
+                    editors.controller(in: NSApp.keyWindow)?.focusText()
+                }
+            }
+            .keyboardShortcut("2", modifiers: [.control, .command])
+        }
+        CommandMenu("Format") {
+            ForEach(FormatToolbarAction.all) { action in
+                formatButton(action)
+            }
+        }
         CommandGroup(after: .saveItem) {
             Button("Create version / checkpoint") { editors.controller(in: NSApp.keyWindow)?.checkpoint?() }
                 .keyboardShortcut("s")
@@ -184,6 +206,22 @@ private struct StudioCommands: Commands {
         }
     }
 
+    private var isSignedIn: Bool {
+        if case .signedIn = model.authStatus { true } else { false }
+    }
+
+    @ViewBuilder
+    private func formatButton(_ action: FormatToolbarAction) -> some View {
+        let button = Button(action.label) {
+            editors.controller(in: NSApp.keyWindow)?.format(action.command)
+        }
+        if let (key, modifiers) = action.shortcut {
+            button.keyboardShortcut(KeyEquivalent(key), modifiers: modifiers)
+        } else {
+            button
+        }
+    }
+
     /// The signed-in library for the palette's Documents section. Opening or
     /// creating there brings the library window forward, since ⌘K may have
     /// been pressed in a file document's window.
@@ -195,6 +233,7 @@ private struct StudioCommands: Commands {
             open: { [model] localId in
                 model.selectedDocumentId = localId
                 openWindow(id: "cloud-library")
+                model.request(.focusEditor)
             },
             create: { [model] in
                 openWindow(id: "cloud-library")
@@ -203,7 +242,14 @@ private struct StudioCommands: Commands {
             openInWeb: { [model] in
                 model.openSelectedDocumentInWeb()
             },
-            canOpenInWeb: model.canOpenSelectedDocumentInWeb
+            canOpenInWeb: model.canOpenSelectedDocumentInWeb,
+            focusDocuments: { [model] in
+                openWindow(id: "cloud-library")
+                model.request(.focusDocuments)
+            },
+            focusEditor: { [model] in model.request(.focusEditor) },
+            toggleSidebar: { [model] in model.request(.toggleSidebar) },
+            signOut: { [model] in Task { await model.signOut() } }
         )
     }
 }

@@ -18,6 +18,11 @@ struct PaletteLibrary {
     /// otherwise, the way the web hides "Open in Recto app" off macOS — a
     /// dead palette entry would say nothing about why.
     var canOpenInWeb = false
+    /// The library window's own keyboard moves.
+    var focusDocuments: () -> Void = {}
+    var focusEditor: () -> Void = {}
+    var toggleSidebar: () -> Void = {}
+    var signOut: () -> Void = {}
 }
 
 /// Opens the ⌘K palette over the key window and carries out what it picks.
@@ -191,6 +196,19 @@ final class CommandPaletteController {
             if section == .copyExport, editor?.cloud?.convexId == nil {
                 actions.removeAll { $0.id == "export-docx" }
             }
+            // The sidebar and the account are the library window's.
+            if section == .documents, !library.isSignedIn {
+                actions.removeAll { ["go-to-documents", "toggle-sidebar", "sign-out"].contains($0.id) }
+            }
+            if section == .documents, editor == nil {
+                actions.removeAll { $0.id == "go-to-editor" }
+            }
+            // Formatting edits the text; preview and a window with no editor
+            // have nothing to format.
+            if section == .format,
+               editor.map({ !$0.currentPresentation().isEditable }) ?? true {
+                actions.removeAll()
+            }
             var items = actions.map(PaletteItem.init(action:))
             if section == .documents {
                 if !library.canOpenInWeb {
@@ -228,6 +246,33 @@ final class CommandPaletteController {
     @discardableResult
     func perform(_ id: String, editor: EditorHostController?, library: PaletteLibrary) -> Bool {
         switch id {
+        case "go-to-documents":
+            // After the palette's close hands the keyboard back, or that
+            // hand-back would take it straight from the list again.
+            Task { @MainActor in library.focusDocuments() }
+        case "go-to-editor":
+            Task { @MainActor [weak editor] in
+                if library.isSignedIn, editor?.panes != nil {
+                    library.focusEditor()
+                } else {
+                    editor?.focusText()
+                }
+            }
+        case "toggle-sidebar":
+            library.toggleSidebar()
+        case "open-settings":
+            Task { @MainActor in
+                NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+            }
+        case "sign-out":
+            library.signOut()
+        case "toggle-lint":
+            settings.toggleLint()
+        case "toggle-quiet-chrome":
+            settings.toggleQuietChrome()
+        case let id where id.hasPrefix("format-"):
+            guard let action = FormatToolbarAction.all.first(where: { "format-\($0.id)" == id }) else { return false }
+            editor?.format(action.command)
         case "new-document":
             if library.isSignedIn {
                 library.create()

@@ -22,6 +22,10 @@ struct PaneContext {
     /// Where to put the caret once this pane's document opens, then forget it.
     var pendingJump: Int? = nil
     var clearJump: () -> Void = {}
+    /// Give this pane's text the keyboard once it is on screen, then report
+    /// back so a later document mounting here does not take it again.
+    var wantsKeyboard = false
+    var tookKeyboard: () -> Void = {}
 }
 
 /// The pane tree as nested split views, the web's `render-pane-node`. The

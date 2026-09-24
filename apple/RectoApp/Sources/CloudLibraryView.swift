@@ -10,6 +10,12 @@ struct CloudLibraryView: View {
     @State private var columnVisibility = NavigationSplitViewVisibility.automatic
     /// What the sidebar was before zen hid it, to put it back after.
     @State private var visibilityBeforeZen: NavigationSplitViewVisibility?
+    @FocusState private var documentsFocused: Bool
+    /// The active pane's editor should take the keyboard once it is on
+    /// screen. True at first, so opening the app lands in the text; a
+    /// selection made by arrowing through the list leaves it false, so the
+    /// list keeps the keyboard while the writer browses.
+    @State private var editorWantsKeyboard = true
 
     var body: some View {
         @Bindable var model = model
@@ -17,6 +23,12 @@ struct CloudLibraryView: View {
             List(model.documents, id: \.localId, selection: $model.selectedDocumentId) { document in
                 DocumentRow(document: document)
                     .tag(document.localId)
+            }
+            .focused($documentsFocused)
+            // Return opens the highlighted document for writing.
+            .onKeyPress(.return) {
+                model.request(.focusEditor)
+                return .handled
             }
             .tint(Color(nsColor: StudioSettings.shared.theme.accent))
             .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 380)
@@ -46,6 +58,10 @@ struct CloudLibraryView: View {
         .onChange(of: layout.activePane?.documentId) { _, active in
             if model.selectedDocumentId != active { model.selectedDocumentId = active }
         }
+        .onChange(of: model.keyboardRequest) { _, request in
+            guard let request else { return }
+            handle(request.kind)
+        }
         .onPreferenceChange(ZenPreferenceKey.self) { isZen in
             if isZen {
                 visibilityBeforeZen = visibilityBeforeZen ?? columnVisibility
@@ -68,6 +84,18 @@ struct CloudLibraryView: View {
 }
 
 extension CloudLibraryView {
+    private func handle(_ request: RectoApplicationModel.KeyboardRequest.Kind) {
+        switch request {
+        case .focusDocuments:
+            if columnVisibility == .detailOnly { columnVisibility = .all }
+            documentsFocused = true
+        case .focusEditor:
+            editorWantsKeyboard = true
+        case .toggleSidebar:
+            columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
+        }
+    }
+
     private func openCitation(_ convexId: String, _ offset: Int) {
         guard let localId = model.documents.first(where: { $0.convexId == convexId })?.localId else {
             model.errorMessage = "That draft isn't on this Mac yet."
@@ -98,7 +126,9 @@ extension CloudLibraryView {
                         activate: { layout.activate(pane.id) }, commands: commands,
                         openDocument: openCitation,
                         pendingJump: isActive && pendingJump?.localId == localId ? pendingJump?.offset : nil,
-                        clearJump: { pendingJump = nil }))
+                        clearJump: { pendingJump = nil },
+                        wantsKeyboard: isActive && editorWantsKeyboard,
+                        tookKeyboard: { editorWantsKeyboard = false }))
                     .id("\(pane.id)-\(localId)")
             } else {
                 ContentUnavailableView(

@@ -18,6 +18,44 @@ struct FormatToolbarAction: Identifiable, Equatable, Sendable {
     let glyph: Glyph
 }
 
+extension FormatToolbarAction {
+    /// Every button, inline marks then blocks: the palette's Format section
+    /// and the Format menu list the same commands in the same order.
+    nonisolated static var all: [FormatToolbarAction] {
+        TopFormatToolbar.inlineActions + TopFormatToolbar.blockActions
+    }
+
+    /// Milkdown's commonmark and GFM keymaps (`Mod-b`, `Mod-Alt-1`, …), the
+    /// chords the web editor answers. Link has none: ⌘K is the palette.
+    nonisolated var shortcut: (key: Character, modifiers: EventModifiers)? {
+        switch id {
+        case "bold": ("b", .command)
+        case "italic": ("i", .command)
+        case "code": ("e", .command)
+        case "strike": ("x", [.command, .option])
+        case "h1": ("1", [.command, .option])
+        case "h2": ("2", [.command, .option])
+        case "h3": ("3", [.command, .option])
+        case "quote": ("b", [.command, .shift])
+        case "bulletList": ("8", [.command, .option])
+        case "orderedList": ("7", [.command, .option])
+        case "codeBlock": ("c", [.command, .option])
+        default: nil
+        }
+    }
+
+    /// The chord as the palette prints it: `⌥⌘X`.
+    nonisolated var shortcutGlyphs: String {
+        guard let (key, modifiers) = shortcut else { return "" }
+        var glyphs = ""
+        if modifiers.contains(.control) { glyphs += "⌃" }
+        if modifiers.contains(.option) { glyphs += "⌥" }
+        if modifiers.contains(.shift) { glyphs += "⇧" }
+        if modifiers.contains(.command) { glyphs += "⌘" }
+        return glyphs + String(key).uppercased()
+    }
+}
+
 /// What the toolbar's buttons do, supplied by the host that owns the editor.
 struct FormatToolbarActions {
     var undo: () -> Void
