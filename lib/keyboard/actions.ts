@@ -115,7 +115,9 @@ const A = "⌥";
 
 /**
  * The formatting toolbar's buttons, in its order. The chords are Milkdown's
- * (commonmark + gfm keymaps), so they apply in the Rich lens.
+ * (commonmark + gfm keymaps), so they apply in the Rich lens. Code block shows
+ * none: Milkdown's Mod-Alt-C never reaches the editor, because the capture-phase
+ * handler takes ⌘⌥C for Copy as Markdown.
  */
 const FORMAT_ACTIONS: ActionDef[] = (
 	[
@@ -130,7 +132,7 @@ const FORMAT_ACTIONS: ActionDef[] = (
 		["format-quote", "Quote", "B", "shift"],
 		["format-bulletList", "Bullet list", "8", "alt"],
 		["format-orderedList", "Numbered list", "7", "alt"],
-		["format-codeBlock", "Code block", "C", "alt"],
+		["format-codeBlock", "Code block", "", ""],
 	] as const
 ).map(([id, label, key, extra]) => ({
 	id,
