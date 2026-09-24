@@ -47,6 +47,7 @@ enum CommandRegistry {
                       aliases: [], shortcut: "⌃⇧]"),
         CommandAction(id: "cycle-prev", label: "Cycle mode backward", section: .modes,
                       aliases: [], shortcut: "⌃⇧["),
+    ] + formatActions + [
         CommandAction(id: "split-v", label: "Split pane — vertical", section: .panes,
                       aliases: ["column", "right"], shortcut: "⌘\\"),
         CommandAction(id: "split-h", label: "Split pane — horizontal", section: .panes,
@@ -131,6 +132,10 @@ enum CommandRegistry {
                       aliases: ["typewriter", "center line", "scroll", "focus"], shortcut: "⌃⇧T"),
         CommandAction(id: "toggle-focus-dim", label: "Toggle focus dimming", section: .view,
                       aliases: ["dim", "focus text", "highlight current", "spotlight"], shortcut: "⌃⇧D"),
+        CommandAction(id: "toggle-focus-blur", label: "Toggle focus blur", section: .view,
+                      aliases: ["blur", "typewriter", "focus", "current line", "zen"], shortcut: "⌃⇧B"),
+        CommandAction(id: "toggle-quiet-chrome", label: "Toggle quiet chrome while typing", section: .view,
+                      aliases: ["fade", "hide toolbar", "distraction", "quiet"], shortcut: ""),
         CommandAction(id: "cycle-dim-scope", label: "Focus scope: sentence / paragraph", section: .view,
                       aliases: ["sentence", "paragraph", "scope", "dim scope"], shortcut: ""),
         CommandAction(id: "toggle-email-preview", label: "Toggle email/inbox preview", section: .view,
@@ -158,9 +163,8 @@ enum CommandRegistry {
     ]
 
     /// Mac-only commands: what the web does with a click or has no need of —
-    /// the sidebar, the formatting toolbar, the status bar's native toggles —
-    /// so the whole app is reachable from the keyboard. Shortcuts are the
-    /// menu's chords; the Format chords are Milkdown's, which the web uses.
+    /// the sidebar, Settings, the status bar's native toggles — so the whole
+    /// app is reachable from the keyboard. Shortcuts are the menu's chords.
     static let nativeActions: [CommandAction] = [
         CommandAction(id: "go-to-documents", label: "Go to document list", section: .documents,
                       aliases: ["sidebar", "library", "files", "notes", "focus"], shortcut: "⌃⌘1"),
@@ -174,20 +178,16 @@ enum CommandRegistry {
                       aliases: ["preferences", "markdown files", "default app"], shortcut: "⌘,"),
         CommandAction(id: "sign-out", label: "Sign out", section: .documents,
                       aliases: ["log out", "account", "switch account"], shortcut: ""),
-    ] + formatActions + [
         CommandAction(id: "toggle-lint", label: "Toggle prose linter", section: .view,
                       aliases: ["lint", "prose", "suggestions", "style"], shortcut: ""),
-        CommandAction(id: "toggle-quiet-chrome", label: "Toggle quiet chrome while typing", section: .view,
-                      aliases: ["fade", "hide toolbar", "distraction", "quiet"], shortcut: ""),
-        CommandAction(id: "toggle-focus-blur", label: "Toggle focus blur", section: .view,
-                      aliases: ["blur", "typewriter", "focus", "current line", "zen"], shortcut: "⌃⇧B"),
         CommandAction(id: "toggle-compact-status", label: "Toggle compact status bar", section: .view,
                       aliases: ["status bar", "display", "aa", "controls", "clutter"], shortcut: ""),
         CommandAction(id: "toggle-sheet", label: "Toggle page sheet", section: .view,
                       aliases: ["page", "paper", "atmosphere", "flat", "background"], shortcut: ""),
     ]
 
-    /// The formatting toolbar's buttons, in its order, as `format-<id>`.
+    /// The formatting toolbar's buttons, in its order, as `format-<id>`: the
+    /// web's `FORMAT_ACTIONS`, with Milkdown's chords, which the web uses.
     static let formatActions: [CommandAction] = FormatToolbarAction.all
         .map { action in
             CommandAction(
