@@ -33,6 +33,15 @@ public struct MarkdownStyler: Sendable, Equatable {
     /// Smart paste: rich-mode paste turns an HTML flavor into Markdown. Off
     /// pastes the plain text. Read at paste time, so a toggle applies at once.
     public var convertsPastedHTML: Bool
+    /// The writing column as a sheet on the atmosphere, rather than the sheet
+    /// colour edge to edge. Presentation only; the engine never sees it.
+    public var showsSheet: Bool
+
+    /// Room around the text inside the sheet, each side.
+    public static let sheetMargin: CGFloat = 56
+
+    /// The sheet's width: the reading column and its margins.
+    public var sheetWidth: CGFloat? { readingWidth.map { $0 + 2 * Self.sheetMargin } }
 
     public init(
         presentation: Presentation = .rich,
@@ -42,7 +51,8 @@ public struct MarkdownStyler: Sendable, Equatable {
         readingWidth: CGFloat? = 720,
         spellChecking: Bool = true,
         undo: UndoPolicy = .external,
-        convertsPastedHTML: Bool = true
+        convertsPastedHTML: Bool = true,
+        showsSheet: Bool = false
     ) {
         self.presentation = presentation
         self.theme = theme
@@ -52,6 +62,7 @@ public struct MarkdownStyler: Sendable, Equatable {
         self.spellChecking = spellChecking
         self.undo = undo
         self.convertsPastedHTML = convertsPastedHTML
+        self.showsSheet = showsSheet
     }
 
     /// The same styler at a different presentation, with the matching scale.

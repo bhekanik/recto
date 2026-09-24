@@ -93,6 +93,9 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.bhekani.recto
+        # Twilight's accent in dark, Paper's in light: system controls
+        # (focus rings, toggles, buttons) follow Recto instead of blue.
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         COMBINE_HIDPI_IMAGES: YES
         ENABLE_HARDENED_RUNTIME: YES
         ARCHS: arm64

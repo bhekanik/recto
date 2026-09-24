@@ -691,6 +691,13 @@ struct PaneViewTests {
         #expect(views.count == 2, "one editor per pane")
         let frames = views.map { $0.convert($0.bounds, to: nil) }.sorted { $0.minX < $1.minX }
         #expect(frames.count == 2 && frames[0].maxX <= frames[1].minX + 1, "side by side: \(frames)")
+        // Each column wraps inside its own pane: a text view wider than its
+        // scroll view cuts lines off at the pane's edge.
+        for view in views {
+            let text = view.convert(view.bounds, to: nil)
+            let pane = try #require(view.enclosingScrollView).convert(view.enclosingScrollView!.bounds, to: nil)
+            #expect(text.minX >= pane.minX - 0.5 && text.maxX <= pane.maxX + 0.5, "\(text) inside \(pane)")
+        }
 
         let left = views.min { $0.convert($0.bounds, to: nil).minX < $1.convert($1.bounds, to: nil).minX }!
         let right = views.first { $0 !== left }!

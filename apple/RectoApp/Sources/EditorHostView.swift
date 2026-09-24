@@ -18,6 +18,9 @@ struct EditorHostView: View {
     /// This window's lens. `nil` until it appears, when it takes the stored
     /// default; after that only the writer's own choice moves it.
     @State private var chosenPresentation: Presentation?
+    /// The window opens with the keyboard in the text, once; after that the
+    /// writer's own focus moves stand.
+    @State private var tookInitialKeyboard = false
     private let settings: StudioSettings
     private let isEditable: Bool
 
@@ -101,10 +104,14 @@ struct EditorHostView: View {
                 RectoEditorView(
                     storage: storage,
                     styler: styler,
-                    placeholder: "Start writing…",
+                    placeholder: "Start writing…   ⌘K for commands",
                     onAttach: { seam in
                         chrome.attach(seam)
                         vim.sync(seam: seam, presentation: presentation)
+                        if seam != nil, !tookInitialKeyboard {
+                            tookInitialKeyboard = true
+                            chrome.focusTextWhenOnScreen()
+                        }
                     },
                     onEdit: history.accept,
                     writingController: chrome.writingController
@@ -126,6 +133,8 @@ struct EditorHostView: View {
             }
         }
         .modifier(ZenChrome(zen: zen, settings: settings, toolbar: toolbar(styler), statusBar: statusBar(styler)))
+        // Under the title bar too, so the glow starts at the window's top edge.
+        .background { DocumentBackdrop(theme: styler.theme, showsSheet: styler.showsSheet).ignoresSafeArea() }
         .background { WordCountTracker(storage: storage, count: wordCount) }
         .background {
             LintTracker(

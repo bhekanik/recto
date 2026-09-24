@@ -17,34 +17,6 @@ import Testing
 @Suite("Snapshot harness", .serialized)
 @MainActor
 struct SnapshotHarness {
-    private actor Transport: RectoTransport {
-        enum Failure: Error { case unexpectedCall }
-        func createDocument(title: String, documentUuid: String) async throws
-            -> CreateDocumentResponse { throw Failure.unexpectedCall }
-        func commitEdit(_ request: CommitEditRequest) async throws
-            -> CommitEditResponse { throw Failure.unexpectedCall }
-        func updateCurrentNodeId(
-            documentId: String, currentNodeId: String, markdown: String, wordCount: Int,
-            updatedAt: Double, expectedPointerRevision: Double?, title: String?
-        ) async throws -> UpdateCurrentNodeResponse { throw Failure.unexpectedCall }
-        func updateMarkdown(
-            documentId: String, markdown: String, wordCount: Int, expectedUpdatedAt: Double,
-            expectedHeadNodeId: String?, title: String?
-        ) async throws -> UpdateMarkdownResponse { throw Failure.unexpectedCall }
-        func appendNode(documentId: String, node: CommitEditRequest) async throws { throw Failure.unexpectedCall }
-        func rename(documentId: String, title: String) async throws { throw Failure.unexpectedCall }
-        func remove(documentId: String) async throws { throw Failure.unexpectedCall }
-        func recordWritingStat(date: String, words: Int) async throws { throw Failure.unexpectedCall }
-        func listNodes(documentId: String, sinceCreatedAt: Double?) async throws -> [RemoteNode] { [] }
-        func getDocument(documentId: String) async throws -> RemoteDocument? { nil }
-        func documentsStream() -> AsyncThrowingStream<[RemoteDocumentSummary], any Error> {
-            AsyncThrowingStream { $0.finish() }
-        }
-        func nodesStream(documentId: String, sinceCreatedAt: Double?)
-            -> AsyncThrowingStream<[RemoteNode], any Error> { AsyncThrowingStream { $0.finish() } }
-        func loginFromCache() async -> Bool { false }
-    }
-
     private static var dir: String? {
         ProcessInfo.processInfo.environment["RECTO_SNAPSHOT_DIR"].flatMap { $0.isEmpty ? nil : $0 }
     }
@@ -88,7 +60,7 @@ struct SnapshotHarness {
 
         let store = try RectoStore.inMemory()
         let origin = try await SyncEngine.resolveOrigin(store: store)
-        let sync = SyncEngine(store: store, transport: Transport(), origin: origin)
+        let sync = SyncEngine(store: store, transport: OfflineTransport(), origin: origin)
         let registry = DocumentSessionRegistry(store: store, sync: sync, origin: origin)
         let library = DocumentLibrary(store: store, sync: sync, origin: origin)
         let auth = RectoAuth(store: store)
@@ -137,6 +109,19 @@ struct SnapshotHarness {
             try await Task.sleep(for: .milliseconds(900))
             try await capture(window, name: "library-\(appearance.rawValue)", in: dir)
         }
+
+        // The status bar's Display panel, on its own.
+        settings.appearance = .dark
+        let panel = NSPanel(
+            contentRect: NSRect(x: 200, y: 200, width: 280, height: 460),
+            styleMask: [.titled, .utilityWindow], backing: .buffered, defer: false)
+        panel.appearance = NSAppearance(named: .darkAqua)
+        panel.contentView = NSHostingView(rootView: DisplaySettingsPanel(settings: settings, lint: nil))
+        panel.setContentSize(panel.contentView!.fittingSize)
+        panel.orderFront(nil)
+        try await Task.sleep(for: .milliseconds(400))
+        try await capture(panel, name: "display-panel", in: dir)
+        panel.orderOut(nil)
         window.orderOut(nil)
     }
 

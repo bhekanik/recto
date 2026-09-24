@@ -38,6 +38,10 @@ public struct RectoEditorTheme: Sendable, Equatable {
     public var selection: NSColor
     /// Caret.
     public var caret: NSColor
+    /// The two soft glows on the canvas, top-left and bottom-right (the web's
+    /// `--atmos-1`/`--atmos-2`), with their alpha.
+    public var atmosphere1: NSColor
+    public var atmosphere2: NSColor
 
     public init(
         canvas: NSColor,
@@ -50,7 +54,9 @@ public struct RectoEditorTheme: Sendable, Equatable {
         accent: NSColor,
         accent2: NSColor,
         selection: NSColor,
-        caret: NSColor
+        caret: NSColor,
+        atmosphere1: NSColor = .clear,
+        atmosphere2: NSColor = .clear
     ) {
         self.canvas = canvas
         self.sheet = sheet
@@ -63,6 +69,8 @@ public struct RectoEditorTheme: Sendable, Equatable {
         self.accent2 = accent2
         self.selection = selection
         self.caret = caret
+        self.atmosphere1 = atmosphere1
+        self.atmosphere2 = atmosphere2
     }
 
     /// Twilight — the dark palette shipping at launch.
@@ -77,7 +85,9 @@ public struct RectoEditorTheme: Sendable, Equatable {
         accent: .oklch(0.74, 0.13, 288),
         accent2: .oklch(0.78, 0.1, 250),
         selection: NSColor.oklch(0.74, 0.13, 288).withAlphaComponent(0.26),
-        caret: .oklch(0.92, 0.04, 285)
+        caret: .oklch(0.92, 0.04, 285),
+        atmosphere1: NSColor.oklch(0.5, 0.12, 290).withAlphaComponent(0.4),
+        atmosphere2: NSColor.oklch(0.42, 0.1, 255).withAlphaComponent(0.4)
     )
 
     /// Aurora — teal and aqua-mint (`palette.aurora` in `packages/design-tokens`).
@@ -92,7 +102,9 @@ public struct RectoEditorTheme: Sendable, Equatable {
         accent: .oklch(0.78, 0.115, 178),
         accent2: .oklch(0.8, 0.1, 205),
         selection: NSColor.oklch(0.78, 0.115, 178).withAlphaComponent(0.24),
-        caret: .oklch(0.93, 0.05, 190)
+        caret: .oklch(0.93, 0.05, 190),
+        atmosphere1: NSColor.oklch(0.5, 0.1, 185).withAlphaComponent(0.38),
+        atmosphere2: NSColor.oklch(0.44, 0.09, 162).withAlphaComponent(0.36)
     )
 
     /// Dawn — charcoal and rose-lavender (`palette.dawn`).
@@ -107,7 +119,9 @@ public struct RectoEditorTheme: Sendable, Equatable {
         accent: .oklch(0.78, 0.09, 350),
         accent2: .oklch(0.78, 0.08, 300),
         selection: NSColor.oklch(0.78, 0.09, 350).withAlphaComponent(0.24),
-        caret: .oklch(0.93, 0.04, 345)
+        caret: .oklch(0.93, 0.04, 345),
+        atmosphere1: NSColor.oklch(0.55, 0.09, 350).withAlphaComponent(0.34),
+        atmosphere2: NSColor.oklch(0.5, 0.08, 298).withAlphaComponent(0.34)
     )
 
     /// Moonlit — near-black and silver-cyan (`palette.moonlit`).
@@ -122,7 +136,9 @@ public struct RectoEditorTheme: Sendable, Equatable {
         accent: .oklch(0.82, 0.08, 210),
         accent2: .oklch(0.83, 0.08, 215),
         selection: NSColor.oklch(0.82, 0.08, 210).withAlphaComponent(0.22),
-        caret: .oklch(0.94, 0.03, 230)
+        caret: .oklch(0.94, 0.03, 230),
+        atmosphere1: NSColor.oklch(0.42, 0.07, 240).withAlphaComponent(0.4),
+        atmosphere2: NSColor.oklch(0.22, 0.04, 250).withAlphaComponent(0.5)
     )
 
     /// Paper — the light palette shipping at launch.
@@ -137,7 +153,9 @@ public struct RectoEditorTheme: Sendable, Equatable {
         accent: .oklch(0.52, 0.15, 288),
         accent2: .oklch(0.5, 0.12, 250),
         selection: NSColor.oklch(0.52, 0.15, 288).withAlphaComponent(0.18),
-        caret: .oklch(0.52, 0.15, 288)
+        caret: .oklch(0.52, 0.15, 288),
+        atmosphere1: NSColor.oklch(0.78, 0.08, 288).withAlphaComponent(0.3),
+        atmosphere2: NSColor.oklch(0.82, 0.07, 250).withAlphaComponent(0.26)
     )
 }
 

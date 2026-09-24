@@ -18,6 +18,44 @@ struct FormatToolbarAction: Identifiable, Equatable, Sendable {
     let glyph: Glyph
 }
 
+extension FormatToolbarAction {
+    /// Every button, inline marks then blocks: the palette's Format section
+    /// and the Format menu list the same commands in the same order.
+    nonisolated static var all: [FormatToolbarAction] {
+        TopFormatToolbar.inlineActions + TopFormatToolbar.blockActions
+    }
+
+    /// Milkdown's commonmark and GFM keymaps (`Mod-b`, `Mod-Alt-1`, …), the
+    /// chords the web editor answers. Link has none: ⌘K is the palette. Code
+    /// block has none: Milkdown's ⌥⌘C is the web's app-level Copy as Markdown.
+    nonisolated var shortcut: (key: Character, modifiers: EventModifiers)? {
+        switch id {
+        case "bold": ("b", .command)
+        case "italic": ("i", .command)
+        case "code": ("e", .command)
+        case "strike": ("x", [.command, .option])
+        case "h1": ("1", [.command, .option])
+        case "h2": ("2", [.command, .option])
+        case "h3": ("3", [.command, .option])
+        case "quote": ("b", [.command, .shift])
+        case "bulletList": ("8", [.command, .option])
+        case "orderedList": ("7", [.command, .option])
+        default: nil
+        }
+    }
+
+    /// The chord as the palette prints it: `⌥⌘X`.
+    nonisolated var shortcutGlyphs: String {
+        guard let (key, modifiers) = shortcut else { return "" }
+        var glyphs = ""
+        if modifiers.contains(.control) { glyphs += "⌃" }
+        if modifiers.contains(.option) { glyphs += "⌥" }
+        if modifiers.contains(.shift) { glyphs += "⇧" }
+        if modifiers.contains(.command) { glyphs += "⌘" }
+        return glyphs + String(key).uppercased()
+    }
+}
+
 /// What the toolbar's buttons do, supplied by the host that owns the editor.
 struct FormatToolbarActions {
     var undo: () -> Void
@@ -69,8 +107,8 @@ struct TopFormatToolbar: View {
 
     var body: some View {
         HStack(spacing: 2) {
-            button(label: "Undo", glyph: .symbol("arrow.uturn.backward"), action: actions.undo)
-            button(label: "Redo", glyph: .symbol("arrow.uturn.forward"), action: actions.redo)
+            button(label: "Undo", command: "undo", glyph: .symbol("arrow.uturn.backward"), action: actions.undo)
+            button(label: "Redo", command: "redo", glyph: .symbol("arrow.uturn.forward"), action: actions.redo)
             divider
             ForEach(Self.inlineActions, content: formatButton)
             divider
@@ -79,9 +117,8 @@ struct TopFormatToolbar: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity)
-        // The page's own colour: the bar reads as part of the sheet, not a band
-        // across it.
-        .background(Color(nsColor: theme.sheet))
+        // No fill of its own: the host's backdrop (the atmosphere, or the flat
+        // sheet) shows through, so the bar is part of the page, not a band.
         .opacity(isEnabled ? 1 : 0.4)
         .disabled(!isEnabled)
         .accessibilityElement(children: .contain)
@@ -89,10 +126,14 @@ struct TopFormatToolbar: View {
     }
 
     private func formatButton(_ action: FormatToolbarAction) -> some View {
-        button(label: action.label, glyph: action.glyph) { actions.format(action.command) }
+        button(label: action.label, command: "format-\(action.id)", glyph: action.glyph) {
+            actions.format(action.command)
+        }
     }
 
-    private func button(label: String, glyph: FormatToolbarAction.Glyph, action: @escaping () -> Void) -> some View {
+    private func button(
+        label: String, command: String, glyph: FormatToolbarAction.Glyph, action: @escaping () -> Void
+    ) -> some View {
         Button(action: action) {
             Group {
                 switch glyph {
@@ -111,7 +152,7 @@ struct TopFormatToolbar: View {
         // The web's `onPointerDown preventDefault`: the editor keeps focus and
         // its selection while a button is pressed.
         .focusable(false)
-        .help(label)
+        .help(CommandRegistry.help(label, command: command))
         .accessibilityLabel(label)
     }
 

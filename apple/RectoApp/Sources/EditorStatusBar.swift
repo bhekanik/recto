@@ -44,35 +44,70 @@ struct EditorStatusBar<Trailing: View>: View {
                 VimStatusView(status: vimController.status, theme: theme)
             }
             Spacer(minLength: 0)
-            // The right side keeps its natural width; the spacer gives way first.
-            HStack(spacing: 8) {
-                StudioControls(settings: settings, lint: lint, theme: theme)
-                WritingProgress(
-                    settings: settings, wordCount: wordCount, stats: stats, theme: theme,
-                    onOpenConfig: onOpenGoalConfig)
-                if let zen {
-                    StatusDivider(theme: theme)
-                    ZenButton(zen: zen, theme: theme, action: onToggleZen)
-                }
-                StatusDivider(theme: theme)
-                WordCountLabel(count: wordCount, ink: theme.ink3)
-                if Trailing.self != EmptyView.self {
-                    StatusDot(theme: theme)
-                    trailing()
-                }
+            // The spacer gives way first; then, in a narrow pane, the right
+            // side drops what matters least rather than forcing the pane wider
+            // than its split (which pushed the text out of its column).
+            ViewThatFits(in: .horizontal) {
+                trailingControls(.full)
+                trailingControls(.withoutProgress)
+                trailingControls(.essentials)
             }
-            .fixedSize()
             .layoutPriority(1)
         }
         .font(.system(size: 11.5))
         .padding(.horizontal, 12)
         .frame(height: 28)
-        // The sheet's colour with a faint hairline: the bar belongs to the
-        // page instead of sitting under it as a second surface.
-        .background(Color(nsColor: theme.sheet))
+        // No fill, a faint hairline: the host's backdrop shows through, so the
+        // bar belongs to the page instead of sitting under it as a surface.
         .overlay(alignment: .top) {
             Color(nsColor: theme.line.withAlphaComponent(0.55)).frame(height: 1)
         }
+    }
+}
+
+extension EditorStatusBar {
+    /// How much of the right side fits, widest first.
+    enum Density {
+        case full
+        case withoutProgress
+        case essentials
+    }
+
+    @ViewBuilder
+    func trailingControls(_ density: Density) -> some View {
+        let inline = !settings.compactStatusBar && density == .full
+        HStack(spacing: 8) {
+            if inline {
+                StudioControls(settings: settings, lint: lint, theme: theme)
+            }
+            if density == .full {
+                WritingProgress(
+                    settings: settings, wordCount: wordCount, stats: stats, theme: theme,
+                    onOpenConfig: onOpenGoalConfig)
+            }
+            if inline, let zen {
+                StatusDivider(theme: theme)
+                ZenButton(zen: zen, theme: theme, action: onToggleZen)
+            }
+            if density != .essentials {
+                StatusDivider(theme: theme)
+                WordCountLabel(count: wordCount, ink: theme.ink3)
+            }
+            if Trailing.self != EmptyView.self {
+                if density != .essentials { StatusDot(theme: theme) }
+                trailing()
+            }
+            // The display controls behind one button, zen last, where a
+            // pointer heading for the corner finds them.
+            if !inline {
+                StatusDivider(theme: theme)
+                DisplaySettingsButton(settings: settings, lint: lint, theme: theme)
+                if let zen {
+                    ZenButton(zen: zen, theme: theme, action: onToggleZen)
+                }
+            }
+        }
+        .fixedSize()
     }
 }
 
@@ -159,7 +194,8 @@ private struct StudioControls: View {
             StatusDivider(theme: theme)
 
             HStack(spacing: 2) {
-                iconButton("minus", help: "Smaller text", accessibility: "Decrease text size", action: settings.zoomOut)
+                iconButton("minus", help: CommandRegistry.help("Smaller text", command: "zoom-out"),
+                           accessibility: "Decrease text size", action: settings.zoomOut)
                     .disabled(!settings.canZoomOut)
                 Button(action: settings.zoomReset) {
                     Text(verbatim: "\(settings.zoomPercent)%")
@@ -172,9 +208,10 @@ private struct StudioControls: View {
                 }
                 .buttonStyle(.plain)
                 .focusable(false)
-                .help("Reset text size")
+                .help(CommandRegistry.help("Reset text size", command: "zoom-reset"))
                 .accessibilityLabel("Reset text size")
-                iconButton("plus", help: "Bigger text", accessibility: "Increase text size", action: settings.zoomIn)
+                iconButton("plus", help: CommandRegistry.help("Bigger text", command: "zoom-in"),
+                           accessibility: "Increase text size", action: settings.zoomIn)
                     .disabled(!settings.canZoomIn)
             }
 
@@ -206,14 +243,16 @@ private struct StudioControls: View {
 
             iconButton(
                 "arrow.up.and.down.text.horizontal",
-                help: "Typewriter scrolling: \(settings.typewriter ? "On" : "Off")",
+                help: CommandRegistry.help(
+                    "Typewriter scrolling: \(settings.typewriter ? "On" : "Off")", command: "toggle-typewriter"),
                 accessibility: "Toggle typewriter scrolling",
                 isOn: settings.typewriter,
                 action: settings.toggleTypewriter
             )
             iconButton(
                 "highlighter",
-                help: "Focus dimming: \(settings.focusDim ? "On" : "Off")",
+                help: CommandRegistry.help(
+                    "Focus dimming: \(settings.focusDim ? "On" : "Off")", command: "toggle-focus-dim"),
                 accessibility: "Toggle focus dimming",
                 isOn: settings.focusDim,
                 action: settings.toggleFocusDim
@@ -377,7 +416,7 @@ private struct ZenButton: View {
         }
         .buttonStyle(.plain)
         .focusable(false)
-        .help("Zen mode (hide everything but the page)")
+        .help(CommandRegistry.help("Zen mode (hide everything but the page)", command: "toggle-focus"))
         .accessibilityLabel("Toggle zen mode")
         .accessibilityAddTraits(zen.isOn ? .isSelected : [])
     }
@@ -433,7 +472,7 @@ private struct WordCountLabel: View {
         }
         .monospacedDigit()
         .foregroundStyle(Color(nsColor: ink))
-        .help("Estimated reading time")
+        .help(CommandRegistry.help("Estimated reading time. Hide the bar", command: "toggle-status"))
     }
 }
 
@@ -529,10 +568,10 @@ private extension Presentation {
     /// Tooltip. Names the chord.
     var help: String {
         switch self {
-        case .rich: "Rich text (⌃⇧R)"
-        case .raw: "Raw Markdown (⌃⇧M)"
-        case .vim: "Vim (⌃⇧V)"
-        case .preview: "Preview (⌃⇧P)"
+        case .rich: CommandRegistry.help(label, command: "mode-rich")
+        case .raw: CommandRegistry.help(label, command: "mode-raw")
+        case .vim: CommandRegistry.help(label, command: "mode-vim")
+        case .preview: CommandRegistry.help(label, command: "mode-preview")
         }
     }
 }

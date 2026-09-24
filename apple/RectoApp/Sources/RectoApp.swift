@@ -108,6 +108,54 @@ private struct StudioCommands: Commands {
         // Right after Save, so ⌘S reaches Save in a file document's window
         // (Save is enabled there and first) and the checkpoint in the synced
         // library's (where Save has no document and is disabled).
+        // ⌘N makes what the palette's New document makes: a synced document
+        // when signed in, a Markdown file otherwise; ⌥⌘N is always a file.
+        CommandGroup(replacing: .newItem) {
+            Button("New document") { perform("new-document") }
+                .keyboardShortcut("n")
+            Button("New Markdown file") { NSDocumentController.shared.newDocument(nil) }
+                .keyboardShortcut("n", modifiers: [.command, .option])
+        }
+        // The web's document-scope copy and export chords.
+        CommandGroup(after: .pasteboard) {
+            Divider()
+            Button("Copy as rich text") { perform("copy-rich") }
+                .keyboardShortcut("c", modifiers: [.command, .shift])
+            Button("Copy as Markdown") { perform("copy-markdown") }
+                .keyboardShortcut("c", modifiers: [.command, .option])
+            Button("Export…") { palette.open(library: library, query: "Export as") }
+                .keyboardShortcut("e", modifiers: [.control, .shift])
+        }
+        SidebarCommands()
+        CommandGroup(after: .sidebar) {
+            Button("Go to document list") {
+                openWindow(id: "cloud-library")
+                model.request(.focusDocuments)
+            }
+            .keyboardShortcut("1", modifiers: [.control, .command])
+            .disabled(!isSignedIn)
+            Button("Go to editor") {
+                if isSignedIn, editors.libraryWindow === NSApp.keyWindow {
+                    model.request(.focusEditor)
+                } else {
+                    editors.controller(in: NSApp.keyWindow)?.focusText()
+                }
+            }
+            .keyboardShortcut("2", modifiers: [.control, .command])
+            Button("Search documents") {
+                openWindow(id: "cloud-library")
+                model.request(.focusSearch)
+            }
+            .keyboardShortcut("f", modifiers: [.command, .shift])
+            .disabled(!isSignedIn)
+            Button("Go to heading…") { perform("go-to-heading") }
+                .keyboardShortcut("o", modifiers: [.control, .shift])
+        }
+        CommandMenu("Format") {
+            ForEach(FormatToolbarAction.all) { action in
+                formatButton(action)
+            }
+        }
         CommandGroup(after: .saveItem) {
             Button("Create version / checkpoint") { editors.controller(in: NSApp.keyWindow)?.checkpoint?() }
                 .keyboardShortcut("s")
@@ -171,6 +219,8 @@ private struct StudioCommands: Commands {
             Button("Toggle word count / status bar", action: settings.toggleStatusBar)
                 .keyboardShortcut("s", modifiers: [.control, .shift])
             Button("Toggle quiet chrome while typing", action: settings.toggleQuietChrome)
+            Button("Toggle page sheet", action: settings.toggleSheet)
+            Button("Toggle compact status bar", action: settings.toggleCompactStatusBar)
             Button("Toggle typewriter scrolling", action: settings.toggleTypewriter)
                 .keyboardShortcut("t", modifiers: [.control, .shift])
             Button("Toggle focus dimming", action: settings.toggleFocusDim)
@@ -178,9 +228,34 @@ private struct StudioCommands: Commands {
             Button("Toggle prose linter", action: settings.toggleLint)
             Button("Toggle spellcheck", action: settings.toggleSpellcheck)
             Divider()
+            // The system's zoom chords, as browsers and Pages use them.
             Button("Increase text size", action: settings.zoomIn)
+                .keyboardShortcut("=")
             Button("Decrease text size", action: settings.zoomOut)
+                .keyboardShortcut("-")
             Button("Reset text size", action: settings.zoomReset)
+                .keyboardShortcut("0")
+        }
+    }
+
+    /// A palette command from a menu chord, against the key window's editor.
+    private func perform(_ id: String) {
+        palette.perform(id, editor: editors.controller(in: NSApp.keyWindow), library: library)
+    }
+
+    private var isSignedIn: Bool {
+        if case .signedIn = model.authStatus { true } else { false }
+    }
+
+    @ViewBuilder
+    private func formatButton(_ action: FormatToolbarAction) -> some View {
+        let button = Button(action.label) {
+            editors.controller(in: NSApp.keyWindow)?.format(action.command)
+        }
+        if let (key, modifiers) = action.shortcut {
+            button.keyboardShortcut(KeyEquivalent(key), modifiers: modifiers)
+        } else {
+            button
         }
     }
 
@@ -195,6 +270,7 @@ private struct StudioCommands: Commands {
             open: { [model] localId in
                 model.selectedDocumentId = localId
                 openWindow(id: "cloud-library")
+                model.request(.focusEditor)
             },
             create: { [model] in
                 openWindow(id: "cloud-library")
@@ -203,7 +279,18 @@ private struct StudioCommands: Commands {
             openInWeb: { [model] in
                 model.openSelectedDocumentInWeb()
             },
-            canOpenInWeb: model.canOpenSelectedDocumentInWeb
+            canOpenInWeb: model.canOpenSelectedDocumentInWeb,
+            focusDocuments: { [model] in
+                openWindow(id: "cloud-library")
+                model.request(.focusDocuments)
+            },
+            focusEditor: { [model] in model.request(.focusEditor) },
+            toggleSidebar: { [model] in model.request(.toggleSidebar) },
+            focusSearch: { [model] in
+                openWindow(id: "cloud-library")
+                model.request(.focusSearch)
+            },
+            signOut: { [model] in Task { await model.signOut() } }
         )
     }
 }

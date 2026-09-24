@@ -37,6 +37,26 @@ final class RectoApplicationModel {
     var selectedDocumentId: String?
     var errorMessage: String?
 
+    /// A keyboard move for the library window, from the palette, a menu or a
+    /// new document. The serial makes asking twice a change the window sees.
+    struct KeyboardRequest: Equatable {
+        enum Kind: Equatable {
+            case focusDocuments
+            case focusEditor
+            case toggleSidebar
+            case focusSearch
+        }
+
+        let kind: Kind
+        let serial: Int
+    }
+
+    private(set) var keyboardRequest: KeyboardRequest?
+
+    func request(_ kind: KeyboardRequest.Kind) {
+        keyboardRequest = KeyboardRequest(kind: kind, serial: (keyboardRequest?.serial ?? 0) + 1)
+    }
+
     private(set) var store: RectoStore?
     private(set) var sync: SyncEngine?
     private(set) var registry: DocumentSessionRegistry?
@@ -182,6 +202,8 @@ final class RectoApplicationModel {
             await refreshDocuments()
             selectedDocumentId = document.localId
             errorMessage = nil
+            // A new document is for writing in.
+            request(.focusEditor)
         } catch {
             errorMessage = error.localizedDescription
         }

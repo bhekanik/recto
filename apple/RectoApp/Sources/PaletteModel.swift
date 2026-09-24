@@ -32,7 +32,8 @@ extension PaletteItem {
             id: action.id,
             kind: .action(action.id),
             label: action.label,
-            detail: action.shortcut.isEmpty ? nil : .shortcut(action.shortcut),
+            detail: CommandRegistry.shortcut(for: action.id).isEmpty
+                ? nil : .shortcut(CommandRegistry.shortcut(for: action.id)),
             searchValue: ([action.label] + action.aliases + [action.section.rawValue]).joined(separator: " ")
         )
     }

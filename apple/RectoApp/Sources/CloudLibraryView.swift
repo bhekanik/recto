@@ -1,3 +1,5 @@
+import AppKit
+import RectoEditor
 import RectoStore
 import SwiftUI
 
@@ -10,15 +12,55 @@ struct CloudLibraryView: View {
     @State private var columnVisibility = NavigationSplitViewVisibility.automatic
     /// What the sidebar was before zen hid it, to put it back after.
     @State private var visibilityBeforeZen: NavigationSplitViewVisibility?
+    @FocusState private var documentsFocused: Bool
+    /// The active pane's editor should take the keyboard once it is on
+    /// screen. True at first, so opening the app lands in the text; a
+    /// selection made by arrowing through the list leaves it false, so the
+    /// list keeps the keyboard while the writer browses.
+    @State private var editorWantsKeyboard = true
+    @State private var searchQuery = ""
+    @FocusState private var searchFocused: Bool
+
+    private var theme: RectoEditorTheme { StudioSettings.shared.theme }
 
     var body: some View {
         @Bindable var model = model
         NavigationSplitView(columnVisibility: $columnVisibility) {
-            List(model.documents, id: \.localId, selection: $model.selectedDocumentId) { document in
-                DocumentRow(document: document)
-                    .tag(document.localId)
+            let groups = LibraryGroups.groups(model.documents, matching: searchQuery)
+            List(selection: $model.selectedDocumentId) {
+                ForEach(groups, id: \.title) { group in
+                    Section {
+                        ForEach(group.documents, id: \.localId) { document in
+                            documentRow(document)
+                        }
+                    } header: {
+                        Text(group.title)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
-            .tint(Color(nsColor: StudioSettings.shared.theme.accent))
+            .overlay {
+                if groups.isEmpty, !searchQuery.isEmpty {
+                    ContentUnavailableView.search(text: searchQuery)
+                }
+            }
+            .searchable(text: $searchQuery, placement: .sidebar, prompt: "Search")
+            .searchFocused($searchFocused)
+            // Return in the search field opens the first match for writing.
+            .onSubmit(of: .search) {
+                guard let first = groups.first?.documents.first else { return }
+                model.selectedDocumentId = first.localId
+                model.request(.focusEditor)
+            }
+            .scrollContentBackground(.hidden)
+            .background(Color(nsColor: theme.canvas))
+            .focused($documentsFocused)
+            // Return opens the highlighted document for writing.
+            .onKeyPress(.return) {
+                model.request(.focusEditor)
+                return .handled
+            }
             .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 380)
             .navigationTitle("Documents")
             .toolbar {
@@ -26,15 +68,20 @@ struct CloudLibraryView: View {
                     Button("New document", systemImage: "square.and.pencil") {
                         Task { await model.createDocument() }
                     }
+                    .help(CommandRegistry.help("New document", command: "new-document"))
                     Button("Sign out", systemImage: "rectangle.portrait.and.arrow.right") {
                         Task { await model.signOut() }
                     }
+                    .help("Sign out")
                 }
             }
         } detail: {
             PaneTreeView(node: layout.root) { pane in
                 paneView(pane)
             }
+            // No title-bar fill: the document's backdrop runs up under it, so
+            // the window is one surface rather than a grey band over the page.
+            .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         }
         .onAppear {
             if layout.activePane?.documentId == nil { layout.setActiveDocument(model.selectedDocumentId) }
@@ -45,6 +92,10 @@ struct CloudLibraryView: View {
         }
         .onChange(of: layout.activePane?.documentId) { _, active in
             if model.selectedDocumentId != active { model.selectedDocumentId = active }
+        }
+        .onChange(of: model.keyboardRequest) { _, request in
+            guard let request else { return }
+            handle(request.kind)
         }
         .onPreferenceChange(ZenPreferenceKey.self) { isZen in
             if isZen {
@@ -68,6 +119,37 @@ struct CloudLibraryView: View {
 }
 
 extension CloudLibraryView {
+    private func documentRow(_ document: DocumentRecord) -> some View {
+        let isSelected = document.localId == model.selectedDocumentId
+        return DocumentRow(document: document)
+            .tag(document.localId)
+            .background(SystemSelectionHidden())
+            // The design's accent wash instead of the system's solid
+            // highlight, deeper while the list has the keyboard so the
+            // writer can see where typing would go.
+            .listRowBackground(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color(nsColor: theme.accent.withAlphaComponent(
+                        isSelected ? (documentsFocused ? 0.26 : 0.15) : 0)))
+                    .padding(.horizontal, 8)
+            )
+    }
+
+    private func handle(_ request: RectoApplicationModel.KeyboardRequest.Kind) {
+        switch request {
+        case .focusDocuments:
+            if columnVisibility == .detailOnly { columnVisibility = .all }
+            documentsFocused = true
+        case .focusEditor:
+            editorWantsKeyboard = true
+        case .toggleSidebar:
+            columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
+        case .focusSearch:
+            if columnVisibility == .detailOnly { columnVisibility = .all }
+            searchFocused = true
+        }
+    }
+
     private func openCitation(_ convexId: String, _ offset: Int) {
         guard let localId = model.documents.first(where: { $0.convexId == convexId })?.localId else {
             model.errorMessage = "That draft isn't on this Mac yet."
@@ -98,7 +180,9 @@ extension CloudLibraryView {
                         activate: { layout.activate(pane.id) }, commands: commands,
                         openDocument: openCitation,
                         pendingJump: isActive && pendingJump?.localId == localId ? pendingJump?.offset : nil,
-                        clearJump: { pendingJump = nil }))
+                        clearJump: { pendingJump = nil },
+                        wantsKeyboard: isActive && editorWantsKeyboard,
+                        tookKeyboard: { editorWantsKeyboard = false }))
                     .id("\(pane.id)-\(localId)")
             } else {
                 ContentUnavailableView(
@@ -106,7 +190,7 @@ extension CloudLibraryView {
                     systemImage: "doc.text",
                     description: Text(multiple
                         ? "Pick a document in the sidebar to show it in this pane."
-                        : "Create a document to start writing offline.")
+                        : "Press ⌘N to start a document. ⌘K finds every command.")
                 )
                 .contentShape(Rectangle())
                 .onTapGesture { layout.activate(pane.id) }
@@ -173,6 +257,27 @@ private struct DocumentRow: View {
         case .syncing: "Syncing"
         case .diverged: "Needs review"
         case .failed: "Sync failed, changes remain local"
+        }
+    }
+}
+
+/// Turns off the sidebar table's own selection highlight so the row's
+/// ``listRowBackground`` is the selection. macOS draws that highlight in the
+/// system accent with white text on top, which no palette's accent carries at
+/// a readable contrast; SwiftUI has no modifier for it, so this reaches the
+/// table from inside a row.
+private struct SystemSelectionHidden: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { Probe() }
+    func updateNSView(_ view: NSView, context: Context) {}
+
+    private final class Probe: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            var ancestor = superview
+            while let view = ancestor, !(view is NSTableView) { ancestor = view.superview }
+            if let table = ancestor as? NSTableView, table.selectionHighlightStyle != .none {
+                table.selectionHighlightStyle = .none
+            }
         }
     }
 }

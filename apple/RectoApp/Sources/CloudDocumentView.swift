@@ -34,6 +34,8 @@ struct CloudDocumentView: View {
     /// This window's lens. `nil` until it appears, when it takes the stored
     /// default; after that only the writer's own choice moves it.
     @State private var chosenPresentation: Presentation?
+    /// The text view is attached and in a window, so it can take the keyboard.
+    @State private var editorOnScreen = false
 
     init(
         localId: String,
@@ -126,6 +128,8 @@ struct CloudDocumentView: View {
             }
         }
         .modifier(ZenChrome(zen: zen, settings: settings, toolbar: toolbar(styler), statusBar: statusBar(model, styler)))
+        // Under the title bar too, so the glow starts at the window's top edge.
+        .background { DocumentBackdrop(theme: styler.theme, showsSheet: styler.showsSheet).ignoresSafeArea() }
         .background {
             // Synced documents only feed the day's total, as on the web, where
             // every document is synced; a local file's words are not credited.
@@ -184,11 +188,28 @@ struct CloudDocumentView: View {
             chrome.applySettings()
         }
         .modifier(DocumentNavigationTitle(model: model))
+        .onChange(of: KeyboardHandoff(wanted: panes?.wantsKeyboard == true, ready: editorOnScreen), initial: true) {
+            takeKeyboardIfWanted()
+        }
         // No window-toolbar undo/redo: TopFormatToolbar owns the buttons (web
         // parity) and the Edit menu owns the chords, dispatched through
         // EditorHostRegistry so ⌘Z still undoes in this window.
     }
 
+
+    private struct KeyboardHandoff: Equatable {
+        let wanted: Bool
+        let ready: Bool
+    }
+
+    /// The pane asked for the keyboard (the app opening, a new document,
+    /// Return in the list, Go to editor): give it to the text once it is on
+    /// screen, and tell the pane so the next document mounting there does not
+    /// take it again.
+    private func takeKeyboardIfWanted() {
+        guard let panes, panes.wantsKeyboard, editorOnScreen else { return }
+        chrome.focusTextWhenOnScreen(then: panes.tookKeyboard)
+    }
 
     /// Hook the window's chrome up to this document.
     private func wire(_ model: CloudDocumentModel) {
@@ -276,10 +297,11 @@ struct CloudDocumentView: View {
             RectoEditorView(
                 storage: paneStorage(model),
                 styler: styler,
-                placeholder: "Start writing…",
+                placeholder: "Start writing…   ⌘K for commands",
                 onAttach: { seam in
                     chrome.attach(seam)
                     vim.sync(seam: seam, presentation: styler.presentation)
+                    editorOnScreen = seam != nil
                 },
                 onEdit: { [storage = paneStorage(model)] edit in model.accept(edit, from: storage) },
                 writingController: chrome.writingController

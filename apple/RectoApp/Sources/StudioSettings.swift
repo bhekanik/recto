@@ -113,6 +113,8 @@ final class StudioSettings {
         static let showStatusBar = "studio.statusBar"
         static let showOutline = "studio.outline"
         static let quietChrome = "studio.quietChrome"
+        static let showsSheet = "studio.sheet"
+        static let compactStatusBar = "studio.compactStatusBar"
     }
 
     /// The web's zoom steps: `READING_SCALE_MIN/MAX/STEP` in `settings-schema.ts`.
@@ -247,6 +249,19 @@ final class StudioSettings {
         didSet { defaults.set(quietChrome, forKey: Key.quietChrome) }
     }
 
+    /// The writing column as a sheet on the palette's atmosphere (design
+    /// §2's signature), or the sheet colour edge to edge. Native only; on by
+    /// default.
+    var showsSheet: Bool {
+        didSet { defaults.set(showsSheet, forKey: Key.showsSheet) }
+    }
+
+    /// The status bar with the display controls behind one Display button, rather
+    /// than lined up along it. Native only; on by default.
+    var compactStatusBar: Bool {
+        didSet { defaults.set(compactStatusBar, forKey: Key.compactStatusBar) }
+    }
+
     /// What the OS is showing right now; only consulted while `appearance` is
     /// `.system`.
     private(set) var systemAppearance: ResolvedAppearance
@@ -295,6 +310,8 @@ final class StudioSettings {
         showStatusBar = defaults.object(forKey: Key.showStatusBar) as? Bool ?? true
         showOutline = defaults.object(forKey: Key.showOutline) as? Bool ?? false
         quietChrome = defaults.object(forKey: Key.quietChrome) as? Bool ?? true
+        showsSheet = defaults.object(forKey: Key.showsSheet) as? Bool ?? true
+        compactStatusBar = defaults.object(forKey: Key.compactStatusBar) as? Bool ?? true
     }
 
     // MARK: - Appearance
@@ -426,6 +443,8 @@ final class StudioSettings {
     func toggleStatusBar() { showStatusBar.toggle() }
     func toggleOutline() { showOutline.toggle() }
     func toggleQuietChrome() { quietChrome.toggle() }
+    func toggleSheet() { showsSheet.toggle() }
+    func toggleCompactStatusBar() { compactStatusBar.toggle() }
 
     // MARK: - Styler
 
@@ -438,7 +457,8 @@ final class StudioSettings {
             readingFont: readingFont,
             spellChecking: spellcheck,
             undo: .external,
-            convertsPastedHTML: smartPaste
+            convertsPastedHTML: smartPaste,
+            showsSheet: showsSheet
         )
     }
 }
