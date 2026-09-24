@@ -46,8 +46,13 @@ public final class RectoTextStorage {
     public var markdown: String {
         didSet {
             guard !Self.hasSameUTF16(markdown, oldValue) else { return }
-            frontmatter = Frontmatter.parse(markdown)
-            lineEnding = MarkdownLineEnding(detecting: markdown)
+            // Assigned only on a real change: every assignment notifies
+            // observers, and the editor view reads `frontmatter`, so an
+            // unconditional write re-ran its update pass on every keystroke.
+            let parsed = Frontmatter.parse(markdown)
+            if parsed != frontmatter { frontmatter = parsed }
+            let detected = MarkdownLineEnding(detecting: markdown)
+            if detected != lineEnding { lineEnding = detected }
             reconcileEditor()
         }
     }
@@ -238,7 +243,15 @@ public final class RectoTextStorage {
     }
 
     static func hasSameUTF16(_ lhs: String, _ rhs: String) -> Bool {
-        (lhs as NSString).isEqual(to: rhs)
+        let native = lhs.utf8.withContiguousStorageIfAvailable { l in
+            rhs.utf8.withContiguousStorageIfAvailable { r in
+                guard l.count == r.count else { return false }
+                guard let lp = l.baseAddress, let rp = r.baseAddress, lp != rp else { return true }
+                return memcmp(lp, rp, l.count) == 0
+            }
+        }
+        if case .some(.some(let equal)) = native { return equal }
+        return (lhs as NSString).isEqual(to: rhs)
     }
 
     private func withoutReconciling(_ body: () -> Void) {

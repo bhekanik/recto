@@ -45,11 +45,37 @@ public enum SessionError: Error, Equatable, Sendable {
 /// Word counting is injected: the canonical counter parses Markdown (it counts
 /// prose, not syntax) and that parser is W8's Swift port of `lib/markdown`.
 public enum RectoWordCount {
-  /// `countWordsFromPlainText` from `lib/markdown/count-words.ts`, exactly.
+  /// `countWordsFromPlainText` from `lib/markdown/count-words.ts`: runs of
+  /// anything but JavaScript's `\s`, per code point as a JS regex sees them.
   /// Over-counts Markdown syntax, so it is a stand-in until W8 lands — never the
   /// long-term answer for a number the server stores.
+  ///
+  /// The synced editor calls this on every keystroke, so it walks scalars
+  /// rather than splitting into `Character`s (grapheme breaking, plus an array
+  /// of every word just to count it).
   public static let plainText: @Sendable (String) -> Int = { text in
-    text.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).count
+    var count = 0
+    var inWord = false
+    for scalar in text.unicodeScalars {
+      if isJavaScriptWhitespace(scalar) {
+        inWord = false
+      } else if !inWord {
+        inWord = true
+        count += 1
+      }
+    }
+    return count
+  }
+
+  /// ECMAScript `\s`: WhiteSpace plus LineTerminator. Not Unicode's
+  /// White_Space: JS adds U+FEFF and leaves out U+0085.
+  static func isJavaScriptWhitespace(_ scalar: Unicode.Scalar) -> Bool {
+    switch scalar.value {
+    case 0x09...0x0D, 0x20, 0xA0, 0x1680, 0x2000...0x200A, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000, 0xFEFF:
+      true
+    default:
+      false
+    }
   }
 }
 

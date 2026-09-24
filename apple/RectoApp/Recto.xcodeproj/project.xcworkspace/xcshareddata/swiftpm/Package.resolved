@@ -1,5 +1,5 @@
 {
-  "originHash" : "10b5a91f2cf3d34cca8dd1a4de64b184a23ac4ea6dbe73ead430d0b41edaf415",
+  "originHash" : "2d48c57dd1e1d805022c0451b2e08c804c615d665d9eb75fa02148c0584e0780",
   "pins" : [
     {
       "identity" : "clerk-ios",
@@ -60,7 +60,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/bhekanik/swift-markdown-engine",
       "state" : {
-        "revision" : "c528eb6b18ef579a36c27c5e17ebf88d5b0e6b0e"
+        "revision" : "200b9b1321bc308a427c0441311bc9e832f66cfb"
       }
     }
   ],
