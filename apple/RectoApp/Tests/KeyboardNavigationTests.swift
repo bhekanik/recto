@@ -140,6 +140,31 @@ struct KeyboardNavigationTests {
         }, "\(String(describing: window.firstResponder))")
     }
 
+    @Test("opening a document and taking the keyboard never edits it", arguments: ["rich", "vim", "raw"])
+    func openingWritesNothing(_ mode: String) async throws {
+        UserDefaults.standard.set(mode, forKey: PresentationPreference.key)
+        defer { UserDefaults.standard.removeObject(forKey: PresentationPreference.key) }
+        let (model, window) = try await signedInLibrary(documents: 1)
+        defer { window.orderOut(nil) }
+        let text = try #require(await editor(in: window))
+        let markdown = "---\ntitle: The Ordinary Work of Love\n---\n\nBut even that knowing cannot stay still.\n"
+        text.insertText(markdown, replacementRange: NSRange(location: 0, length: (text.string as NSString).length))
+        try await Task.sleep(for: .milliseconds(300))
+        let before = text.string
+        let id = try #require(model.selectedDocumentId)
+
+        // Reopen: another document and back, as a launch restores it.
+        await model.createDocument()
+        let other = try #require(await editor(in: window, notSameAs: text))
+        model.selectedDocumentId = id
+        let reopened = try #require(await editor(in: window, notSameAs: other))
+        try await Task.sleep(for: .seconds(2))
+        let stored = try #require(model.documents.first { $0.localId == id })
+        #expect(reopened.string == before, "opening wrote to the text: \(reopened.string.debugDescription) vs \(before.debugDescription)")
+        #expect(stored.markdown == before || stored.draftMarkdown == before,
+                "the stored document: \((stored.draftMarkdown ?? stored.markdown).debugDescription)")
+    }
+
     @Test("a new document is ready to type in")
     func newDocumentTakesTheKeyboard() async throws {
         let (model, window) = try await signedInLibrary(documents: 1)
