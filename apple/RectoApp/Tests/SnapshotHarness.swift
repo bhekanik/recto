@@ -137,6 +137,45 @@ struct SnapshotHarness {
         window.orderOut(nil)
     }
 
+    @Test("settings snapshots")
+    func settingsTabs() async throws {
+        guard let dir = Self.dir else { return }
+        _ = NSApplication.shared
+        // A throwaway defaults suite: the harness must not move the writer's own settings.
+        let suite = "recto.snapshot.settings"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defaults.removePersistentDomain(forName: suite)
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = StudioSettings(defaults: defaults, systemAppearance: { .dark })
+        settings.lint = true
+        settings.focusDim = true
+
+        let tabs: [(String, AnyView)] = [
+            ("general", AnyView(GeneralSettingsTab(settings: settings))),
+            ("appearance", AnyView(AppearanceSettingsTab(settings: settings))),
+            ("writing", AnyView(WritingSettingsTab(settings: settings))),
+            ("window", AnyView(WindowSettingsTab(settings: settings))),
+            ("shortcuts", AnyView(ShortcutsSettingsTab())),
+        ]
+        for appearance in [StudioSettings.Appearance.dark, .light] {
+            settings.appearance = appearance
+            for (name, view) in tabs {
+                let host = NSHostingView(rootView: view.preferredColorScheme(settings.preferredColorScheme))
+                let window = NSWindow(
+                    contentRect: NSRect(x: 120, y: 120, width: 640, height: 400),
+                    styleMask: [.titled, .closable], backing: .buffered, defer: false)
+                window.appearance = NSAppearance(named: appearance == .dark ? .darkAqua : .aqua)
+                window.title = name.capitalized
+                window.contentView = host
+                window.setContentSize(host.fittingSize)
+                window.makeKeyAndOrderFront(nil)
+                try await Task.sleep(for: .milliseconds(500))
+                try await capture(window, name: "settings-\(name)-\(appearance.rawValue)", in: dir)
+                window.orderOut(nil)
+            }
+        }
+    }
+
     private func waitForEditor(in window: NSWindow, notSameAs previous: NSTextView? = nil) async throws -> NSTextView {
         for _ in 0..<400 {
             if let view = EditorHostRegistry.shared.controller(in: window)?.seam?.nsTextView,
