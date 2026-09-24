@@ -165,6 +165,46 @@ struct KeyboardNavigationTests {
                 "the stored document: \((stored.draftMarkdown ?? stored.markdown).debugDescription)")
     }
 
+    @Test("typing into a new document is styled and wraps at the column", arguments: ["rich", "vim", "raw"])
+    func newDocumentTyping(_ mode: String) async throws {
+        UserDefaults.standard.set(mode, forKey: PresentationPreference.key)
+        defer { UserDefaults.standard.removeObject(forKey: PresentationPreference.key) }
+        let (model, window) = try await signedInLibrary(documents: 1)
+        window.setContentSize(NSSize(width: 1500, height: 1000))
+        defer { window.orderOut(nil) }
+        let first = try #require(await editor(in: window))
+        await model.createDocument()
+        let text = try #require(await editor(in: window, notSameAs: first))
+        #expect(await until { window.firstResponder === text })
+        func key(_ characters: String, code: UInt16 = 0) {
+            window.sendEvent(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, characters: characters,
+                charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code)!)
+        }
+        if mode == "vim" { key("i", code: 34) }
+        for character in "titla;dlkf jaSdjf;alskdj ta" {
+            key(String(character))
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try await Task.sleep(for: .milliseconds(400))
+        let storage = try #require(text.textStorage)
+        let font = storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
+        let color = storage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+        var lines = 0
+        text.textLayoutManager?.enumerateTextLayoutFragments(
+            from: text.textLayoutManager?.documentRange.location, options: [.ensuresLayout]
+        ) { fragment in
+            lines += fragment.textLineFragments.count
+            return true
+        }
+        #expect(text.string == "titla;dlkf jaSdjf;alskdj ta")
+        #expect((font?.pointSize ?? 0) > 15, "styled at the editor's size, not the default 12 pt")
+        #expect(color != nil, "the theme's ink, not the default black")
+        #expect(lines == 1, "one short line fits the column")
+        #expect(text.frame.width >= 700, "the full reading column in a wide window")
+    }
+
     @Test("a new document is ready to type in")
     func newDocumentTakesTheKeyboard() async throws {
         let (model, window) = try await signedInLibrary(documents: 1)
