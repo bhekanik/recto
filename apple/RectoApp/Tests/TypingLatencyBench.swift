@@ -116,6 +116,18 @@ struct TypingLatencyBench {
     }
 
     private func measure(_ textView: NSTextView, _ window: NSWindow, label: String) async throws {
+        // RECTO_BENCH_FOCUS_BLUR=1: the same keystrokes with focus blur on.
+        let blur = ProcessInfo.processInfo.environment["RECTO_BENCH_FOCUS_BLUR"] == "1"
+        if let chrome = EditorHostRegistry.shared.controller(in: window), blur {
+            chrome.settings.focusBlur = true
+            chrome.applySettings()
+        }
+        defer {
+            if blur, let chrome = EditorHostRegistry.shared.controller(in: window) {
+                chrome.settings.focusBlur = false
+                chrome.applySettings()
+            }
+        }
         let middle = (textView.string as NSString).length / 2
         textView.setSelectedRange(NSRange(location: middle, length: 0))
         textView.scrollRangeToVisible(NSRange(location: middle, length: 0))

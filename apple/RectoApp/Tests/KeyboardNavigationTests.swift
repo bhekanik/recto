@@ -1,4 +1,5 @@
 import AppKit
+import CoreImage
 import RectoCore
 import RectoEditor
 import RectoStore
@@ -203,6 +204,74 @@ struct KeyboardNavigationTests {
         #expect(color != nil, "the theme's ink, not the default black")
         #expect(lines == 1, "one short line fits the column")
         #expect(text.frame.width >= 700, "the full reading column in a wide window")
+    }
+
+    @Test("focus blur keeps the caret line sharp and centred, blurring more with distance")
+    func focusBlur() async throws {
+        let (model, window) = try await signedInLibrary(documents: 1)
+        window.setContentSize(NSSize(width: 1200, height: 900))
+        defer { window.orderOut(nil) }
+        let text = try #require(await editor(in: window))
+        let paragraph = "The second draft is for the reader. You read the thing as a stranger would, and you cut everything that only made sense to you."
+        text.insertText(Array(repeating: paragraph, count: 30).joined(separator: "\n\n"),
+                        replacementRange: NSRange(location: 0, length: 0))
+        try await Task.sleep(for: .milliseconds(300))
+        let chrome = try #require(EditorHostRegistry.shared.controller(in: window))
+        chrome.settings.focusBlur = true
+        chrome.applySettings()
+        defer { chrome.settings.focusBlur = false; chrome.applySettings() }
+        // Mid-sentence, on a line of text rather than a blank one.
+        let whole = text.string as NSString
+        let middle = whole.range(of: "stranger", range: NSRange(location: whole.length / 2, length: whole.length / 2)).location
+        window.makeFirstResponder(text)
+        text.setSelectedRange(NSRange(location: middle, length: 0))
+        try await Task.sleep(for: .milliseconds(600))
+        _ = model
+
+        let clip = try #require(text.enclosingScrollView?.contentView)
+        let caret = try #require(chrome.seam?.caretRect())
+        let caretY = text.convert(caret, to: clip).midY - clip.bounds.minY
+        #expect(abs(caretY - clip.bounds.height / 2) < 60, "typewriter keeps the caret line near the middle")
+        let blur = try #require(chrome.blur.current, "the engine is drawing focus blur")
+        let caretLine = try #require(chrome.seam?.caretRect())
+        #expect(blur.lineMinY <= caretLine.midY - text.textContainerOrigin.y
+                && caretLine.midY - text.textContainerOrigin.y <= blur.lineMaxY, "the sharp line is the caret's")
+        let height = blur.lineMaxY - blur.lineMinY
+        let neighbour = blur.radius(lineMinY: blur.lineMaxY + 4, lineMaxY: blur.lineMaxY + 4 + height)
+        let far = blur.radius(lineMinY: blur.lineMaxY + height * 3, lineMaxY: blur.lineMaxY + height * 4)
+        #expect(blur.radius(lineMinY: blur.lineMinY, lineMaxY: blur.lineMaxY) == 0)
+        #expect(0 < neighbour && neighbour < far && far < RectoFocusBlurController.maximumRadius)
+        #expect(blur.radius(lineMinY: blur.lineMaxY + height * 20, lineMaxY: blur.lineMaxY + height * 21)
+                == RectoFocusBlurController.maximumRadius)
+
+        // Return: the page glides up to the new line rather than jumping.
+        let before = clip.bounds.origin.y
+        text.insertNewline(nil)
+        var positions: [CGFloat] = []
+        for _ in 0..<60 {
+            positions.append(clip.bounds.origin.y)
+            try await Task.sleep(for: .milliseconds(8))
+        }
+        let after = clip.bounds.origin.y
+        #expect(after > before + 10, "the page moved up a line")
+        let between = Set(positions.filter { $0 > before + 0.5 && $0 < after - 0.5 })
+        #expect(between.count >= 2, "passed through positions in between, not a jump: \(positions)")
+        #expect(positions == positions.sorted(), "never moved backwards")
+        let caretAfter = try #require(chrome.seam?.caretRect())
+        #expect(abs(text.convert(caretAfter, to: clip).midY - clip.bounds.minY - clip.bounds.height / 2) < 60)
+
+        chrome.settings.focusBlur = false
+        chrome.applySettings()
+        #expect(chrome.blur.current == nil, "switching it off draws everything sharp")
+        chrome.settings.focusBlur = true
+        chrome.applySettings()
+        try await Task.sleep(for: .milliseconds(300))
+        if let dir = ProcessInfo.processInfo.environment["RECTO_SNAPSHOT_DIR"] {
+            try "\(window.windowNumber)".write(toFile: "\(dir)/focus-blur.req", atomically: true, encoding: .utf8)
+            for _ in 0..<500 where !FileManager.default.fileExists(atPath: "\(dir)/focus-blur.done") {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+        }
     }
 
     @Test("a new document is ready to type in")

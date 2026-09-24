@@ -113,7 +113,9 @@ public struct MarkdownStyler: Sendable, Equatable {
                 spacingFactor: 0,
                 lineHeightExtraSpacing: typography.lineHeightExtraSpacing
             ),
-            textInsets: TextInsets(horizontal: 0, vertical: 32),
+            // Horizontal room past the text column: the focus-blur line band
+            // reaches beyond the text, and the text view clips what it draws.
+            textInsets: TextInsets(horizontal: 16, vertical: 32),
             readingWidth: readingWidth,
             // Autocorrect is left to the OS setting: the web's toggle is the
             // squiggles, not what gets typed.

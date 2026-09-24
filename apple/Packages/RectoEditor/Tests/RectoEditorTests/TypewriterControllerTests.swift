@@ -125,7 +125,8 @@ struct TypewriterControllerTests {
     func restoresInsetAndStops() throws {
         let mounted = try mount(markdown: document(lineCount: 100))
         defer { mounted.harness.tearDown() }
-        let configuredInset = NSSize(width: 0, height: 32)
+        // MarkdownStyler's text insets: 16 pt each side, 32 pt top and bottom.
+        let configuredInset = NSSize(width: 16, height: 32)
 
         #expect(mounted.textView.textContainerInset.height > configuredInset.height)
         mounted.controller.isEnabled = false

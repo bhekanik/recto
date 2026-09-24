@@ -27,6 +27,9 @@ import MarkdownEngine
 public struct RectoTextView {
     private let controller: MarkdownEditorController
 
+    /// The engine's controller, for this package's own layers (focus blur).
+    var editorController: MarkdownEditorController { controller }
+
     init(controller: MarkdownEditorController) {
         self.controller = controller
     }

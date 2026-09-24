@@ -115,6 +115,7 @@ final class StudioSettings {
         static let quietChrome = "studio.quietChrome"
         static let showsSheet = "studio.sheet"
         static let compactStatusBar = "studio.compactStatusBar"
+        static let focusBlur = "studio.focusBlur"
     }
 
     /// The web's zoom steps: `READING_SCALE_MIN/MAX/STEP` in `settings-schema.ts`.
@@ -262,6 +263,13 @@ final class StudioSettings {
         didSet { defaults.set(compactStatusBar, forKey: Key.compactStatusBar) }
     }
 
+    /// Focus blur: the caret's line sharp and centred, every other line
+    /// blurred more the further away it is. Brings typewriter scrolling with
+    /// it while on. Native only; off by default.
+    var focusBlur: Bool {
+        didSet { defaults.set(focusBlur, forKey: Key.focusBlur) }
+    }
+
     /// What the OS is showing right now; only consulted while `appearance` is
     /// `.system`.
     private(set) var systemAppearance: ResolvedAppearance
@@ -312,6 +320,7 @@ final class StudioSettings {
         quietChrome = defaults.object(forKey: Key.quietChrome) as? Bool ?? true
         showsSheet = defaults.object(forKey: Key.showsSheet) as? Bool ?? false
         compactStatusBar = defaults.object(forKey: Key.compactStatusBar) as? Bool ?? true
+        focusBlur = defaults.object(forKey: Key.focusBlur) as? Bool ?? false
     }
 
     // MARK: - Appearance
@@ -445,6 +454,7 @@ final class StudioSettings {
     func toggleQuietChrome() { quietChrome.toggle() }
     func toggleSheet() { showsSheet.toggle() }
     func toggleCompactStatusBar() { compactStatusBar.toggle() }
+    func toggleFocusBlur() { focusBlur.toggle() }
 
     // MARK: - Styler
 

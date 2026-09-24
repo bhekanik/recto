@@ -89,6 +89,7 @@ final class EditorHostController {
         self.settings = settings
         self.registry = registry
         typewriter = RectoTypewriterController(isEnabled: settings.typewriter)
+        typewriter.glideDuration = 0.16
     }
 
     /// `RectoEditorView.onAttach`.
@@ -96,6 +97,7 @@ final class EditorHostController {
         self.seam = seam
         find.attach(to: seam)
         typewriter.attach(to: seam)
+        blur.attach(to: seam)
         decorations.attach(to: seam)
         quiet.follow(seam?.nsTextView)
         applySettings()
@@ -114,6 +116,9 @@ final class EditorHostController {
         }
         if seam == nil { registry.remove(self) } else { registry.add(self) }
     }
+
+    /// Focus blur over the text, see ``RectoFocusBlurController``.
+    let blur = RectoFocusBlurController()
 
     /// Whether the writer is typing, for the chrome to step back.
     let quiet = QuietChrome()
@@ -171,7 +176,11 @@ final class EditorHostController {
     /// Push the settings that reach into the live text view. Run on attach and
     /// whenever spellcheck or typewriter change.
     func applySettings() {
-        typewriter.isEnabled = settings.typewriter
+        // Focus blur is typewriter mode with the other lines blurred: the
+        // caret line has to stay put for the blur to read as focus.
+        typewriter.isEnabled = settings.typewriter || settings.focusBlur
+        blur.isEnabled = settings.focusBlur && currentPresentation() != .preview
+        blur.lineHighlight = settings.theme.accent.withAlphaComponent(settings.theme.isLight ? 0.08 : 0.1)
         decorations.theme = settings.theme
         // Nothing to dim around in a read-only preview, as on the web.
         decorations.focusDim = settings.focusDim && currentPresentation() != .preview
