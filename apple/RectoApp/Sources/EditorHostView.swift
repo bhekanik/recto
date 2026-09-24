@@ -91,6 +91,7 @@ struct EditorHostView: View {
         VStack(spacing: 0) {
             if settings.showToolbar, !zen.hidesChrome {
                 toolbar(styler)
+                    .modifier(QuietChromeFade(quiet: chrome.quiet, settings: settings))
             }
             if styler.presentation == .preview, settings.previewVariant == .email {
                 EmailPreviewChrome(
@@ -121,6 +122,7 @@ struct EditorHostView: View {
             }
             if settings.showStatusBar, !zen.hidesChrome {
                 statusBar(styler)
+                    .modifier(QuietChromeFade(quiet: chrome.quiet, settings: settings, quietOpacity: 0.3))
             }
         }
         .modifier(ZenChrome(zen: zen, settings: settings, toolbar: toolbar(styler), statusBar: statusBar(styler)))

@@ -34,7 +34,7 @@ public struct RectoTypography: Sendable, Equatable {
         baseSize: CGFloat,
         lineHeightMultiple: CGFloat = 1.6,
         headingMultipliers: [CGFloat] = [1.7, 1.42, 1.22, 1.08, 1, 1],
-        headingTopSpacingEm: [CGFloat] = [0.9, 0.8, 0.7, 0.6, 0.5, 0.5],
+        headingTopSpacingEm: [CGFloat] = [0.35, 0.3, 0.25, 0.2, 0.2, 0.2],
         tracking: CGFloat = -0.015,
         scale: CGFloat = 1
     ) {

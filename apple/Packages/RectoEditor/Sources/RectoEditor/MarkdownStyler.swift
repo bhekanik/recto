@@ -99,7 +99,7 @@ public struct MarkdownStyler: Sendable, Equatable {
             ),
             paragraph: ParagraphStyle(
                 // Gap between paragraphs, in line heights.
-                spacingFactor: 0.6,
+                spacingFactor: 0,
                 lineHeightExtraSpacing: typography.lineHeightExtraSpacing
             ),
             textInsets: TextInsets(horizontal: 0, vertical: 32),

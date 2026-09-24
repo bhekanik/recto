@@ -18,6 +18,8 @@ struct CloudLibraryView: View {
                 DocumentRow(document: document)
                     .tag(document.localId)
             }
+            .tint(Color(nsColor: StudioSettings.shared.theme.accent))
+            .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 380)
             .navigationTitle("Documents")
             .toolbar {
                 ToolbarItemGroup {
@@ -119,40 +121,48 @@ extension CloudLibraryView {
     }
 }
 
+/// Title, then when and how long, in the sidebar's own type sizes. The sync
+/// glyph appears only when something needs the writer: a synced or syncing
+/// document is the normal case and would put an icon on every row.
 private struct DocumentRow: View {
     let document: DocumentRecord
 
     var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(document.title)
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Text(document.title.isEmpty ? "Untitled" : document.title)
+                    .font(.system(size: 13, weight: .medium))
                     .lineLimit(1)
-                Text("\(document.wordCount) words")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                if let problem {
+                    Image(systemName: problem.symbol)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(problem.color)
+                        .accessibilityLabel(statusHelp)
+                }
             }
-            Spacer()
-            Image(systemName: statusSymbol)
-                .foregroundStyle(statusColor)
-                .help(statusHelp)
+            Text(meta)
+                .font(.system(size: 11))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
         }
+        .padding(.vertical, 4)
+        .help(statusHelp)
     }
 
-    private var statusSymbol: String {
-        switch document.syncState {
-        case .synced: "checkmark.icloud"
-        case .pending, .syncing: "arrow.trianglehead.2.clockwise.rotate.90.icloud"
-        case .diverged: "arrow.triangle.branch"
-        case .failed: "exclamationmark.icloud"
-        }
+    private var meta: String {
+        let edited = Date(timeIntervalSince1970: document.updatedAt / 1000)
+            .formatted(.relative(presentation: .named, unitsStyle: .abbreviated))
+        let words = document.wordCount == 1 ? "1 word" : "\(document.wordCount.formatted()) words"
+        return "\(edited) · \(words)"
     }
 
-    private var statusColor: Color {
+    private var problem: (symbol: String, color: Color)? {
         switch document.syncState {
-        case .synced: .secondary
-        case .pending, .syncing: .blue
-        case .diverged: .orange
-        case .failed: .red
+        case .synced, .pending, .syncing: nil
+        case .diverged: ("arrow.triangle.branch", .orange)
+        case .failed: ("exclamationmark.icloud", .red)
         }
     }
 

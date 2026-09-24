@@ -77,12 +77,11 @@ struct TopFormatToolbar: View {
             ForEach(Self.blockActions, content: formatButton)
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 4)
+        .padding(.vertical, 6)
         .frame(maxWidth: .infinity)
-        .background(Color(nsColor: theme.canvas))
-        .overlay(alignment: .bottom) {
-            Color(nsColor: theme.line).frame(height: 1)
-        }
+        // The page's own colour: the bar reads as part of the sheet, not a band
+        // across it.
+        .background(Color(nsColor: theme.sheet))
         .opacity(isEnabled ? 1 : 0.4)
         .disabled(!isEnabled)
         .accessibilityElement(children: .contain)
@@ -99,17 +98,16 @@ struct TopFormatToolbar: View {
                 switch glyph {
                 case let .symbol(name):
                     Image(systemName: name)
-                        .font(.system(size: 14, weight: .medium))
+                        .font(.system(size: 12.5, weight: .regular))
                 case let .text(text):
                     Text(text)
-                        .font(.system(size: 12, weight: .bold))
+                        .font(.system(size: 11, weight: .semibold))
                 }
             }
-            .frame(width: 32, height: 32)
-            .foregroundStyle(Color(nsColor: theme.ink2))
+            .frame(width: 28, height: 26)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(QuietToolbarButtonStyle(theme: theme))
         // The web's `onPointerDown preventDefault`: the editor keeps focus and
         // its selection while a button is pressed.
         .focusable(false)
@@ -119,8 +117,37 @@ struct TopFormatToolbar: View {
 
     private var divider: some View {
         Color(nsColor: theme.line)
-            .frame(width: 1, height: 20)
-            .padding(.horizontal, 4)
+            .frame(width: 1, height: 14)
+            .padding(.horizontal, 6)
             .accessibilityHidden(true)
+    }
+}
+
+/// Glyphs rest at the tertiary ink and come forward under the pointer, on a
+/// soft wash rather than a border.
+struct QuietToolbarButtonStyle: ButtonStyle {
+    let theme: RectoEditorTheme
+
+    func makeBody(configuration: Configuration) -> some View {
+        QuietToolbarButton(configuration: configuration, theme: theme)
+    }
+
+    private struct QuietToolbarButton: View {
+        let configuration: ButtonStyleConfiguration
+        let theme: RectoEditorTheme
+        @State private var isHovered = false
+        @Environment(\.isEnabled) private var isEnabled
+
+        var body: some View {
+            configuration.label
+                .foregroundStyle(Color(nsColor: isHovered && isEnabled ? theme.ink : theme.ink3))
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color(nsColor: theme.ink.withAlphaComponent(
+                            configuration.isPressed ? 0.12 : isHovered && isEnabled ? 0.06 : 0)))
+                )
+                .onHover { isHovered = $0 }
+                .animation(.easeOut(duration: 0.12), value: isHovered)
+        }
     }
 }

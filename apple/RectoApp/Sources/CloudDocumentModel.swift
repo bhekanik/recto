@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import Observation
 import RectoCore
@@ -120,6 +121,10 @@ final class CloudDocumentModel {
     }
 
     var pendingEditCount: Int { edits.pendingCount }
+    /// `pendingEditCount` as it changes. The queue is an `ObservableObject`,
+    /// which Observation does not track, so a view that shows the count has to
+    /// subscribe rather than read it in `body`.
+    var pendingEditCounts: Published<Int>.Publisher { edits.$pendingCount }
     var editError: String? { edits.lastError ?? edits.lastTitleError ?? errorMessage }
 
     func accept(_ markdown: String) {

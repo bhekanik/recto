@@ -110,9 +110,10 @@ struct CloudDocumentView: View {
     private func editor(_ model: CloudDocumentModel) -> some View {
         let styler = styler(model)
         return VStack(spacing: 0) {
-            banner(model)
+            DocumentBanner(model: model)
             if settings.showToolbar, !zen.hidesChrome {
                 toolbar(styler)
+                    .modifier(QuietChromeFade(quiet: chrome.quiet, settings: settings))
             }
             if styler.presentation == .preview, settings.previewVariant == .email {
                 EmailPreviewChrome(
@@ -121,6 +122,7 @@ struct CloudDocumentView: View {
             page(model, styler)
             if settings.showStatusBar, !zen.hidesChrome {
                 statusBar(model, styler)
+                    .modifier(QuietChromeFade(quiet: chrome.quiet, settings: settings, quietOpacity: 0.3))
             }
         }
         .modifier(ZenChrome(zen: zen, settings: settings, toolbar: toolbar(styler), statusBar: statusBar(model, styler)))
@@ -181,7 +183,7 @@ struct CloudDocumentView: View {
             vim.sync(seam: paneStorage(model).textView, presentation: presentation)
             chrome.applySettings()
         }
-        .navigationTitle(model.state.title)
+        .modifier(DocumentNavigationTitle(model: model))
         // No window-toolbar undo/redo: TopFormatToolbar owns the buttons (web
         // parity) and the Edit menu owns the chords, dispatched through
         // EditorHostRegistry so ⌘Z still undoes in this window.
@@ -268,17 +270,6 @@ struct CloudDocumentView: View {
         }
     }
 
-    @ViewBuilder
-    private func banner(_ model: CloudDocumentModel) -> some View {
-        if model.state.syncState == .diverged {
-            divergenceBanner(model)
-        } else if let error = model.editError {
-            statusBanner(error, color: .red)
-        } else if model.state.syncState == .failed {
-            statusBanner("Sync failed. Your changes remain on this Mac.", color: .orange)
-        }
-    }
-
     /// The text, and the outline beside it when shown.
     private func page(_ model: CloudDocumentModel, _ styler: MarkdownStyler) -> some View {
         HStack(spacing: 0) {
@@ -344,46 +335,8 @@ struct CloudDocumentView: View {
             onToggleZen: chrome.toggleZen,
             onSelect: choose
         ) {
-            HStack(spacing: 8) {
-                OpenInWebButton(
-                    enabled: WebHandoff.isEnabled(
-                        convexId: model.state.convexId, webOrigin: webOrigin),
-                    help: WebHandoff.disabledReason(
-                        convexId: model.state.convexId, webOrigin: webOrigin),
-                    theme: styler.theme
-                ) {
-                    openInWeb(convexId: model.state.convexId)
-                }
-                SyncIndicator(
-                    state: model.state.syncState,
-                    pendingCount: model.pendingEditCount,
-                    theme: styler.theme
-                )
-            }
+            DocumentCloudStatus(model: model, webOrigin: webOrigin, theme: styler.theme, openInWeb: openInWeb)
         }
-    }
-
-    private func divergenceBanner(_ model: CloudDocumentModel) -> some View {
-        HStack {
-            Text("This document changed on another device. Both versions are safe.")
-            Spacer()
-            Button("Keep this Mac's version") {
-                Task { await model.keepLocalBranch() }
-            }
-            Button("Use remote version") {
-                Task { await model.keepRemoteBranch() }
-            }
-        }
-        .padding(10)
-        .background(.orange.opacity(0.18))
-    }
-
-    private func statusBanner(_ message: String, color: Color) -> some View {
-        Text(message)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(10)
-            .background(color.opacity(0.16))
-            .textSelection(.enabled)
     }
 
     private func open() async {
@@ -504,5 +457,103 @@ private struct DocumentChanges: ViewModifier {
             .onChange(of: historyView) { _, view in react(.historyView(view)) }
             .onChange(of: panesActive) { _, active in if active == true { react(.activated) } }
             .onAppear { react(.opened) }
+    }
+}
+
+/// The document's sync and edit problems, above the page. Its own view so the
+/// state it reads, which the session replaces after every commit, re-renders
+/// this strip and not the whole document view.
+private struct DocumentBanner: View {
+    let model: CloudDocumentModel
+
+    var body: some View {
+        if model.state.syncState == .diverged {
+            divergenceBanner(model)
+        } else if let error = model.editError {
+            statusBanner(error, color: .red)
+        } else if model.state.syncState == .failed {
+            statusBanner("Sync failed. Your changes remain on this Mac.", color: .orange)
+        }
+    }
+
+    private func divergenceBanner(_ model: CloudDocumentModel) -> some View {
+        HStack {
+            Text("This document changed on another device. Both versions are safe.")
+            Spacer()
+            Button("Keep this Mac's version") {
+                Task { await model.keepLocalBranch() }
+            }
+            Button("Use remote version") {
+                Task { await model.keepRemoteBranch() }
+            }
+        }
+        .padding(10)
+        .background(.orange.opacity(0.18))
+    }
+
+    private func statusBanner(_ message: String, color: Color) -> some View {
+        Text(message)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(10)
+            .background(color.opacity(0.16))
+            .textSelection(.enabled)
+    }
+}
+
+/// The status bar's web and sync slots, scoped like ``DocumentBanner``.
+private struct DocumentCloudStatus: View {
+    let model: CloudDocumentModel
+    let webOrigin: URL?
+    let theme: RectoEditorTheme
+    let openInWeb: (String?) -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            OpenInWebButton(
+                enabled: WebHandoff.isEnabled(convexId: model.state.convexId, webOrigin: webOrigin),
+                help: WebHandoff.disabledReason(convexId: model.state.convexId, webOrigin: webOrigin),
+                theme: theme
+            ) {
+                openInWeb(model.state.convexId)
+            }
+            SyncIndicator(
+                state: isSaving && !savingIsSlow ? .synced : model.state.syncState,
+                pendingCount: savingIsSlow ? pendingCount : 0,
+                theme: theme
+            )
+        }
+        .onReceive(model.pendingEditCounts) { pendingCount = $0 }
+        .task(id: isSaving) {
+            savingIsSlow = false
+            guard isSaving else { return }
+            try? await Task.sleep(for: Self.savingDelay)
+            if !Task.isCancelled { savingIsSlow = true }
+        }
+    }
+
+    /// Every keystroke saves and syncs within a moment, so an honest label
+    /// flips Saving ↔ Saved several times a second while the writer types.
+    /// "Saving" shows only once a save has taken this long; failures and
+    /// divergence still show at once.
+    static let savingDelay: Duration = .seconds(1)
+
+    @State private var savingIsSlow = false
+    @State private var pendingCount = 0
+
+    private var isSaving: Bool {
+        guard pendingCount == 0 else { return true }
+        switch model.state.syncState {
+        case .pending, .syncing: return true
+        case .synced, .failed, .diverged: return false
+        }
+    }
+}
+
+/// The window title, scoped like ``DocumentBanner``.
+private struct DocumentNavigationTitle: ViewModifier {
+    let model: CloudDocumentModel
+
+    func body(content: Content) -> some View {
+        content.navigationTitle(model.state.title)
     }
 }
