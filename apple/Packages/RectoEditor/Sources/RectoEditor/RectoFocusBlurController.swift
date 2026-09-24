@@ -82,9 +82,12 @@ public final class RectoFocusBlurController {
         seam?.editorController.focusBlur = nil
     }
 
-    /// Once per run-loop turn, after the edit's layout: a keystroke fires both
-    /// notifications, and the line's frame is only final once laid out.
+    /// Now, so the frame that draws the edit already blurs the line just
+    /// left; and once more on the next run-loop turn, when the edit's layout
+    /// has settled and the line's frame is final. A keystroke fires both
+    /// notifications, so the second pass is coalesced.
     private func scheduleUpdate() {
+        update()
         guard !isUpdateScheduled else { return }
         isUpdateScheduled = true
         DispatchQueue.main.async { [weak self] in
