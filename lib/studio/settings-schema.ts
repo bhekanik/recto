@@ -148,7 +148,8 @@ export const DEFAULTS: StudioSettings = {
 	theme: "twilight",
 	readingFont: "sans",
 	readingScale: 1,
-	spellcheck: true,
+	// Off by default: no squiggles while drafting; ⌘; turns on a checking pass.
+	spellcheck: false,
 	topToolbar: true,
 	// Smart paste defaults ON — pasting from Word/Docs/web should land as clean
 	// canonical Markdown, not raw style spans (plan 007).

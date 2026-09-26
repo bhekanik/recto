@@ -26,7 +26,7 @@ struct StudioSettingsTests {
         let settings = settings()
         #expect(settings.appearance == .system)
         #expect(settings.readingScale == 1)
-        #expect(settings.spellcheck)
+        #expect(!settings.spellcheck, "no squiggles until the writer asks")
         #expect(!settings.typewriter)
         #expect(settings.showToolbar)
         #expect(settings.showStatusBar)
@@ -96,7 +96,7 @@ struct StudioSettingsTests {
         let settings = settings()
         #expect(settings.appearance == .system)
         #expect(settings.readingScale == 1)
-        #expect(settings.spellcheck)
+        #expect(!settings.spellcheck)
         #expect(!settings.typewriter)
         #expect(!settings.showToolbar, "the one readable key still applies")
     }
@@ -124,7 +124,7 @@ struct StudioSettingsTests {
         let second = settings()
         #expect(second.appearance == .light)
         #expect(second.readingScale == 1.2)
-        #expect(!second.spellcheck)
+        #expect(second.spellcheck)
         #expect(second.typewriter)
         #expect(!second.showToolbar)
         #expect(!second.showStatusBar)
@@ -199,10 +199,10 @@ struct StudioSettingsTests {
         #expect(styler.theme == .paper)
         #expect(styler.typography.scale == 1.1)
         #expect(styler.typography.family == RectoFonts.sourceFamily)
-        #expect(!styler.spellChecking)
+        #expect(styler.spellChecking)
         let configuration = styler.engineConfiguration()
-        #expect(!configuration.spellChecking.continuousSpellChecking)
-        #expect(!configuration.spellChecking.grammarChecking)
+        #expect(configuration.spellChecking.continuousSpellChecking)
+        #expect(configuration.spellChecking.grammarChecking)
     }
 
     /// P2-1: `.shared` is created before `NSApplication.shared` exists, so the

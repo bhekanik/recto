@@ -312,7 +312,8 @@ final class StudioSettings {
         goalStyle = defaults.string(forKey: Key.goalStyle).flatMap(GoalStyle.init(rawValue:)) ?? .ring
         readingScale = (defaults.object(forKey: Key.readingScale) as? Double)
             .map(Self.clampScale) ?? Self.readingScaleDefault
-        spellcheck = defaults.object(forKey: Key.spellcheck) as? Bool ?? true
+        // Off until asked for: no squiggles while drafting, ⌘; for a checking pass.
+        spellcheck = defaults.object(forKey: Key.spellcheck) as? Bool ?? false
         typewriter = defaults.object(forKey: Key.typewriter) as? Bool ?? false
         showToolbar = defaults.object(forKey: Key.showToolbar) as? Bool ?? true
         showStatusBar = defaults.object(forKey: Key.showStatusBar) as? Bool ?? true

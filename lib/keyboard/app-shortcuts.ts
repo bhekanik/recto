@@ -25,6 +25,7 @@ export type AppShortcutAction =
 	| { type: "toggle-typewriter" }
 	| { type: "toggle-focus-dim" }
 	| { type: "toggle-focus-blur" }
+	| { type: "toggle-spellcheck" }
 	| { type: "open-go-to-heading" }
 	| { type: "toggle-outline" }
 	| { type: "find-replace" }
@@ -56,6 +57,17 @@ export function isNewDocumentKey(event: KeyboardEvent): boolean {
 	if (key !== "n") return false;
 	if (isMac) return event.metaKey && !event.altKey && !event.shiftKey;
 	return event.ctrlKey && event.altKey && !event.shiftKey;
+}
+
+/**
+ * ⌘; (mac) / Ctrl+; — spellcheck on or off, the key macOS gives spelling
+ * everywhere else, so a checking pass is one chord away from writing.
+ */
+export function isSpellcheckKey(event: KeyboardEvent, mac = isMac): boolean {
+	if (event.key !== ";" || event.shiftKey || event.altKey) return false;
+	return mac
+		? event.metaKey && !event.ctrlKey
+		: event.ctrlKey && !event.metaKey;
 }
 
 function matchCtrlShift(event: KeyboardEvent, key: string): boolean {
@@ -245,6 +257,12 @@ export function createAppShortcutHandler(
 			event.preventDefault();
 			event.stopPropagation();
 			onAction({ type: "toggle-focus-blur" });
+			return;
+		}
+		if (isSpellcheckKey(event)) {
+			event.preventDefault();
+			event.stopPropagation();
+			onAction({ type: "toggle-spellcheck" });
 			return;
 		}
 		// AI (plan 009) — the studio handlers no-op when AI features are disabled.

@@ -4,6 +4,7 @@ import {
 	type AppShortcutAction,
 	createAppShortcutHandler,
 	isFindKey,
+	isSpellcheckKey,
 	shouldInterceptFind,
 } from "./app-shortcuts";
 
@@ -64,6 +65,34 @@ describe("focus blur chord", () => {
 		});
 		handle(event);
 		expect(actions).toEqual([{ type: "toggle-focus-blur" }]);
+		expect(event.defaultPrevented).toBe(true);
+	});
+});
+
+describe("spellcheck chord", () => {
+	const semicolon = (init: KeyboardEventInit) =>
+		new KeyboardEvent("keydown", { key: ";", cancelable: true, ...init });
+
+	it("⌘; on a Mac, Ctrl+; elsewhere", () => {
+		expect(isSpellcheckKey(semicolon({ metaKey: true }), true)).toBe(true);
+		expect(isSpellcheckKey(semicolon({ ctrlKey: true }), true)).toBe(false);
+		expect(isSpellcheckKey(semicolon({ ctrlKey: true }), false)).toBe(true);
+		expect(isSpellcheckKey(semicolon({ metaKey: true }), false)).toBe(false);
+	});
+
+	it("leaves ⌘: and plain ; alone", () => {
+		expect(
+			isSpellcheckKey(semicolon({ metaKey: true, shiftKey: true }), true),
+		).toBe(false);
+		expect(isSpellcheckKey(semicolon({}), true)).toBe(false);
+	});
+
+	it("toggles spellcheck from the app handler", () => {
+		const actions: AppShortcutAction[] = [];
+		const handle = createAppShortcutHandler((action) => actions.push(action));
+		const event = semicolon({ ctrlKey: true });
+		handle(event);
+		expect(actions).toEqual([{ type: "toggle-spellcheck" }]);
 		expect(event.defaultPrevented).toBe(true);
 	});
 });
