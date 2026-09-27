@@ -6,12 +6,27 @@ import { useDebouncedCallback } from "use-debounce";
 import type { Id } from "@/convex/_generated/dataModel";
 import { FLAG_CLICK_EVENT, type FlagClickDetail } from "@/lib/editor/flags";
 import type { EditorHandle } from "@/lib/editor/handle";
+import { dispatchModeSwitch } from "@/lib/keyboard/app-shortcuts";
 import { type Flag, findFlags } from "@/lib/markdown/flags";
 import type { DocumentModelRegistry } from "@/lib/workspace/document-registry";
 import type { WorkspaceState } from "@/lib/workspace/types";
 
-/** The note field open under a flag: which flag, where, and its current note. */
-export type FlagNoteDraft = { index: number; rect: DOMRect; note: string };
+/**
+ * The note field that is open: for a new flag, where it will go (it is
+ * written with its note, one edit); for an existing one, which flag.
+ */
+export type FlagNoteDraft = {
+	target: { kind: "new"; at: number } | { kind: "existing"; index: number };
+	rect: DOMRect;
+	note: string;
+};
+
+/** A stable React key for a draft's field. */
+export function draftKey(draft: FlagNoteDraft): string {
+	return draft.target.kind === "new"
+		? `new-${draft.target.at}`
+		: `flag-${draft.target.index}`;
+}
 
 type UseFlagsArgs = {
 	activeDocId: Id<"documents"> | null;
@@ -30,11 +45,14 @@ export type UseFlagsResult = {
 	setNotesOpen: (open: boolean) => void;
 	toggleNotes: () => void;
 	draft: FlagNoteDraft | null;
-	/** ⌘⇧X: drop a flag at the caret and open its note field. */
+	/** ⌘⇧X: open a note at the caret; the flag lands when it closes. */
 	addFlag: () => void;
 	/** Save the draft's note (empty keeps a bare flag) and return to the text. */
 	saveNote: (note: string) => void;
-	/** Close the note field without changing the note; back to the text. */
+	/**
+	 * Escape: leave an existing note as it was, or drop a new flag bare.
+	 * Either way, back to the text after the flag.
+	 */
 	closeDraft: () => void;
 	goToFlag: (index: number) => void;
 	resolveFlag: (index: number) => void;
@@ -95,7 +113,7 @@ export function useFlags({
 	const openDraft = useCallback(
 		(index: number, note: string) => {
 			const rect = getHandle()?.flags?.rect(index);
-			if (rect) setDraft({ index, rect, note });
+			if (rect) setDraft({ target: { kind: "existing", index }, rect, note });
 		},
 		[getHandle],
 	);
@@ -105,13 +123,15 @@ export function useFlags({
 		// selectionchange, which can still be queued behind this keydown, and
 		// the flag must land where the caret is now, not a keystroke ago.
 		setTimeout(() => {
-			const index = getHandle()?.flags?.insertAtCaret();
-			if (index === null || index === undefined || index < 0) return;
-			refresh();
-			// The glyph is in the DOM once the editor has painted.
-			requestAnimationFrame(() => openDraft(index, ""));
+			const anchor = getHandle()?.flags?.caretAnchor();
+			if (!anchor) return;
+			setDraft({
+				target: { kind: "new", at: anchor.at },
+				rect: anchor.rect,
+				note: "",
+			});
 		}, 0);
-	}, [getHandle, openDraft, refresh]);
+	}, [getHandle]);
 
 	const draftRef = useRef(draft);
 	draftRef.current = draft;
@@ -122,9 +142,14 @@ export function useFlags({
 			setDraft(null);
 			const handle = getHandle();
 			if (!current || !handle) return;
-			if (note.trim() !== current.note)
-				handle.flags?.setNote(current.index, note);
-			handle.flags?.goTo(current.index);
+			if (current.target.kind === "new") {
+				// The flag and its note are one edit, so one undo takes both.
+				handle.flags?.insertAt(current.target.at, note);
+			} else {
+				const { index } = current.target;
+				if (note.trim() !== current.note) handle.flags?.setNote(index, note);
+				handle.flags?.goTo(index);
+			}
 			refresh();
 		},
 		[getHandle, refresh],
@@ -133,15 +158,33 @@ export function useFlags({
 	const closeDraft = useCallback(() => {
 		const current = draftRef.current;
 		setDraft(null);
-		if (current) getHandle()?.flags?.goTo(current.index);
-	}, [getHandle]);
+		if (!current) return;
+		const flags = getHandle()?.flags;
+		if (current.target.kind === "new") {
+			flags?.insertAt(current.target.at, "");
+			refresh();
+		} else {
+			flags?.goTo(current.target.index);
+		}
+	}, [getHandle, refresh]);
 
 	const goToFlag = useCallback(
 		(index: number) => {
-			getHandle()?.flags?.goTo(index);
 			if (!notesPinned) setNotesOpenState(false);
+			const flags = getHandle()?.flags;
+			if (flags) {
+				flags.goTo(index);
+				return;
+			}
+			// Preview can't hold a caret: switch the pane to rich text, then go
+			// once the editor has mounted and seeded (two frames, as find does).
+			if (!activeDocId) return;
+			dispatchModeSwitch("rich");
+			requestAnimationFrame(() => {
+				requestAnimationFrame(() => getHandle()?.flags?.goTo(index));
+			});
 		},
-		[getHandle, notesPinned],
+		[activeDocId, getHandle, notesPinned],
 	);
 
 	const resolveFlag = useCallback(

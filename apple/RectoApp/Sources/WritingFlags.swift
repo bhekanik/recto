@@ -24,24 +24,44 @@ final class NotesPanelState {
     }
 }
 
-/// Writing flags (`lib/markdown/flags.ts`): ⌘⇧X drops `<!--flag-->` at the
-/// caret and opens a note for it; the notes panel lists, jumps to and
+/// Writing flags (`lib/markdown/flags.ts`): ⌘⇧X opens a note at the caret
+/// and drops `<!--flag: note-->` there; the notes panel lists, jumps to and
 /// resolves them. Every edit goes through the writing controller, so it is
 /// undoable and syncs like any other.
 extension EditorHostController {
     /// `add-flag`. Nothing in preview, where the text can't change.
+    ///
+    /// The note is written first and the flag lands with it when the field
+    /// closes, so one edit (one undo) holds both.
     func addFlag() {
-        guard let markdown = writingController.markdown, let textView = seam?.nsTextView else { return }
-        let selection = textView.selectedRange()
-        let at = NSMaxRange(selection)
-        let insertion = Flags.insertion(in: markdown, at: at)
-        let length = (insertion as NSString).length
-        guard writingController.replace(
+        guard currentPresentation().isEditable, let textView = seam?.nsTextView else { return }
+        let at = NSMaxRange(textView.selectedRange())
+        notePopover?.close()
+        let popover = FlagNotePopover(note: "") { [weak self] result in
+            guard let self else { return }
+            self.notePopover = nil
+            // Escape still drops the flag, bare: the spot is what matters.
+            if case .save(let note) = result { self.insertFlag(at: at, note: note) } else { self.insertFlag(at: at, note: "") }
+        }
+        notePopover = popover
+        popover.show(at: rect(of: NSRange(location: at, length: 0), in: textView), in: textView)
+    }
+
+    /// Write a flag with its note at `at` and put the caret after it.
+    func insertFlag(at: Int, note: String) {
+        guard let markdown = writingController.markdown, at <= (markdown as NSString).length else { return }
+        let insertion = Flags.insertion(in: markdown, at: at, note: note)
+        writingController.replace(
             NSRange(location: at, length: 0), with: insertion,
-            selection: NSRange(location: at + length, length: 0), actionName: "Flag")
-        else { return }
-        let guardLength = insertion.hasPrefix(Flags.guardCharacter) ? (Flags.guardCharacter as NSString).length : 0
-        showNote(for: WritingFlag(from: at, to: at + length, tokenFrom: at + guardLength, note: ""))
+            selection: NSRange(location: at + (insertion as NSString).length, length: 0), actionName: "Flag")
+    }
+
+    /// `range`'s first line box in the text view's coordinates, to anchor the note.
+    private func rect(of range: NSRange, in textView: NSTextView) -> NSRect {
+        var actual = NSRange()
+        let screen = textView.firstRect(forCharacterRange: range, actualRange: &actual)
+        guard let window = textView.window, screen != .zero else { return textView.visibleRect }
+        return textView.convert(window.convertFromScreen(screen), from: nil)
     }
 
     /// Open the note field under `flag`, the one just dropped or clicked.
@@ -96,10 +116,7 @@ extension EditorHostController {
     /// The drawn flag, in the text view's coordinates: the glyph rides on the
     /// token's first character, whose kern is the glyph's width.
     func glyphRect(of flag: WritingFlag, in textView: NSTextView) -> NSRect {
-        var actual = NSRange()
-        let screen = textView.firstRect(forCharacterRange: NSRange(location: flag.tokenFrom, length: 1), actualRange: &actual)
-        guard let window = textView.window, screen != .zero else { return textView.visibleRect }
-        return textView.convert(window.convertFromScreen(screen), from: nil)
+        rect(of: NSRange(location: flag.tokenFrom, length: 1), in: textView)
     }
 
     /// A click on a drawn flag opens its note. The engine puts the caret at

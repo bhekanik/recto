@@ -89,6 +89,16 @@ public final class RectoDecorationController: NSObject {
         didSet { if theme != oldValue { apply() } }
     }
 
+    /// Tint writing flags' source (`<!--flag: …-->`) in the flag colour, for
+    /// the presentations that show source (raw, vim), as the web's
+    /// `.recto-flag-token`. Rich draws flags as glyphs and needs none of this.
+    public var tintsFlags = false {
+        didSet { if tintsFlags != oldValue { apply() } }
+    }
+
+    /// The web's `flagDecorator`: a flag token and any guard in front of it.
+    private static let flagToken = try! NSRegularExpression(pattern: #"\u2060?<!--flag(?::[^\n]*?)?-->"#)
+
     /// The lit range last computed, for tests and for the embedder's status.
     public private(set) var litRange: NSRange?
 
@@ -100,6 +110,7 @@ public final class RectoDecorationController: NSObject {
     /// rendering attributes (marked text, say).
     private var appliedDim: [NSRange] = []
     private var appliedComments: [NSRange] = []
+    private var appliedFlags: [NSRange] = []
 
     public override init() {
         super.init()
@@ -228,6 +239,12 @@ public final class RectoDecorationController: NSObject {
             setRendering([.backgroundColor: Self.commentWash(focused: mark.isFocused, dark: dark)], for: mark.range)
             appliedComments.append(mark.range)
         }
+        if tintsFlags {
+            for match in Self.flagToken.matches(in: text as String, range: NSRange(location: 0, length: text.length)) {
+                setRendering([.foregroundColor: theme.flagColor], for: match.range)
+                appliedFlags.append(match.range)
+            }
+        }
         seam.underlines = lintMarks
             .filter { NSMaxRange($0.range) <= text.length && $0.range.length > 0 }
             .map { MarkdownUnderline(range: $0.range, color: Self.lintColor($0.category, dark: dark)) }
@@ -242,8 +259,12 @@ public final class RectoDecorationController: NSObject {
         for range in appliedComments {
             removeRendering(.backgroundColor, for: clamp(range, to: length))
         }
+        for range in appliedFlags {
+            removeRendering(.foregroundColor, for: clamp(range, to: length))
+        }
         appliedDim.removeAll()
         appliedComments.removeAll()
+        appliedFlags.removeAll()
     }
 
     private func clamp(_ range: NSRange, to length: Int) -> NSRange {

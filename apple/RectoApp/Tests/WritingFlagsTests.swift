@@ -17,28 +17,38 @@ struct WritingFlagsTests {
         scratch.removePersistentDomain(forName: Self.scratchSuite)
     }
 
-    @Test("⌘⇧X drops a flag at the caret, opens its note and leaves the caret after it")
+    @Test("⌘⇧X opens a note at the caret; closing it drops the flag and leaves the caret after it")
     func dropsFlagAtCaret() async throws {
         let mounted = try await mount("Born in  in 1920.")
         defer { mounted.close() }
         mounted.textView.setSelectedRange(NSRange(location: 8, length: 0))
         mounted.chrome.addFlag()
-        #expect(mounted.textView.string == "Born in <!--flag--> in 1920.")
-        #expect(mounted.storage.markdown == "Born in <!--flag--> in 1920.")
-        #expect(mounted.textView.selectedRange() == NSRange(location: 19, length: 0))
         #expect(mounted.chrome.notePopover != nil, "the note field opens")
+        #expect(mounted.textView.string == "Born in  in 1920.", "nothing is written until the note is done")
         mounted.chrome.notePopover?.close()
         #expect(mounted.chrome.notePopover == nil)
+        #expect(mounted.textView.string == "Born in <!--flag--> in 1920.", "Escape still drops a bare flag")
+        #expect(mounted.storage.markdown == "Born in <!--flag--> in 1920.")
         #expect(mounted.textView.selectedRange() == NSRange(location: 19, length: 0), "back after the flag")
+    }
+
+    @Test("a new flag and its note are one edit")
+    func flagAndNoteAreOneEdit() async throws {
+        let mounted = try await mount("Born in  in 1920.")
+        defer { mounted.close() }
+        mounted.edits.log.removeAll()
+        mounted.chrome.insertFlag(at: 8, note: "the town")
+        #expect(mounted.textView.string == "Born in <!--flag: the town--> in 1920.")
+        #expect(mounted.edits.log.map(\.markdown) == ["Born in <!--flag: the town--> in 1920."], "one edit, one undo step")
+        #expect(mounted.edits.log.first?.structural == true, "its own history node, apart from typing")
+        #expect(mounted.textView.selectedRange().location == 29)
     }
 
     @Test("a flag that would begin a line is guarded, so it stays inline")
     func guardsLineStart() async throws {
         let mounted = try await mount("One.\nwas born.")
         defer { mounted.close() }
-        mounted.textView.setSelectedRange(NSRange(location: 5, length: 0))
-        mounted.chrome.addFlag()
-        mounted.chrome.notePopover?.close()
+        mounted.chrome.insertFlag(at: 5, note: "")
         #expect(mounted.textView.string == "One.\n\u{2060}<!--flag-->was born.")
     }
 
@@ -68,6 +78,30 @@ struct WritingFlagsTests {
         mounted.chrome.resolve(stale)
         mounted.chrome.setNote("x", of: stale)
         #expect(mounted.textView.string == "Born in <!--flag: town--> in 1920.")
+    }
+
+    @Test("raw shows the flag's source in the flag colour")
+    func rawTint() async throws {
+        let mounted = try await mount("Born in <!--flag: town--> in 1920.", presentation: .raw)
+        defer { mounted.close() }
+        mounted.chrome.applySettings()
+        await drainMainQueue()
+        let manager = try #require(mounted.textView.textLayoutManager)
+        let content = try #require(manager.textContentManager)
+        // Every run of a rendering attribute, as (UTF-16 range, colour).
+        var tinted: [(NSRange, NSColor)] = []
+        manager.enumerateRenderingAttributes(from: content.documentRange.location, reverse: false) { _, attributes, range in
+            if let color = attributes[.foregroundColor] as? NSColor {
+                let start = content.offset(from: content.documentRange.location, to: range.location)
+                tinted.append((NSRange(location: start, length: content.offset(from: range.location, to: range.endLocation)), color))
+            }
+            return true
+        }
+        func color(at offset: Int) -> NSColor? {
+            tinted.first { NSLocationInRange(offset, $0.0) }?.1
+        }
+        #expect(color(at: 12) == mounted.settings.theme.flagColor)
+        #expect(color(at: 2) == nil, "prose keeps its colour")
     }
 
     @Test("preview takes no flags")
@@ -130,7 +164,13 @@ struct WritingFlagsTests {
 
     // MARK: - Harness
 
+    /// What the editor reported through `onEdit`, as the hosts receive it.
+    final class EditLog {
+        var log: [RectoEditorEdit] = []
+    }
+
     private struct Mounted {
+        let edits: EditLog
         let settings: StudioSettings
         let chrome: EditorHostController
         let storage: RectoTextStorage
@@ -149,12 +189,14 @@ struct WritingFlagsTests {
         let chrome: EditorHostController
         let storage: RectoTextStorage
         let presentation: Presentation
+        let edits: EditLog
 
         var body: some View {
             RectoEditorView(
                 storage: storage,
                 styler: settings.styler(presentation: presentation),
                 onAttach: chrome.attach,
+                onEdit: { edits.log.append($0) },
                 writingController: chrome.writingController
             )
             .frame(width: 720, height: 400)
@@ -167,8 +209,9 @@ struct WritingFlagsTests {
         let chrome = EditorHostController(settings: settings)
         chrome.currentPresentation = { presentation }
         let storage = RectoTextStorage(documentId: "flags-\(UUID().uuidString)", markdown: markdown)
+        let edits = EditLog()
         let host = NSHostingView(rootView: Host(
-            settings: settings, chrome: chrome, storage: storage, presentation: presentation))
+            settings: settings, chrome: chrome, storage: storage, presentation: presentation, edits: edits))
         let window = NSWindow(contentViewController: NSViewController())
         window.contentView = host
         window.makeKeyAndOrderFront(nil)
@@ -176,7 +219,7 @@ struct WritingFlagsTests {
         await drainMainQueue()
         let textView = try #require(storage.textView.nsTextView)
         window.makeFirstResponder(textView)
-        return Mounted(settings: settings, chrome: chrome, storage: storage, textView: textView, window: window)
+        return Mounted(edits: edits, settings: settings, chrome: chrome, storage: storage, textView: textView, window: window)
     }
 
     private func drainMainQueue() async {

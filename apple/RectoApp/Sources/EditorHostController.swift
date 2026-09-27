@@ -187,6 +187,7 @@ final class EditorHostController {
         blur.isEnabled = settings.focusBlur && currentPresentation() != .preview
         blur.lineHighlight = settings.theme.accent.withAlphaComponent(settings.theme.isLight ? 0.08 : 0.1)
         decorations.theme = settings.theme
+        decorations.tintsFlags = currentPresentation().showsSource
         // Nothing to dim around in a read-only preview, as on the web.
         decorations.focusDim = settings.focusDim && currentPresentation() != .preview
             ? settings.focusDimScope : nil
