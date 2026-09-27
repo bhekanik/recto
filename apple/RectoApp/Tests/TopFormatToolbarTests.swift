@@ -124,6 +124,7 @@ struct TopFormatToolbarTests {
 
     @Test("spellcheck and typewriter settings reach the live text view")
     func settingsReachTextView() async throws {
+        scratch.set(true, forKey: StudioSettings.Key.spellcheck)
         let mounted = try await mount("hello", presentation: .rich, id: "toolbar-settings")
         defer { mounted.window.close() }
         let textView = mounted.textView
@@ -147,6 +148,7 @@ struct TopFormatToolbarTests {
     /// reach the engine's snapshot, or leaving the span brings spellcheck back.
     @Test("spellcheck turned off inside a code span stays off after leaving it")
     func spellcheckOffInsideCodeSpanSticks() async throws {
+        scratch.set(true, forKey: StudioSettings.Key.spellcheck)
         let markdown = "word `code` word"
         let mounted = try await mount(markdown, presentation: .rich, id: "toolbar-spellcheck-code")
         defer { mounted.window.close() }

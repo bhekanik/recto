@@ -457,7 +457,7 @@ export const ACTIONS: ActionDef[] = [
 		label: "Toggle spellcheck",
 		section: "View",
 		aliases: ["spelling", "squiggles"],
-		shortcut: { mac: "", other: "" },
+		shortcut: { mac: `${M};`, other: "Ctrl+;" },
 	},
 	{
 		id: "toggle-lint-passive",

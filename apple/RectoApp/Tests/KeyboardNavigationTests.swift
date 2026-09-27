@@ -329,6 +329,8 @@ struct KeyboardNavigationTests {
         #expect(seen["\(controlCommand)-1"] == "Go to document list")
         #expect(seen["\(controlCommand)-2"] == "Go to editor")
         #expect(seen["\(controlCommand)-s"] != nil, "the sidebar toggle")
+        let command = NSEvent.ModifierFlags.command.rawValue
+        #expect(seen["\(command)-;"] == "Toggle spellcheck", "⌘; is Recto's, not the system spelling pass")
     }
 }
 

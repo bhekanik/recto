@@ -115,7 +115,7 @@ enum CommandRegistry {
         CommandAction(id: "zoom-reset", label: "Reset text size", section: .view,
                       aliases: ["zoom 100", "default size"], shortcut: ""),
         CommandAction(id: "toggle-spellcheck", label: "Toggle spellcheck", section: .view,
-                      aliases: ["spelling", "squiggles"], shortcut: ""),
+                      aliases: ["spelling", "squiggles"], shortcut: "⌘;"),
         CommandAction(id: "toggle-lint-passive", label: "Lint: toggle passive voice", section: .view,
                       aliases: ["passive", "lint", "prose"], shortcut: ""),
         CommandAction(id: "toggle-lint-readability", label: "Lint: toggle readability", section: .view,

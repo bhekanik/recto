@@ -602,6 +602,9 @@ function StudioWorkspace() {
 					case "toggle-focus-blur":
 						dispatchRef.current("toggle-focus-blur");
 						return;
+					case "toggle-spellcheck":
+						dispatchRef.current("toggle-spellcheck");
+						return;
 					case "open-go-to-heading":
 						dispatchRef.current("go-to-heading");
 						return;

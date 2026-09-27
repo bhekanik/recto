@@ -231,6 +231,7 @@ private struct StudioCommands: Commands {
                 .keyboardShortcut("b", modifiers: [.control, .shift])
             Button("Toggle prose linter", action: settings.toggleLint)
             Button("Toggle spellcheck", action: settings.toggleSpellcheck)
+                .keyboardShortcut(";")
             Divider()
             // The system's zoom chords, as browsers and Pages use them.
             Button("Increase text size", action: settings.zoomIn)

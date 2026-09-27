@@ -67,7 +67,7 @@ struct CommandRegistryTests {
         ("zoom-in", .view, "Increase text size", ""),
         ("zoom-out", .view, "Decrease text size", ""),
         ("zoom-reset", .view, "Reset text size", ""),
-        ("toggle-spellcheck", .view, "Toggle spellcheck", ""),
+        ("toggle-spellcheck", .view, "Toggle spellcheck", "⌘;"),
         ("toggle-lint-passive", .view, "Lint: toggle passive voice", ""),
         ("toggle-lint-readability", .view, "Lint: toggle readability", ""),
         ("toggle-lint-adverb", .view, "Lint: toggle adverbs", ""),
