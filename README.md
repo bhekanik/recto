@@ -4,6 +4,8 @@ Writing studio — canonical Markdown, four lenses, branching undo.
 
 **Live:** [recto-dusky.vercel.app](https://recto-dusky.vercel.app)
 
+**Mac app:** [download the latest release](https://github.com/bhekanik/recto/releases/latest/download/Recto.dmg) (macOS 26 or later, Apple silicon). Releases are built with `apple/scripts/release-mac.sh`.
+
 ## Stack
 
 Next.js 16 + Convex + Clerk auth, with rich (Milkdown), raw/Vim (CodeMirror), and
@@ -79,3 +81,7 @@ bun run dev:bridge   # Spike A harness — http://localhost:5173
 
 Blueprint: [`docs/blueprint/README.md`](./docs/blueprint/README.md)  
 Plan: [`docs/plan/README.md`](./docs/plan/README.md)
+
+## License
+
+Recto is free software under the [GNU Affero General Public License v3.0](LICENSE): you may use, change and share it, and if you run a modified version for others over a network, you must offer them its source.
