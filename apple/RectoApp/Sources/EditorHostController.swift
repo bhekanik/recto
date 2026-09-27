@@ -64,6 +64,10 @@ final class EditorHostController {
     var ai: AIHooks?
     /// The window's panes, when this editor is one of them.
     var panes: PaneCommands?
+    /// The notes (writing flags) panel's open state and the note being
+    /// written; see `WritingFlags.swift`.
+    let notes = NotesPanelState()
+    var notePopover: FlagNotePopover?
     /// The writer moved into this editor: a click or a caret move while it is
     /// first responder. Pane hosts use it to track the active pane.
     var onFocus: () -> Void = {}
@@ -111,6 +115,7 @@ final class EditorHostController {
                     guard let self, textView.window?.firstResponder === textView else { return }
                     self.registry.noteFocused(self)
                     self.onFocus()
+                    self.openNoteIfFlagClicked(in: textView)
                 }
             }
         }

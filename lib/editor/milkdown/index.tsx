@@ -65,6 +65,7 @@ import {
 	setCommentMeta,
 } from "@/lib/review/comment-decorations-pm";
 import { caretSectionRange } from "./caret-section";
+import { flagPlugin, milkdownFlagEditing } from "./flags";
 import { lintPlugin, setLintMeta } from "./lint-plugin";
 import { replaceMarkdownSelection } from "./replace-selection";
 import { SelectionToolbarView } from "./selection-toolbar-view";
@@ -454,6 +455,8 @@ const MilkdownEditorInner = forwardRef<MilkdownEditorHandle, InnerProps>(
 				// Comment highlights (plan 010 Phase B) — display-only $prose plugin;
 				// marks arrive via tr meta and are located by searching for the quote.
 				.use($prose(() => commentPlugin()))
+				// Writing flags: `<!--flag: note-->` drawn as a flag glyph.
+				.use($prose(() => flagPlugin()))
 				.config((ctx) => {
 					ctx.get(listenerCtx).markdownUpdated((_ctx, md, prevMd) => {
 						if (programmaticRef.current) return;
@@ -637,6 +640,13 @@ const MilkdownEditorInner = forwardRef<MilkdownEditorHandle, InnerProps>(
 					// editor still mounting / command unavailable — ignore
 				}
 			},
+			flags: milkdownFlagEditing(() => {
+				try {
+					return editorRef.current?.ctx.get(editorViewCtx) ?? null;
+				} catch {
+					return null;
+				}
+			}),
 			getPmView() {
 				const editor = editorRef.current;
 				if (!editor) return null;

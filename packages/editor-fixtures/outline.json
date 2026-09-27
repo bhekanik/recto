@@ -107,6 +107,24 @@
 					"index": 1
 				}
 			]
+		},
+		{
+			"name": "a writing flag is not heading text",
+			"markdown": "## Arrival <!--flag: which year?-->\n\n# Chapter <!--flag--> One\n",
+			"outline": [
+				{
+					"depth": 2,
+					"text": "Arrival",
+					"offset": 0,
+					"index": 0
+				},
+				{
+					"depth": 1,
+					"text": "Chapter  One",
+					"offset": 37,
+					"index": 1
+				}
+			]
 		}
 	]
 }

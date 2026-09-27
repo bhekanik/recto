@@ -1,0 +1,196 @@
+{
+	"$source": "lib/markdown/flags.ts",
+	"$contract": "flags in document order with UTF-16 from/to/tokenFrom and the note; the text a new flag inserts; each flag's setFlagNote and removeFlag results",
+	"find": [
+		{
+			"name": "inline, with and without a note",
+			"markdown": "Born in <!--flag: town--> in <!--flag-->.\n",
+			"flags": [
+				{
+					"from": 8,
+					"to": 25,
+					"tokenFrom": 8,
+					"note": "town"
+				},
+				{
+					"from": 29,
+					"to": 40,
+					"tokenFrom": 29,
+					"note": ""
+				}
+			],
+			"edits": [
+				{
+					"renamed": "Born in <!--flag: renamed--> in <!--flag-->.\n",
+					"removed": "Born in in <!--flag-->.\n"
+				},
+				{
+					"renamed": "Born in <!--flag: town--> in <!--flag: renamed-->.\n",
+					"removed": "Born in <!--flag: town--> in .\n"
+				}
+			]
+		},
+		{
+			"name": "notes keep hyphens and punctuation",
+			"markdown": "A <!--flag: mid-century, maybe?--> b\n",
+			"flags": [
+				{
+					"from": 2,
+					"to": 34,
+					"tokenFrom": 2,
+					"note": "mid-century, maybe?"
+				}
+			],
+			"edits": [
+				{
+					"renamed": "A <!--flag: renamed--> b\n",
+					"removed": "A b\n"
+				}
+			]
+		},
+		{
+			"name": "flag text in code is not a flag",
+			"markdown": "a `<!--flag-->` b\n\n```\n<!--flag-->\n```\n",
+			"flags": [],
+			"edits": []
+		},
+		{
+			"name": "a guarded line-start flag covers its guard",
+			"markdown": "⁠<!--flag: who--> was born\n",
+			"flags": [
+				{
+					"from": 0,
+					"to": 17,
+					"tokenFrom": 1,
+					"note": "who"
+				}
+			],
+			"edits": [
+				{
+					"renamed": "⁠<!--flag: renamed--> was born\n",
+					"removed": " was born\n"
+				}
+			]
+		},
+		{
+			"name": "headings, lists and quotes",
+			"markdown": "# Title <!--flag-->\n\n- ⁠<!--flag: a-->\n\n> x <!--flag: b-->\n",
+			"flags": [
+				{
+					"from": 8,
+					"to": 19,
+					"tokenFrom": 8,
+					"note": ""
+				},
+				{
+					"from": 23,
+					"to": 38,
+					"tokenFrom": 24,
+					"note": "a"
+				},
+				{
+					"from": 44,
+					"to": 58,
+					"tokenFrom": 44,
+					"note": "b"
+				}
+			],
+			"edits": [
+				{
+					"renamed": "# Title <!--flag: renamed-->\n\n- ⁠<!--flag: a-->\n\n> x <!--flag: b-->\n",
+					"removed": "# Title \n\n- ⁠<!--flag: a-->\n\n> x <!--flag: b-->\n"
+				},
+				{
+					"renamed": "# Title <!--flag-->\n\n- ⁠<!--flag: renamed-->\n\n> x <!--flag: b-->\n",
+					"removed": "# Title <!--flag-->\n\n- \n\n> x <!--flag: b-->\n"
+				},
+				{
+					"renamed": "# Title <!--flag-->\n\n- ⁠<!--flag: a-->\n\n> x <!--flag: renamed-->\n",
+					"removed": "# Title <!--flag-->\n\n- ⁠<!--flag: a-->\n\n> x \n"
+				}
+			]
+		},
+		{
+			"name": "a plain comment is not a flag",
+			"markdown": "a <!-- note --> b <!--flagpole--> c\n",
+			"flags": [],
+			"edits": []
+		},
+		{
+			"name": "astral characters before a flag shift UTF-16 offsets",
+			"markdown": "😀 in <!--flag: emoji-->\n",
+			"flags": [
+				{
+					"from": 6,
+					"to": 24,
+					"tokenFrom": 6,
+					"note": "emoji"
+				}
+			],
+			"edits": [
+				{
+					"renamed": "😀 in <!--flag: renamed-->\n",
+					"removed": "😀 in \n"
+				}
+			]
+		}
+	],
+	"insert": [
+		{
+			"name": "mid-sentence",
+			"markdown": "Born in  in 1920.\n",
+			"at": 8,
+			"note": "",
+			"inserted": "<!--flag-->"
+		},
+		{
+			"name": "start of the document",
+			"markdown": "was born.\n",
+			"at": 0,
+			"note": "who",
+			"inserted": "⁠<!--flag: who-->"
+		},
+		{
+			"name": "start of a later line",
+			"markdown": "One.\nTwo.\n",
+			"at": 5,
+			"note": "",
+			"inserted": "⁠<!--flag-->"
+		},
+		{
+			"name": "after a list marker",
+			"markdown": "- item\n",
+			"at": 2,
+			"note": "",
+			"inserted": "⁠<!--flag-->"
+		},
+		{
+			"name": "after an ordered marker and task box",
+			"markdown": "  1. [ ] task\n",
+			"at": 9,
+			"note": "",
+			"inserted": "⁠<!--flag-->"
+		},
+		{
+			"name": "after a quote marker",
+			"markdown": "> quoted\n",
+			"at": 2,
+			"note": "",
+			"inserted": "⁠<!--flag-->"
+		},
+		{
+			"name": "a heading is inline already",
+			"markdown": "# Title\n",
+			"at": 2,
+			"note": "",
+			"inserted": "<!--flag-->"
+		},
+		{
+			"name": "a note is cleaned",
+			"markdown": "x\n",
+			"at": 1,
+			"note": " two\nlines --> here- ",
+			"inserted": "<!--flag: two lines –> here–-->"
+		}
+	]
+}

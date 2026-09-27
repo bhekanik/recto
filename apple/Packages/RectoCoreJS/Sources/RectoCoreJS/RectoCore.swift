@@ -176,6 +176,19 @@ public final class RectoCore: @unchecked Sendable {
         }
     }
 
+    /// Writing flags in document order. The authority for `Flags`' offsets.
+    public func findFlags(_ markdown: String) async throws -> [WritingFlag] {
+        try await array("findFlags", [.string(markdown)]) { dictionary in
+            guard let from = dictionary["from"] as? NSNumber,
+                let to = dictionary["to"] as? NSNumber,
+                let tokenFrom = dictionary["tokenFrom"] as? NSNumber,
+                let note = dictionary["note"] as? String
+            else { return nil }
+            return WritingFlag(
+                from: from.intValue, to: to.intValue, tokenFrom: tokenFrom.intValue, note: note)
+        }
+    }
+
     /// The **sanitized** preview pipeline (`lib/preview/render.ts`), not the
     /// export renderer — that one absolutizes URLs against `window.location` and
     /// stays on the web.

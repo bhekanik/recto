@@ -94,6 +94,12 @@ describe("coerceSettings", () => {
 		expect(coerced.quietChrome).toBe(true);
 	});
 
+	it("the notes panel ships unpinned and a bad value falls back", () => {
+		expect(DEFAULTS.notesPinned).toBe(false);
+		expect(coerceSettings({ notesPinned: true }).notesPinned).toBe(true);
+		expect(coerceSettings({ notesPinned: "yes" }).notesPinned).toBe(false);
+	});
+
 	it("clamps the reading scale into range", () => {
 		expect(coerceSettings({ readingScale: 99 }, DEFAULTS).readingScale).toBe(
 			READING_SCALE_MAX,

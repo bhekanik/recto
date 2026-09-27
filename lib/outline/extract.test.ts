@@ -66,3 +66,10 @@ describe("extractOutline", () => {
 		expect(outline.map((h) => h.index)).toEqual([0, 1]);
 	});
 });
+
+describe("writing flags in headings", () => {
+	it("leave the flag's note out of the heading text", () => {
+		const headings = extractOutline("## Arrival <!--flag: which year?-->\n");
+		expect(headings.map((h) => h.text)).toEqual(["Arrival"]);
+	});
+});

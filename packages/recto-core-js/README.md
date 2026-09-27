@@ -28,6 +28,7 @@ Evaluating the bundle defines one global, `RectoCore`:
 | `normalize` | `(md: string) => string` | `serialize(parse(md))` with `CANONICAL_STRINGIFY` — the only MDAST↔string crossing |
 | `countWords` | `(md: string) => number` | prose words, markdown syntax excluded |
 | `parseOutline` | `(md: string) => { depth, text, offset, index }[]` | flat, document order; `offset` is a UTF-16 index into `md` |
+| `findFlags` | `(md: string) => { from, to, tokenFrom, note }[]` | writing flags in document order; UTF-16 offsets, `from` includes a line-start guard |
 | `htmlFromMarkdown` | `(md: string) => string` | `lib/preview/render.ts` — the **sanitized** preview pipeline |
 | `markdownFromHtml` | `(html: string) => string` | smart paste; rehype-parse, no DOM |
 | `lint` | `(md: string, categories?: string[]) => Promise<LintIssue[]>` | see below |

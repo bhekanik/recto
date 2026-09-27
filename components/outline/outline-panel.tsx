@@ -8,6 +8,8 @@ type OutlineHeadingItem = { text: string; depth: number; index: number };
 type OutlinePanelProps = {
 	open: boolean;
 	headings: OutlineHeadingItem[];
+	/** Headings whose section holds an open writing flag. */
+	flaggedHeadings?: Set<number>;
 	onJumpToHeading: (index: number) => void;
 	onClose: () => void;
 };
@@ -15,6 +17,7 @@ type OutlinePanelProps = {
 export function OutlinePanel({
 	open,
 	headings,
+	flaggedHeadings,
 	onJumpToHeading,
 	onClose,
 }: OutlinePanelProps) {
@@ -92,6 +95,14 @@ export function OutlinePanel({
 										<span className="min-w-0 flex-1 truncate text-[var(--color-ink-secondary)]">
 											{h.text || "(untitled heading)"}
 										</span>
+										{flaggedHeadings?.has(h.index) && (
+											<span
+												role="img"
+												aria-label="Has open flags"
+												title="Has open flags"
+												className="size-1.5 shrink-0 rounded-full bg-[var(--color-warning)]"
+											/>
+										)}
 										<span className="shrink-0 text-[0.6875rem] text-[var(--color-ink-tertiary)]">
 											H{h.depth}
 										</span>

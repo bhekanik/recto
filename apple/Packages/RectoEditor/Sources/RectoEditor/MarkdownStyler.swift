@@ -125,9 +125,9 @@ public struct MarkdownStyler: Sendable, Equatable {
             ),
             undo: undo,
             rawSourceMode: presentation.showsSource,
-            // The one construct beyond CommonMark + GFM tables that Recto's
+            // The constructs beyond CommonMark + GFM tables that Recto's
             // dialect has and the engine does not build in.
-            extensions: [StrikethroughExtension()],
+            extensions: [StrikethroughExtension(), RectoFlagExtension(color: theme.flagColor)],
             convertsPastedHTML: convertsPastedHTML
         )
     }

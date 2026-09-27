@@ -26,6 +26,12 @@ import {
 } from "@/lib/history/patch";
 import { CORPUS_CASES } from "@/lib/markdown/corpus/cases";
 import { countWords } from "@/lib/markdown/count-words";
+import {
+	findFlags,
+	flagInsertion,
+	removeFlag,
+	setFlagNote,
+} from "@/lib/markdown/flags";
 import { normalizeMarkdown } from "@/lib/markdown/normalize";
 import { parseMarkdown } from "@/lib/markdown/parse";
 import { extractOutline, type OutlineHeading } from "@/lib/outline/extract";
@@ -34,6 +40,8 @@ import { currentStreak } from "@/lib/stats/streak";
 import {
 	DIFF_CASES,
 	DIFF_GRANULARITIES,
+	FLAG_FIND_CASES,
+	FLAG_INSERT_CASES,
 	MATERIALIZE_SPECS,
 	type MaterializeSpec,
 	OUTLINE_CASES,
@@ -285,6 +293,30 @@ function buildStreak() {
 	};
 }
 
+function buildFlags() {
+	return {
+		$source: "lib/markdown/flags.ts",
+		$contract:
+			"flags in document order with UTF-16 from/to/tokenFrom and the note; " +
+			"the text a new flag inserts; each flag's setFlagNote and removeFlag results",
+		find: FLAG_FIND_CASES.map((testCase) => {
+			const flags = findFlags(testCase.markdown);
+			return {
+				...testCase,
+				flags,
+				edits: flags.map((flag) => ({
+					renamed: setFlagNote(testCase.markdown, flag, "renamed"),
+					removed: removeFlag(testCase.markdown, flag),
+				})),
+			};
+		}),
+		insert: FLAG_INSERT_CASES.map((testCase) => ({
+			...testCase,
+			inserted: flagInsertion(testCase.markdown, testCase.at, testCase.note),
+		})),
+	};
+}
+
 function buildSlashEntries() {
 	return {
 		$source: "lib/editor/milkdown/slash-entries.ts",
@@ -304,6 +336,7 @@ export function generateFixtures() {
 		"diff-runs.json": buildDiffRuns(),
 		"streak.json": buildStreak(),
 		"slash-entries.json": buildSlashEntries(),
+		"flags.json": buildFlags(),
 	};
 }
 

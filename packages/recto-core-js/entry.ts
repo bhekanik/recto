@@ -14,6 +14,7 @@ import { transformWarnings } from "@/lib/ai/transform-checks";
 import { analyze } from "@/lib/lint/analyze";
 import { ALL_CATEGORIES, type LintOptions } from "@/lib/lint/types";
 import { countWords } from "@/lib/markdown/count-words";
+import { type Flag, findFlags } from "@/lib/markdown/flags";
 import { markdownFromHtml } from "@/lib/markdown/from-html";
 import { normalizeMarkdown } from "@/lib/markdown/normalize";
 import { extractOutline, type OutlineHeading } from "@/lib/outline/extract";
@@ -103,6 +104,11 @@ const RectoCore = {
 	/** Flat heading outline in document order. */
 	parseOutline(markdown: string): OutlineHeading[] {
 		return extractOutline(requireString(markdown, "parseOutline", "markdown"));
+	},
+
+	/** Writing flags in document order, UTF-16 offsets (`lib/markdown/flags.ts`). */
+	findFlags(markdown: string): Flag[] {
+		return findFlags(requireString(markdown, "findFlags", "markdown"));
 	},
 
 	/** Sanitized preview HTML (`lib/preview/render.ts`). */

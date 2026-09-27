@@ -124,6 +124,11 @@ export type StudioSettings = {
 	focusBlur: boolean;
 	/** Fade the toolbar and status bar while typing; the pointer brings them back. */
 	quietChrome: boolean;
+	/**
+	 * Keep the notes (writing flags) panel open through jumps, Escape and
+	 * document switches — for a revision pass. Unpinned, it closes on Go to.
+	 */
+	notesPinned: boolean;
 	/** Prose linter on/off (plan 004) — opt-in highlight-only, off by default. */
 	lint: boolean;
 	/** Per-category lint toggles (passive / readability / adverb / weasel). */
@@ -168,6 +173,7 @@ export const DEFAULTS: StudioSettings = {
 	focusBlur: false,
 	// On, as in the Mac app: while the writer is in the sentence, the chrome is not.
 	quietChrome: true,
+	notesPinned: false,
 	// Prose linter is opt-in — off by default (highlighting fights minimalism); all
 	// categories on once enabled, each individually toggleable.
 	lint: false,
@@ -345,6 +351,10 @@ export function coerceSettings(
 			typeof parsed.quietChrome === "boolean"
 				? parsed.quietChrome
 				: base.quietChrome,
+		notesPinned:
+			typeof parsed.notesPinned === "boolean"
+				? parsed.notesPinned
+				: base.notesPinned,
 		lint: typeof parsed.lint === "boolean" ? parsed.lint : base.lint,
 		lintCategories:
 			parsed.lintCategories === undefined

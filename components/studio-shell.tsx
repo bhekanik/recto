@@ -13,6 +13,8 @@ import { CommandPalette } from "@/components/command-palette";
 import { DeleteAccountDialog } from "@/components/delete-account-dialog";
 import { DocumentSwitcher } from "@/components/document-switcher";
 import { EmptyState } from "@/components/empty-state";
+import { FlagNoteField } from "@/components/flags/flag-note-field";
+import { NotesPanel } from "@/components/flags/notes-panel";
 import {
 	HistoryPanel,
 	type HistoryView,
@@ -54,10 +56,12 @@ import {
 	resolveModeAction,
 } from "@/lib/keyboard/app-shortcuts";
 import { readingTimeMinutes } from "@/lib/markdown";
+import { headingsWithFlags } from "@/lib/outline/flagged-headings";
 import { createActionMap } from "@/lib/studio/action-map";
 import { StudioSettingsProvider } from "@/lib/studio/settings-context";
 import { useAiFeatures } from "@/lib/studio/use-ai-features";
 import { useCommentHighlights } from "@/lib/studio/use-comment-highlights";
+import { useFlags } from "@/lib/studio/use-flags";
 import { useIsMobile } from "@/lib/studio/use-is-mobile";
 import { useOutline } from "@/lib/studio/use-outline";
 import { useQuietChrome } from "@/lib/studio/use-quiet-chrome";
@@ -420,6 +424,21 @@ function StudioWorkspace() {
 		headingsPaletteOpen: commandOpen && commandScope === "headings",
 	});
 
+	// --- Writing flags: ⌘⇧X drops one, the notes panel lists them ---
+	const flagState = useFlags({
+		activeDocId,
+		workspace,
+		registry,
+		syncedMarkdown: activeSync?.markdown ?? "",
+		notesPinned: settings.notesPinned,
+		unpinNotes: settings.toggleNotesPinned,
+	});
+
+	const flaggedHeadings = useMemo(
+		() => headingsWithFlags(outline, flagState.flags),
+		[outline, flagState.flags],
+	);
+
 	// Find & replace lives in the CodeMirror-backed lenses (raw/vim). Rich does a
 	// lossless, instant switch to raw and opens the panel there; preview falls
 	// through to the browser's native page find (no panel).
@@ -462,6 +481,8 @@ function StudioWorkspace() {
 				openFindReplace,
 				summonAiTransform,
 				summonAddComment,
+				addFlag: flagState.addFlag,
+				toggleNotes: flagState.toggleNotes,
 				effectiveAiEnabled,
 				activeDocId,
 				activeDocIsOwned,
@@ -494,6 +515,8 @@ function StudioWorkspace() {
 			isMobile,
 			summonAiTransform,
 			summonAddComment,
+			flagState.addFlag,
+			flagState.toggleNotes,
 			effectiveAiEnabled,
 			activeDocId,
 			activeDocIsOwned,
@@ -604,6 +627,12 @@ function StudioWorkspace() {
 						return;
 					case "toggle-spellcheck":
 						dispatchRef.current("toggle-spellcheck");
+						return;
+					case "add-flag":
+						dispatchRef.current("add-flag");
+						return;
+					case "toggle-notes":
+						dispatchRef.current("toggle-notes");
 						return;
 					case "open-go-to-heading":
 						dispatchRef.current("go-to-heading");
@@ -957,10 +986,34 @@ function StudioWorkspace() {
 					/>
 				)}
 
+				{!showEmpty && flagState.notesOpen && (
+					<NotesPanel
+						flags={flagState.flags}
+						pinned={settings.notesPinned}
+						onTogglePin={settings.toggleNotesPinned}
+						onGoTo={flagState.goToFlag}
+						onResolve={flagState.resolveFlag}
+						onClose={() => {
+							flagState.setNotesOpen(false);
+							dispatchFocusEditor();
+						}}
+					/>
+				)}
+
+				{flagState.draft && (
+					<FlagNoteField
+						key={flagState.draft.index}
+						draft={flagState.draft}
+						onSave={flagState.saveNote}
+						onClose={flagState.closeDraft}
+					/>
+				)}
+
 				{!showEmpty && (
 					<OutlinePanel
 						open={settings.outlineOpen}
 						headings={outline}
+						flaggedHeadings={flaggedHeadings}
 						onJumpToHeading={(i) => {
 							jumpToHeading(i);
 							dispatchFocusEditor();

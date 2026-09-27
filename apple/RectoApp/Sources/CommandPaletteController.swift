@@ -189,9 +189,18 @@ final class CommandPaletteController {
             if section == .ai, !settings.aiEnabled || editor?.ai == nil {
                 actions = actions.filter { $0.id == "toggle-ai" }
             }
-            // Sharing, comments and suggestions need the server.
+            // Sharing, comments and suggestions need the server; writing flags
+            // live in the text, so any editor has them.
+            let flagIds: Set<String> = ["add-flag", "toggle-notes", "toggle-notes-pin"]
             if section == .review, editor?.review == nil {
+                actions.removeAll { !flagIds.contains($0.id) }
+            }
+            if section == .review, editor == nil {
                 actions.removeAll()
+            }
+            // A flag is written into the text; preview can't take one.
+            if section == .review, editor.map({ !$0.currentPresentation().isEditable }) ?? true {
+                actions.removeAll { $0.id == "add-flag" }
             }
             // Panes live in the library window; a file document's window has none.
             if section == .panes, editor?.panes == nil {
@@ -332,6 +341,12 @@ final class CommandPaletteController {
             editor?.review?.toggleComments()
         case "add-comment":
             editor?.review?.addComment()
+        case "add-flag":
+            editor?.addFlag()
+        case "toggle-notes":
+            editor?.notes.toggle(settings)
+        case "toggle-notes-pin":
+            settings.toggleNotesPinned()
         case "toggle-ai":
             if let toggle = editor?.ai?.toggle { toggle() } else { settings.aiEnabled.toggle() }
         case "toggle-transform-mode":

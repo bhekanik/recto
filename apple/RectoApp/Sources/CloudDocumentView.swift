@@ -321,6 +321,9 @@ struct CloudDocumentView: View {
                     jump: { [chrome] range in chrome.jump(to: range) },
                     close: { showsComments = false })
             }
+            if chrome.notes.isVisible(settings), !zen.hidesChrome {
+                notesPanel(storage: paneStorage(model), theme: styler.theme)
+            }
             if let history, historyView != nil, !zen.hidesChrome {
                 HistoryPanel(history: history, settings: settings, theme: styler.theme, view: $historyView)
             }
@@ -333,6 +336,20 @@ struct CloudDocumentView: View {
                 )
             }
         }
+    }
+
+    private func notesPanel(storage: RectoTextStorage, theme: RectoEditorTheme) -> some View {
+        NotesPanel(
+            storage: storage, theme: theme, settings: settings,
+            goTo: { [chrome, settings] flag in
+                chrome.goTo(flag)
+                if !settings.notesPinned { chrome.notes.isOpen = false }
+            },
+            resolve: { [chrome] flag in chrome.resolve(flag) },
+            close: { [chrome, settings] in
+                chrome.notes.setOpen(false, settings)
+                chrome.focusText()
+            })
     }
 
     private func toolbar(_ styler: MarkdownStyler) -> some View {

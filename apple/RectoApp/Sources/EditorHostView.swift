@@ -118,6 +118,19 @@ struct EditorHostView: View {
                 )
                 .frame(minWidth: 720, minHeight: 540)
                 .background(WritingControlsHost(controller: chrome.writingController))
+                if chrome.notes.isVisible(settings), !zen.hidesChrome {
+                    NotesPanel(
+                        storage: storage, theme: styler.theme, settings: settings,
+                        goTo: { [chrome, settings] flag in
+                            chrome.goTo(flag)
+                            if !settings.notesPinned { chrome.notes.isOpen = false }
+                        },
+                        resolve: { [chrome] flag in chrome.resolve(flag) },
+                        close: { [chrome, settings] in
+                            chrome.notes.setOpen(false, settings)
+                            chrome.focusText()
+                        })
+                }
                 if settings.showOutline, !zen.hidesChrome {
                     OutlinePanel(
                         storage: storage,

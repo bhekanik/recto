@@ -82,6 +82,11 @@ export type WordCountCase = {
 /** Lifted from `lib/markdown/count-words.test.ts`. */
 export const WORD_COUNT_CASES: WordCountCase[] = [
 	{ name: "empty string", markdown: "", expectWords: 0 },
+	{
+		name: "writing flags are not words",
+		markdown: "Born in <!--flag: the town name--> in 1920.",
+		expectWords: 4,
+	},
 	{ name: "whitespace only", markdown: "   \n\n  ", expectWords: 0 },
 	{
 		name: "prose words, not markdown syntax",
@@ -154,6 +159,13 @@ export const OUTLINE_CASES: OutlineCase[] = [
 		markdown: "# \n\n## Real\n",
 		expectTexts: ["", "Real"],
 		expectDepths: [1, 2],
+	},
+	{
+		name: "a writing flag is not heading text",
+		markdown:
+			"## Arrival <!--flag: which year?-->\n\n# Chapter <!--flag--> One\n",
+		expectTexts: ["Arrival", "Chapter  One"],
+		expectDepths: [2, 1],
 	},
 ];
 
@@ -384,5 +396,75 @@ export const STREAK_CASES: StreakCase[] = [
 		],
 		today: "2026-06-01",
 		expectStreak: 2,
+	},
+];
+
+/** Writing flags (`lib/markdown/flags.ts`): what a port must find and write. */
+export const FLAG_FIND_CASES: { name: string; markdown: string }[] = [
+	{
+		name: "inline, with and without a note",
+		markdown: "Born in <!--flag: town--> in <!--flag-->.\n",
+	},
+	{
+		name: "notes keep hyphens and punctuation",
+		markdown: "A <!--flag: mid-century, maybe?--> b\n",
+	},
+	{
+		name: "flag text in code is not a flag",
+		markdown: "a `<!--flag-->` b\n\n```\n<!--flag-->\n```\n",
+	},
+	{
+		name: "a guarded line-start flag covers its guard",
+		markdown: "\u2060<!--flag: who--> was born\n",
+	},
+	{
+		name: "headings, lists and quotes",
+		markdown:
+			"# Title <!--flag-->\n\n- \u2060<!--flag: a-->\n\n> x <!--flag: b-->\n",
+	},
+	{
+		name: "a plain comment is not a flag",
+		markdown: "a <!-- note --> b <!--flagpole--> c\n",
+	},
+	{
+		name: "astral characters before a flag shift UTF-16 offsets",
+		markdown: "😀 in <!--flag: emoji-->\n",
+	},
+];
+
+/** Where a new flag goes and whether it needs the line-start guard. */
+export const FLAG_INSERT_CASES: {
+	name: string;
+	markdown: string;
+	at: number;
+	note: string;
+}[] = [
+	{ name: "mid-sentence", markdown: "Born in  in 1920.\n", at: 8, note: "" },
+	{
+		name: "start of the document",
+		markdown: "was born.\n",
+		at: 0,
+		note: "who",
+	},
+	{ name: "start of a later line", markdown: "One.\nTwo.\n", at: 5, note: "" },
+	{ name: "after a list marker", markdown: "- item\n", at: 2, note: "" },
+	{
+		name: "after an ordered marker and task box",
+		markdown: "  1. [ ] task\n",
+		at: 9,
+		note: "",
+	},
+	{ name: "after a quote marker", markdown: "> quoted\n", at: 2, note: "" },
+	{
+		name: "a heading is inline already",
+		markdown: "# Title\n",
+		at: 2,
+		note: "",
+	},
+	{
+		name: "a note is cleaned",
+		markdown: "x\n",
+		at: 1,
+		note: " two\nlines --> here- ",
 	},
 ];

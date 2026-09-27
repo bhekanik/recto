@@ -44,6 +44,23 @@ public struct LintIssue: Sendable, Equatable, Codable {
     }
 }
 
+/// A writing flag in the markdown (`lib/markdown/flags.ts`). Offsets are
+/// UTF-16: `from`/`to` span the flag and any line-start guard, `tokenFrom` is
+/// where the comment itself starts.
+public struct WritingFlag: Sendable, Equatable, Codable {
+    public let from: Int
+    public let to: Int
+    public let tokenFrom: Int
+    public let note: String
+
+    public init(from: Int, to: Int, tokenFrom: Int, note: String) {
+        self.from = from
+        self.to = to
+        self.tokenFrom = tokenFrom
+        self.note = note
+    }
+}
+
 /// One day's writing total. `date` is a local calendar key, `"YYYY-MM-DD"`.
 public struct WritingDay: Sendable, Equatable, Codable {
     public let date: String
