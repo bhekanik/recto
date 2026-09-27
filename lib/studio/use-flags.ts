@@ -170,7 +170,7 @@ export function useFlags({
 
 	const goToFlag = useCallback(
 		(index: number) => {
-			if (!notesPinned) setNotesOpenState(false);
+			// The panel stays open: the writer is working down the list.
 			const flags = getHandle()?.flags;
 			if (flags) {
 				flags.goTo(index);
@@ -184,7 +184,7 @@ export function useFlags({
 				requestAnimationFrame(() => getHandle()?.flags?.goTo(index));
 			});
 		},
-		[activeDocId, getHandle, notesPinned],
+		[activeDocId, getHandle],
 	);
 
 	const resolveFlag = useCallback(

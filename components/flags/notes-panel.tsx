@@ -21,7 +21,7 @@ type NotesPanelProps = {
 /**
  * The writer's flags beside the text, in document order. Not a dialog: the
  * text stays editable while it's open, so it can sit alongside a revision
- * pass (pinned) or close itself after Go to (unpinned).
+ * pass; Go to leaves it open, and the pin keeps it open across documents.
  */
 export function NotesPanel({
 	flags,

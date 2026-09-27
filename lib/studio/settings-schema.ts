@@ -126,7 +126,7 @@ export type StudioSettings = {
 	quietChrome: boolean;
 	/**
 	 * Keep the notes (writing flags) panel open through jumps, Escape and
-	 * document switches — for a revision pass. Unpinned, it closes on Go to.
+	 * document switches — for a revision pass. Unpinned, it closes on a document switch.
 	 */
 	notesPinned: boolean;
 	/** Prose linter on/off (plan 004) — opt-in highlight-only, off by default. */

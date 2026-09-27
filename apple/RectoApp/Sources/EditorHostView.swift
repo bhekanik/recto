@@ -121,10 +121,7 @@ struct EditorHostView: View {
                 if chrome.notes.isVisible(settings), !zen.hidesChrome {
                     NotesPanel(
                         storage: storage, theme: styler.theme, settings: settings,
-                        goTo: { [chrome, settings] flag in
-                            chrome.goTo(flag)
-                            if !settings.notesPinned { chrome.notes.isOpen = false }
-                        },
+                        goTo: { [chrome] flag in chrome.goTo(flag) },
                         resolve: { [chrome] flag in chrome.resolve(flag) },
                         close: { [chrome, settings] in
                             chrome.notes.setOpen(false, settings)
