@@ -109,6 +109,7 @@ export function CommandPalette({
 	const newDoc = ACTIONS.find((a) => a.id === "new-document");
 	const openInMac = ACTIONS.find((a) => a.id === "open-in-mac-app");
 	const downloadMac = ACTIONS.find((a) => a.id === "download-mac-app");
+	const viewSource = ACTIONS.find((a) => a.id === "view-source");
 
 	return (
 		<div
@@ -214,6 +215,17 @@ export function CommandPalette({
 												</span>
 												<span className="shrink-0 text-[var(--color-ink-tertiary)]">
 													{MAC_APP_REQUIREMENTS}
+												</span>
+											</Command.Item>
+										)}
+										{viewSource && (
+											<Command.Item
+												value={`${viewSource.label} ${viewSource.aliases?.join(" ") ?? ""} Documents`}
+												onSelect={() => run(() => onRunAction("view-source"))}
+												className={ITEM}
+											>
+												<span className="flex-1 text-[var(--color-ink-primary)]">
+													{viewSource.label}
 												</span>
 											</Command.Item>
 										)}

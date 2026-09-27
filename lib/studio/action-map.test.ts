@@ -176,6 +176,20 @@ describe("createActionMap", () => {
 		}
 	});
 
+	it("view-source opens the repository in a new tab", () => {
+		const open = vi.spyOn(window, "open").mockReturnValue(null);
+		try {
+			createActionMap(makeDeps())["view-source"]();
+			expect(open).toHaveBeenCalledWith(
+				"https://github.com/bhekanik/recto",
+				"_blank",
+				"noopener,noreferrer",
+			);
+		} finally {
+			open.mockRestore();
+		}
+	});
+
 	it("flags: drop one, toggle the notes panel, pin it", () => {
 		const deps = makeDeps();
 		const map = createActionMap(deps);
