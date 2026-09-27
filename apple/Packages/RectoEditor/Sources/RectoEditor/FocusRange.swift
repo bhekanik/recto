@@ -60,6 +60,17 @@ enum FocusRange {
             let line = text.lineRange(for: NSRange(location: caret - 1, length: 0))
             if caret <= NSMaxRange(line), !isBlank(line, in: text) { return caret - 1 }
         }
+        // Anywhere on a line with text, trailing spaces included (a space just
+        // typed): that line's paragraph, not the next one down.
+        if caret > 0 {
+            let line = text.lineRange(for: NSRange(location: caret - 1, length: 0))
+            let onLine = caret < NSMaxRange(line) || text.character(at: caret - 1) != 0x0A
+            if onLine, !isBlank(line, in: text) {
+                var index = caret - 1
+                while index >= line.location, isSpace(index) { index -= 1 }
+                if index >= line.location { return index }
+            }
+        }
         var forward = caret
         while forward < text.length, isSpace(forward) { forward += 1 }
         if forward < text.length { return forward }

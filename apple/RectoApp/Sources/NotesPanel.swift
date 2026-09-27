@@ -5,7 +5,7 @@ import SwiftUI
 
 /// The web's `components/flags/notes-panel.tsx`: the document's writing flags
 /// beside the text, in document order. Go to puts the caret after a flag (and
-/// closes the panel unless it is pinned); Resolve takes the flag out.
+/// leaves the panel open); Resolve takes the flag out.
 ///
 /// Like `OutlinePanel`, it takes the storage so only it observes the text, and
 /// re-finds flags through the JS core after a pause in typing.

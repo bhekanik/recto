@@ -52,6 +52,31 @@ describe("activeFocusRange", () => {
 		expect(text.slice(sentence?.from, sentence?.to)).toBe("Para two here.");
 	});
 
+	it("a space just typed at the end of a paragraph keeps it lit", () => {
+		const text = "One two.\nth other al \n\n## heading\nis the place";
+		const caret = text.indexOf("al ") + 3;
+		expect(activeFocusRange(text, caret, "paragraph")).toEqual({
+			from: 0,
+			to: text.indexOf("al ") + 2,
+		});
+		expect(activeFocusRange(text, caret, "sentence")?.from).toBeLessThan(caret);
+		// The same at the very end of the text, and mid-paragraph.
+		expect(activeFocusRange("Last words ", 11, "paragraph")).toEqual({
+			from: 0,
+			to: 10,
+		});
+		const mid = "First line \nsecond\n\nNext";
+		expect(activeFocusRange(mid, 11, "paragraph")).toEqual({ from: 0, to: 18 });
+	});
+
+	it("a caret on a blank line still belongs to the paragraph below", () => {
+		const text = "Para one.\n\nPara two.";
+		expect(activeFocusRange(text, 10, "paragraph")).toEqual({
+			from: 11,
+			to: 20,
+		});
+	});
+
 	it("scopes the first paragraph when the caret is there", () => {
 		const text = "Para one.\n\nPara two here.";
 		const range = activeFocusRange(text, 2, "paragraph");

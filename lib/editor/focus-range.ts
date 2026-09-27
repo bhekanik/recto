@@ -12,8 +12,12 @@
 export type FocusScope = "sentence" | "paragraph";
 export type FocusRange = { from: number; to: number };
 
-/** A paragraph block (split on blank lines) with its document offsets. */
-type ParagraphBlock = { from: number; to: number; text: string };
+/**
+ * A paragraph block (split on blank lines) with its document offsets, trimmed.
+ * `end` is where its last line ends, trailing spaces included: a caret there
+ * (just after typing a space) is still in this paragraph.
+ */
+type ParagraphBlock = { from: number; to: number; end: number; text: string };
 
 /** Blank-line separator: a newline, optional inline whitespace, another newline. */
 const BLANK_LINE = /\n[ \t]*\r?\n/g;
@@ -50,7 +54,11 @@ function pushBlock(
 	const from = rawFrom + leading;
 	const to = rawTo - trailing;
 	if (to <= from) return;
-	blocks.push({ from, to, text: text.slice(from, to) });
+	// Where the last content line ends: its trailing spaces are still this
+	// paragraph; anything past its newline is a gap.
+	const lineBreak = text.indexOf("\n", to);
+	const end = lineBreak === -1 || lineBreak > rawTo ? rawTo : lineBreak;
+	blocks.push({ from, to, end, text: text.slice(from, to) });
 }
 
 /**
@@ -64,8 +72,9 @@ function blockAtCaret(
 ): ParagraphBlock | null {
 	if (blocks.length === 0) return null;
 	for (const block of blocks) {
-		// Inclusive of `to` so a caret at the end of a paragraph still maps to it.
-		if (caret >= block.from && caret <= block.to) return block;
+		// Through the end of its last line, so a caret after trailing spaces (a
+		// space just typed) stays in its paragraph instead of skipping ahead.
+		if (caret >= block.from && caret <= block.end) return block;
 		// Caret falls in the gap before this block's start — claim it for this block.
 		if (caret < block.from) return block;
 	}
