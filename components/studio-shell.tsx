@@ -443,6 +443,34 @@ function StudioWorkspace() {
 		[outline, flagState.flags],
 	);
 
+	// Open in Recto app: the same document, with the caret where it is here.
+	const handOffToMac = useCallback(
+		async (documentId: Id<"documents">) => {
+			const handle = workspace
+				? registry.getPrimaryHandle(documentId, workspace.activePaneId)
+				: null;
+			const markdown = handle?.getCanonicalMarkdown();
+			const at = handle?.getMarkdownCaret?.();
+			// Land the latest words on the server first, so the Mac opens this
+			// text rather than a sync behind it; never hold the handoff long.
+			if (markdown !== undefined && activeSync) {
+				await Promise.race([
+					activeSync.flushMarkdown(markdown).catch(() => undefined),
+					new Promise((resolve) => window.setTimeout(resolve, 1500)),
+				]);
+			}
+			const caret =
+				markdown !== undefined && at !== null && at !== undefined
+					? { markdown, at }
+					: undefined;
+			// Nothing took the link: most likely the app isn't installed yet.
+			openInMacApp(macAppDocumentURL(documentId, caret), () =>
+				setMacNudgeOpen(true),
+			);
+		},
+		[workspace, registry, activeSync],
+	);
+
 	// Find & replace lives in the CodeMirror-backed lenses (raw/vim). Rich does a
 	// lossless, instant switch to raw and opens the panel there; preview falls
 	// through to the browser's native page find (no panel).
@@ -503,11 +531,7 @@ function StudioWorkspace() {
 				setZen,
 				setGoalConfigOpen,
 				toggleAiEnabled,
-				// Nothing took the link: most likely the app isn't installed yet.
-				openInMacApp: (documentId) =>
-					openInMacApp(macAppDocumentURL(documentId), () =>
-						setMacNudgeOpen(true),
-					),
+				openInMacApp: (documentId) => void handOffToMac(documentId),
 			}),
 		[
 			actions,

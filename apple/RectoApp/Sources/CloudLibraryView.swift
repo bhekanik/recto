@@ -181,6 +181,9 @@ extension CloudLibraryView {
                         openDocument: openCitation,
                         pendingJump: isActive && pendingJump?.localId == localId ? pendingJump?.offset : nil,
                         clearJump: { pendingJump = nil },
+                        pendingCaret: isActive && model.pendingCaret?.localId == localId
+                            ? model.pendingCaret?.caret : nil,
+                        clearCaret: { model.pendingCaret = nil },
                         wantsKeyboard: isActive && editorWantsKeyboard,
                         tookKeyboard: { editorWantsKeyboard = false }))
                     .id("\(pane.id)-\(localId)")

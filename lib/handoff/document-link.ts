@@ -40,8 +40,27 @@ export function stripDocSearchParam(href: string): string {
 	return `${url.pathname}${url.search}${url.hash}`;
 }
 
-export function macAppDocumentURL(documentId: string): string {
-	return `${MAC_APP_SCHEME}://document/${documentId}`;
+/** Characters of Markdown before the caret the Mac app matches on. */
+const CARET_CONTEXT_LENGTH = 32;
+
+/**
+ * `recto://document/<id>`, and with a caret, `?at=<offset>&ctx=<text>`: the
+ * caret's UTF-16 offset in the canonical Markdown, plus the text just before
+ * it, so the Mac app can find the place even if its copy of the text is a
+ * sync behind.
+ */
+export function macAppDocumentURL(
+	documentId: string,
+	caret?: { markdown: string; at: number },
+): string {
+	const base = `${MAC_APP_SCHEME}://document/${documentId}`;
+	if (!caret) return base;
+	const at = Math.max(0, Math.min(caret.at, caret.markdown.length));
+	const params = new URLSearchParams({
+		at: String(at),
+		ctx: caret.markdown.slice(Math.max(0, at - CARET_CONTEXT_LENGTH), at),
+	});
+	return `${base}?${params.toString()}`;
 }
 
 export function webDocumentURL(origin: string, documentId: string): string {

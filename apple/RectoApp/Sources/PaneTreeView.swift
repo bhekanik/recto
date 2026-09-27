@@ -22,6 +22,10 @@ struct PaneContext {
     /// Where to put the caret once this pane's document opens, then forget it.
     var pendingJump: Int? = nil
     var clearJump: () -> Void = {}
+    /// The caret a `recto://` link carried from the web, for this pane's
+    /// document; placed once the text is there, then forgotten.
+    var pendingCaret: DocumentLink.Caret? = nil
+    var clearCaret: () -> Void = {}
     /// Give this pane's text the keyboard once it is on screen, then report
     /// back so a later document mounting here does not take it again.
     var wantsKeyboard = false

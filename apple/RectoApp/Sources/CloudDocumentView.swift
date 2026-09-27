@@ -178,6 +178,8 @@ struct CloudDocumentView: View {
             }
         }
         .modifier(DocumentChanges(model: model, react: { react($0, model) }, panesActive: panes?.isActive, historyView: historyView))
+        // The linked document was already open here: no open event comes.
+        .onChange(of: panes?.pendingCaret) { placeHandedOverCaret(model) }
         .onChange(of: settings.spellcheck) { chrome.applySettings() }
         .onChange(of: settings.focusDim) { chrome.applySettings() }
         .onChange(of: settings.focusDimScope) { chrome.applySettings() }
@@ -284,11 +286,23 @@ struct CloudDocumentView: View {
                 DispatchQueue.main.async { chrome.jump(to: NSRange(location: offset, length: 0)) }
                 panes?.clearJump()
             }
+            placeHandedOverCaret(model)
         case .activated:
             // Moved here by a command, not a click: give it the keyboard.
             if let textView = chrome.seam?.nsTextView, textView.window?.firstResponder !== textView {
                 textView.window?.makeFirstResponder(textView)
             }
+        }
+    }
+
+    /// Opened from the web's Open in Recto app: put the caret where the writer
+    /// left it there, found in this Mac's copy of the text.
+    private func placeHandedOverCaret(_ model: CloudDocumentModel) {
+        guard let caret = panes?.pendingCaret else { return }
+        let storage = paneStorage(model)
+        panes?.clearCaret()
+        DispatchQueue.main.async {
+            chrome.jump(to: NSRange(location: caret.location(in: storage.markdown), length: 0))
         }
     }
 

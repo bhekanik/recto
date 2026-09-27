@@ -56,6 +56,19 @@ describe("macAppDocumentURL", () => {
 			"recto://document/k57abcdefghijklmnop",
 		);
 	});
+
+	it("carries the caret and the text just before it", () => {
+		const markdown = "# Title\n\nThe train came in late & nobody met it.";
+		const at = markdown.indexOf("nobody");
+		const url = new URL(
+			macAppDocumentURL("k57abcdefghijklmnop", { markdown, at }),
+		);
+		expect(url.searchParams.get("at")).toBe(String(at));
+		expect(url.searchParams.get("ctx")).toBe(markdown.slice(at - 32, at));
+		expect(
+			macAppDocumentURL("k57abcdefghijklmnop", { markdown: "ab", at: 1 }),
+		).toBe("recto://document/k57abcdefghijklmnop?at=1&ctx=a");
+	});
 });
 
 describe("webDocumentURL", () => {

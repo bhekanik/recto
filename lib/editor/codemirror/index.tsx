@@ -25,6 +25,7 @@ import { blocksInRamp, focusBlurStyle } from "@/lib/editor/focus-blur";
 import { activeFocusRange, type FocusScope } from "@/lib/editor/focus-range";
 import type { FormatCommand } from "@/lib/editor/format";
 import type { EditorHandle } from "@/lib/editor/handle";
+import { CARET_SENTINEL, caretOffsetIn } from "@/lib/editor/markdown-caret";
 import { glideCaretToCentre } from "@/lib/editor/typewriter-glide";
 import { HISTORY_REDO_EVENT, HISTORY_UNDO_EVENT } from "@/lib/events";
 import type { LintIssue } from "@/lib/lint";
@@ -635,6 +636,19 @@ export const CodeMirrorEditor = forwardRef<
 			if (!view) return { offset: 0, anchor: 0, head: 0 };
 			const { anchor, head } = view.state.selection.main;
 			return exportCaretFromCm(anchor, head);
+		},
+		getMarkdownCaret() {
+			const view = viewRef.current;
+			if (!view) return null;
+			const text = view.state.doc.toString();
+			const head = view.state.selection.main.head;
+			return (
+				caretOffsetIn(
+					normalizeMarkdown(
+						text.slice(0, head) + CARET_SENTINEL + text.slice(head),
+					),
+				) ?? head
+			);
 		},
 		getCaretSectionMarkdown() {
 			const view = viewRef.current;

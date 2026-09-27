@@ -541,6 +541,7 @@ struct HandoffModelTests {
     @Test("an unknown document link surfaces a note instead of crashing")
     func unknownLinkReports() async throws {
         let (model, _) = try await startedModel()
+        model.pendingOpenPatience = 0
         await model.createDocument()
         let before = model.selectedDocumentId
 
@@ -549,6 +550,26 @@ struct HandoffModelTests {
         #expect(handled)
         #expect(model.selectedDocumentId == before)
         #expect(model.errorMessage == "This document isn't on this Mac yet. Sign in and wait for it to sync, then open the link again.")
+    }
+
+    @MainActor
+    @Test("a link that arrives before its document waits for the sync, then opens with the caret")
+    func linkWaitsForSync() async throws {
+        let (model, components) = try await startedModel()
+        await model.createDocument()
+        let url = try #require(URL(string: "recto://document/k57late00000000?at=7&ctx=Hello"))
+
+        #expect(await model.openDocument(from: url))
+        #expect(model.errorMessage == nil, "no error while the sync may still bring it")
+
+        // The document lands on this Mac.
+        let late = try await components.library.createDocument(title: "Late")
+        try await assignConvexId("k57late00000000", localId: late.localId, in: components)
+        await model.refreshDocuments()
+
+        #expect(model.selectedDocumentId == late.localId)
+        #expect(model.pendingCaret == .init(localId: late.localId, caret: .init(at: 7, context: "Hello")))
+        #expect(model.errorMessage == nil)
     }
 
     @MainActor

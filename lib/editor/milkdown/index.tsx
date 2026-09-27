@@ -47,6 +47,7 @@ import { activeFocusRange, type FocusScope } from "@/lib/editor/focus-range";
 import type { FormatCommand } from "@/lib/editor/format";
 import type { EditorHandle } from "@/lib/editor/handle";
 import { isImageFile } from "@/lib/editor/image-upload";
+import { CARET_SENTINEL, caretOffsetIn } from "@/lib/editor/markdown-caret";
 import { glideCaretToCentre } from "@/lib/editor/typewriter-glide";
 import type { LintIssue } from "@/lib/lint";
 import {
@@ -658,6 +659,27 @@ const MilkdownEditorInner = forwardRef<MilkdownEditorHandle, InnerProps>(
 			},
 			getParser() {
 				return parserRef.current;
+			},
+			getMarkdownCaret() {
+				const editor = editorRef.current;
+				if (!editor) return null;
+				try {
+					const { state } = editor.ctx.get(editorViewCtx);
+					const serialize = editor.ctx.get(serializerCtx);
+					const marked = state.tr.insertText(
+						CARET_SENTINEL,
+						state.selection.head,
+					).doc;
+					return caretOffsetIn(
+						composeFrontmatter(
+							metaRef.current,
+							serialize(marked),
+							extraRef.current,
+						),
+					);
+				} catch {
+					return null;
+				}
 			},
 			getSelectedMarkdown() {
 				const editor = editorRef.current;

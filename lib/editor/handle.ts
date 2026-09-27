@@ -13,6 +13,11 @@ export type EditorHandle = {
 	seed: (markdown: string, opts?: { programmatic?: boolean }) => void;
 	getCanonicalMarkdown: () => string;
 	exportCaret: () => CaretPosition;
+	/**
+	 * The caret as a UTF-16 offset into `getCanonicalMarkdown()`, for handing
+	 * the writer's place to another app. Null when it can't be told.
+	 */
+	getMarkdownCaret?: () => number | null;
 	importCaret: (caret: CaretPosition) => void;
 	focus: () => void;
 	isFocused: () => boolean;
