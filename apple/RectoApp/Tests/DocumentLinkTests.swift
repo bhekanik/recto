@@ -15,6 +15,42 @@ struct DocumentLinkTests {
         #expect(DocumentLink.parse("recto:/document/k57handoff0000000") == "k57handoff0000000")
     }
 
+    @Test("a link from the web carries the writer's caret")
+    func parsesCaret() throws {
+        let url = try #require(URL(string: "recto://document/k57handoff0000000?at=42&ctx=the%20train%20came%20in%20"))
+        #expect(DocumentLink.target(url) == DocumentLink.Target(
+            convexId: "k57handoff0000000",
+            caret: DocumentLink.Caret(at: 42, context: "the train came in ")))
+        let bare = try #require(URL(string: "recto://document/k57handoff0000000?at=0"))
+        #expect(DocumentLink.target(bare)?.caret == DocumentLink.Caret(at: 0, context: ""))
+        let none = try #require(URL(string: "recto://document/k57handoff0000000"))
+        #expect(DocumentLink.target(none)?.caret == nil)
+        for string in [
+            "recto://document/k57handoff0000000?at=-1",
+            "recto://document/k57handoff0000000?at=x",
+            "recto://document/k57handoff0000000?ctx=abc",
+            "recto://document/k57handoff0000000?at=1&at=2",
+            "recto://document/k57handoff0000000?at=1&evil=1",
+        ] {
+            #expect(DocumentLink.parse(string) == nil, "should reject \(string)")
+        }
+    }
+
+    @Test("the caret lands where the web left it, even a sync apart")
+    func caretLocation() {
+        let text = "# Title\n\nThe train came in late. Nobody met it."
+        let at = (text as NSString).range(of: "Nobody").location
+        let context = (text as NSString).substring(with: NSRange(location: at - 12, length: 12))
+        let caret = DocumentLink.Caret(at: at, context: context)
+        #expect(caret.location(in: text) == at, "same text: the offset")
+        let ahead = "Added line.\n\n" + text
+        #expect(caret.location(in: ahead) == at + 13, "text grew before it: found by context")
+        #expect(DocumentLink.Caret(at: 500, context: "").location(in: text) == (text as NSString).length, "clamped")
+        #expect(DocumentLink.Caret(at: 3, context: "zzz").location(in: text) == 3, "no match: the offset")
+        let twice = "one two. one two. one two."
+        #expect(DocumentLink.Caret(at: 17, context: "one two").location(in: twice) == 16, "nearest occurrence")
+    }
+
     @Test("garbage is rejected without throwing")
     func rejectsGarbage() {
         let rejected = [

@@ -70,7 +70,20 @@ final class RectoApplicationModel {
     private var authTask: Task<Void, Never>?
     private var syncTask: Task<Void, Never>?
     private let injectedComponents: Components?
-    private var pendingOpenConvexId: String?
+    /// A document link waiting for its document: the link can arrive before
+    /// this Mac has it (a note just made on the web, or a launch whose first
+    /// sync is still under way), so it waits a while rather than failing.
+    private var pendingOpen: (target: DocumentLink.Target, since: Date)?
+    /// How long a link waits for its document to sync before giving up.
+    var pendingOpenPatience: TimeInterval = 20
+    @ObservationIgnored private var pendingOpenDeadline: Task<Void, Never>?
+    /// The caret a document link carried, for the pane that opens it.
+    var pendingCaret: PendingCaret?
+
+    struct PendingCaret: Equatable {
+        let localId: String
+        let caret: DocumentLink.Caret
+    }
 
     init(components: Components? = nil) {
         injectedComponents = components
@@ -189,8 +202,8 @@ final class RectoApplicationModel {
     /// `recto://document/<convexId>`. Returns false for anything else, without throwing.
     @discardableResult
     func openDocument(from url: URL) async -> Bool {
-        guard let convexId = DocumentLink.parse(url) else { return false }
-        pendingOpenConvexId = convexId
+        guard let target = DocumentLink.target(url) else { return false }
+        pendingOpen = (target, Date())
         await applyPendingOpen()
         return true
     }
@@ -326,15 +339,33 @@ final class RectoApplicationModel {
     }
 
     private func applyPendingOpen() async {
-        guard let convexId = pendingOpenConvexId else { return }
-        if let localId = await localId(forConvexId: convexId) {
+        guard let pending = pendingOpen else { return }
+        if let localId = await localId(forConvexId: pending.target.convexId) {
             selectedDocumentId = localId
-            pendingOpenConvexId = nil
+            pendingCaret = pending.target.caret.map { PendingCaret(localId: localId, caret: $0) }
+            pendingOpen = nil
+            pendingOpenDeadline?.cancel()
+            pendingOpenDeadline = nil
             errorMessage = nil
+            // Handed over to keep writing: the text takes the keyboard.
+            request(.focusEditor)
             return
         }
         guard store != nil, startupState == .ready else { return }
-        pendingOpenConvexId = nil
+        let waited = Date().timeIntervalSince(pending.since)
+        if waited < pendingOpenPatience {
+            // Syncs that land meanwhile retry through refreshDocuments; this
+            // is the last look, when the wait is over.
+            guard pendingOpenDeadline == nil else { return }
+            let remaining = pendingOpenPatience - waited
+            pendingOpenDeadline = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(remaining))
+                self?.pendingOpenDeadline = nil
+                await self?.applyPendingOpen()
+            }
+            return
+        }
+        pendingOpen = nil
         errorMessage = "This document isn't on this Mac yet. Sign in and wait for it to sync, then open the link again."
     }
 
