@@ -19,6 +19,7 @@ import {
 	resolveModeAction,
 } from "@/lib/keyboard/app-shortcuts";
 import type { Mode } from "@/lib/modes/types";
+import { SOURCE_REPOSITORY_URL } from "@/lib/project-links";
 import type { StudioSettingsApi } from "@/lib/studio/use-studio-settings";
 import type { WorkspaceActions } from "@/lib/workspace/use-workspace-persistence";
 
@@ -113,6 +114,8 @@ export function createActionMap(
 			window.location.assign(macAppDocumentURL(activeDocId));
 		},
 		"download-mac-app": () => window.location.assign(MAC_APP_DOWNLOAD_URL),
+		"view-source": () =>
+			window.open(SOURCE_REPOSITORY_URL, "_blank", "noopener,noreferrer"),
 		"mode-rich": () => dispatchModeSwitch("rich"),
 		"mode-raw": () => dispatchModeSwitch("raw"),
 		"mode-vim": () => dispatchModeSwitch("vim"),

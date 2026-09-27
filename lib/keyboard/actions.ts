@@ -22,6 +22,7 @@ export type ActionId =
 	| "new-document"
 	| "open-in-mac-app"
 	| "download-mac-app"
+	| "view-source"
 	| "mode-rich"
 	| "mode-raw"
 	| "mode-vim"
@@ -171,6 +172,13 @@ export const ACTIONS: ActionDef[] = [
 		label: "Download Recto for Mac",
 		section: "Documents",
 		aliases: ["mac", "desktop", "native", "install", "app"],
+		shortcut: { mac: "", other: "" },
+	},
+	{
+		id: "view-source",
+		label: "View source on GitHub",
+		section: "Documents",
+		aliases: ["github", "open source", "code", "repository", "license"],
 		shortcut: { mac: "", other: "" },
 	},
 	{

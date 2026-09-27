@@ -3,6 +3,7 @@
 import { SignIn } from "@clerk/nextjs";
 
 import { MacAppSignInNote } from "@/components/handoff/mac-app-sign-in-note";
+import { SourceLinkNote } from "@/components/source-link-note";
 
 export default function LoginPage() {
 	return (
@@ -23,7 +24,10 @@ export default function LoginPage() {
 					signUpFallbackRedirectUrl="/"
 				/>
 
-				<MacAppSignInNote />
+				<div className="flex flex-col items-center gap-[var(--space-2)]">
+					<MacAppSignInNote />
+					<SourceLinkNote />
+				</div>
 			</div>
 		</main>
 	);
