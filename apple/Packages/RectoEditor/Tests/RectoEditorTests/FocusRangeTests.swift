@@ -27,6 +27,22 @@ struct FocusRangeTests {
         #expect(range("", 0, .paragraph) == nil)
     }
 
+    @Test("a space just typed at the end of a paragraph keeps it lit")
+    func trailingSpace() {
+        let text = "One two.\nth other al \n\n## heading\nis the place"
+        let caret = (text as NSString).range(of: "al ").location + 3
+        #expect(slice(text, range(text, caret, .paragraph)) == "One two.\nth other al")
+        #expect(slice(text, range(text, caret, .sentence))?.hasSuffix("al") == true)
+        #expect(range("Last words ", 11, .paragraph) == NSRange(location: 0, length: 10))
+        #expect(slice("First line \nsecond\n\nNext", range("First line \nsecond\n\nNext", 11, .paragraph))
+            == "First line \nsecond")
+    }
+
+    @Test("a caret on a blank line still belongs to the paragraph below")
+    func blankLineGap() {
+        #expect(slice("Para one.\n\nPara two.", range("Para one.\n\nPara two.", 10, .paragraph)) == "Para two.")
+    }
+
     @Test("a single sentence is the whole range in both scopes")
     func singleSentence() {
         let text = "Hello world."
