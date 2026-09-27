@@ -163,6 +163,19 @@ describe("createActionMap", () => {
 		expect(deps.settings.toggleQuietChrome).toHaveBeenCalledTimes(1);
 	});
 
+	it("download-mac-app fetches the latest release's disk image", () => {
+		const assign = vi.fn();
+		vi.stubGlobal("location", { ...window.location, assign });
+		try {
+			createActionMap(makeDeps())["download-mac-app"]();
+			expect(assign).toHaveBeenCalledWith(
+				"https://github.com/bhekanik/recto/releases/latest/download/Recto.dmg",
+			);
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
+
 	it("flags: drop one, toggle the notes panel, pin it", () => {
 		const deps = makeDeps();
 		const map = createActionMap(deps);

@@ -4,6 +4,7 @@ import {
 	AlignVerticalJustifyCenter,
 	Aperture,
 	AppWindowMac,
+	Download,
 	Eye,
 	FileCode,
 	Flame,
@@ -20,8 +21,18 @@ import {
 	Sun,
 	Type,
 } from "lucide-react";
+import { useState } from "react";
 
 import { GoalPopover } from "@/components/goal-popover";
+import {
+	Popover,
+	PopoverContent,
+	PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+	MAC_APP_DOWNLOAD_URL,
+	MAC_APP_REQUIREMENTS,
+} from "@/lib/handoff/mac-app";
 import { type ActionId, withShortcut } from "@/lib/keyboard/actions";
 import { formatReadingTime } from "@/lib/markdown";
 import { MODE_RING, type Mode, modeToLabel } from "@/lib/modes/types";
@@ -659,19 +670,66 @@ export function StatusBar({
 				>
 					·
 				</span>
-				{onOpenInMacApp && (
-					<button
-						type="button"
-						className={iconBtn}
-						onClick={onOpenInMacApp}
-						title="Open in Recto app"
-						aria-label="Open in Recto app"
-					>
-						<AppWindowMac aria-hidden className="size-[15px]" />
-					</button>
-				)}
+				{onOpenInMacApp && <MacAppMenu onOpenInMacApp={onOpenInMacApp} />}
 				<SyncIndicator status={syncStatus} onShowBlocked={onShowBlocked} />
 			</div>
 		</footer>
+	);
+}
+
+/**
+ * The status bar's Mac icon: open this document in the Mac app, or get the
+ * app when this Mac doesn't have it yet.
+ */
+function MacAppMenu({ onOpenInMacApp }: { onOpenInMacApp: () => void }) {
+	const [open, setOpen] = useState(false);
+	const item =
+		"flex w-full items-center gap-[var(--space-2)] rounded-[var(--radius-sm)] px-[var(--space-2)] py-1.5 text-left text-[length:var(--text-ui-sm)] text-[var(--color-ink-primary)] transition-colors hover:bg-[var(--color-bg-hover)]";
+	return (
+		<Popover open={open} onOpenChange={setOpen}>
+			<PopoverTrigger
+				className={iconBtn}
+				title="Recto for Mac"
+				aria-label="Recto for Mac"
+			>
+				<AppWindowMac aria-hidden className="size-[15px]" />
+			</PopoverTrigger>
+			<PopoverContent
+				align="end"
+				side="top"
+				className="flex w-60 flex-col gap-0.5 border border-[var(--color-line)] bg-[var(--color-bg-raised)] p-1"
+			>
+				<button
+					type="button"
+					className={item}
+					onClick={() => {
+						setOpen(false);
+						onOpenInMacApp();
+					}}
+				>
+					<AppWindowMac
+						aria-hidden
+						className="size-4 text-[var(--color-ink-tertiary)]"
+					/>
+					Open in Recto app
+				</button>
+				<a
+					href={MAC_APP_DOWNLOAD_URL}
+					className={item}
+					onClick={() => setOpen(false)}
+				>
+					<Download
+						aria-hidden
+						className="size-4 text-[var(--color-ink-tertiary)]"
+					/>
+					<span className="flex flex-col">
+						Download Recto for Mac
+						<span className="text-[0.6875rem] text-[var(--color-ink-tertiary)]">
+							{MAC_APP_REQUIREMENTS}
+						</span>
+					</span>
+				</a>
+			</PopoverContent>
+		</Popover>
 	);
 }

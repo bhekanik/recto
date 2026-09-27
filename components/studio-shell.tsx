@@ -15,6 +15,7 @@ import { DocumentSwitcher } from "@/components/document-switcher";
 import { EmptyState } from "@/components/empty-state";
 import { FlagNoteField } from "@/components/flags/flag-note-field";
 import { NotesPanel } from "@/components/flags/notes-panel";
+import { MacAppNudge } from "@/components/handoff/mac-app-nudge";
 import {
 	HistoryPanel,
 	type HistoryView,
@@ -47,6 +48,7 @@ import {
 	isMacOSPlatform,
 	macAppDocumentURL,
 } from "@/lib/handoff/document-link";
+import { openInMacApp } from "@/lib/handoff/mac-app";
 import { useDocumentDeepLink } from "@/lib/handoff/use-document-deep-link";
 import type { ActionId } from "@/lib/keyboard/actions";
 import {
@@ -234,6 +236,8 @@ function StudioWorkspace() {
 		}
 	}, [acceptAiConsent, aiConsent, settings]);
 	const [shareDialogOpen, setShareDialogOpen] = useState(false);
+	const [macNudgeOpen, setMacNudgeOpen] = useState(false);
+	const closeMacNudge = useCallback(() => setMacNudgeOpen(false), []);
 
 	// Comments (plan 010 Phase B). Available whenever the caller can see the active
 	// doc with at least commenter access: the owner always can; a grantee can (any
@@ -499,9 +503,11 @@ function StudioWorkspace() {
 				setZen,
 				setGoalConfigOpen,
 				toggleAiEnabled,
-				openInMacApp: (documentId) => {
-					window.location.assign(macAppDocumentURL(documentId));
-				},
+				// Nothing took the link: most likely the app isn't installed yet.
+				openInMacApp: (documentId) =>
+					openInMacApp(macAppDocumentURL(documentId), () =>
+						setMacNudgeOpen(true),
+					),
 			}),
 		[
 			actions,
@@ -1132,6 +1138,7 @@ function StudioWorkspace() {
 				)}
 
 				<Toaster />
+				{macNudgeOpen && <MacAppNudge onClose={closeMacNudge} />}
 				<AiConsentDialog
 					open={aiConsentOpen}
 					busy={aiConsentBusy}
