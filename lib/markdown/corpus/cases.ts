@@ -222,4 +222,14 @@ End
 <script>alert(1)</script>
 `,
 	},
+	{
+		id: 25,
+		name: "writing flags (inline HTML comments, guarded at line start)",
+		input: `Born in <!--flag: the town, mid-century--> in 1920.
+
+\u2060<!--flag--> opens a paragraph.
+
+- \u2060<!--flag: a list item--> item
+`,
+	},
 ];

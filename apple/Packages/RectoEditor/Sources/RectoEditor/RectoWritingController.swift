@@ -105,6 +105,21 @@ public final class RectoWritingController {
         return apply(edit, actionName: command.actionName)
     }
 
+    /// Replace a source range as one structural edit (its own undo step),
+    /// through the same path as the formatting commands, and put the caret at
+    /// `selection`. For app features that write Markdown, like writing flags.
+    @discardableResult
+    public func replace(_ range: NSRange, with replacement: String, selection: NSRange, actionName: String) -> Bool {
+        guard presentation.isEditable else { return false }
+        return apply(
+            RectoCommandEdit(patch: MarkdownTextPatch(range: range, replacement: replacement), selection: selection),
+            actionName: actionName)
+    }
+
+    /// The source the editor holds, for callers that must check a range
+    /// before replacing it.
+    public var markdown: String? { storage?.markdown }
+
     public func moveSlashSelection(by delta: Int) {
         guard let state = slashMenuState, !state.entries.isEmpty else { return }
         selectedSlashIndex = (state.selectedIndex + delta + state.entries.count) % state.entries.count

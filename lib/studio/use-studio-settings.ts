@@ -94,6 +94,7 @@ export type StudioSettingsApi = StudioSettings & {
 	toggleFocusDim: () => void;
 	toggleFocusBlur: () => void;
 	toggleQuietChrome: () => void;
+	toggleNotesPinned: () => void;
 	setFocusDimScope: (scope: FocusScope) => void;
 	cycleFocusDimScope: () => void;
 	toggleLint: () => void;
@@ -261,6 +262,10 @@ export function useStudioSettings(): StudioSettingsApi {
 		setSettings((s) => ({ ...s, quietChrome: !s.quietChrome }));
 	}, []);
 
+	const toggleNotesPinned = useCallback(() => {
+		setSettings((s) => ({ ...s, notesPinned: !s.notesPinned }));
+	}, []);
+
 	const setFocusDimScope = useCallback((focusDimScope: FocusScope) => {
 		setSettings((s) => ({ ...s, focusDimScope }));
 	}, []);
@@ -353,6 +358,7 @@ export function useStudioSettings(): StudioSettingsApi {
 		toggleFocusDim,
 		toggleFocusBlur,
 		toggleQuietChrome,
+		toggleNotesPinned,
 		setFocusDimScope,
 		cycleFocusDimScope,
 		toggleLint,

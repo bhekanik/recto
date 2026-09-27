@@ -82,6 +82,7 @@ const smoke = "# Title\n\nThe report was written by the committee.\n";
 core.normalize(smoke);
 core.countWords(smoke);
 core.parseOutline(smoke);
+core.findFlags(smoke);
 core.htmlFromMarkdown(smoke);
 core.markdownFromHtml("<p>hi</p>");
 core.streak([{ date: "2026-08-27", words: 10 }], "2026-08-27");

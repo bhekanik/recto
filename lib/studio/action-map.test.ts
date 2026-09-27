@@ -31,6 +31,7 @@ function makeDeps(overrides: Partial<ActionMapDeps> = {}): ActionMapDeps {
 			toggleFocusDim: vi.fn(),
 			toggleFocusBlur: vi.fn(),
 			toggleQuietChrome: vi.fn(),
+			toggleNotesPinned: vi.fn(),
 			cycleFocusDimScope: vi.fn(),
 			togglePreviewVariant: vi.fn(),
 			toggleGoalStyle: vi.fn(),
@@ -57,6 +58,8 @@ function makeDeps(overrides: Partial<ActionMapDeps> = {}): ActionMapDeps {
 		openFindReplace: vi.fn(),
 		summonAiTransform: vi.fn(),
 		summonAddComment: vi.fn(),
+		addFlag: vi.fn(),
+		toggleNotes: vi.fn(),
 		effectiveAiEnabled: true,
 		activeDocId: "doc1" as ActionMapDeps["activeDocId"],
 		activeDocIsOwned: true,
@@ -158,6 +161,17 @@ describe("createActionMap", () => {
 		expect(deps.settings.toggleFocusBlur).toHaveBeenCalledTimes(1);
 		map["toggle-quiet-chrome"]();
 		expect(deps.settings.toggleQuietChrome).toHaveBeenCalledTimes(1);
+	});
+
+	it("flags: drop one, toggle the notes panel, pin it", () => {
+		const deps = makeDeps();
+		const map = createActionMap(deps);
+		map["add-flag"]();
+		map["toggle-notes"]();
+		map["toggle-notes-pin"]();
+		expect(deps.addFlag).toHaveBeenCalledTimes(1);
+		expect(deps.toggleNotes).toHaveBeenCalledTimes(1);
+		expect(deps.settings.toggleNotesPinned).toHaveBeenCalledTimes(1);
 	});
 
 	it("Format actions fire the toolbar's command at the active editor", () => {

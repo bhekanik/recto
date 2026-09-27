@@ -1,6 +1,7 @@
 import type { PhrasingContent, Root } from "mdast";
 import { visit } from "unist-util-visit";
 
+import { isFlagHtml } from "@/lib/markdown/flags";
 import { parseMarkdown } from "@/lib/markdown/parse";
 
 export type OutlineHeading = {
@@ -22,6 +23,8 @@ export type OutlineHeading = {
 function phrasingToText(nodes: PhrasingContent[]): string {
 	return nodes
 		.map((node) => {
+			// A writing flag is a note to the writer, not heading text.
+			if (node.type === "html" && isFlagHtml(node.value)) return "";
 			if ("value" in node && typeof node.value === "string") {
 				return node.value;
 			}

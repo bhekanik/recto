@@ -1241,6 +1241,16 @@ private struct InlineScanner {
     /// A delayed inline emission. The cases preserve the distinction between
     /// MDAST text children, non-text nodes, and nodes whose `value` is visible
     /// only to outline flattening.
+    /// `isFlagHtml` in `lib/markdown/flags.ts`: `<!--flag-->` or `<!--flag: …-->`
+    /// on one line, optionally padded before the close.
+    private static func isFlag(_ comment: [UInt16]) -> Bool {
+        let text = String(decoding: comment, as: UTF16.self)
+        guard text.hasPrefix(Flags.open), text.hasSuffix(Flags.close) else { return false }
+        let inner = text.dropFirst(Flags.open.count).dropLast(Flags.close.count)
+        guard !inner.contains("\n") else { return false }
+        return inner.hasPrefix(":") || inner.allSatisfy { $0 == " " || $0 == "\t" }
+    }
+
     private enum Token {
         /// An MDAST `text` node's characters: prose and heading text both take it.
         case text([UInt16])
@@ -1313,7 +1323,10 @@ private struct InlineScanner {
                 // Raw HTML is an `html` node, which carries the source verbatim
                 // as its `value` — comment markers and angle brackets included.
                 if starts(with: "<!--", at: cursor), let end = find("-->", after: cursor + 4) {
-                    tokens.append(.value(Array(units[cursor..<end])))
+                    let comment = Array(units[cursor..<end])
+                    // A writing flag is a note to the writer: `lib/outline/extract.ts`
+                    // leaves it out of heading text, so it is a bare separator here.
+                    tokens.append(Self.isFlag(comment) ? .separator : .value(comment))
                     cursor = end
                     continue
                 }

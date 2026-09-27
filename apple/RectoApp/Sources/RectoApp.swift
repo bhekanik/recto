@@ -230,6 +230,14 @@ private struct StudioCommands: Commands {
             Button("Toggle focus blur", action: settings.toggleFocusBlur)
                 .keyboardShortcut("b", modifiers: [.control, .shift])
             Button("Toggle prose linter", action: settings.toggleLint)
+            Divider()
+            // Writing flags: a note at the caret, and the panel that lists them.
+            Button("Flag this spot…") { editors.controller(in: NSApp.keyWindow)?.addFlag() }
+                .keyboardShortcut("x", modifiers: [.command, .shift])
+            Button("Toggle notes panel") { editors.controller(in: NSApp.keyWindow)?.notes.toggle(settings) }
+                .keyboardShortcut("n", modifiers: [.control, .shift])
+            Button("Pin notes panel open", action: settings.toggleNotesPinned)
+            Divider()
             Button("Toggle spellcheck", action: settings.toggleSpellcheck)
                 .keyboardShortcut(";")
             Divider()

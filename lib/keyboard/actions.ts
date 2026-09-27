@@ -43,6 +43,9 @@ export type ActionId =
 	| "review-surface"
 	| "toggle-comments"
 	| "add-comment"
+	| "add-flag"
+	| "toggle-notes"
+	| "toggle-notes-pin"
 	| "ai-transform"
 	| "ai-critique"
 	| "ai-related"
@@ -317,6 +320,28 @@ export const ACTIONS: ActionDef[] = [
 		label: "Add comment on selection",
 		section: "Review",
 		aliases: ["comment", "annotate", "note", "leave a comment"],
+		shortcut: { mac: "", other: "" },
+	},
+	{
+		id: "add-flag",
+		label: "Flag this spot…",
+		section: "Review",
+		aliases: ["flag", "tk", "placeholder", "missing", "note", "later", "todo"],
+		shortcut: { mac: `${M}${S}X`, other: "Ctrl+Shift+X" },
+	},
+	{
+		id: "toggle-notes",
+		label: "Toggle notes panel",
+		section: "Review",
+		aliases: ["notes", "flags", "missing", "todo", "tk"],
+		// Off Mac, Ctrl+Shift+N is the browser's private window.
+		shortcut: { mac: "Ctrl+⇧+N", other: "Alt+Shift+N" },
+	},
+	{
+		id: "toggle-notes-pin",
+		label: "Pin notes panel open",
+		section: "Review",
+		aliases: ["pin", "keep open", "revision", "notes", "flags"],
 		shortcut: { mac: "", other: "" },
 	},
 	{

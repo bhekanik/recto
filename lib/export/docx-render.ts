@@ -5,6 +5,7 @@ import remarkParse from "remark-parse";
 import { unified } from "unified";
 import { visit } from "unist-util-visit";
 
+import { stripFlagsFromMdast } from "../markdown/flags";
 import { splitFrontmatter } from "../markdown/frontmatter";
 
 /**
@@ -91,6 +92,8 @@ export async function renderDocx(
 		.use(remarkGfm)
 		.use(remarkFrontmatter, ["yaml"])
 		.use(stripFrontmatter)
+		// remark-docx prints raw HTML as text; a writing flag is not prose.
+		.use(() => stripFlagsFromMdast)
 		.use(() => imagesToLinks(origin))
 		.use(() => absolutizeLinkUrls(origin))
 		// The dialect's `---` is a horizontal rule, not a page break.

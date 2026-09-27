@@ -26,6 +26,8 @@ export type AppShortcutAction =
 	| { type: "toggle-focus-dim" }
 	| { type: "toggle-focus-blur" }
 	| { type: "toggle-spellcheck" }
+	| { type: "add-flag" }
+	| { type: "toggle-notes" }
 	| { type: "open-go-to-heading" }
 	| { type: "toggle-outline" }
 	| { type: "find-replace" }
@@ -68,6 +70,24 @@ export function isSpellcheckKey(event: KeyboardEvent, mac = isMac): boolean {
 	return mac
 		? event.metaKey && !event.ctrlKey
 		: event.ctrlKey && !event.metaKey;
+}
+
+/** ⌘⇧X (mac) / Ctrl+Shift+X — drop a writing flag at the caret. */
+export function isAddFlagKey(event: KeyboardEvent, mac = isMac): boolean {
+	if (event.key.toLowerCase() !== "x" || !event.shiftKey || event.altKey) {
+		return false;
+	}
+	return mac
+		? event.metaKey && !event.ctrlKey
+		: event.ctrlKey && !event.metaKey;
+}
+
+/** ⌃⇧N (mac) / Alt+Shift+N — the notes panel (Ctrl+Shift+N is a private window). */
+export function isToggleNotesKey(event: KeyboardEvent, mac = isMac): boolean {
+	if (event.key.toLowerCase() !== "n" || !event.shiftKey || event.metaKey) {
+		return false;
+	}
+	return mac ? event.ctrlKey && !event.altKey : event.altKey && !event.ctrlKey;
 }
 
 function matchCtrlShift(event: KeyboardEvent, key: string): boolean {
@@ -263,6 +283,18 @@ export function createAppShortcutHandler(
 			event.preventDefault();
 			event.stopPropagation();
 			onAction({ type: "toggle-spellcheck" });
+			return;
+		}
+		if (isAddFlagKey(event)) {
+			event.preventDefault();
+			event.stopPropagation();
+			onAction({ type: "add-flag" });
+			return;
+		}
+		if (isToggleNotesKey(event)) {
+			event.preventDefault();
+			event.stopPropagation();
+			onAction({ type: "toggle-notes" });
 			return;
 		}
 		// AI (plan 009) — the studio handlers no-op when AI features are disabled.

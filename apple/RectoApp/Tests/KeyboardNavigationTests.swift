@@ -331,6 +331,10 @@ struct KeyboardNavigationTests {
         #expect(seen["\(controlCommand)-s"] != nil, "the sidebar toggle")
         let command = NSEvent.ModifierFlags.command.rawValue
         #expect(seen["\(command)-;"] == "Toggle spellcheck", "⌘; is Recto's, not the system spelling pass")
+        let commandShift = NSEvent.ModifierFlags([.command, .shift]).rawValue
+        let controlShift = NSEvent.ModifierFlags([.control, .shift]).rawValue
+        #expect(seen["\(commandShift)-x"] == "Flag this spot…")
+        #expect(seen["\(controlShift)-n"] == "Toggle notes panel")
     }
 }
 

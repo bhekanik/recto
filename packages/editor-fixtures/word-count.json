@@ -7,6 +7,11 @@
 			"words": 0
 		},
 		{
+			"name": "writing flags are not words",
+			"markdown": "Born in <!--flag: the town name--> in 1920.",
+			"words": 4
+		},
+		{
 			"name": "whitespace only",
 			"markdown": "   \n\n  ",
 			"words": 0

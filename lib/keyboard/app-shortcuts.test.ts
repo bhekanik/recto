@@ -3,8 +3,10 @@ import type { Mode } from "@/lib/modes/types";
 import {
 	type AppShortcutAction,
 	createAppShortcutHandler,
+	isAddFlagKey,
 	isFindKey,
 	isSpellcheckKey,
+	isToggleNotesKey,
 	shouldInterceptFind,
 } from "./app-shortcuts";
 
@@ -94,5 +96,46 @@ describe("spellcheck chord", () => {
 		handle(event);
 		expect(actions).toEqual([{ type: "toggle-spellcheck" }]);
 		expect(event.defaultPrevented).toBe(true);
+	});
+});
+
+describe("flag chords", () => {
+	const key = (k: string, init: KeyboardEventInit) =>
+		new KeyboardEvent("keydown", { key: k, cancelable: true, ...init });
+
+	it("⌘⇧X flags on a Mac, Ctrl+Shift+X elsewhere; ⌘X stays cut", () => {
+		expect(
+			isAddFlagKey(key("X", { metaKey: true, shiftKey: true }), true),
+		).toBe(true);
+		expect(isAddFlagKey(key("x", { metaKey: true }), true)).toBe(false);
+		expect(
+			isAddFlagKey(key("X", { ctrlKey: true, shiftKey: true }), false),
+		).toBe(true);
+		expect(
+			isAddFlagKey(key("X", { ctrlKey: true, shiftKey: true }), true),
+		).toBe(false);
+	});
+
+	it("⌃⇧N opens notes on a Mac, Alt+Shift+N elsewhere", () => {
+		expect(
+			isToggleNotesKey(key("N", { ctrlKey: true, shiftKey: true }), true),
+		).toBe(true);
+		expect(
+			isToggleNotesKey(key("N", { altKey: true, shiftKey: true }), false),
+		).toBe(true);
+		expect(
+			isToggleNotesKey(key("N", { ctrlKey: true, shiftKey: true }), false),
+		).toBe(false);
+		expect(
+			isToggleNotesKey(key("N", { metaKey: true, shiftKey: true }), true),
+		).toBe(false);
+	});
+
+	it("route through the app handler", () => {
+		const actions: AppShortcutAction[] = [];
+		const handle = createAppShortcutHandler((action) => actions.push(action));
+		handle(key("X", { ctrlKey: true, shiftKey: true }));
+		handle(key("N", { altKey: true, shiftKey: true }));
+		expect(actions).toEqual([{ type: "add-flag" }, { type: "toggle-notes" }]);
 	});
 });

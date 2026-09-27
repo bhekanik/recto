@@ -33,7 +33,7 @@ enum RectoMarkdownContext {
             markdown: markdown as String,
             intersecting: range,
             configuration: MarkdownEditorConfiguration(
-                extensions: [StrikethroughExtension()]
+                extensions: [StrikethroughExtension(), RectoFlagExtension(color: .labelColor)]
             )
         ).spans
     }

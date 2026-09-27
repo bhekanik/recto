@@ -113,6 +113,7 @@ final class StudioSettings {
         static let showStatusBar = "studio.statusBar"
         static let showOutline = "studio.outline"
         static let quietChrome = "studio.quietChrome"
+        static let notesPinned = "studio.notesPinned"
         static let showsSheet = "studio.sheet"
         static let compactStatusBar = "studio.compactStatusBar"
         static let focusBlur = "studio.focusBlur"
@@ -250,6 +251,12 @@ final class StudioSettings {
         didSet { defaults.set(quietChrome, forKey: Key.quietChrome) }
     }
 
+    /// The notes (writing flags) panel stays open through Go to and document
+    /// switches, for a revision pass. The web's `notesPinned`; off by default.
+    var notesPinned: Bool {
+        didSet { defaults.set(notesPinned, forKey: Key.notesPinned) }
+    }
+
     /// The writing column as a sheet on the palette's atmosphere (design
     /// §2's signature), or the sheet colour edge to edge. Native only; off by
     /// default: the writer preferred the flat page to a card with a shadow.
@@ -319,6 +326,7 @@ final class StudioSettings {
         showStatusBar = defaults.object(forKey: Key.showStatusBar) as? Bool ?? true
         showOutline = defaults.object(forKey: Key.showOutline) as? Bool ?? false
         quietChrome = defaults.object(forKey: Key.quietChrome) as? Bool ?? true
+        notesPinned = defaults.object(forKey: Key.notesPinned) as? Bool ?? false
         showsSheet = defaults.object(forKey: Key.showsSheet) as? Bool ?? false
         compactStatusBar = defaults.object(forKey: Key.compactStatusBar) as? Bool ?? true
         focusBlur = defaults.object(forKey: Key.focusBlur) as? Bool ?? false
@@ -458,6 +466,7 @@ final class StudioSettings {
     func toggleStatusBar() { showStatusBar.toggle() }
     func toggleOutline() { showOutline.toggle() }
     func toggleQuietChrome() { quietChrome.toggle() }
+    func toggleNotesPinned() { notesPinned.toggle() }
     func toggleSheet() { showsSheet.toggle() }
     func toggleCompactStatusBar() { compactStatusBar.toggle() }
     func toggleFocusBlur() { focusBlur.toggle() }

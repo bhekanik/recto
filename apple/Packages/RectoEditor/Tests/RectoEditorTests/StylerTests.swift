@@ -84,11 +84,12 @@ struct StylerTests {
         #expect(MarkdownStyler().engineConfiguration().undo == .external)
     }
 
-    @Test("strikethrough is registered; nothing else beyond CommonMark is")
-    func strikethroughIsRegistered() {
+    @Test("strikethrough and writing flags are registered; nothing else beyond CommonMark is")
+    func dialectExtensionsAreRegistered() {
         let extensions = MarkdownStyler().engineConfiguration().extensions
-        #expect(extensions.count == 1)
+        #expect(extensions.count == 2)
         #expect(extensions.first is StrikethroughExtension)
+        #expect(extensions.last is RectoFlagExtension)
     }
 
     @Test("raw turns off the smart-input helpers")

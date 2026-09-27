@@ -267,6 +267,15 @@
 			"words": 1,
 			"outline": [],
 			"yaml": null
+		},
+		{
+			"id": 25,
+			"name": "writing flags (inline HTML comments, guarded at line start)",
+			"input": "Born in <!--flag: the town, mid-century--> in 1920.\n\n⁠<!--flag--> opens a paragraph.\n\n- ⁠<!--flag: a list item--> item\n",
+			"normalized": "Born in <!--flag: the town, mid-century--> in 1920.\n\n⁠<!--flag--> opens a paragraph.\n\n- ⁠<!--flag: a list item--> item\n",
+			"words": 10,
+			"outline": [],
+			"yaml": null
 		}
 	],
 	"unicode": [

@@ -38,6 +38,7 @@ import {
 	setCommentHighlights,
 } from "@/lib/review/comment-decorations-cm";
 import { dispatchOpenComment } from "@/lib/review/summon";
+import { codeMirrorFlagEditing, flagHighlight } from "./flags";
 import { lintExtension, setLintIssues } from "./lint-extension";
 
 export type CodeMirrorEditorHandle = EditorHandle & {
@@ -471,6 +472,7 @@ export const CodeMirrorEditor = forwardRef<
 			),
 			drawSelection(),
 			markdown(),
+			flagHighlight(),
 			// Image paste/drop → Convex storage (plan 008), then smart paste: route
 			// rich clipboard HTML through the canonical HTML→Markdown converter so a
 			// paste from Word/Docs/web lands as clean canonical Markdown. Image items
@@ -683,6 +685,7 @@ export const CodeMirrorEditor = forwardRef<
 			if (!view) return;
 			view.dispatch({ effects: setLintIssues.of(issues) });
 		},
+		flags: codeMirrorFlagEditing(() => viewRef.current),
 		setCommentHighlights(highlights: CommentHighlight[]) {
 			const view = viewRef.current;
 			if (!view) return;

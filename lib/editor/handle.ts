@@ -1,3 +1,4 @@
+import type { FlagEditing } from "@/lib/editor/flags";
 import type { FormatCommand } from "@/lib/editor/format";
 import type { CaretPosition } from "@/lib/modes/types";
 
@@ -32,6 +33,8 @@ export type EditorHandle = {
 	 * the document.
 	 */
 	getCaretSectionMarkdown?: () => string | null;
+	/** Writing flags in this surface; absent where the text can't be edited. */
+	flags?: FlagEditing;
 	/** Capture selected Markdown and its replacement transaction from one editor state. */
 	captureAiSelection?: () => {
 		markdown: string;

@@ -38,6 +38,8 @@ export type ActionMapDeps = {
 	openFindReplace: () => void;
 	summonAiTransform: () => void;
 	summonAddComment: () => void;
+	addFlag: () => void;
+	toggleNotes: () => void;
 	effectiveAiEnabled: boolean;
 	activeDocId: Id<"documents"> | null;
 	activeDocIsOwned: boolean;
@@ -152,6 +154,9 @@ export function createActionMap(
 		"add-comment": () => {
 			if (canComment) summonAddComment();
 		},
+		"add-flag": () => deps.addFlag(),
+		"toggle-notes": () => deps.toggleNotes(),
+		"toggle-notes-pin": () => settings.toggleNotesPinned(),
 		"toggle-ai": () => (deps.toggleAiEnabled ?? settings.toggleAiEnabled)(),
 		"toggle-transform-mode": () => settings.toggleAiTransformMode(),
 		"ai-transform": () => {

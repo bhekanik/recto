@@ -67,11 +67,13 @@
 		94CE851A6BF9F407B0C2ED90 /* RootForegroundInterleavingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCEBFE1A5165F1BE37FD346D /* RootForegroundInterleavingTests.swift */; };
 		966C39C0B62ECA5F5C349E5B /* OfflineTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36A1E659419C4C6FEBDA5FBE /* OfflineTransport.swift */; };
 		9A0126F78D54CBD645461F94 /* VimPresentationHostTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59B4F0B273ADA1DDC96FDDD0 /* VimPresentationHostTests.swift */; };
+		9AF40BFB7CA85CFB8EE89F11 /* WritingFlags.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9950D10682901CB3F007A201 /* WritingFlags.swift */; };
 		9B852E1FE0A9DFA036A90F56 /* DisplaySettingsPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08898BE55D91DA265879530D /* DisplaySettingsPanel.swift */; };
 		9B8F0EE82B650E24C9EF4F0A /* LibraryGroups.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06C9B6E94A93D096586FCD77 /* LibraryGroups.swift */; };
 		9FB703FFE9E9279098841DC8 /* ZenMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA3A74D0D69F9E702408570F /* ZenMode.swift */; };
 		A00A4B74222E46F4A09BFD3F /* WordCountTracking.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9368B38C653A8BC56D4AB7AA /* WordCountTracking.swift */; };
 		A27999E05D5E6B25C82E7734 /* HistoryPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FE2398821A83F66312028FC /* HistoryPanel.swift */; };
+		A31B534CE1D375A3731C0C0D /* WritingFlagsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E7B807DECEF3FDBAD631B2D /* WritingFlagsTests.swift */; };
 		A347F6A7844DF668348C8C80 /* WritingSettingsTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74A4C6FC5F98C41BD07E4141 /* WritingSettingsTab.swift */; };
 		A69E275C753052A3B33B0261 /* MarkdownHandlerSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26EF72694687925314503054 /* MarkdownHandlerSettings.swift */; };
 		A769940BFFE515C5B4C758E2 /* QuietChromeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A191B57376848CDC3A511CE6 /* QuietChromeTests.swift */; };
@@ -102,6 +104,7 @@
 		D8373D06A45E37210DF0F78A /* PresentationPreference.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DFB77EE2FCD168B679A47D4 /* PresentationPreference.swift */; };
 		DAA7CABAF7A809203F3E3E91 /* ZenModeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60B94F31BA7DC9B46D6FD841 /* ZenModeTests.swift */; };
 		DB1507CE201C207D5F146FB6 /* AIViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8556E1FF3EF270A44B2B3CD9 /* AIViews.swift */; };
+		DC0FDB3FB1E7A0B45873CB06 /* NotesPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEE9F7192940DC6EA6DC79C9 /* NotesPanel.swift */; };
 		E02A3B1FE8A01024A31CBDC5 /* WritingControlsHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = C23DDE416656399FB4E41FEF /* WritingControlsHost.swift */; };
 		E2C8A1EB9E80686B323D0A61 /* AppConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E9FB961CB61B80D498AC7F0 /* AppConfiguration.swift */; };
 		E64E7A5238B9F99D7115731B /* PaneDocuments.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D788A596A6070EF76840A51 /* PaneDocuments.swift */; };
@@ -199,10 +202,12 @@
 		8C12F711F47CBD7B108CC4FE /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		8D870252B3C23A258E900482 /* LibraryGroupsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryGroupsTests.swift; sourceTree = "<group>"; };
 		8DFB77EE2FCD168B679A47D4 /* PresentationPreference.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresentationPreference.swift; sourceTree = "<group>"; };
+		8E7B807DECEF3FDBAD631B2D /* WritingFlagsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WritingFlagsTests.swift; sourceTree = "<group>"; };
 		9162CA095C6BFD74EA02C263 /* CommandPaletteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandPaletteView.swift; sourceTree = "<group>"; };
 		9368B38C653A8BC56D4AB7AA /* WordCountTracking.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WordCountTracking.swift; sourceTree = "<group>"; };
 		93B05EF44F4CD5DAC0FC14AE /* RectoTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RectoTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		974F77168BF315CC83C58C3E /* DocumentLinkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentLinkTests.swift; sourceTree = "<group>"; };
+		9950D10682901CB3F007A201 /* WritingFlags.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WritingFlags.swift; sourceTree = "<group>"; };
 		9BC4145FD50C0B2E0D076716 /* SHA256SUMS */ = {isa = PBXFileReference; path = SHA256SUMS; sourceTree = "<group>"; };
 		9D788A596A6070EF76840A51 /* PaneDocuments.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaneDocuments.swift; sourceTree = "<group>"; };
 		9DEDB77337009783F5E0E9A5 /* PageSheetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PageSheetTests.swift; sourceTree = "<group>"; };
@@ -220,6 +225,7 @@
 		B9F5C256848CE3E71B3FBBF0 /* RectoDocumentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RectoDocumentTests.swift; sourceTree = "<group>"; };
 		BA24465686AB4748FE498A70 /* OrderedDocumentEditsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrderedDocumentEditsTests.swift; sourceTree = "<group>"; };
 		BCEBFE1A5165F1BE37FD346D /* RootForegroundInterleavingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootForegroundInterleavingTests.swift; sourceTree = "<group>"; };
+		BEE9F7192940DC6EA6DC79C9 /* NotesPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotesPanel.swift; sourceTree = "<group>"; };
 		C18C6AD908DF2B8695049C6A /* EmailPreviewChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmailPreviewChrome.swift; sourceTree = "<group>"; };
 		C23DDE416656399FB4E41FEF /* WritingControlsHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WritingControlsHost.swift; sourceTree = "<group>"; };
 		C392C824BA3377AB65598207 /* ApplicationModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplicationModelTests.swift; sourceTree = "<group>"; };
@@ -330,6 +336,7 @@
 				4FE2398821A83F66312028FC /* HistoryPanel.swift */,
 				06C9B6E94A93D096586FCD77 /* LibraryGroups.swift */,
 				26EF72694687925314503054 /* MarkdownHandlerSettings.swift */,
+				BEE9F7192940DC6EA6DC79C9 /* NotesPanel.swift */,
 				A1016C956B2129F9E615F092 /* OrderedDocumentEdits.swift */,
 				363C26A512770F4ABD73F2E9 /* OutlinePanel.swift */,
 				76EE13261BC8A4CB8A758876 /* PaletteModel.swift */,
@@ -357,6 +364,7 @@
 				519EB914F6100E0B9B31F0D5 /* WindowSettingsTab.swift */,
 				9368B38C653A8BC56D4AB7AA /* WordCountTracking.swift */,
 				C23DDE416656399FB4E41FEF /* WritingControlsHost.swift */,
+				9950D10682901CB3F007A201 /* WritingFlags.swift */,
 				15D45A5C4EDBD6AFF00A8600 /* WritingGoals.swift */,
 				74A4C6FC5F98C41BD07E4141 /* WritingSettingsTab.swift */,
 				203C1E04C76AF6896D9C490A /* WritingStatsModel.swift */,
@@ -437,6 +445,7 @@
 				59B4F0B273ADA1DDC96FDDD0 /* VimPresentationHostTests.swift */,
 				CD732FDE9A42768F4D278301 /* VimUndoRegimeTests.swift */,
 				E0B936E706CD1B1EC1FF9571 /* WindowToolbarTests.swift */,
+				8E7B807DECEF3FDBAD631B2D /* WritingFlagsTests.swift */,
 				1431D8EE1D0E47F5712E71A6 /* WritingGoalsTests.swift */,
 				8B646E5999478764C867E04F /* WritingStatsModelTests.swift */,
 				60B94F31BA7DC9B46D6FD841 /* ZenModeTests.swift */,
@@ -587,6 +596,7 @@
 				9A0126F78D54CBD645461F94 /* VimPresentationHostTests.swift in Sources */,
 				D55F86FAC4D81DFAFF619FBE /* VimUndoRegimeTests.swift in Sources */,
 				AA66841AEE7747CE3146A7BA /* WindowToolbarTests.swift in Sources */,
+				A31B534CE1D375A3731C0C0D /* WritingFlagsTests.swift in Sources */,
 				F84E96206049779B646D8FCA /* WritingGoalsTests.swift in Sources */,
 				5369877F9402BB739397F4E1 /* WritingStatsModelTests.swift in Sources */,
 				DAA7CABAF7A809203F3E3E91 /* ZenModeTests.swift in Sources */,
@@ -629,6 +639,7 @@
 				A27999E05D5E6B25C82E7734 /* HistoryPanel.swift in Sources */,
 				9B8F0EE82B650E24C9EF4F0A /* LibraryGroups.swift in Sources */,
 				A69E275C753052A3B33B0261 /* MarkdownHandlerSettings.swift in Sources */,
+				DC0FDB3FB1E7A0B45873CB06 /* NotesPanel.swift in Sources */,
 				840F1328B957A05D45E90150 /* OrderedDocumentEdits.swift in Sources */,
 				C111D28857D095B976198334 /* OutlinePanel.swift in Sources */,
 				885D94683237079208EDA687 /* PaletteModel.swift in Sources */,
@@ -656,6 +667,7 @@
 				ED99C6449F2609A3250222DB /* WindowSettingsTab.swift in Sources */,
 				A00A4B74222E46F4A09BFD3F /* WordCountTracking.swift in Sources */,
 				E02A3B1FE8A01024A31CBDC5 /* WritingControlsHost.swift in Sources */,
+				9AF40BFB7CA85CFB8EE89F11 /* WritingFlags.swift in Sources */,
 				17680E8E8E1700E0B1E8BC4F /* WritingGoals.swift in Sources */,
 				A347F6A7844DF668348C8C80 /* WritingSettingsTab.swift in Sources */,
 				D0FE0DD743EAFF6392F14E52 /* WritingStatsModel.swift in Sources */,

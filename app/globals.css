@@ -675,6 +675,28 @@
    bottom border so the commented span is visible without reflowing text. Shared by
    both editors (CM marks and PM inline decorations carry the same class). A resolved
    comment fades to a quieter underline so it stays discoverable but recedes. */
+/* Writing flags: the glyph in rich text, the tinted token in raw/vim. */
+.recto-flag {
+	display: inline-flex;
+	vertical-align: -0.1em;
+	margin-inline: 0.1em;
+	color: var(--color-warning);
+	cursor: pointer;
+}
+.recto-flag svg {
+	width: 0.9em;
+	height: 0.9em;
+	fill: currentColor;
+	fill-opacity: 0.25;
+	stroke: currentColor;
+	stroke-width: 2;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+}
+.recto-flag-token {
+	color: var(--color-warning);
+}
+
 .recto-comment-mark {
 	background-color: var(--color-comment-wash);
 	border-bottom: 2px solid var(--color-comment);

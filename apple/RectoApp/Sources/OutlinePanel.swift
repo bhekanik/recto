@@ -27,7 +27,12 @@ struct OutlinePanel: View {
     var parse: @Sendable (String) async throws -> [OutlineHeading] = { markdown in
         try await SharedRectoCore.core().parseOutline(markdown)
     }
+    /// `RectoCore.findFlags`, for the dot on headings with an open flag.
+    var findFlags: @Sendable (String) async throws -> [WritingFlag] = { markdown in
+        try await SharedRectoCore.core().findFlags(markdown)
+    }
     @State private var headings: [OutlineHeading]?
+    @State private var flagged: Set<Int> = []
     @State private var didParseFirst = false
 
     /// The web's `w-[min(20rem,100vw)]`.
@@ -113,6 +118,13 @@ struct OutlinePanel: View {
                     .padding(.leading, CGFloat(max(heading.depth - 1, 0)) * 16 + 8)
                     .foregroundStyle(Color(nsColor: theme.ink2))
                 Spacer(minLength: 8)
+                if flagged.contains(heading.index) {
+                    Circle()
+                        .fill(Color(nsColor: theme.flagColor))
+                        .frame(width: 6, height: 6)
+                        .help("Has open flags")
+                        .accessibilityLabel("Has open flags")
+                }
                 Text(verbatim: "H\(heading.depth)")
                     .font(.system(size: 11))
                     .foregroundStyle(Color(nsColor: theme.ink3))
@@ -132,6 +144,9 @@ struct OutlinePanel: View {
         guard let parsed = try? await parse(markdown) else { return }
         // A failed parse keeps what was there; an empty one is a real answer.
         headings = parsed
+        if let flags = try? await findFlags(markdown) {
+            flagged = FlaggedHeadings.indexes(parsed, flags)
+        }
     }
 }
 
