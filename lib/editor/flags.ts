@@ -5,8 +5,16 @@
  * Markdown can drive any editor without mapping offsets between them.
  */
 export type FlagEditing = {
-	/** Insert an empty flag at the caret. Returns its index, or null. */
-	insertAtCaret: () => number | null;
+	/**
+	 * Where a new flag would go: the caret's position (in this surface's own
+	 * coordinates, only for `insertAt`) and its box in the viewport.
+	 */
+	caretAnchor: () => { at: number; rect: DOMRect } | null;
+	/**
+	 * Insert a flag with its note at an anchor's `at`, as one edit, caret
+	 * after it. Returns its index, or null.
+	 */
+	insertAt: (at: number, note: string) => number | null;
 	setNote: (index: number, note: string) => void;
 	/** Resolve: remove the flag from the text. */
 	remove: (index: number) => void;

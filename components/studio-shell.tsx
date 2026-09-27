@@ -61,7 +61,7 @@ import { createActionMap } from "@/lib/studio/action-map";
 import { StudioSettingsProvider } from "@/lib/studio/settings-context";
 import { useAiFeatures } from "@/lib/studio/use-ai-features";
 import { useCommentHighlights } from "@/lib/studio/use-comment-highlights";
-import { useFlags } from "@/lib/studio/use-flags";
+import { draftKey, useFlags } from "@/lib/studio/use-flags";
 import { useIsMobile } from "@/lib/studio/use-is-mobile";
 import { useOutline } from "@/lib/studio/use-outline";
 import { useQuietChrome } from "@/lib/studio/use-quiet-chrome";
@@ -1002,7 +1002,7 @@ function StudioWorkspace() {
 
 				{flagState.draft && (
 					<FlagNoteField
-						key={flagState.draft.index}
+						key={draftKey(flagState.draft)}
 						draft={flagState.draft}
 						onSave={flagState.saveNote}
 						onClose={flagState.closeDraft}

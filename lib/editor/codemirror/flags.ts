@@ -46,17 +46,27 @@ export function codeMirrorFlagEditing(
 		findFlags(view.state.doc.toString())[index];
 
 	return {
-		insertAtCaret() {
+		caretAnchor() {
 			const view = getView();
 			if (!view) return null;
-			const doc = view.state.doc.toString();
 			const at = view.state.selection.main.to;
-			const insert = flagInsertion(doc, at);
+			const box = view.coordsAtPos(at);
+			if (!box) return null;
+			return {
+				at,
+				rect: new DOMRect(box.left, box.top, 1, box.bottom - box.top),
+			};
+		},
+		insertAt(at, note) {
+			const view = getView();
+			if (!view || at > view.state.doc.length) return null;
+			const insert = flagInsertion(view.state.doc.toString(), at, note);
 			view.dispatch({
 				changes: { from: at, insert },
 				selection: { anchor: at + insert.length },
 				scrollIntoView: true,
 			});
+			view.focus();
 			return findFlags(view.state.doc.toString()).findIndex(
 				(flag) => flag.to === at + insert.length,
 			);

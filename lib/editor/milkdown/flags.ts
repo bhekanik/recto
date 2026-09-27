@@ -108,11 +108,21 @@ export function milkdownFlagEditing(
 		flagPositions(view.state.doc)[index];
 
 	return {
-		insertAtCaret() {
+		caretAnchor() {
+			const view = getView();
+			if (!view) return null;
+			const at = view.state.selection.to;
+			const box = view.coordsAtPos(at);
+			return {
+				at,
+				rect: new DOMRect(box.left, box.top, 1, box.bottom - box.top),
+			};
+		},
+		insertAt(at, note) {
 			const view = getView();
 			if (!view) return null;
 			const { state } = view;
-			const at = state.selection.to;
+			if (at > state.doc.content.size) return null;
 			const $at = state.doc.resolve(at);
 			if (!$at.parent.inlineContent) return null;
 			const html = state.schema.nodes.html;
@@ -121,12 +131,13 @@ export function milkdownFlagEditing(
 			const before = $at.nodeBefore;
 			const startsLine =
 				$at.parentOffset === 0 || before?.type.name === "hardbreak";
-			const flag = html.create({ value: flagToken("") });
+			const flag = html.create({ value: flagToken(note) });
 			const nodes = startsLine ? [state.schema.text(FLAG_GUARD), flag] : [flag];
 			const tr = state.tr.insert(at, nodes);
 			const after = at + nodes.reduce((size, node) => size + node.nodeSize, 0);
 			tr.setSelection(TextSelection.create(tr.doc, after)).scrollIntoView();
 			view.dispatch(tr);
+			view.focus();
 			return flagPositions(view.state.doc).indexOf(after - flag.nodeSize);
 		},
 		setNote(index, note) {
