@@ -2,6 +2,8 @@
 
 import { SignIn } from "@clerk/nextjs";
 
+import { MacAppSignInNote } from "@/components/handoff/mac-app-sign-in-note";
+
 export default function LoginPage() {
 	return (
 		<main className="flex min-h-dvh flex-col items-center justify-center bg-[var(--color-bg-app)] px-[var(--space-6)] py-[var(--space-8)]">
@@ -20,6 +22,8 @@ export default function LoginPage() {
 					fallbackRedirectUrl="/"
 					signUpFallbackRedirectUrl="/"
 				/>
+
+				<MacAppSignInNote />
 			</div>
 		</main>
 	);

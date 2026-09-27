@@ -11,6 +11,7 @@ import {
 	exportMarkdownFile,
 } from "@/lib/export";
 import { macAppDocumentURL } from "@/lib/handoff/document-link";
+import { MAC_APP_DOWNLOAD_URL } from "@/lib/handoff/mac-app";
 import type { HistoryController } from "@/lib/history/use-document-history";
 import type { ActionId, FormatActionId } from "@/lib/keyboard/actions";
 import {
@@ -111,6 +112,7 @@ export function createActionMap(
 			}
 			window.location.assign(macAppDocumentURL(activeDocId));
 		},
+		"download-mac-app": () => window.location.assign(MAC_APP_DOWNLOAD_URL),
 		"mode-rich": () => dispatchModeSwitch("rich"),
 		"mode-raw": () => dispatchModeSwitch("raw"),
 		"mode-vim": () => dispatchModeSwitch("vim"),

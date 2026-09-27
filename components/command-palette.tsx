@@ -4,6 +4,8 @@ import { Command } from "cmdk";
 import { useCallback, useEffect, useRef } from "react";
 
 import type { Id } from "@/convex/_generated/dataModel";
+import { isMacOSPlatform } from "@/lib/handoff/document-link";
+import { MAC_APP_REQUIREMENTS } from "@/lib/handoff/mac-app";
 import {
 	ACTIONS,
 	type ActionId,
@@ -69,6 +71,7 @@ export function CommandPalette({
 	canOpenInMacApp = false,
 }: CommandPaletteProps) {
 	const close = useCallback(() => onOpenChange(false), [onOpenChange]);
+	const isMac = isMacOSPlatform();
 
 	useEffect(() => {
 		if (!open) return;
@@ -105,6 +108,7 @@ export function CommandPalette({
 		scope === "documents" ? (["Documents"] as const) : SECTION_ORDER;
 	const newDoc = ACTIONS.find((a) => a.id === "new-document");
 	const openInMac = ACTIONS.find((a) => a.id === "open-in-mac-app");
+	const downloadMac = ACTIONS.find((a) => a.id === "download-mac-app");
 
 	return (
 		<div
@@ -197,6 +201,22 @@ export function CommandPalette({
 												</span>
 											</Command.Item>
 										)}
+										{isMac && downloadMac && (
+											<Command.Item
+												value={`${downloadMac.label} ${downloadMac.aliases?.join(" ") ?? ""} Documents`}
+												onSelect={() =>
+													run(() => onRunAction("download-mac-app"))
+												}
+												className={ITEM}
+											>
+												<span className="flex-1 text-[var(--color-ink-primary)]">
+													{downloadMac.label}
+												</span>
+												<span className="shrink-0 text-[var(--color-ink-tertiary)]">
+													{MAC_APP_REQUIREMENTS}
+												</span>
+											</Command.Item>
+										)}
 										{(documents ?? []).map((doc) => (
 											<Command.Item
 												key={doc._id}
@@ -236,6 +256,14 @@ export function CommandPalette({
 									if (a.id === "review-surface") return canReview;
 									if (a.id === "toggle-comments" || a.id === "add-comment") {
 										return canComment;
+									}
+									// Flags live in the text: any open document has them.
+									if (
+										a.id === "add-flag" ||
+										a.id === "toggle-notes" ||
+										a.id === "toggle-notes-pin"
+									) {
+										return true;
 									}
 									return canManageSharing;
 								});
