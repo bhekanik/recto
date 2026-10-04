@@ -177,6 +177,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             RECTO_CONVEX_URL='https://example.convex.cloud' \
             RECTO_CLERK_PUBLISHABLE_KEY='pk_test_bW9jay5jbGVyay5hY2NvdW50cy5kZXYk' \
+            RECTO_WEB_URL='https://example.test' \
             2>&1 | tee "$RUNNER_TEMP/recto-archive.log"
           if grep -q "built for newer 'macOS' version" "$RUNNER_TEMP/recto-archive.log"; then
             echo "::error::A linked object requires a newer macOS deployment target."
