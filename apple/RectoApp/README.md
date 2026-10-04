@@ -24,6 +24,8 @@ the floating bold, italic, strikethrough, inline-code and link panel. Standalone
 and synced documents both send those edits through their existing history
 owners as structural boundaries.
 
+Keep unused material beside a library draft with [Overflow](../../docs/how-to/keep-notes-in-overflow.md). Open it through `Toggle Overflow` in the command palette or Review menu, or use the tray button beside the formatting toolbar.
+
 `project.yml` is the source of truth. XcodeGen 2.46.0 generated the committed
 `Recto.xcodeproj`; regenerate it after adding or removing project files:
 
@@ -60,12 +62,13 @@ xcodebuild -project apple/RectoApp/Recto.xcodeproj -scheme Recto \
   -archivePath /tmp/Recto-unsigned.xcarchive \
   CODE_SIGNING_ALLOWED=NO archive \
   RECTO_CONVEX_URL='https://example.convex.cloud' \
-  RECTO_CLERK_PUBLISHABLE_KEY='pk_test_bW9jay5jbGVyay5hY2NvdW50cy5kZXYk'
+  RECTO_CLERK_PUBLISHABLE_KEY='pk_test_bW9jay5jbGVyay5hY2NvdW50cy5kZXYk' \
+  RECTO_WEB_URL='https://example.test'
 
 apple/RectoApp/scripts/validate-archive-config.sh /tmp/Recto-unsigned.xcarchive
 ```
 
-Inject the two public client values at build or archive time; do not put them in
+Inject the three public client values at build or archive time; do not put them in
 source control:
 
 ```sh
@@ -73,7 +76,8 @@ xcodebuild -project apple/RectoApp/Recto.xcodeproj -scheme Recto \
   -configuration Release -destination 'generic/platform=macOS' \
   -archivePath /tmp/Recto.xcarchive archive \
   RECTO_CONVEX_URL='https://example.convex.cloud' \
-  RECTO_CLERK_PUBLISHABLE_KEY='pk_test_bW9jay5jbGVyay5hY2NvdW50cy5kZXYk'
+  RECTO_CLERK_PUBLISHABLE_KEY='pk_test_bW9jay5jbGVyay5hY2NvdW50cy5kZXYk' \
+  RECTO_WEB_URL='https://example.test'
 
 apple/RectoApp/scripts/validate-archive-config.sh /tmp/Recto.xcarchive
 ```
