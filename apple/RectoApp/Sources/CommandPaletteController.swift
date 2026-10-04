@@ -195,6 +195,9 @@ final class CommandPaletteController {
             if section == .review, editor?.review == nil {
                 actions.removeAll { !flagIds.contains($0.id) }
             }
+            if section == .review, editor?.toggleOverflow == nil {
+                actions.removeAll { $0.id == "toggle-overflow" }
+            }
             if section == .review, editor == nil {
                 actions.removeAll()
             }
@@ -343,6 +346,8 @@ final class CommandPaletteController {
             editor?.review?.addComment()
         case "add-flag":
             editor?.addFlag()
+        case "toggle-overflow":
+            editor?.toggleOverflow?()
         case "toggle-notes":
             editor?.notes.toggle(settings)
         case "toggle-notes-pin":
@@ -360,9 +365,9 @@ final class CommandPaletteController {
         case "ai-reindex":
             editor?.ai?.reindex()
         case "undo":
-            editor?.undo()
+            editor?.performUndo()
         case "redo":
-            editor?.redo()
+            editor?.performRedo()
         case "copy-markdown":
             guard let markdown = editor?.markdown else { return true }
             pasteboard.clearContents()

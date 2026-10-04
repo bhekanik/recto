@@ -12,6 +12,7 @@ enum Migrations {
   static let v6 = "v6-title-mode"
   static let v7 = "v7-editor-ingress-acknowledgement"
   static let v8 = "v8-remote-title-revision"
+  static let v9 = "v9-document-overflow"
 
   static func migrator() -> DatabaseMigrator {
     // Deliberately NOT `eraseDatabaseOnSchemaChange`, even in DEBUG: BK
@@ -216,6 +217,22 @@ enum Migrations {
         try db.alter(table: "documents") { t in
           t.add(column: "remoteTitleUpdatedAt", .double)
         }
+      }
+    }
+
+    migrator.registerMigration(v9) { db in
+      try db.create(table: "document_overflow") { t in
+        t.primaryKey("documentLocalId", .text).references("documents", onDelete: .cascade)
+        t.column("markdown", .text).notNull().defaults(to: "")
+        t.column("generation", .integer).notNull().defaults(to: 0)
+        t.column("acknowledgedGeneration", .integer).notNull().defaults(to: 0)
+        t.column("revision", .integer).notNull().defaults(to: 0)
+        t.column("pending", .text)
+        t.column("remoteMarkdown", .text)
+        t.column("remoteRevision", .integer)
+        t.column("syncError", .text)
+        t.column("observedMarkdown", .text)
+        t.column("observedRevision", .integer)
       }
     }
 

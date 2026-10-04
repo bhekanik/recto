@@ -46,6 +46,22 @@ final class EditorHostController {
     /// the cloud document through its session.
     var undo: () -> Void = {}
     var redo: () -> Void = {}
+    var toggleOverflow: (() -> Void)?
+
+    func noteOverflowFocused() {
+        registry.noteFocused(self)
+        onFocus()
+    }
+
+    func performUndo() {
+        if let text = window?.firstResponder as? OverflowTextView { text.undoManager?.undo() }
+        else { undo() }
+    }
+
+    func performRedo() {
+        if let text = window?.firstResponder as? OverflowTextView { text.undoManager?.redo() }
+        else { redo() }
+    }
     /// Set by the host: the lens is this window's own, so a mode switch from
     /// the palette lands on the window it was pressed in.
     var choosePresentation: (Presentation) -> Void = { _ in }
@@ -224,8 +240,8 @@ final class EditorHostController {
 
     var formatToolbarActions: FormatToolbarActions {
         FormatToolbarActions(
-            undo: { [weak self] in self?.undo() },
-            redo: { [weak self] in self?.redo() },
+            undo: { [weak self] in self?.performUndo() },
+            redo: { [weak self] in self?.performRedo() },
             format: { [weak self] command in self?.format(command) }
         )
     }

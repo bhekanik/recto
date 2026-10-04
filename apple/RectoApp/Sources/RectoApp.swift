@@ -234,6 +234,8 @@ private struct StudioCommands: Commands {
             // Writing flags: a note at the caret, and the panel that lists them.
             Button("Flag this spot…") { editors.controller(in: NSApp.keyWindow)?.addFlag() }
                 .keyboardShortcut("x", modifiers: [.command, .shift])
+            Button("Toggle Overflow") { editors.controller(in: NSApp.keyWindow)?.toggleOverflow?() }
+                .disabled(editors.controller(in: NSApp.keyWindow)?.toggleOverflow == nil)
             Button("Toggle notes panel") { editors.controller(in: NSApp.keyWindow)?.notes.toggle(settings) }
                 .keyboardShortcut("n", modifiers: [.control, .shift])
             Button("Pin notes panel open", action: settings.toggleNotesPinned)
@@ -334,8 +336,8 @@ enum UndoRedoCommands {
     ) -> Bool {
         if let chrome = editors.controller(in: keyWindow) {
             switch direction {
-            case .undo: chrome.undo()
-            case .redo: chrome.redo()
+            case .undo: chrome.performUndo()
+            case .redo: chrome.performRedo()
             }
             return true
         }
