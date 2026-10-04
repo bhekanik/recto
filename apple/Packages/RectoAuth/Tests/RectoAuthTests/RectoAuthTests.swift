@@ -635,6 +635,8 @@ struct RefusedSignOutLifecycleTests {
     private var startCount = 0
     private var isSuspended = false
     private var releaseGate: CheckedContinuation<Void, Never>?
+    private var startObservers: [UUID: AsyncStream<Int>.Continuation] = [:]
+    var startObserverCount: Int { startObservers.count }
     private(set) var isEditable = false
     private(set) var isRunning = false
 
@@ -646,6 +648,7 @@ struct RefusedSignOutLifecycleTests {
 
     func start() async {
       startCount += 1
+      startObservers.values.forEach { $0.yield(startCount) }
       if suspensionPoint == .start, startCount == 2 { await suspend() }
       isRunning = true
     }
@@ -682,18 +685,65 @@ struct RefusedSignOutLifecycleTests {
       Issue.record("coordinator never reached the requested suspension point")
     }
 
-    func waitUntilStartCount(_ expected: Int) async {
-      for _ in 0..<10_000 {
-        if startCount >= expected { return }
-        await Task.yield()
+    enum StartWaitError: Error, Equatable {
+      case timedOut(expected: Int)
+    }
+
+    func waitUntilStartCount(_ expected: Int, timeout: Duration = .seconds(5)) async throws {
+      try Task.checkCancellation()
+      guard startCount < expected else { return }
+      let id = UUID()
+      let (events, continuation) = AsyncStream<Int>.makeStream()
+      startObservers[id] = continuation
+      defer {
+        startObservers.removeValue(forKey: id)
+        continuation.finish()
       }
-      Issue.record("coordinator never reached \(expected) sync starts")
+      try await withThrowingTaskGroup(of: Void.self) { group in
+        defer { group.cancelAll() }
+        group.addTask {
+          for await count in events {
+            if count >= expected { return }
+          }
+          try Task.checkCancellation()
+        }
+        group.addTask {
+          try await Task.sleep(for: timeout)
+          throw StartWaitError.timedOut(expected: expected)
+        }
+        try await group.next()
+      }
+      try Task.checkCancellation()
     }
 
     func release() {
       releaseGate?.resume()
       releaseGate = nil
     }
+  }
+
+  @Test("a missing sync start times out and removes its observer")
+  func missingStartTimesOut() async {
+    let coordinator = Coordinator()
+    await #expect(throws: Coordinator.StartWaitError.timedOut(expected: 1)) {
+      try await coordinator.waitUntilStartCount(1, timeout: .milliseconds(10))
+    }
+    #expect(await coordinator.startObserverCount == 0)
+  }
+
+  @Test("a cancelled sync-start wait removes its observer")
+  func cancelledStartWait() async throws {
+    let coordinator = Coordinator()
+    let wait = Task { try await coordinator.waitUntilStartCount(1) }
+    defer { wait.cancel() }
+    let deadline = ContinuousClock.now.advanced(by: .seconds(1))
+    while await coordinator.startObserverCount == 0, ContinuousClock.now < deadline {
+      await Task.yield()
+    }
+    try #require(await coordinator.startObserverCount == 1)
+    wait.cancel()
+    await #expect(throws: CancellationError.self) { try await wait.value }
+    #expect(await coordinator.startObserverCount == 0)
   }
 
   private func makeDirtySignedInAuth(
@@ -803,13 +853,18 @@ struct RefusedSignOutLifecycleTests {
     arguments: [SuspensionPoint.resume, .start])
   func sameUserSessionReplacementDuringRefusal(_ suspensionPoint: SuspensionPoint) async throws {
     let context = try await makeDirtySignedInAuth(suspensionPoint: suspensionPoint)
+    context.auth.convexAuthProvider.cachedLogin = {
+      // A valid async login can outlast any fixed number of scheduler yields.
+      try? await Task.sleep(for: .milliseconds(400))
+      return true
+    }
     let signOut = Task { try await context.auth.signOut() }
     await context.coordinator.waitUntilSuspended()
 
     context.session.id = "session-B"
     context.continuation.yield(
       .sessionChanged(userId: "user-A", sessionID: "session-B"))
-    await context.coordinator.waitUntilStartCount(suspensionPoint == .resume ? 2 : 3)
+    try await context.coordinator.waitUntilStartCount(suspensionPoint == .resume ? 2 : 3)
 
     await context.coordinator.release()
     await expectRefusal(signOut)
