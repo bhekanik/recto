@@ -6,7 +6,7 @@
 	"scripts": {
 		"dev": "convex dev --start 'next dev --turbopack'",
 		"dev:bridge": "vite",
-		"build": "next build",
+		"build": "next build --webpack",
 		"start": "next start",
 		"typecheck": "tsc --noEmit",
 		"biome": "biome check .",
