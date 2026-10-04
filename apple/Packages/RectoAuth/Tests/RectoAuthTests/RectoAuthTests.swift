@@ -864,7 +864,14 @@ struct RefusedSignOutLifecycleTests {
     context.session.id = "session-B"
     context.continuation.yield(
       .sessionChanged(userId: "user-A", sessionID: "session-B"))
-    try await context.coordinator.waitUntilStartCount(suspensionPoint == .resume ? 2 : 3)
+    do {
+      try await context.coordinator.waitUntilStartCount(suspensionPoint == .resume ? 2 : 3)
+    } catch {
+      await context.coordinator.release()
+      context.continuation.finish()
+      signOut.cancel()
+      throw error
+    }
 
     await context.coordinator.release()
     await expectRefusal(signOut)
