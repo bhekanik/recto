@@ -444,8 +444,21 @@ const Vim = initVim(RectoCM);
 	const normalise = (text) => (text ?? "").replace(/\r\n|\r/g, "\n");
 	const controllerProto = Object.getPrototypeOf(controller);
 	const pushText = controllerProto.pushText;
-	controllerProto.pushText = function (name, operator, text, linewise, blockwise) {
-		return pushText.call(this, name, operator, normalise(text), linewise, blockwise);
+	controllerProto.pushText = function (
+		name,
+		operator,
+		text,
+		linewise,
+		blockwise,
+	) {
+		return pushText.call(
+			this,
+			name,
+			operator,
+			normalise(text),
+			linewise,
+			blockwise,
+		);
 	};
 	const registerProto = Object.getPrototypeOf(controller.unnamedRegister);
 	const setText = registerProto.setText;

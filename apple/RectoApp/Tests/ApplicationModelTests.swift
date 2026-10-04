@@ -678,6 +678,7 @@ struct PaneViewTests {
         }
     }
 
+    @MainActor
     private func textViews(in view: NSView) -> [NSTextView] {
         (view as? NSTextView).map { [$0] } ?? view.subviews.flatMap(textViews)
     }

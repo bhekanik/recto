@@ -16,7 +16,8 @@ import Foundation
 /// canonical parser's job (`lib/markdown` on the web, RectoCoreJS natively);
 /// the header needs five strings and the block's range, and inventing a second
 /// YAML implementation here would be a second thing to keep in agreement.
-public struct Frontmatter: Sendable, Equatable {
+// Export callers can read this value without an editor or main-actor state.
+nonisolated public struct Frontmatter: Sendable, Equatable {
     /// UTF-16 range of the whole block, opening `---` through the closing
     /// `---` and its newline. This is what the body suppresses.
     public let range: NSRange
@@ -25,7 +26,7 @@ public struct Frontmatter: Sendable, Equatable {
     /// header does not render them, but their presence is visible to callers.
     public let fields: [Field]
 
-    public struct Field: Sendable, Equatable {
+    nonisolated public struct Field: Sendable, Equatable {
         public let key: String
         public let value: String
     }

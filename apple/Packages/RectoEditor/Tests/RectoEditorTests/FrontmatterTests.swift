@@ -9,6 +9,13 @@ import Testing
 
 @Suite("Frontmatter")
 struct FrontmatterTests {
+    @Test("export callers can parse frontmatter away from the main actor")
+    func parsesOutsideMainActor() async {
+        let title = await Task.detached {
+            Frontmatter.parse("---\ntitle: Export title\n---\nBody.\n")?.title
+        }.value
+        #expect(title == "Export title")
+    }
 
     @Test("reads the top-level scalars and claims the whole block")
     func readsScalars() throws {

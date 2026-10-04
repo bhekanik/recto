@@ -152,7 +152,8 @@ export class RectoDoc {
 	 * reconcile resync kicked insert mode out mid-session.
 	 */
 	documentEnding() {
-		for (const ending of this.endings) if (ending) return ending === "\r\n" ? "\r\n" : "\n";
+		for (const ending of this.endings)
+			if (ending) return ending === "\r\n" ? "\r\n" : "\n";
 		return "\n";
 	}
 

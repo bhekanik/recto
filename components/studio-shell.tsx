@@ -556,6 +556,7 @@ function StudioWorkspace() {
 			setAiReviewOpen,
 			setRelatedOpen,
 			toggleAiEnabled,
+			handOffToMac,
 		],
 	);
 

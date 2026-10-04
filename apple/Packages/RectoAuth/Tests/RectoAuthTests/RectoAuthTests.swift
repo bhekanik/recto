@@ -303,6 +303,8 @@ struct AuthPublicationInterleavingTests {
     private var startCount = 0
     private var gate: CheckedContinuation<Void, Never>?
     private var observers: [CheckedContinuation<Void, Never>] = []
+    private var containmentObservers: [CheckedContinuation<Void, Never>] = []
+    private var stopCount = 0
     private var successorFreezeGate: CheckedContinuation<Void, Never>?
     private var successorFreezeObservers: [CheckedContinuation<Void, Never>] = []
     private(set) var isEditable = false
@@ -314,7 +316,15 @@ struct AuthPublicationInterleavingTests {
       self.pinsSuccessorFreeze = pinsSuccessorFreeze
     }
 
-    func stop() { isRunning = false }
+    func stop() {
+      isRunning = false
+      stopCount += 1
+      if stopCount >= 2 {
+        let waiting = containmentObservers
+        containmentObservers.removeAll()
+        waiting.forEach { $0.resume() }
+      }
+    }
 
     func start() async {
       startCount += 1
@@ -325,7 +335,8 @@ struct AuthPublicationInterleavingTests {
     func freezeAndFlushAll() async -> EditSessionFreezeToken {
       freezeCount += 1
       activeFreeze = EditSessionFreezeToken()
-      if pinsSuccessorFreeze, freezeCount == 4 {
+      // Restore, B, eager containment and inline containment precede C.
+      if pinsSuccessorFreeze, freezeCount == 5 {
         let waiting = successorFreezeObservers
         successorFreezeObservers.removeAll()
         waiting.forEach { $0.resume() }
@@ -367,11 +378,14 @@ struct AuthPublicationInterleavingTests {
     }
 
     func waitUntilFirstContainmentFinishes() async {
-      for _ in 0..<10_000 where freezeCount < 2 { await Task.yield() }
+      // The B transition already froze once; containment finishes after its
+      // second stop, not when that earlier freeze starts.
+      guard stopCount < 2 else { return }
+      await withCheckedContinuation { containmentObservers.append($0) }
     }
 
     func waitUntilSuccessorFreeze() async {
-      guard freezeCount < 4 else { return }
+      guard freezeCount < 5 else { return }
       await withCheckedContinuation { successorFreezeObservers.append($0) }
     }
 
