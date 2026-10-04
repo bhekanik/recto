@@ -10,6 +10,16 @@ export default defineSchema({
 		// replaced by a derived one before the bounded backfill reaches it.
 		titleMode: v.optional(v.union(v.literal("derived"), v.literal("manual"))),
 		markdown: v.string(),
+		// Overflow is independent of prose history so older text-only clients preserve it.
+		overflowMarkdown: v.optional(v.string()),
+		overflowRevision: v.optional(v.number()),
+		lastOverflowCommit: v.optional(
+			v.object({
+				clientMutationId: v.string(),
+				requestHash: v.string(),
+				revision: v.number(),
+			}),
+		),
 		wordCount: v.number(),
 		currentNodeId: v.string(),
 		createdAt: v.number(),

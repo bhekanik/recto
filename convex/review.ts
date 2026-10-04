@@ -11,6 +11,7 @@ import { syncBlobReferences } from "./blobReferences";
 import {
 	MARKDOWN_TOO_LARGE_MESSAGE,
 	MAX_MARKDOWN_LENGTH,
+	requireDocumentTextFits,
 	requireOwnedDocument,
 	requireUserId,
 	utf8Length,
@@ -943,6 +944,7 @@ export const acceptBranch = mutation({
 		const nodes = rows.map(toServerNode);
 
 		const markdown = materialize(branch.headNodeId, nodes);
+		requireDocumentTextFits(markdown, doc.overflowMarkdown);
 		const parentNodeId = doc.currentNodeId;
 		const parentMarkdown = materialize(parentNodeId, nodes);
 		const newNodeId = crypto.randomUUID();
@@ -984,6 +986,7 @@ export const acceptBranch = mutation({
 		});
 		await syncBlobReferences(ctx, doc.userId, "document", args.documentId, [
 			markdown,
+			doc.overflowMarkdown ?? "",
 		]);
 
 		await ctx.db.patch(branch._id, { status: "accepted", updatedAt: now });
@@ -1073,9 +1076,7 @@ export const acceptHunks = mutation({
 		const merged = applyAcceptedHunks(runs, args.acceptedHunks);
 
 		// Same ~1 MiB cap as every other write into the owner's doc.
-		if (utf8Length(merged) > MAX_MARKDOWN_LENGTH) {
-			throw new Error(MARKDOWN_TOO_LARGE_MESSAGE);
-		}
+		requireDocumentTextFits(merged, doc.overflowMarkdown);
 
 		const now = Date.now();
 
@@ -1127,6 +1128,7 @@ export const acceptHunks = mutation({
 		});
 		await syncBlobReferences(ctx, doc.userId, "document", args.documentId, [
 			merged,
+			doc.overflowMarkdown ?? "",
 		]);
 
 		await ctx.db.patch(branch._id, { status: "accepted", updatedAt: now });

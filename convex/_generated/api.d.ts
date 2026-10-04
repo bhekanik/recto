@@ -34,6 +34,7 @@ import type * as files from "../files.js";
 import type * as history from "../history.js";
 import type * as http from "../http.js";
 import type * as migrations from "../migrations.js";
+import type * as overflow from "../overflow.js";
 import type * as retention from "../retention.js";
 import type * as review from "../review.js";
 import type * as settings from "../settings.js";
@@ -75,6 +76,7 @@ declare const fullApi: ApiFromModules<{
   history: typeof history;
   http: typeof http;
   migrations: typeof migrations;
+  overflow: typeof overflow;
   retention: typeof retention;
   review: typeof review;
   settings: typeof settings;
