@@ -220,9 +220,12 @@ struct KeyboardNavigationTests {
         chrome.settings.focusBlur = true
         chrome.applySettings()
         defer { chrome.settings.focusBlur = false; chrome.applySettings() }
-        // Mid-sentence, on a line of text rather than a blank one.
+        // Inside a word: Enter must add a visual line even if that word starts
+        // at a wrap boundary in this window.
         let whole = text.string as NSString
-        let middle = whole.range(of: "stranger", range: NSRange(location: whole.length / 2, length: whole.length / 2)).location
+        let word = whole.range(of: "stranger", range: NSRange(location: whole.length / 2, length: whole.length / 2))
+        try #require(word.location != NSNotFound)
+        let middle = word.location + word.length / 2
         window.makeFirstResponder(text)
         text.setSelectedRange(NSRange(location: middle, length: 0))
         try await Task.sleep(for: .milliseconds(600))
@@ -232,10 +235,22 @@ struct KeyboardNavigationTests {
         let caret = try #require(chrome.seam?.caretRect())
         let caretY = text.convert(caret, to: clip).midY - clip.bounds.minY
         #expect(abs(caretY - clip.bounds.height / 2) < 60, "typewriter keeps the caret line near the middle")
-        let blur = try #require(chrome.blur.current, "the engine is drawing focus blur")
-        let caretLine = try #require(chrome.seam?.caretRect())
-        #expect(blur.lineMinY <= caretLine.midY - text.textContainerOrigin.y
-                && caretLine.midY - text.textContainerOrigin.y <= blur.lineMaxY, "the sharp line is the caret's")
+        var blur = try #require(chrome.blur.current, "the engine is drawing focus blur")
+        var caretLine = try #require(chrome.seam?.caretRect())
+        var blurSnapshots: [String] = []
+        // Read the caret before its blur snapshot: TextKit can refine geometry
+        // during measurement, and blur also publishes on a deferred turn.
+        let blurSettled = await until {
+            guard let line = chrome.seam?.caretRect(), let current = chrome.blur.current else { return false }
+            caretLine = line
+            blur = current
+            let caretY = line.midY - text.textContainerOrigin.y
+            blurSnapshots.append("caretY=\(caretY), blur=\(current.lineMinY)...\(current.lineMaxY)")
+            return current.lineMinY <= caretY && caretY <= current.lineMaxY
+        }
+        #expect(blurSettled && blur.lineMinY <= caretLine.midY - text.textContainerOrigin.y
+                && caretLine.midY - text.textContainerOrigin.y <= blur.lineMaxY,
+                "the sharp line is the caret's after layout settles: \(blurSnapshots)")
         let height = blur.lineMaxY - blur.lineMinY
         let neighbour = blur.radius(lineMinY: blur.lineMaxY + 4, lineMaxY: blur.lineMaxY + 4 + height)
         let far = blur.radius(lineMinY: blur.lineMaxY + height * 3, lineMaxY: blur.lineMaxY + height * 4)
@@ -244,18 +259,29 @@ struct KeyboardNavigationTests {
         #expect(blur.radius(lineMinY: blur.lineMaxY + height * 20, lineMaxY: blur.lineMaxY + height * 21)
                 == RectoFocusBlurController.maximumRadius)
 
-        // Return: the page glides up to the new line rather than jumping.
+        // Return glides to the new line unless accessibility requests no motion.
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let glideDuration = chrome.typewriter.glideDuration
+        #expect(glideDuration > 0)
         let before = clip.bounds.origin.y
+        let sampleStart = DispatchTime.now().uptimeNanoseconds
         text.insertNewline(nil)
         var positions: [CGFloat] = []
+        var sampleTimes: [Double] = []
         for _ in 0..<60 {
+            sampleTimes.append(Double(DispatchTime.now().uptimeNanoseconds - sampleStart) / 1_000_000)
             positions.append(clip.bounds.origin.y)
             try await Task.sleep(for: .milliseconds(8))
         }
         let after = clip.bounds.origin.y
         #expect(after > before + 10, "the page moved up a line")
         let between = Set(positions.filter { $0 > before + 0.5 && $0 < after - 0.5 })
-        #expect(between.count >= 2, "passed through positions in between, not a jump: \(positions)")
+        let diagnostics = "reduceMotion=\(reduceMotion), glideDuration=\(glideDuration), sampleMilliseconds=\(sampleTimes), positions=\(positions)"
+        if reduceMotion {
+            #expect(between.isEmpty, "reduced motion centres immediately: \(diagnostics)")
+        } else {
+            #expect(between.count >= 2, "passed through positions in between, not a jump: \(diagnostics)")
+        }
         #expect(positions == positions.sorted(), "never moved backwards")
         let caretAfter = try #require(chrome.seam?.caretRect())
         #expect(abs(text.convert(caretAfter, to: clip).midY - clip.bounds.minY - clip.bounds.height / 2) < 60)
