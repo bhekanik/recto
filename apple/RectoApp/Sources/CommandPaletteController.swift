@@ -189,11 +189,10 @@ final class CommandPaletteController {
             if section == .ai, !settings.aiEnabled || editor?.ai == nil {
                 actions = actions.filter { $0.id == "toggle-ai" }
             }
-            // Sharing, comments and suggestions need the server; writing flags
-            // live in the text, so any editor has them.
-            let flagIds: Set<String> = ["add-flag", "toggle-notes", "toggle-notes-pin"]
+            // Writing flags and Overflow do not need the server's review hooks.
+            let localReviewIds: Set<String> = ["add-flag", "toggle-notes", "toggle-notes-pin", "toggle-overflow"]
             if section == .review, editor?.review == nil {
-                actions.removeAll { !flagIds.contains($0.id) }
+                actions.removeAll { !localReviewIds.contains($0.id) }
             }
             if section == .review, editor?.toggleOverflow == nil {
                 actions.removeAll { $0.id == "toggle-overflow" }
