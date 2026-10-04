@@ -236,6 +236,7 @@ export const scanDocumentRefs = internalMutation({
 		for (const doc of result.page) {
 			await syncBlobReferences(ctx, doc.userId, "document", doc._id, [
 				doc.markdown,
+				doc.overflowMarkdown ?? "",
 			]);
 		}
 

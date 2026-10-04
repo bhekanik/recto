@@ -27,6 +27,7 @@
 		287E6390F220D0E12AE94983 /* ProseLintingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A15513CABF32B92EE2A0FD57 /* ProseLintingTests.swift */; };
 		375DE2A731A46C7AAF29B999 /* RectoEditor in Frameworks */ = {isa = PBXBuildFile; productRef = A060C6A5E130E049277D314E /* RectoEditor */; };
 		37922CBF4C7301C6B0141D70 /* AIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EAA6744E41BCF30F17C9A05 /* AIClient.swift */; };
+		379B4433D3052BFEE2B4DA6E /* OverflowPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 596782682821CDEFEF050FCA /* OverflowPanel.swift */; };
 		37B76FF4F2D5115FA3D9FA37 /* ExportFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D555444683948EF0618D0AE /* ExportFile.swift */; };
 		3A33650ED0EDD6B6845B4946 /* TopFormatToolbarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 081000DF06421E2AB99C4D14 /* TopFormatToolbarTests.swift */; };
 		3B6D75ED64FCB5ADC1495B05 /* CommandPaletteController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 584B9D617349E093DAD17A7F /* CommandPaletteController.swift */; };
@@ -60,6 +61,7 @@
 		86122FF82C29BCF53F7C770C /* AppearanceSettingsTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED6923F868328DA6A34A2A21 /* AppearanceSettingsTab.swift */; };
 		87C43C876F634C0552593789 /* HandoffEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02B6D7800E92A211EE1A23EB /* HandoffEnvironment.swift */; };
 		885D94683237079208EDA687 /* PaletteModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76EE13261BC8A4CB8A758876 /* PaletteModel.swift */; };
+		887F2DD6B360B8299A3099F1 /* OverflowPanelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9DB60C52E316B80A267C344 /* OverflowPanelTests.swift */; };
 		8BA51F3A687B1F9F12CCE8D9 /* LibraryGroupsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D870252B3C23A258E900482 /* LibraryGroupsTests.swift */; };
 		8C67170EE9A465BCAA518CC2 /* CloudDocumentModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8589138DCF2864A8EC5C41C9 /* CloudDocumentModel.swift */; };
 		8FCB07B23C1B40C5410F8531 /* ShortcutsSettingsTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6899B36A8CB8DE765028572D /* ShortcutsSettingsTab.swift */; };
@@ -91,6 +93,7 @@
 		B4FE92DC5819552B77D990D4 /* RectoSync in Frameworks */ = {isa = PBXBuildFile; productRef = 84D6ED67B9C0E968AA84A94C /* RectoSync */; };
 		B6F058CCEDBB573B185703E5 /* ExportFileTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A55BCBBDB746B682E175C065 /* ExportFileTests.swift */; };
 		B7C17D95A863AF017CBF8C22 /* RectoApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E4F2E4947A1F0496BA12943 /* RectoApp.swift */; };
+		B83919E109D2B6F4E7F1A8CB /* OverflowModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA239B9980C9D30E1F2E38EB /* OverflowModel.swift */; };
 		BD0BB267D3FA29633D32B897 /* VimHistoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EF8528C9DE808904C45C672 /* VimHistoryTests.swift */; };
 		BF7B536CD3D010ADC992918E /* RectoCloudRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A889A25CDE48A7DD348070E0 /* RectoCloudRootView.swift */; };
 		C111D28857D095B976198334 /* OutlinePanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 363C26A512770F4ABD73F2E9 /* OutlinePanel.swift */; };
@@ -169,6 +172,7 @@
 		5607FF90F1BEA6D3ED8F410D /* DocumentLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentLink.swift; sourceTree = "<group>"; };
 		567434CEB53FD3D963A11A1A /* ScriptedAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptedAPI.swift; sourceTree = "<group>"; };
 		584B9D617349E093DAD17A7F /* CommandPaletteController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandPaletteController.swift; sourceTree = "<group>"; };
+		596782682821CDEFEF050FCA /* OverflowPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverflowPanel.swift; sourceTree = "<group>"; };
 		59B4F0B273ADA1DDC96FDDD0 /* VimPresentationHostTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VimPresentationHostTests.swift; sourceTree = "<group>"; };
 		5A9B27E0E9570FB896924145 /* MarkdownHandlerSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownHandlerSettingsTests.swift; sourceTree = "<group>"; };
 		5EF8528C9DE808904C45C672 /* VimHistoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VimHistoryTests.swift; sourceTree = "<group>"; };
@@ -237,6 +241,7 @@
 		D09B8E4F436878C6794F11AB /* ReadingTime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingTime.swift; sourceTree = "<group>"; };
 		D42D652D53492C574A283241 /* KeyboardNavigationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardNavigationTests.swift; sourceTree = "<group>"; };
 		D88EC0199D3061B9D5A33378 /* ProseLinting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProseLinting.swift; sourceTree = "<group>"; };
+		D9DB60C52E316B80A267C344 /* OverflowPanelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverflowPanelTests.swift; sourceTree = "<group>"; };
 		DA53218E8DA7B61CDFDC0AE8 /* RectoSync */ = {isa = PBXFileReference; lastKnownFileType = folder; name = RectoSync; path = ../Packages/RectoSync; sourceTree = SOURCE_ROOT; };
 		E0B936E706CD1B1EC1FF9571 /* WindowToolbarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowToolbarTests.swift; sourceTree = "<group>"; };
 		E2487F991B53EE441E06C072 /* CommentAnchor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommentAnchor.swift; sourceTree = "<group>"; };
@@ -244,6 +249,7 @@
 		ED6923F868328DA6A34A2A21 /* AppearanceSettingsTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearanceSettingsTab.swift; sourceTree = "<group>"; };
 		F42BFB0AFA4FA2B556E8AA99 /* OutlinePanelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlinePanelTests.swift; sourceTree = "<group>"; };
 		F9E0596B01A39521DDFD3990 /* SharedRectoCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedRectoCore.swift; sourceTree = "<group>"; };
+		FA239B9980C9D30E1F2E38EB /* OverflowModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverflowModel.swift; sourceTree = "<group>"; };
 		FC238A1AE201F838C026FB1E /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		FD3F7F786A85496318A94A06 /* AppConfigurationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfigurationTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -339,6 +345,8 @@
 				BEE9F7192940DC6EA6DC79C9 /* NotesPanel.swift */,
 				A1016C956B2129F9E615F092 /* OrderedDocumentEdits.swift */,
 				363C26A512770F4ABD73F2E9 /* OutlinePanel.swift */,
+				FA239B9980C9D30E1F2E38EB /* OverflowModel.swift */,
+				596782682821CDEFEF050FCA /* OverflowPanel.swift */,
 				76EE13261BC8A4CB8A758876 /* PaletteModel.swift */,
 				9D788A596A6070EF76840A51 /* PaneDocuments.swift */,
 				A590B381E4ADB80E8BB25065 /* PaneLayout.swift */,
@@ -427,6 +435,7 @@
 				36A1E659419C4C6FEBDA5FBE /* OfflineTransport.swift */,
 				BA24465686AB4748FE498A70 /* OrderedDocumentEditsTests.swift */,
 				F42BFB0AFA4FA2B556E8AA99 /* OutlinePanelTests.swift */,
+				D9DB60C52E316B80A267C344 /* OverflowPanelTests.swift */,
 				9DEDB77337009783F5E0E9A5 /* PageSheetTests.swift */,
 				060D7A5E6257CE68E0AC8825 /* PaneLayoutTests.swift */,
 				452B50AD957A1DC21F1D722A /* PresentationPreferenceTests.swift */,
@@ -578,6 +587,7 @@
 				966C39C0B62ECA5F5C349E5B /* OfflineTransport.swift in Sources */,
 				B24A3B1FC7CA46D45EF1C453 /* OrderedDocumentEditsTests.swift in Sources */,
 				1804D6CE4FD24A216A3D7617 /* OutlinePanelTests.swift in Sources */,
+				887F2DD6B360B8299A3099F1 /* OverflowPanelTests.swift in Sources */,
 				45D019F4A22ECF6FD7575E5D /* PageSheetTests.swift in Sources */,
 				B24A1E092793EA901FD7F130 /* PaneLayoutTests.swift in Sources */,
 				1AFE0F46610F4E1A37A062F0 /* PresentationPreferenceTests.swift in Sources */,
@@ -642,6 +652,8 @@
 				DC0FDB3FB1E7A0B45873CB06 /* NotesPanel.swift in Sources */,
 				840F1328B957A05D45E90150 /* OrderedDocumentEdits.swift in Sources */,
 				C111D28857D095B976198334 /* OutlinePanel.swift in Sources */,
+				B83919E109D2B6F4E7F1A8CB /* OverflowModel.swift in Sources */,
+				379B4433D3052BFEE2B4DA6E /* OverflowPanel.swift in Sources */,
 				885D94683237079208EDA687 /* PaletteModel.swift in Sources */,
 				E64E7A5238B9F99D7115731B /* PaneDocuments.swift in Sources */,
 				53EFAB63A051B2CD9FF1C67C /* PaneLayout.swift in Sources */,

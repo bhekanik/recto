@@ -74,7 +74,19 @@ export function refuse(code: RefusalCode, message: string): never {
 	throw new ConvexError({ code, message });
 }
 
-function requireId(value: string, field: string): string {
+export function requireDocumentTextFits(
+	markdown: string,
+	overflowMarkdown = "",
+): void {
+	if (
+		utf8Length(markdown) + utf8Length(overflowMarkdown) >
+		MAX_MARKDOWN_LENGTH
+	) {
+		refuse("too_large", MARKDOWN_TOO_LARGE_MESSAGE);
+	}
+}
+
+export function requireId(value: string, field: string): string {
 	if (value.length === 0 || value.length > MAX_ID_LENGTH) {
 		refuse("invalid_argument", `Invalid ${field}`);
 	}
@@ -314,9 +326,7 @@ export const updateCurrentNodeId = mutation({
 
 		// Same ~1 MiB guard as updateMarkdown — the materialized markdown is stored
 		// on the documents row here too.
-		if (utf8Length(args.markdown) > MAX_MARKDOWN_LENGTH) {
-			refuse("too_large", MARKDOWN_TOO_LARGE_MESSAGE);
-		}
+		requireDocumentTextFits(args.markdown, doc.overflowMarkdown);
 
 		const pointerRevision = (doc.pointerRevision ?? 0) + 1;
 		const rejected =
@@ -350,6 +360,7 @@ export const updateCurrentNodeId = mutation({
 		);
 		await syncBlobReferences(ctx, doc.userId, "document", args.documentId, [
 			args.markdown,
+			doc.overflowMarkdown ?? "",
 		]);
 		return {
 			applied: true as const,
@@ -457,10 +468,8 @@ export const commitEdit = mutation({
 		const nodeRowBytes =
 			utf8Length(args.node.patch) +
 			(args.node.snapshot ? utf8Length(args.node.snapshot) : 0);
-		if (
-			utf8Length(args.markdown) > MAX_MARKDOWN_LENGTH ||
-			nodeRowBytes > MAX_MARKDOWN_LENGTH
-		) {
+		requireDocumentTextFits(args.markdown, doc.overflowMarkdown);
+		if (nodeRowBytes > MAX_MARKDOWN_LENGTH) {
 			refuse("too_large", MARKDOWN_TOO_LARGE_MESSAGE);
 		}
 
@@ -546,6 +555,7 @@ export const commitEdit = mutation({
 		);
 		await syncBlobReferences(ctx, doc.userId, "document", args.documentId, [
 			args.markdown,
+			doc.overflowMarkdown ?? "",
 		]);
 
 		return {
@@ -595,9 +605,7 @@ export const updateMarkdown = mutation({
 		// Guard the Convex ~1 MiB per-value ceiling (blueprint 03 §5). Book-length
 		// manuscripts are an explicit non-goal; fail loudly rather than let Convex
 		// reject the whole mutation opaquely. The editor keeps the text locally.
-		if (utf8Length(args.markdown) > MAX_MARKDOWN_LENGTH) {
-			refuse("too_large", MARKDOWN_TOO_LARGE_MESSAGE);
-		}
+		requireDocumentTextFits(args.markdown, doc.overflowMarkdown);
 
 		// A diverged head is NOT retryable: the stale-updatedAt retry loop below
 		// would otherwise keep re-writing this device's draft on top of whichever
@@ -645,6 +653,7 @@ export const updateMarkdown = mutation({
 		await ctx.db.patch(args.documentId, patch);
 		await syncBlobReferences(ctx, doc.userId, "document", args.documentId, [
 			args.markdown,
+			doc.overflowMarkdown ?? "",
 		]);
 
 		return { updatedAt, stale: false as const, headMoved: false as const };

@@ -26,6 +26,9 @@ struct CloudDocumentView: View {
     @State private var autoVersions = AutoVersioning()
     @State private var comments = CommentsModel()
     @State private var showsComments = false
+    @State private var showsOverflow = false
+    @State private var overflow: OverflowModel?
+    @State private var overflowOpenError: String?
     @State private var showsSharing = false
     @State private var review: ReviewSurfaceModel?
     @State private var ai: AIController?
@@ -166,6 +169,9 @@ struct CloudDocumentView: View {
         )) {} message: {
             Text(ai?.errorMessage ?? "")
         }
+        .alert("Could not open Overflow", isPresented: Binding(
+            get: { overflowOpenError != nil }, set: { if !$0 { overflowOpenError = nil } }
+        )) {} message: { Text(overflowOpenError ?? "") }
         .sheet(isPresented: $showsSharing) {
             ShareSheet(title: model.state.title, cloud: chrome.cloud, dismiss: { showsSharing = false })
         }
@@ -216,6 +222,11 @@ struct CloudDocumentView: View {
 
     /// Hook the window's chrome up to this document.
     private func wire(_ model: CloudDocumentModel) {
+        chrome.toggleOverflow = { showsOverflow.toggle() }
+        if overflow == nil {
+            do { overflow = try OverflowModel.open(store: registry.store, localId: localId) }
+            catch { overflowOpenError = error.localizedDescription }
+        }
         chrome.undo = { [model] in Task { await model.undo() } }
         chrome.redo = { [model] in Task { await model.redo() } }
         chrome.choosePresentation = choose
@@ -329,6 +340,12 @@ struct CloudDocumentView: View {
                     panes?.openDocument(passage.documentId, Int(passage.charStart))
                 }
             }
+            if showsOverflow, let overflow, !zen.hidesChrome {
+                OverflowPanel(model: overflow, theme: styler.theme, close: {
+                    showsOverflow = false
+                    chrome.focusText()
+                }, onFocus: chrome.noteOverflowFocused)
+            }
             if showsComments, !zen.hidesChrome {
                 CommentsPanel(
                     comments: comments, theme: styler.theme,
@@ -364,11 +381,20 @@ struct CloudDocumentView: View {
     }
 
     private func toolbar(_ styler: MarkdownStyler) -> some View {
-        TopFormatToolbar(
-            theme: styler.theme,
-            presentation: styler.presentation,
-            actions: chrome.formatToolbarActions
-        )
+        HStack(spacing: 0) {
+            TopFormatToolbar(
+                theme: styler.theme,
+                presentation: styler.presentation,
+                actions: chrome.formatToolbarActions
+            )
+            Button { showsOverflow.toggle() } label: {
+                Image(systemName: "tray.full")
+            }
+            .buttonStyle(.plain).focusable(false)
+            .foregroundStyle(Color(nsColor: styler.theme.ink3))
+            .padding(.horizontal, 12)
+            .help("Toggle Overflow").accessibilityLabel("Toggle Overflow")
+        }
     }
 
     private func statusBar(_ model: CloudDocumentModel, _ styler: MarkdownStyler) -> some View {

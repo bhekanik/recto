@@ -38,6 +38,7 @@ larger and phased; ship the craft features first.
 | 022 | Fix undo-after-AI-accept pointer race (editor blanks, empty markdown syncs up) | P1 | M | 021 | IN REVIEW (2026-08-28; root cause = the cross-device pointer-adoption effect re-running on every local commit and adopting the not-yet-published server pointer; fixed by `decideServerPointer` + atomic `documents.commitEdit` (ADR-19); deterministic unit repro in `lib/history/pointer-race.test.ts`; e2e self-skip removed, ×5 proof pending a dev `CLERK_SECRET_KEY`) |
 | 023 | Native Swift/SwiftUI macOS/iPadOS/iPhone apps (App Store) + AI on Convex with BYOK, metering, LangSmith | P1 | XL | 022 | IN PROGRESS (program plan + design plan + orchestration file; milestones N0–N10 become plans 024+; wave 1 workers start after compaction) |
 | 024 | Native editor stage 2 — text-system foundation, Vim/history, rich blocks, N5 gate | P1 | XL | 023/W9a, 023/W8, 023/W10 | IN PROGRESS (W9b; Slice A complete locally; blocks Mac alpha) |
+| [026](026-writing-alternatives-and-lab.md) | Overflow, alternatives, Ghost and focused Lab passes | P1 | XL | Signed macOS release and real user smoke per increment | IN PROGRESS (first Overflow candidate built; release checks and final deployment remain pending) |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | REJECTED (one-line rationale)
 

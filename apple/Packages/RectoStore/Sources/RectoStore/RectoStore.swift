@@ -107,7 +107,7 @@ public actor RectoStore {
   static let materializationCacheSize = 24
 
   private let logger = Logger(subsystem: "com.bhekani.recto", category: "store")
-  private nonisolated let writer: any DatabaseWriter
+  nonisolated let writer: any DatabaseWriter
   private nonisolated let localMutationFence = LocalMutationFence()
   public nonisolated let path: String
 
@@ -169,6 +169,11 @@ public actor RectoStore {
 
   public nonisolated func resumeLocalMutations(frozenAt generation: Int) {
     localMutationFence.resume(frozenAt: generation)
+  }
+
+  // The feature extension shares the same fence as prose and auth transitions.
+  nonisolated func performLocalMutation<T>(_ body: () throws -> T) throws -> T {
+    try localMutationFence.perform(body)
   }
 
   public func document(localId: String) throws -> DocumentRecord? {
@@ -737,7 +742,8 @@ public actor RectoStore {
     try writer.write { db in
       guard let document = try DocumentRecord.fetchOne(db, key: localId) else { return true }
       guard document.draftMarkdown == nil,
-        try OutboxJob.filter(Column("documentLocalId") == localId).fetchCount(db) == 0
+        try OutboxJob.filter(Column("documentLocalId") == localId).fetchCount(db) == 0,
+        try !Self.hasUnsyncedOverflow(db, localId: localId)
       else { return false }
       _ = try DocumentRecord.deleteOne(db, key: localId)
       return true
@@ -1129,7 +1135,8 @@ public actor RectoStore {
     try writer.read { db in
       let jobs = try OutboxJob.fetchCount(db)
       let drafts = try DocumentRecord.filter(Column("draftMarkdown") != nil).fetchCount(db)
-      return jobs + drafts
+      let overflow = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM document_overflow WHERE generation != acknowledgedGeneration OR pending IS NOT NULL OR remoteMarkdown IS NOT NULL") ?? 0
+      return jobs + drafts + overflow
     }
   }
 

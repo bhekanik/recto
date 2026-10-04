@@ -50,6 +50,7 @@ struct CommandRegistryTests {
         ("toggle-comments", .review, "Toggle comments panel", ""),
         ("add-comment", .review, "Add comment on selection", ""),
         ("add-flag", .review, "Flag this spot…", "⌘⇧X"),
+        ("toggle-overflow", .review, "Toggle Overflow", ""),
         ("toggle-notes", .review, "Toggle notes panel", "⌃⇧N"),
         ("toggle-notes-pin", .review, "Pin notes panel open", ""),
         ("ai-transform", .ai, "Transform selection with AI…", "⌃⇧I"),
@@ -298,6 +299,26 @@ struct CommandPaletteControllerTests {
         ], canOpenInWeb: false)
         let hidden = CommandPaletteController.sections(settings: settings(), library: unavailable).first
         #expect(hidden?.items.map(\.id) == ["new-document"] + native + ["document-a"])
+    }
+
+    @Test("Overflow is offered by its local capability without review hooks and stays absent for files")
+    func overflowCapability() {
+        let settings = settings()
+        let editor = EditorHostController(settings: settings)
+        let controller = CommandPaletteController(settings: settings, editors: EditorHostRegistry(), pasteboard: pasteboard)
+        func offered() -> Bool {
+            CommandPaletteController.sections(settings: settings, library: PaletteLibrary(), editor: editor)
+                .flatMap(\.items).contains { $0.id == "toggle-overflow" }
+        }
+        #expect(!offered())
+        #expect(editor.review == nil)
+        var toggled = false
+        editor.toggleOverflow = { toggled.toggle() }
+        #expect(offered())
+        #expect(controller.perform("toggle-overflow", editor: editor, library: PaletteLibrary()))
+        #expect(toggled)
+        editor.toggleOverflow = nil
+        #expect(!offered())
     }
 
     @Test("sections come in SECTION_ORDER and empty ones are skipped")

@@ -29,6 +29,7 @@ public actor SyncEngine: SyncControlling {
   private let store: RectoStore
   private let transport: any RectoTransport
   private let origin: String
+  private let overflow: OverflowSync?
 
   private var eventContinuations: [UUID: AsyncStream<SyncEvent>.Continuation] = [:]
   /// The ONE drain in flight. Every request joins it rather than starting a
@@ -64,6 +65,7 @@ public actor SyncEngine: SyncControlling {
     self.store = store
     self.transport = transport
     self.origin = origin
+    overflow = (transport as? any RectoAPI).map { OverflowSync(store: store, api: $0) }
   }
 
   /// Resolve (or mint) this device's provenance id.
@@ -97,7 +99,7 @@ public actor SyncEngine: SyncControlling {
   /// Call on launch, on every auth transition, and on foreground: a Convex
   /// subscription that hit a server error is a completed publisher and never
   /// comes back on its own (N0a).
-  public func start() {
+  public func start() async {
     isRunning = true
     let generation = lifecycle
     libraryTask?.cancel()
@@ -105,6 +107,9 @@ public actor SyncEngine: SyncControlling {
     for localId in openDocumentIds { subscribeToNodes(localId: localId) }
     Task { [weak self] in await self?.rehydrateIncompleteDocuments(generation: generation) }
     Task { [weak self] in await self?.reconcileAbandonedBarriers(generation: generation) }
+    await overflow?.start()
+    for localId in openDocumentIds { await overflow?.openDocument(localId: localId) }
+    guard lifecycle == generation, isRunning else { return }
     requestDrain()
   }
 
@@ -135,6 +140,7 @@ public actor SyncEngine: SyncControlling {
     // Awaiting is the point: cancellation does not abort a network call, and
     // returning early lets a stale task resume after the caller has purged and
     // switched accounts.
+    await overflow?.stop()
     for task in pending { await task.value }
   }
 
@@ -157,7 +163,7 @@ public actor SyncEngine: SyncControlling {
     // down. That newer lifecycle owns the stopped state; this stale resume must
     // not bring sockets back after sign-out or an account switch.
     guard lifecycle == resumeGeneration else { return }
-    start()
+    await start()
   }
 
   /// Replace the auth bridge, with every socket stopped first.
@@ -172,9 +178,11 @@ public actor SyncEngine: SyncControlling {
     for task in subscriptions { task.cancel() }
     for task in subscriptions { await task.value }
 
+    await overflow?.stop()
     _ = await transport.loginFromCache()
 
     guard isRunning else { return }
+    await overflow?.start()
     libraryTask = Task { [weak self] in await self?.runLibrarySubscription() }
     for localId in openDocumentIds { subscribeToNodes(localId: localId) }
   }
@@ -405,13 +413,16 @@ public actor SyncEngine: SyncControlling {
   /// of racing a subscription tick it never asked for.
   public func openDocument(localId: String) async {
     openDocumentIds.insert(localId)
+    await overflow?.openDocument(localId: localId)
+    guard openDocumentIds.contains(localId) else { return }
     subscribeToNodes(localId: localId)
   }
 
-  public func closeDocument(localId: String) {
+  public func closeDocument(localId: String) async {
     openDocumentIds.remove(localId)
     nodeSubscriptions[localId]?.cancel()
     nodeSubscriptions[localId] = nil
+    await overflow?.closeDocument(localId: localId)
   }
 
   private func subscribeToNodes(localId: String) {
