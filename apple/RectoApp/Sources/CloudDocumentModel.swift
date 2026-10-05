@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Foundation
 import Observation
@@ -102,14 +103,16 @@ final class CloudDocumentModel {
         self.registry = registry
         storage = RectoTextStorage(documentId: localId, markdown: state.markdown)
         edits = OrderedDocumentEdits(
-            store: registry.store, documentLocalId: localId, initialMarkdown: state.markdown
+            store: registry.store, documentLocalId: localId, initialMarkdown: state.markdown,
+            tracksHistoryReceipts: true
         ) { change in
             try await session.applyPersistedLocalChange(
                 markdown: change.markdown,
                 selection: change.selection,
                 structural: change.structural,
                 generation: change.generation,
-                origin: change.origin
+                origin: change.origin,
+                preserveAcceptedOrder: true
             )
         }
         stateTask = Task { [weak self] in
@@ -118,6 +121,59 @@ final class CloudDocumentModel {
                 adopt(updated)
             }
         }
+    }
+
+    private weak var overflowDragSource: OverflowTextView?
+    private var overflowDragText: String?
+
+    func beginOverflowDrag(from source: OverflowTextView, text: String) {
+        endOverflowDrag()
+        let selection = source.selectedRange()
+        guard source.documentLocalId == localId, source.window != nil,
+              selection.length > 0, NSMaxRange(selection) <= (source.string as NSString).length,
+              ((source.string as NSString).substring(with: selection) as NSString).isEqual(to: text) else { return }
+        overflowDragSource = source
+        overflowDragText = text
+    }
+
+    func endOverflowDrag() {
+        overflowDragSource = nil
+        overflowDragText = nil
+    }
+
+    /// A drag is a history boundary, but the native editor still owns its caret and edit path.
+    private func consumeOverflowDrag(_ markdown: String, into storage: RectoTextStorage) -> Bool {
+        guard let source = overflowDragSource,
+              let dragged = overflowDragText, !dragged.isEmpty,
+              let window = source.window,
+              storage.textView.nsTextView?.window === window,
+              allStorages.contains(where: { $0 === storage }),
+              NSApp.currentEvent?.type != .keyDown else { return false }
+        // Repeated text can shorten a minimal diff, so constrain the exact inserted run
+        // with the common prefix and suffix instead of inferring a deletion target.
+        guard Self.isOverflowInsertion(before: edits.lastAcceptedMarkdown, after: markdown,
+                                       dragged: storage.lineEnding.normalize(dragged)) else { return false }
+        endOverflowDrag()
+        return true
+    }
+
+    static func isOverflowInsertion(before: String, after: String, dragged: String) -> Bool {
+        let before = before as NSString
+        let after = after as NSString
+        let normalized = dragged as NSString
+        guard normalized.length > 0 else { return false }
+        guard after.length == before.length + normalized.length else { return false }
+        var prefix = 0
+        while prefix < before.length && before.character(at: prefix) == after.character(at: prefix) { prefix += 1 }
+        var suffix = 0
+        while suffix < before.length && before.character(at: before.length - suffix - 1) == after.character(at: after.length - suffix - 1) { suffix += 1 }
+        let earliest = before.length - suffix
+        guard earliest <= prefix else { return false }
+        let range = after.range(of: normalized as String, options: .literal,
+                                range: NSRange(location: earliest, length: prefix - earliest + normalized.length))
+        guard range.location != NSNotFound,
+              (after.replacingCharacters(in: range, with: "") as NSString).isEqual(to: before as String) else { return false }
+        return true
     }
 
     var pendingEditCount: Int { edits.pendingCount }
@@ -146,7 +202,8 @@ final class CloudDocumentModel {
         for sibling in allStorages where sibling !== source {
             sibling.markdown = markdown
         }
-        if !edits.accept(markdown: markdown, structural: edit.structural, origin: origin) {
+        let overflowInsertion = consumeOverflowDrag(markdown, into: source)
+        if !edits.accept(markdown: markdown, structural: edit.structural || overflowInsertion, origin: origin) {
             for storage in allStorages { storage.markdown = edits.lastAcceptedMarkdown }
         }
     }
@@ -243,6 +300,7 @@ final class CloudDocumentModel {
     func close() async {
         guard !isClosed else { return }
         isClosed = true
+        endOverflowDrag()
         stateTask?.cancel()
         await edits.freezeAndDrain()
         do {

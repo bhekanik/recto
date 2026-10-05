@@ -94,6 +94,12 @@ public enum QueueBlockReason: String, Sendable, CaseIterable {
   public static var provisional: [QueueBlockReason] { allCases.filter(\.isProvisional) }
 }
 
+private struct OrderedEditorIngressState: Sendable {
+  var pending: [String: Set<UUID>] = [:]
+  var acknowledgements: [String: (markdown: String, title: String)] = [:]
+  var headResetCutoffs: [String: Int] = [:]
+}
+
 /// The local SQLite mirror (plan 023 §4.2).
 ///
 /// One `DatabasePool` in WAL mode, owned by an actor. The pool is already
@@ -109,6 +115,7 @@ public actor RectoStore {
   private let logger = Logger(subsystem: "com.bhekani.recto", category: "store")
   nonisolated let writer: any DatabaseWriter
   private nonisolated let localMutationFence = LocalMutationFence()
+  private nonisolated let orderedEditorReceipts = Mutex(OrderedEditorIngressState())
   public nonisolated let path: String
 
   private static var configuration: Configuration {
@@ -361,94 +368,114 @@ public actor RectoStore {
     wordCount: Int,
     title: String? = nil,
     preserveQueuedDraftJob: Bool = false,
+    retainNewerEditorIngress: Bool = false,
     expectedHeadNodeId: String,
     expectedDraftRevision: Int? = nil,
     job: OutboxJob?,
     now: Double = Date().timeIntervalSince1970 * 1000
   ) throws -> DocumentRecord {
-    try writer.write { db in
-      guard var document = try DocumentRecord.fetchOne(db, key: documentLocalId) else {
-        throw StoreError.documentNotFound(documentLocalId)
-      }
-      guard document.localHeadNodeId == expectedHeadNodeId else {
-        throw StoreError.headMoved(
-          expected: expectedHeadNodeId, actual: document.localHeadNodeId)
-      }
-      guard node.parentNodeId == expectedHeadNodeId else {
-        throw StoreError.parentMismatch(
-          expected: expectedHeadNodeId, actual: node.parentNodeId)
-      }
-      if let expectedDraftRevision, document.draftRevision != expectedDraftRevision {
-        throw StoreError.staleGeneration(
-          expected: expectedDraftRevision, actual: document.draftRevision)
-      }
-
-      var stored = node
-      stored.materialized = markdown
-      stored.materializedAt = now
-      try stored.save(db)
-
-      // Grouping can commit the previous body while the current callback starts
-      // the next group. That newer ingress must follow the commit, not vanish.
-      let committedAcknowledgedIngress =
-        preserveQueuedDraftJob && document.editorIngressRevision != nil
-        && document.editorIngressAcknowledged
-        && document.draftMarkdown.map { ($0 as NSString).isEqual(to: markdown) } == true
-      let retainedEditorIngress =
-        document.editorIngressRevision != nil
-        && (document.draftMarkdown.map { !($0 as NSString).isEqual(to: markdown) } == true
-          || preserveQueuedDraftJob)
-        && !committedAcknowledgedIngress
-      var retainedDraftJob: OutboxJob?
-      if job != nil {
-        let queuedDraft = try OutboxJob
-          .filter(Column("documentLocalId") == documentLocalId)
-          .filter(Column("kind") == OutboxKind.draftSave.rawValue)
-          .fetchOne(db)
-        // A derived commit with no title delegates title publication to the
-        // editor's async lane. Keep its draft behind the body commit whether
-        // that lane has finished already or still has to replace it.
-        if retainedEditorIngress || preserveQueuedDraftJob {
-          retainedDraftJob = queuedDraft
+    try orderedEditorReceipts.withLock { receipts in
+      try writer.write { db in
+        guard var document = try DocumentRecord.fetchOne(db, key: documentLocalId) else {
+          throw StoreError.documentNotFound(documentLocalId)
         }
-      }
-
-      document.localHeadNodeId = node.nodeId
-      document.markdown = markdown
-      if document.titleMode == .derived, let title { document.title = title }
-      if !retainedEditorIngress {
-        document.wordCount = wordCount
-        document.draftMarkdown = nil
-        document.draftSelectionAnchor = nil
-        document.draftSelectionHead = nil
-        document.editorIngressRevision = nil
-        document.editorIngressAcknowledged = false
-      }
-      document.updatedAt = now
-      document.draftRevision += 1
-      if retainedEditorIngress { document.editorIngressRevision = document.draftRevision }
-      if document.syncState != .diverged { document.syncState = .pending }
-      try document.update(db)
-
-      if var job {
-        _ =
-          try OutboxJob
-          .filter(Column("documentLocalId") == documentLocalId)
-          .filter(Column("kind") == OutboxKind.draftSave.rawValue)
-          .deleteAll(db)
-        try job.insert(db)
-        if var retainedDraftJob {
-          retainedDraftJob.id = nil
-          retainedDraftJob.baseHeadNodeId = node.nodeId
-          retainedDraftJob.attempts = 0
-          retainedDraftJob.lastError = nil
-          retainedDraftJob.nextAttemptAt = 0
-          try retainedDraftJob.insert(db)
+        guard document.localHeadNodeId == expectedHeadNodeId else {
+          throw StoreError.headMoved(
+            expected: expectedHeadNodeId, actual: document.localHeadNodeId)
         }
+        guard node.parentNodeId == expectedHeadNodeId else {
+          throw StoreError.parentMismatch(
+            expected: expectedHeadNodeId, actual: node.parentNodeId)
+        }
+        // A head reset can return to the same node while this actor callback
+        // waits. Such a callback must not use the newer-ingress CAS exception.
+        if retainNewerEditorIngress, let expectedDraftRevision,
+          expectedDraftRevision <= (receipts.headResetCutoffs[documentLocalId] ?? -1)
+        {
+          throw StoreError.staleGeneration(expected: expectedDraftRevision, actual: document.draftRevision)
+        }
+        if let expectedDraftRevision, document.draftRevision != expectedDraftRevision,
+          !(retainNewerEditorIngress && preserveQueuedDraftJob
+            && document.editorIngressRevision != nil && document.draftRevision > expectedDraftRevision)
+        {
+          throw StoreError.staleGeneration(
+            expected: expectedDraftRevision, actual: document.draftRevision)
+        }
+
+        var stored = node
+        stored.materialized = markdown
+        stored.materializedAt = now
+        try stored.save(db)
+
+        // Grouping can commit the previous body while the current callback starts
+        // the next group. That newer ingress must follow the commit, not vanish.
+        let committedAcknowledgedIngress =
+          preserveQueuedDraftJob && document.editorIngressRevision != nil
+          && document.editorIngressAcknowledged
+          && receipts.pending[documentLocalId]?.isEmpty != false
+          && document.draftMarkdown.map { ($0 as NSString).isEqual(to: markdown) } == true
+        let retainedEditorIngress =
+          document.editorIngressRevision != nil
+          && (document.draftMarkdown.map { !($0 as NSString).isEqual(to: markdown) } == true
+            || preserveQueuedDraftJob)
+          && !committedAcknowledgedIngress
+        var retainedDraftJob: OutboxJob?
+        if job != nil {
+          let queuedDraft = try OutboxJob
+            .filter(Column("documentLocalId") == documentLocalId)
+            .filter(Column("kind") == OutboxKind.draftSave.rawValue)
+            .fetchOne(db)
+          // A derived commit with no title delegates title publication to the
+          // editor's async lane. Keep its draft behind the body commit whether
+          // that lane has finished already or still has to replace it.
+          if retainedEditorIngress || preserveQueuedDraftJob {
+            retainedDraftJob = queuedDraft
+          }
+        }
+
+        document.localHeadNodeId = node.nodeId
+        document.markdown = markdown
+        if document.titleMode == .derived, let title { document.title = title }
+        if !retainedEditorIngress {
+          document.wordCount = wordCount
+          document.draftMarkdown = nil
+          document.draftSelectionAnchor = nil
+          document.draftSelectionHead = nil
+          document.editorIngressRevision = nil
+          document.editorIngressAcknowledged = false
+        }
+        document.updatedAt = now
+        document.draftRevision += 1
+        if retainedEditorIngress { document.editorIngressRevision = document.draftRevision }
+        if document.syncState != .diverged { document.syncState = .pending }
+        try document.update(db)
+
+        if var job {
+          _ =
+            try OutboxJob
+            .filter(Column("documentLocalId") == documentLocalId)
+            .filter(Column("kind") == OutboxKind.draftSave.rawValue)
+            .deleteAll(db)
+          try job.insert(db)
+          if var retainedDraftJob {
+            retainedDraftJob.id = nil
+            retainedDraftJob.baseHeadNodeId = node.nodeId
+            retainedDraftJob.attempts = 0
+            retainedDraftJob.lastError = nil
+            retainedDraftJob.nextAttemptAt = 0
+            try retainedDraftJob.insert(db)
+          }
+        }
+        try Self.trimMaterializationCache(db, documentLocalId: documentLocalId)
+        return document
       }
-      try Self.trimMaterializationCache(db, documentLocalId: documentLocalId)
-      return document
     }
+  }
+
+  /// Accepted callbacks at or before this revision belong to the previous
+  /// head. Own ordered commits advance revisions without invalidating the lane.
+  public nonisolated func orderedEditorIngressCutoff(documentLocalId: String) -> Int {
+    orderedEditorReceipts.withLock { $0.headResetCutoffs[documentLocalId] ?? -1 }
   }
 
   /// Move the head to an existing node (undo, redo, navigate, adopt-remote).
@@ -469,47 +496,51 @@ public actor RectoStore {
     clearDivergence: Bool = false,
     now: Double = Date().timeIntervalSince1970 * 1000
   ) throws -> DocumentRecord {
-    try writer.write { db in
-      guard var document = try DocumentRecord.fetchOne(db, key: documentLocalId) else {
-        throw StoreError.documentNotFound(documentLocalId)
-      }
-      if let expectedHeadNodeId, document.localHeadNodeId != expectedHeadNodeId {
-        throw StoreError.headMoved(
-          expected: expectedHeadNodeId, actual: document.localHeadNodeId)
-      }
-      guard
-        var node = try DocNodeRecord.fetchOne(
-          db, key: ["documentLocalId": documentLocalId, "nodeId": nodeId])
-      else {
-        throw StoreError.nodeNotFound(document: documentLocalId, node: nodeId)
-      }
+    try orderedEditorReceipts.withLock { receipts in
+      let result: DocumentRecord = try writer.write { db in
+        guard var document = try DocumentRecord.fetchOne(db, key: documentLocalId) else {
+          throw StoreError.documentNotFound(documentLocalId)
+        }
+        if let expectedHeadNodeId, document.localHeadNodeId != expectedHeadNodeId {
+          throw StoreError.headMoved(
+            expected: expectedHeadNodeId, actual: document.localHeadNodeId)
+        }
+        guard
+          var node = try DocNodeRecord.fetchOne(
+            db, key: ["documentLocalId": documentLocalId, "nodeId": nodeId])
+        else {
+          throw StoreError.nodeNotFound(document: documentLocalId, node: nodeId)
+        }
 
-      node.materialized = markdown
-      node.materializedAt = now
-      try node.update(db)
+        node.materialized = markdown
+        node.materializedAt = now
+        try node.update(db)
 
-      document.localHeadNodeId = nodeId
-      document.markdown = markdown
-      if document.titleMode == .derived, let title { document.title = title }
-      document.wordCount = wordCount
-      document.draftMarkdown = nil
-      document.draftSelectionAnchor = nil
-      document.draftSelectionHead = nil
-      document.editorIngressRevision = nil
-      document.editorIngressAcknowledged = false
-      document.updatedAt = now
-      document.draftRevision += 1
-      if clearDivergence {
-        document.divergedRemoteHeadNodeId = nil
-        document.syncState = job == nil ? .synced : .pending
-      } else if document.syncState != .diverged {
-        document.syncState = .pending
+        document.localHeadNodeId = nodeId
+        document.markdown = markdown
+        if document.titleMode == .derived, let title { document.title = title }
+        document.wordCount = wordCount
+        document.draftMarkdown = nil
+        document.draftSelectionAnchor = nil
+        document.draftSelectionHead = nil
+        document.editorIngressRevision = nil
+        document.editorIngressAcknowledged = false
+        document.updatedAt = now
+        document.draftRevision += 1
+        if clearDivergence {
+          document.divergedRemoteHeadNodeId = nil
+          document.syncState = job == nil ? .synced : .pending
+        } else if document.syncState != .diverged {
+          document.syncState = .pending
+        }
+        try document.update(db)
+
+        if var job { try job.insert(db) }
+        try Self.trimMaterializationCache(db, documentLocalId: documentLocalId)
+        return document
       }
-      try document.update(db)
-
-      if var job { try job.insert(db) }
-      try Self.trimMaterializationCache(db, documentLocalId: documentLocalId)
-      return document
+      receipts.headResetCutoffs[documentLocalId] = result.draftRevision
+      return result
     }
   }
 
@@ -581,40 +612,78 @@ public actor RectoStore {
     title: String? = nil,
     clientMutationId: String,
     draftPayload: String,
+    orderedReceipt: UUID? = nil,
     now: Double = Date().timeIntervalSince1970 * 1000
   ) throws -> Int {
-    try writer.write { db in
-      guard var document = try DocumentRecord.fetchOne(db, key: documentLocalId) else {
-        throw StoreError.documentNotFound(documentLocalId)
-      }
-      document.draftMarkdown = markdown
-      document.draftSelectionAnchor = selection?.anchor
-      document.draftSelectionHead = selection?.head
-      document.wordCount = wordCount
-      if document.titleMode == .derived, let title { document.title = title }
-      document.updatedAt = now
-      if document.syncState != .diverged { document.syncState = .pending }
-      document.draftRevision += 1
-      document.editorIngressRevision = document.draftRevision
-      document.editorIngressAcknowledged = false
-      try document.update(db)
+    // Receipt lock precedes the SQL writer for both acceptance and acknowledgement.
+    // Register only after commit succeeds, while acknowledgement is still excluded.
+    try orderedEditorReceipts.withLock { receipts in
+      let revision = try writer.write { db in
+        guard var document = try DocumentRecord.fetchOne(db, key: documentLocalId) else {
+          throw StoreError.documentNotFound(documentLocalId)
+        }
+        document.draftMarkdown = markdown
+        document.draftSelectionAnchor = selection?.anchor
+        document.draftSelectionHead = selection?.head
+        document.wordCount = wordCount
+        if document.titleMode == .derived, let title { document.title = title }
+        document.updatedAt = now
+        if document.syncState != .diverged { document.syncState = .pending }
+        document.draftRevision += 1
+        document.editorIngressRevision = document.draftRevision
+        document.editorIngressAcknowledged = false
+        try document.update(db)
 
-      // Draft bodies are mutable full snapshots. The newest accepted snapshot
-      // supersedes every older unsent one, while keeping its place after any
-      // immutable node jobs already queued for this document.
-      _ = try OutboxJob
-        .filter(Column("documentLocalId") == documentLocalId)
-        .filter(Column("kind") == OutboxKind.draftSave.rawValue)
-        .deleteAll(db)
-      var job = OutboxJob(
-        documentLocalId: documentLocalId,
-        kind: .draftSave,
-        clientMutationId: clientMutationId,
-        baseHeadNodeId: document.localHeadNodeId,
-        payload: draftPayload,
-        createdAt: now)
-      try job.insert(db)
-      return document.draftRevision
+        // Draft bodies are mutable full snapshots. The newest accepted snapshot
+        // supersedes every older unsent one, while keeping its place after any
+        // immutable node jobs already queued for this document.
+        _ = try OutboxJob
+          .filter(Column("documentLocalId") == documentLocalId)
+          .filter(Column("kind") == OutboxKind.draftSave.rawValue)
+          .deleteAll(db)
+        var job = OutboxJob(
+          documentLocalId: documentLocalId,
+          kind: .draftSave,
+          clientMutationId: clientMutationId,
+          baseHeadNodeId: document.localHeadNodeId,
+          payload: draftPayload,
+          createdAt: now)
+        try job.insert(db)
+        return document.draftRevision
+      }
+      if let orderedReceipt { receipts.pending[documentLocalId, default: []].insert(orderedReceipt) }
+      return revision
+    }
+  }
+
+  public nonisolated func completeOrderedEditorReceipt(documentLocalId: String, receipt: UUID) throws {
+    try orderedEditorReceipts.withLock { receipts in
+      guard receipts.pending[documentLocalId]?.contains(receipt) == true else { return }
+      if receipts.pending[documentLocalId]?.count == 1 {
+        defer {
+          receipts.pending.removeValue(forKey: documentLocalId)
+          receipts.acknowledgements.removeValue(forKey: documentLocalId)
+        }
+        if let acknowledgement = receipts.acknowledgements[documentLocalId] {
+          try writer.write { db in
+            guard var document = try DocumentRecord.fetchOne(db, key: documentLocalId),
+              document.editorIngressAcknowledged,
+              document.title == acknowledgement.title,
+              (document.markdown as NSString).isEqual(to: acknowledgement.markdown),
+              document.draftMarkdown.map({ ($0 as NSString).isEqual(to: acknowledgement.markdown) }) == true
+            else { return }
+            document.draftMarkdown = nil
+            document.draftSelectionAnchor = nil
+            document.draftSelectionHead = nil
+            document.editorIngressRevision = nil
+            document.editorIngressAcknowledged = false
+            document.draftRevision += 1
+            try document.update(db)
+          }
+        }
+      } else {
+        receipts.pending[documentLocalId]?.remove(receipt)
+      }
     }
   }
 
@@ -670,24 +739,30 @@ public actor RectoStore {
     markdown: String,
     title: String?
   ) throws {
-    try writer.write { db in
-      guard var document = try DocumentRecord.fetchOne(db, key: documentLocalId),
-        document.editorIngressRevision != nil,
-        document.draftMarkdown.map({ ($0 as NSString).isEqual(to: markdown) }) == true,
-        document.titleMode == .manual || (title != nil && document.title == title)
-      else { return }
-      guard (document.markdown as NSString).isEqual(to: markdown) else {
-        document.editorIngressAcknowledged = true
+    try orderedEditorReceipts.withLock { receipts in
+      try writer.write { db in
+        guard var document = try DocumentRecord.fetchOne(db, key: documentLocalId),
+          document.editorIngressRevision != nil,
+          document.draftMarkdown.map({ ($0 as NSString).isEqual(to: markdown) }) == true,
+          document.titleMode == .manual || (title != nil && document.title == title)
+        else { return }
+        if receipts.pending[documentLocalId]?.isEmpty == false {
+          receipts.acknowledgements[documentLocalId] = (markdown, document.title)
+        }
+        guard (document.markdown as NSString).isEqual(to: markdown),
+          receipts.pending[documentLocalId]?.isEmpty != false else {
+          document.editorIngressAcknowledged = true
+          try document.update(db)
+          return
+        }
+        document.draftMarkdown = nil
+        document.draftSelectionAnchor = nil
+        document.draftSelectionHead = nil
+        document.editorIngressRevision = nil
+        document.editorIngressAcknowledged = false
+        document.draftRevision += 1
         try document.update(db)
-        return
       }
-      document.draftMarkdown = nil
-      document.draftSelectionAnchor = nil
-      document.draftSelectionHead = nil
-      document.editorIngressRevision = nil
-      document.editorIngressAcknowledged = false
-      document.draftRevision += 1
-      try document.update(db)
     }
   }
 
@@ -800,38 +875,43 @@ public actor RectoStore {
     remotePointerRevision: Double?,
     now: Double = Date().timeIntervalSince1970 * 1000
   ) throws -> Bool {
-    try writer.write { db in
-      guard var document = try DocumentRecord.fetchOne(db, key: documentLocalId) else {
-        throw StoreError.documentNotFound(documentLocalId)
-      }
-      guard document.localHeadNodeId == observedLocalHeadNodeId,
-        document.draftMarkdown == nil,
-        try OutboxJob.filter(Column("documentLocalId") == documentLocalId).fetchCount(db) == 0
-      else { return false }
-      guard
-        var node = try DocNodeRecord.fetchOne(
-          db, key: ["documentLocalId": documentLocalId, "nodeId": remoteHeadNodeId])
-      else {
-        throw StoreError.nodeNotFound(document: documentLocalId, node: remoteHeadNodeId)
-      }
+    try orderedEditorReceipts.withLock { receipts in
+      let result: Int? = try writer.write { db in
+        guard var document = try DocumentRecord.fetchOne(db, key: documentLocalId) else {
+          throw StoreError.documentNotFound(documentLocalId)
+        }
+        guard document.localHeadNodeId == observedLocalHeadNodeId,
+          document.draftMarkdown == nil,
+          try OutboxJob.filter(Column("documentLocalId") == documentLocalId).fetchCount(db) == 0
+        else { return nil }
+        guard
+          var node = try DocNodeRecord.fetchOne(
+            db, key: ["documentLocalId": documentLocalId, "nodeId": remoteHeadNodeId])
+        else {
+          throw StoreError.nodeNotFound(document: documentLocalId, node: remoteHeadNodeId)
+        }
 
-      node.materialized = markdown
-      node.materializedAt = now
-      try node.update(db)
+        node.materialized = markdown
+        node.materializedAt = now
+        try node.update(db)
 
-      document.localHeadNodeId = remoteHeadNodeId
-      document.remoteHeadNodeId = remoteHeadNodeId
-      if let remoteUpdatedAt { document.remoteUpdatedAt = remoteUpdatedAt }
-      if let remotePointerRevision { document.remotePointerRevision = remotePointerRevision }
-      document.markdown = markdown
-      document.wordCount = wordCount
-      document.divergedRemoteHeadNodeId = nil
-      document.queueBlockedReason = nil
-      document.syncState = .synced
-      document.updatedAt = now
-      try document.update(db)
-      try Self.trimMaterializationCache(db, documentLocalId: documentLocalId)
-      return true
+        document.localHeadNodeId = remoteHeadNodeId
+        document.remoteHeadNodeId = remoteHeadNodeId
+        if let remoteUpdatedAt { document.remoteUpdatedAt = remoteUpdatedAt }
+        if let remotePointerRevision { document.remotePointerRevision = remotePointerRevision }
+        document.markdown = markdown
+        document.wordCount = wordCount
+        document.divergedRemoteHeadNodeId = nil
+        document.queueBlockedReason = nil
+        document.syncState = .synced
+        document.updatedAt = now
+        document.draftRevision += 1
+        try document.update(db)
+        try Self.trimMaterializationCache(db, documentLocalId: documentLocalId)
+        return document.draftRevision
+      }
+      if let result { receipts.headResetCutoffs[documentLocalId] = result }
+      return result != nil
     }
   }
 
@@ -900,43 +980,47 @@ public actor RectoStore {
     title: String? = nil,
     now: Double = Date().timeIntervalSince1970 * 1000
   ) throws {
-    try writer.write { db in
-      guard var document = try DocumentRecord.fetchOne(db, key: documentLocalId) else {
-        throw StoreError.documentNotFound(documentLocalId)
+    try orderedEditorReceipts.withLock { receipts in
+      let result: Int = try writer.write { db in
+        guard var document = try DocumentRecord.fetchOne(db, key: documentLocalId) else {
+          throw StoreError.documentNotFound(documentLocalId)
+        }
+        try Self.checkResolution(db, document, expecting)
+        let remoteHeadNodeId = expecting.divergedRemoteHeadNodeId
+        guard
+          var node = try DocNodeRecord.fetchOne(
+            db, key: ["documentLocalId": documentLocalId, "nodeId": remoteHeadNodeId])
+        else {
+          throw StoreError.nodeNotFound(document: documentLocalId, node: remoteHeadNodeId)
+        }
+
+        try Self.demoteBranchJobs(db, documentLocalId: documentLocalId)
+
+        node.materialized = markdown
+        node.materializedAt = now
+        try node.update(db)
+
+        document.localHeadNodeId = remoteHeadNodeId
+        document.markdown = markdown
+        document.wordCount = wordCount
+        if document.titleMode == .derived, let title { document.title = title }
+        document.draftMarkdown = nil
+        document.draftSelectionAnchor = nil
+        document.draftSelectionHead = nil
+        document.editorIngressRevision = nil
+        document.editorIngressAcknowledged = false
+        document.divergedRemoteHeadNodeId = nil
+        document.queueBlockedReason = nil
+        document.draftRevision += 1
+        document.syncState =
+          try OutboxJob.filter(Column("documentLocalId") == documentLocalId).fetchCount(db) == 0
+          ? .synced : .pending
+        document.updatedAt = now
+        try document.update(db)
+        try Self.trimMaterializationCache(db, documentLocalId: documentLocalId)
+        return document.draftRevision
       }
-      try Self.checkResolution(db, document, expecting)
-      let remoteHeadNodeId = expecting.divergedRemoteHeadNodeId
-      guard
-        var node = try DocNodeRecord.fetchOne(
-          db, key: ["documentLocalId": documentLocalId, "nodeId": remoteHeadNodeId])
-      else {
-        throw StoreError.nodeNotFound(document: documentLocalId, node: remoteHeadNodeId)
-      }
-
-      try Self.demoteBranchJobs(db, documentLocalId: documentLocalId)
-
-      node.materialized = markdown
-      node.materializedAt = now
-      try node.update(db)
-
-      document.localHeadNodeId = remoteHeadNodeId
-      document.markdown = markdown
-      document.wordCount = wordCount
-      if document.titleMode == .derived, let title { document.title = title }
-      document.draftMarkdown = nil
-      document.draftSelectionAnchor = nil
-      document.draftSelectionHead = nil
-      document.editorIngressRevision = nil
-      document.editorIngressAcknowledged = false
-      document.divergedRemoteHeadNodeId = nil
-      document.queueBlockedReason = nil
-      document.draftRevision += 1
-      document.syncState =
-        try OutboxJob.filter(Column("documentLocalId") == documentLocalId).fetchCount(db) == 0
-        ? .synced : .pending
-      document.updatedAt = now
-      try document.update(db)
-      try Self.trimMaterializationCache(db, documentLocalId: documentLocalId)
+      receipts.headResetCutoffs[documentLocalId] = result
     }
   }
 
@@ -958,52 +1042,56 @@ public actor RectoStore {
     rebasedJob: OutboxJob,
     now: Double = Date().timeIntervalSince1970 * 1000
   ) throws {
-    try writer.write { db in
-      guard var document = try DocumentRecord.fetchOne(db, key: documentLocalId) else {
-        throw StoreError.documentNotFound(documentLocalId)
+    try orderedEditorReceipts.withLock { receipts in
+      let result: Int = try writer.write { db in
+        guard var document = try DocumentRecord.fetchOne(db, key: documentLocalId) else {
+          throw StoreError.documentNotFound(documentLocalId)
+        }
+        try Self.checkResolution(db, document, expecting)
+        let remoteHeadNodeId = expecting.divergedRemoteHeadNodeId
+        guard
+          var base = try DocNodeRecord.fetchOne(
+            db, key: ["documentLocalId": documentLocalId, "nodeId": remoteHeadNodeId])
+        else {
+          throw StoreError.nodeNotFound(document: documentLocalId, node: remoteHeadNodeId)
+        }
+
+        try Self.demoteBranchJobs(db, documentLocalId: documentLocalId)
+
+        base.materialized = remoteMarkdown
+        base.materializedAt = now
+        try base.update(db)
+        _ = remoteWordCount
+
+        var node = rebasedNode
+        node.materialized = rebasedMarkdown
+        node.materializedAt = now
+        try node.save(db)
+
+        // Enqueued last, so it drains after the node-only uploads that carry the
+        // discarded branch's text.
+        var job = rebasedJob
+        try job.insert(db)
+
+        document.localHeadNodeId = node.nodeId
+        document.markdown = rebasedMarkdown
+        document.wordCount = rebasedWordCount
+        if document.titleMode == .derived, let title { document.title = title }
+        document.draftMarkdown = nil
+        document.draftSelectionAnchor = nil
+        document.draftSelectionHead = nil
+        document.editorIngressRevision = nil
+        document.editorIngressAcknowledged = false
+        document.divergedRemoteHeadNodeId = nil
+        document.queueBlockedReason = nil
+        document.draftRevision += 1
+        document.syncState = .pending
+        document.updatedAt = now
+        try document.update(db)
+        try Self.trimMaterializationCache(db, documentLocalId: documentLocalId)
+        return document.draftRevision
       }
-      try Self.checkResolution(db, document, expecting)
-      let remoteHeadNodeId = expecting.divergedRemoteHeadNodeId
-      guard
-        var base = try DocNodeRecord.fetchOne(
-          db, key: ["documentLocalId": documentLocalId, "nodeId": remoteHeadNodeId])
-      else {
-        throw StoreError.nodeNotFound(document: documentLocalId, node: remoteHeadNodeId)
-      }
-
-      try Self.demoteBranchJobs(db, documentLocalId: documentLocalId)
-
-      base.materialized = remoteMarkdown
-      base.materializedAt = now
-      try base.update(db)
-      _ = remoteWordCount
-
-      var node = rebasedNode
-      node.materialized = rebasedMarkdown
-      node.materializedAt = now
-      try node.save(db)
-
-      // Enqueued last, so it drains after the node-only uploads that carry the
-      // discarded branch's text.
-      var job = rebasedJob
-      try job.insert(db)
-
-      document.localHeadNodeId = node.nodeId
-      document.markdown = rebasedMarkdown
-      document.wordCount = rebasedWordCount
-      if document.titleMode == .derived, let title { document.title = title }
-      document.draftMarkdown = nil
-      document.draftSelectionAnchor = nil
-      document.draftSelectionHead = nil
-      document.editorIngressRevision = nil
-      document.editorIngressAcknowledged = false
-      document.divergedRemoteHeadNodeId = nil
-      document.queueBlockedReason = nil
-      document.draftRevision += 1
-      document.syncState = .pending
-      document.updatedAt = now
-      try document.update(db)
-      try Self.trimMaterializationCache(db, documentLocalId: documentLocalId)
+      receipts.headResetCutoffs[documentLocalId] = result
     }
   }
 
@@ -1620,23 +1708,28 @@ public actor RectoStore {
   /// which is precisely how one account ends up reading another's documents.
   /// Either both happen or neither does.
   public func purgeAndSetMirrorOwner(_ userId: String?) throws {
-    try writer.write { db in
-      // documents cascades into doc_nodes/versions/comments/review_branches/ai_runs.
-      try db.execute(sql: "DELETE FROM documents")
-      try db.execute(sql: "DELETE FROM outbox")
-      try db.execute(sql: "DELETE FROM writing_stats")
-      // The device id is not the account's data; keeping it stops one Mac
-      // reappearing as a new device in the history panel after every sign-in.
-      try db.execute(
-        sql: "DELETE FROM settings WHERE key <> ?", arguments: [Self.deviceOriginKey])
-      try db.execute(sql: "DELETE FROM window_state")
-      try db.execute(sql: "DELETE FROM ai_runs")
-      if let userId {
-        try SettingRecord(
-          key: Self.mirrorOwnerKey, json: userId,
-          updatedAt: Date().timeIntervalSince1970 * 1000, dirty: false
-        ).insert(db)
+    try orderedEditorReceipts.withLock { receipts in
+      try writer.write { db in
+        // documents cascades into doc_nodes/versions/comments/review_branches/ai_runs.
+        try db.execute(sql: "DELETE FROM documents")
+        try db.execute(sql: "DELETE FROM outbox")
+        try db.execute(sql: "DELETE FROM writing_stats")
+        // The device id is not the account's data; keeping it stops one Mac
+        // reappearing as a new device in the history panel after every sign-in.
+        try db.execute(
+          sql: "DELETE FROM settings WHERE key <> ?", arguments: [Self.deviceOriginKey])
+        try db.execute(sql: "DELETE FROM window_state")
+        try db.execute(sql: "DELETE FROM ai_runs")
+        if let userId {
+          try SettingRecord(
+            key: Self.mirrorOwnerKey, json: userId,
+            updatedAt: Date().timeIntervalSince1970 * 1000, dirty: false
+          ).insert(db)
+        }
       }
+      receipts.pending.removeAll()
+      receipts.acknowledgements.removeAll()
+      receipts.headResetCutoffs.removeAll()
     }
     reclaimSpace()
   }
@@ -1660,19 +1753,24 @@ public actor RectoStore {
   /// (plan 023 §4.1(4)); the backend's `account.deleteEverything` action is a
   /// separate, later concern.
   public func purgeEverything() throws {
-    try writer.write { db in
-      // documents cascades into doc_nodes/versions/comments/review_branches/ai_runs.
-      try db.execute(sql: "DELETE FROM documents")
-      try db.execute(sql: "DELETE FROM outbox")
-      try db.execute(sql: "DELETE FROM writing_stats")
-      // Every setting except the ownership marker, which has to outlive the
-      // purge so a later cold start can still tell whose database this is, and
-      // the device id, which belongs to the machine rather than the account.
-      try db.execute(
-        sql: "DELETE FROM settings WHERE key NOT IN (?, ?)",
-        arguments: [Self.mirrorOwnerKey, Self.deviceOriginKey])
-      try db.execute(sql: "DELETE FROM window_state")
-      try db.execute(sql: "DELETE FROM ai_runs")
+    try orderedEditorReceipts.withLock { receipts in
+      try writer.write { db in
+        // documents cascades into doc_nodes/versions/comments/review_branches/ai_runs.
+        try db.execute(sql: "DELETE FROM documents")
+        try db.execute(sql: "DELETE FROM outbox")
+        try db.execute(sql: "DELETE FROM writing_stats")
+        // Every setting except the ownership marker, which has to outlive the
+        // purge so a later cold start can still tell whose database this is, and
+        // the device id, which belongs to the machine rather than the account.
+        try db.execute(
+          sql: "DELETE FROM settings WHERE key NOT IN (?, ?)",
+          arguments: [Self.mirrorOwnerKey, Self.deviceOriginKey])
+        try db.execute(sql: "DELETE FROM window_state")
+        try db.execute(sql: "DELETE FROM ai_runs")
+      }
+      receipts.pending.removeAll()
+      receipts.acknowledgements.removeAll()
+      receipts.headResetCutoffs.removeAll()
     }
     reclaimSpace()
   }
