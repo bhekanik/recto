@@ -125,6 +125,7 @@ public actor DocumentSession {
   /// The app's editor ingress derives this draft's title on its own latest-wins
   /// lane. Recovery and non-editor callers still derive inside the session.
   private var editorTitleLaneOwnsDraft = false
+  private var lastOrderedIngressGeneration = -1
 
   /// Tail of the transition queue. Actor isolation does NOT prevent reentrancy:
   /// every `await` is a place another window's keystroke can run a whole edit.
@@ -346,12 +347,14 @@ public actor DocumentSession {
     selection: NodeSelection?,
     structural: Bool = false,
     generation: Int,
-    origin: String? = nil
+    origin: String? = nil,
+    preserveAcceptedOrder: Bool = false
   ) async throws {
     try await withTransition {
       try await performLocalChange(
         markdown: markdown, selection: selection, structural: structural,
-        persistedGeneration: generation, originOverride: origin)
+        persistedGeneration: generation, originOverride: origin,
+        preserveAcceptedOrder: preserveAcceptedOrder)
     }
   }
 
@@ -412,7 +415,8 @@ public actor DocumentSession {
     selection: NodeSelection?,
     structural: Bool,
     persistedGeneration: Int?,
-    originOverride: String? = nil
+    originOverride: String? = nil,
+    preserveAcceptedOrder: Bool = false
   ) async throws {
     try requireWritable()
     guard controller != nil else { throw SessionError.notOpen }
@@ -420,19 +424,38 @@ public actor DocumentSession {
 
     let generation: Int
     if let persistedGeneration {
-      let stored = try await store.document(localId: documentLocalId)
-      guard stored?.draftRevision == persistedGeneration,
-        stored.map({ ($0.displayMarkdown as NSString).isEqual(to: markdown) }) == true
-      else {
+      guard let stored = try await store.document(localId: documentLocalId) else {
+        throw SessionError.notOpen
+      }
+      if preserveAcceptedOrder {
+        let cutoff = store.orderedEditorIngressCutoff(documentLocalId: documentLocalId)
+        if cutoff > lastOrderedIngressGeneration {
+          lastOrderedIngressGeneration = cutoff
+          try await rebuildControllerFromStore(restoreDraft: false)
+          publish()
+        }
+        if persistedGeneration <= lastOrderedIngressGeneration { return }
+      }
+      let isCurrent = stored.draftRevision == persistedGeneration
+        && (stored.displayMarkdown as NSString).isEqual(to: markdown)
+      let isQueued = preserveAcceptedOrder && stored.editorIngressRevision != nil
+        && stored.draftRevision >= persistedGeneration
+      guard isCurrent || isQueued else {
         try await rebuildControllerFromStore()
         publish()
         return
       }
-      if stored?.localHeadNodeId != document?.localHeadNodeId {
-        try await rebuildControllerFromStore()
+      if stored.localHeadNodeId != controller?.currentNodeId {
+        // A post-reset accepted callback may start the new cohort. Rebuild
+        // from its head, leaving the newer durable buffer for queued callbacks.
+        try await rebuildControllerFromStore(restoreDraft: !preserveAcceptedOrder)
       }
+      // Later callbacks are already durable. Their snapshots still follow this
+      // one in the ordered lane, so retain its grouping boundary without replacing them.
+      idleTask?.cancel()
+      idleTask = nil
       editorTitleLaneOwnsDraft = true
-      generation = persistedGeneration
+      generation = stored.draftRevision
     } else {
       // Write-ahead: the text is on disk BEFORE any in-memory state moves. A
       // crash between here and the commit loses nothing.
@@ -460,11 +483,15 @@ public actor DocumentSession {
         let persisted = try await persist(
           commit, base: head, expectedDraftRevision: expectedGeneration,
           includeDerivedTitle: !editorTitleLaneOwnsDraft,
-          origin: isThisChange ? originOverride ?? origin : origin, at: timestamp)
+          origin: isThisChange ? originOverride ?? origin : origin,
+          retainNewerEditorIngress: preserveAcceptedOrder, at: timestamp)
         head = persisted.localHeadNodeId
         expectedGeneration = persisted.draftRevision
       }
       controller = staged
+      if preserveAcceptedOrder, let persistedGeneration {
+        lastOrderedIngressGeneration = persistedGeneration
+      }
     } catch {
       // Rebuild from what is actually on disk. Keeping the staged controller
       // would name a parent the store does not have.
@@ -482,9 +509,18 @@ public actor DocumentSession {
     }
 
     try await reload()
+    if preserveAcceptedOrder, let persistedGeneration,
+      persistedGeneration <= store.orderedEditorIngressCutoff(documentLocalId: documentLocalId)
+    {
+      try await rebuildControllerFromStore(restoreDraft: false)
+      publish()
+      return
+    }
     editorTitleLaneOwnsDraft = self.document?.editorIngressRevision != nil
-    guard self.document?.draftRevision == expectedGeneration else {
-      try await rebuildControllerFromStore()
+    guard self.document?.draftRevision == expectedGeneration,
+      !preserveAcceptedOrder || self.document.map { ($0.displayMarkdown as NSString).isEqual(to: markdown) } == true
+    else {
+      if !preserveAcceptedOrder { try await rebuildControllerFromStore() }
       publish()
       return
     }
@@ -502,7 +538,7 @@ public actor DocumentSession {
   /// Re-seed the controller from the persisted head and draft. The store is the
   /// only thing that survives a crash, so it is the only thing worth trusting
   /// after a failed write.
-  private func rebuildControllerFromStore() async throws {
+  private func rebuildControllerFromStore(restoreDraft: Bool = true) async throws {
     try await reload()
     guard let document else { return }
     let markdown = try await store.materializedMarkdown(
@@ -511,7 +547,7 @@ public actor DocumentSession {
       rootNodeId: document.localHeadNodeId,
       rootMarkdown: markdown,
       depthSinceSnapshot: depthSinceSnapshot(document.localHeadNodeId, nodesById))
-    if let draft = document.draftMarkdown {
+    if restoreDraft, let draft = document.draftMarkdown {
       rebuilt.restorePendingDraft(
         markdown: draft, selection: document.draftSelection, now: now())
     }
@@ -584,6 +620,7 @@ public actor DocumentSession {
     expectedDraftRevision: Int? = nil,
     includeDerivedTitle: Bool = true,
     origin: String? = nil,
+    retainNewerEditorIngress: Bool = false,
     at timestamp: Double
   ) async throws -> DocumentRecord
   {
@@ -614,6 +651,7 @@ public actor DocumentSession {
       documentLocalId: documentLocalId, node: node, markdown: commit.markdown, wordCount: words,
       title: title,
       preserveQueuedDraftJob: !includeDerivedTitle,
+      retainNewerEditorIngress: retainNewerEditorIngress,
       expectedHeadNodeId: base, expectedDraftRevision: expectedDraftRevision,
       job: job, now: timestamp)
   }
@@ -692,10 +730,11 @@ public actor DocumentSession {
 
     // Materializing suspended. If the head moved in that window the move is
     // stale, and applying it would strand the newer node's queued commit.
-    _ = try await store.moveHead(
+    let moved = try await store.moveHead(
       documentLocalId: documentLocalId, to: nodeId, markdown: markdown, wordCount: words,
       title: title,
       expectedHeadNodeId: base, job: job, now: timestamp)
+    lastOrderedIngressGeneration = max(lastOrderedIngressGeneration, moved.draftRevision)
     controller?.setCurrent(
       nodeId: nodeId, markdown: markdown,
       depthSinceSnapshot: depthSinceSnapshot(nodeId, nodesById))

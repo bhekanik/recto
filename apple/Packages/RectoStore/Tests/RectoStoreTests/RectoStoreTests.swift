@@ -41,6 +41,81 @@ private func nodeAndJob(
 
 @Suite("RectoStore")
 struct RectoStoreTests {
+  @Test("an ordered history commit retains a newer durable ingress and its outbox job")
+  func retainedOrderedIngress() async throws {
+    let store = try makeStore()
+    _ = try await seedDocument(store)
+    let older = try store.saveEditorIngressSynchronously(documentLocalId: "doc-1", markdown: "old boundary", selection: nil, wordCount: 2, clientMutationId: ulid(), draftPayload: "old")
+    let newer = try store.saveEditorIngressSynchronously(documentLocalId: "doc-1", markdown: "newest buffer", selection: nil, wordCount: 2, clientMutationId: ulid(), draftPayload: "newest")
+    var grouping = GroupingController(rootNodeId: "root", rootMarkdown: "")
+    let commit = try #require(grouping.record(markdown: "old boundary", selection: nil, structural: true, now: 1).first)
+    let (node, job) = nodeAndJob(documentLocalId: "doc-1", commit: commit, now: 1)
+    await #expect(throws: StoreError.staleGeneration(expected: older, actual: newer)) {
+      _ = try await store.commit(documentLocalId: "doc-1", node: node, markdown: commit.markdown, wordCount: 2, preserveQueuedDraftJob: true, expectedHeadNodeId: "root", expectedDraftRevision: older, job: job)
+    }
+    let retained = try await store.commit(documentLocalId: "doc-1", node: node, markdown: commit.markdown, wordCount: 2, preserveQueuedDraftJob: true, retainNewerEditorIngress: true, expectedHeadNodeId: "root", expectedDraftRevision: older, job: job)
+    #expect(retained.displayMarkdown == "newest buffer")
+    #expect(retained.localHeadNodeId == commit.nodeId)
+    let draft = try #require(try await store.pendingJobs(documentLocalId: "doc-1").last { $0.kind == .draftSave })
+    #expect(draft.payload == "newest")
+    #expect(draft.baseHeadNodeId == commit.nodeId)
+  }
+
+  @Test("ordered commit CAS refuses a head-reset ABA after the session captured its revision")
+  func orderedCommitAfterHeadReset() async throws {
+    let store = try makeStore()
+    _ = try await seedDocument(store)
+    try await store.mergeRemoteNodes(documentLocalId: "doc-1", nodes: [DocNodeRecord(documentLocalId: "doc-1", nodeId: "other", parentNodeId: "root", patch: TextPatch(from: 0, to: 0, insert: "B").encoded, snapshot: "B", origin: "remote", createdAt: 1)])
+    let captured = try store.saveEditorIngressSynchronously(documentLocalId: "doc-1", markdown: "old A", selection: nil, wordCount: 2, clientMutationId: ulid(), draftPayload: "old")
+    var grouping = GroupingController(rootNodeId: "root", rootMarkdown: "")
+    let commit = try #require(grouping.record(markdown: "old A", selection: nil, structural: true, now: 1).first)
+    let (node, job) = nodeAndJob(documentLocalId: "doc-1", commit: commit, now: 1)
+    _ = try await store.moveHead(documentLocalId: "doc-1", to: "other", markdown: "B", wordCount: 1, expectedHeadNodeId: "root", job: nil)
+    let reset = try await store.moveHead(documentLocalId: "doc-1", to: "root", markdown: "", wordCount: 0, expectedHeadNodeId: "other", job: nil)
+    let fresh = try store.saveEditorIngressSynchronously(documentLocalId: "doc-1", markdown: "latest B", selection: nil, wordCount: 2, clientMutationId: ulid(), draftPayload: "latest")
+    #expect(store.orderedEditorIngressCutoff(documentLocalId: "doc-1") == reset.draftRevision)
+    await #expect(throws: StoreError.staleGeneration(expected: captured, actual: fresh)) {
+      _ = try await store.commit(documentLocalId: "doc-1", node: node, markdown: commit.markdown, wordCount: 2, preserveQueuedDraftJob: true, retainNewerEditorIngress: true, expectedHeadNodeId: "root", expectedDraftRevision: captured, job: job)
+    }
+    #expect(try await store.document(localId: "doc-1")?.displayMarkdown == "latest B")
+    #expect(try await store.document(localId: "doc-1")?.localHeadNodeId == "root")
+    #expect(try await store.node(documentLocalId: "doc-1", nodeId: node.nodeId) == nil)
+    #expect(try await store.pendingJobs(documentLocalId: "doc-1").last?.payload == "latest")
+  }
+
+  @Test("purge and reused document identifiers cannot transfer an old receipt hold")
+  func receiptsAfterPurge() async throws {
+    let store = try makeStore()
+    _ = try await seedDocument(store)
+    let old = UUID()
+    _ = try store.saveEditorIngressSynchronously(documentLocalId: "doc-1", markdown: "", selection: nil, wordCount: 0, clientMutationId: ulid(), draftPayload: "{}", orderedReceipt: old)
+    try await store.purgeEverything()
+    _ = try await seedDocument(store)
+    let fresh = UUID()
+    _ = try store.saveEditorIngressSynchronously(documentLocalId: "doc-1", markdown: "", selection: nil, wordCount: 0, clientMutationId: ulid(), draftPayload: "{}", orderedReceipt: fresh)
+    try await store.acknowledgeEditorIngress(documentLocalId: "doc-1", markdown: "", title: "native-spike-test")
+    try store.completeOrderedEditorReceipt(documentLocalId: "doc-1", receipt: old)
+    #expect(try await store.document(localId: "doc-1")?.editorIngressRevision != nil)
+    try store.completeOrderedEditorReceipt(documentLocalId: "doc-1", receipt: fresh)
+    #expect(try await store.document(localId: "doc-1")?.editorIngressRevision == nil)
+  }
+
+  @Test("receipt completion cannot clear a title that changed after acknowledgement")
+  func receiptTitleProof() async throws {
+    let store = try makeStore()
+    _ = try await seedDocument(store)
+    let receipt = UUID()
+    _ = try store.saveEditorIngressSynchronously(documentLocalId: "doc-1", markdown: "", selection: nil, wordCount: 0, clientMutationId: ulid(), draftPayload: "{}", orderedReceipt: receipt)
+    try await store.acknowledgeEditorIngress(documentLocalId: "doc-1", markdown: "", title: "native-spike-test")
+    var changed = try #require(try await store.document(localId: "doc-1"))
+    changed.title = "new title still unacknowledged"
+    try await store.save(changed)
+    try store.completeOrderedEditorReceipt(documentLocalId: "doc-1", receipt: receipt)
+    #expect(try await store.document(localId: "doc-1")?.editorIngressRevision != nil)
+    try await store.acknowledgeEditorIngress(documentLocalId: "doc-1", markdown: "", title: changed.title)
+    #expect(try await store.document(localId: "doc-1")?.editorIngressRevision == nil)
+  }
+
   @Test("migrations create every table plan 023 §4.2 lists")
   func schema() async throws {
     let store = try makeStore()

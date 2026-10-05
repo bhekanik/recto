@@ -57,7 +57,7 @@ public enum MarkdownLineEnding: String, Sendable {
         )
     }
 
-    func normalize(_ text: String) -> String {
+    public func normalize(_ text: String) -> String {
         var result = ""
         result.reserveCapacity(text.utf8.count)
         let scalars = text.unicodeScalars

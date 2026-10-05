@@ -18,6 +18,7 @@ final class OrderedDocumentEdits: ObservableObject, EditorIngressCoordinating {
         var wordCount: Int
         /// Names the node this change becomes (`ai:<label>`); nil is the device's.
         var origin: String? = nil
+        var orderedReceipt: UUID? = nil
     }
 
     typealias Submit = @Sendable (Change) async throws -> Void
@@ -38,6 +39,8 @@ final class OrderedDocumentEdits: ObservableObject, EditorIngressCoordinating {
     private let publishTitle: PublishTitle
     private let continuation: AsyncStream<Change>.Continuation
     private var worker: Task<Void, Never>?
+    private var receipts: Set<UUID> = []
+    private let tracksHistoryReceipts: Bool
     private var pendingTitle: Change?
     private var titleWorker: Task<Void, Never>?
     private var drainWaiters: [CheckedContinuation<Void, Never>] = []
@@ -54,11 +57,13 @@ final class OrderedDocumentEdits: ObservableObject, EditorIngressCoordinating {
         },
         publishTitle: PublishTitle? = nil,
         initialMarkdown: String = "",
+        tracksHistoryReceipts: Bool = false,
         submit: @escaping Submit
     ) {
         self.store = store
         self.documentLocalId = documentLocalId
         self.countWords = countWords
+        self.tracksHistoryReceipts = tracksHistoryReceipts
         self.deriveTitle = deriveTitle
         self.publishTitle = publishTitle ?? { change, title in
             let titleJob = OutboxJob(
@@ -85,12 +90,15 @@ final class OrderedDocumentEdits: ObservableObject, EditorIngressCoordinating {
         continuation = pair.continuation
         worker = Task { [weak self] in
             for await change in pair.stream {
-                do {
-                    try await submit(change)
-                    self?.didFinish(error: nil)
-                } catch {
-                    self?.didFinish(error: error)
+                var failure: (any Error)?
+                do { try await submit(change) } catch { failure = error }
+                if let receipt = change.orderedReceipt {
+                    do {
+                        try store.completeOrderedEditorReceipt(documentLocalId: documentLocalId, receipt: receipt)
+                    } catch { failure = failure ?? error }
+                    self?.receipts.remove(receipt)
                 }
+                self?.didFinish(error: failure)
             }
         }
     }
@@ -99,6 +107,9 @@ final class OrderedDocumentEdits: ObservableObject, EditorIngressCoordinating {
         continuation.finish()
         worker?.cancel()
         titleWorker?.cancel()
+        for receipt in receipts {
+            try? store.completeOrderedEditorReceipt(documentLocalId: documentLocalId, receipt: receipt)
+        }
     }
 
     @discardableResult
@@ -108,6 +119,7 @@ final class OrderedDocumentEdits: ObservableObject, EditorIngressCoordinating {
         guard isAccepting else { return false }
         do {
             let wordCount = countWords(markdown)
+            let receipt = tracksHistoryReceipts ? UUID() : nil
             let generation = try store.saveEditorIngressSynchronously(
                 documentLocalId: documentLocalId,
                 markdown: markdown,
@@ -117,8 +129,10 @@ final class OrderedDocumentEdits: ObservableObject, EditorIngressCoordinating {
                 clientMutationId: ulid(),
                 draftPayload: OutboxPayload(
                     title: nil, markdown: markdown, wordCount: wordCount
-                ).encoded
+                ).encoded,
+                orderedReceipt: receipt
             )
+            if let receipt { receipts.insert(receipt) }
             pendingCount += 1
             lastAcceptedMarkdown = markdown
             let change = Change(
@@ -127,7 +141,8 @@ final class OrderedDocumentEdits: ObservableObject, EditorIngressCoordinating {
                 structural: structural,
                 generation: generation,
                 wordCount: wordCount,
-                origin: origin
+                origin: origin,
+                orderedReceipt: receipt
             )
             continuation.yield(change)
             enqueueTitle(change)
@@ -177,6 +192,14 @@ final class OrderedDocumentEdits: ObservableObject, EditorIngressCoordinating {
         continuation.finish()
         worker?.cancel()
         worker = nil
+        for receipt in receipts {
+            try? store.completeOrderedEditorReceipt(documentLocalId: documentLocalId, receipt: receipt)
+        }
+        receipts.removeAll()
+        pendingCount = 0
+        let waiters = drainWaiters
+        drainWaiters.removeAll()
+        waiters.forEach { $0.resume() }
         pendingTitle = nil
         titleWorker?.cancel()
         titleWorker = nil

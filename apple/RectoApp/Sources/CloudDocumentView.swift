@@ -344,7 +344,9 @@ struct CloudDocumentView: View {
                 OverflowPanel(model: overflow, theme: styler.theme, close: {
                     showsOverflow = false
                     chrome.focusText()
-                }, onFocus: chrome.noteOverflowFocused)
+                }, onFocus: chrome.noteOverflowFocused, onDragBegan: { source, text in
+                    model.beginOverflowDrag(from: source, text: text)
+                }, onDragEnded: model.endOverflowDrag)
             }
             if showsComments, !zen.hidesChrome {
                 CommentsPanel(

@@ -638,4 +638,57 @@ struct OrderedDocumentEditsTests {
         #expect(try await store.pendingJobs(documentLocalId: localId).count == 1)
         #expect(await session.currentState?.markdown == "clean")
     }
+    @MainActor
+    @Test("delayed title publication survives immediate ordered structural boundaries")
+    func titleAfterStructuralHistory() async throws {
+        let store = try RectoStore.inMemory()
+        let library = DocumentLibrary(store: store, sync: nil, origin: "test")
+        let document = try await library.createDocument(title: "Initial")
+        let session = DocumentSession(documentLocalId: document.localId, store: store, sync: nil, origin: "test", schedulesTimers: false)
+        try await session.open()
+        let titleGate = TitleGate()
+        let submissions = SubmissionRecorder()
+        let queue = OrderedDocumentEdits(store: store, documentLocalId: document.localId,
+                                        deriveTitle: { await titleGate.derive($0) }, tracksHistoryReceipts: true) { change in
+            try await session.applyPersistedLocalChange(markdown: change.markdown, selection: nil, structural: change.structural, generation: change.generation, preserveAcceptedOrder: true)
+            await submissions.record(change.markdown)
+        }
+        #expect(queue.accept(markdown: "Before"))
+        await titleGate.waitUntilStarted()
+        #expect(queue.accept(markdown: "Before drop", structural: true))
+        #expect(queue.accept(markdown: "Before drop after"))
+        await submissions.waitForCount(3)
+        try await session.flush()
+        await titleGate.release()
+        await queue.waitUntilDrained()
+        let stored = try #require(try await store.document(localId: document.localId))
+        #expect(stored.displayMarkdown == "Before drop after")
+        #expect(stored.title == "Before drop after")
+        let latestTitleJob = try #require(try await store.pendingJobs(documentLocalId: document.localId).last { $0.kind == .draftSave })
+        #expect(latestTitleJob.payload.contains("Before drop after"))
+        try await store.acknowledgeEditorIngress(documentLocalId: document.localId, markdown: stored.displayMarkdown, title: stored.title)
+        #expect(try await store.document(localId: document.localId)?.editorIngressRevision == nil)
+    }
+
+    @MainActor
+    @Test("canceling an ordered queue releases only its own pending acknowledgements")
+    func cancelledReceipts() async throws {
+        let store = try RectoStore.inMemory()
+        let library = DocumentLibrary(store: store, sync: nil, origin: "test")
+        let document = try await library.createDocument(title: "Cancel")
+        let gate = EditGate()
+        let titleGate = TitleGate()
+        let queue = OrderedDocumentEdits(store: store, documentLocalId: document.localId, deriveTitle: { await titleGate.derive($0) }, tracksHistoryReceipts: true) { _ in await gate.suspendFirstWrite() }
+        #expect(queue.accept(markdown: ""))
+        await gate.waitUntilStarted()
+        await titleGate.waitUntilStarted()
+        #expect(queue.accept(markdown: ""))
+        try await store.acknowledgeEditorIngress(documentLocalId: document.localId, markdown: "", title: document.title)
+        #expect(try await store.document(localId: document.localId)?.editorIngressRevision != nil)
+        queue.invalidate()
+        #expect(try await store.document(localId: document.localId)?.editorIngressRevision == nil)
+        await gate.release()
+        await titleGate.release()
+    }
+
 }

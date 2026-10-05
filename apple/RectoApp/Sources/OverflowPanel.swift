@@ -7,6 +7,8 @@ struct OverflowPanel: View {
     let theme: RectoEditorTheme
     let close: () -> Void
     let onFocus: () -> Void
+    var onDragBegan: (OverflowTextView, String) -> Void = { _, _ in }
+    var onDragEnded: () -> Void = {}
     @State private var showsOtherCopy = false
     @State private var resolution: Bool?
 
@@ -22,10 +24,10 @@ struct OverflowPanel: View {
             .foregroundStyle(Color(nsColor: theme.ink2))
             .padding(.horizontal, 12).frame(height: 36)
             Color(nsColor: theme.line).frame(height: 1)
-            Text("Notes stay outside your draft and exports. Copy any passage back when you need it.")
+            Text("Notes stay outside your draft and exports. Select a passage, then drag it into your draft. The notes stay here.")
                 .font(.system(size: 12)).foregroundStyle(Color(nsColor: theme.ink3))
                 .padding(12)
-            OverflowEditor(model: model, theme: theme, onFocus: onFocus)
+            OverflowEditor(model: model, theme: theme, onFocus: onFocus, onDragBegan: onDragBegan, onDragEnded: onDragEnded)
             if model.unsavedMarkdown != nil {
                 Button("Retry saving notes", action: model.retryUnsaved).padding(12)
                 Text("These changes are not saved. Keep this panel open or copy them before closing.")
@@ -82,8 +84,28 @@ final class OverflowTextView: NSTextView {
     }
 
     isolated deinit {
+        onDragEnded()
         for observer in historyObservers { NotificationCenter.default.removeObserver(observer) }
     }
+    var documentLocalId = ""
+    var onDragBegan: (OverflowTextView, String) -> Void = { _, _ in }
+    var onDragEnded: () -> Void = {}
+
+    override func dragSelection(with event: NSEvent, offset mouseOffset: NSSize, slideBack: Bool) -> Bool {
+        onDragEnded()
+        let selection = selectedRange()
+        guard selection.length > 0, NSMaxRange(selection) <= (string as NSString).length else { return false }
+        onDragBegan(self, (string as NSString).substring(with: selection))
+        let began = super.dragSelection(with: event, offset: mouseOffset, slideBack: slideBack)
+        if !began { onDragEnded() }
+        return began
+    }
+
+    override func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        onDragEnded()
+        super.draggingSession(session, endedAt: screenPoint, operation: operation)
+    }
+
     var onFocus: () -> Void = {}
     override func becomeFirstResponder() -> Bool {
         let focused = super.becomeFirstResponder()
@@ -98,14 +120,19 @@ private struct OverflowEditor: NSViewRepresentable {
     let theme: RectoEditorTheme
 
     let onFocus: () -> Void
+    let onDragBegan: (OverflowTextView, String) -> Void
+    let onDragEnded: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(model: model) }
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
         let text = OverflowTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 300))
+        text.documentLocalId = model.record.documentLocalId
         text.observeHistory()
         text.onFocus = onFocus
+        text.onDragBegan = onDragBegan
+        text.onDragEnded = onDragEnded
         text.isRichText = false
         text.allowsUndo = true
         text.isVerticallyResizable = true
@@ -125,6 +152,8 @@ private struct OverflowEditor: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let text = scroll.documentView as? OverflowTextView else { return }
         applyTheme(text, scroll)
+        text.onDragBegan = onDragBegan
+        text.onDragEnded = onDragEnded
         context.coordinator.generation = model.record.generation
         if !(text.string as NSString).isEqual(to: model.displayMarkdown) {
             // A remote copy or another pane replaced the buffer. Old undo cannot overwrite it.
