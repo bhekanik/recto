@@ -2,6 +2,41 @@ import AppKit
 import SwiftUI
 
 @main
+enum RectoMain {
+    /// Under XCTest the app is only a host. Its library window would open the
+    /// writer's real mirror and start sign-in and sync, and its document group
+    /// would open windows over the screen while the tests run.
+    static func main() {
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+            RectoTestHost.main()
+        } else {
+            RectoApp.main()
+        }
+    }
+}
+
+/// The app's menus without its windows: tests read the real menu bar.
+struct RectoTestHost: App {
+    private let settings = StudioSettings.shared
+    @State private var model = RectoApplicationModel()
+    private let palette = CommandPaletteController(settings: .shared)
+
+    @NSApplicationDelegateAdaptor private var launch: RectoTestHostLaunch
+
+    var body: some Scene {
+        Settings { EmptyView() }
+            .commands { StudioCommands(settings: settings, palette: palette, model: model, editors: .shared) }
+    }
+}
+
+/// The app arms appearance following when its first window appears; the host
+/// has none, so it arms once the application object exists.
+final class RectoTestHostLaunch: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        MainActor.assumeIsolated { StudioSettings.shared.followApplicationAppearance() }
+    }
+}
+
 struct RectoApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @State private var model = RectoApplicationModel()
