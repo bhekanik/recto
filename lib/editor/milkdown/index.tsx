@@ -65,12 +65,14 @@ import {
 	commentPlugin,
 	setCommentMeta,
 } from "@/lib/review/comment-decorations-pm";
+import type { WritingMark } from "@/lib/writing/marks";
 import { caretSectionRange } from "./caret-section";
 import { flagPlugin, milkdownFlagEditing } from "./flags";
 import { lintPlugin, setLintMeta } from "./lint-plugin";
 import { replaceMarkdownSelection } from "./replace-selection";
 import { SelectionToolbarView } from "./selection-toolbar-view";
 import { SlashMenuView } from "./slash-menu-view";
+import { setWritingMeta, writingPlugin } from "./writing-plugin";
 
 export type MilkdownEditorHandle = EditorHandle & {
 	getPmView: () => PMEditorView | null;
@@ -81,6 +83,7 @@ export type MilkdownEditorHandle = EditorHandle & {
 	setLintIssues: (issues: LintIssue[]) => void;
 	/** Push display-only comment highlights (located by quote text; plan 010 Phase B). */
 	setCommentHighlights: (marks: CommentMark[]) => void;
+	setWritingMarks: (marks: WritingMark[]) => void;
 };
 
 const rectoSlash = slashFactory("RECTO_SLASH");
@@ -456,6 +459,7 @@ const MilkdownEditorInner = forwardRef<MilkdownEditorHandle, InnerProps>(
 				// Comment highlights (plan 010 Phase B) — display-only $prose plugin;
 				// marks arrive via tr meta and are located by searching for the quote.
 				.use($prose(() => commentPlugin()))
+				.use($prose(() => writingPlugin()))
 				// Writing flags: `<!--flag: note-->` drawn as a flag glyph.
 				.use($prose(() => flagPlugin()))
 				.config((ctx) => {
@@ -741,6 +745,16 @@ const MilkdownEditorInner = forwardRef<MilkdownEditorHandle, InnerProps>(
 				try {
 					const view = editor.ctx.get(editorViewCtx);
 					view.dispatch(view.state.tr.setMeta(setLintMeta, issues));
+				} catch {
+					// editor still mounting — next push will land once the view exists
+				}
+			},
+			setWritingMarks(marks: WritingMark[]) {
+				const editor = editorRef.current;
+				if (!editor) return;
+				try {
+					const view = editor.ctx.get(editorViewCtx);
+					view.dispatch(view.state.tr.setMeta(setWritingMeta, marks));
 				} catch {
 					// editor still mounting — next push will land once the view exists
 				}

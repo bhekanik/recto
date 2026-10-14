@@ -8,6 +8,6 @@ Ghosted text is still text. You can edit it while it is faded, and typing inside
 
 Readers do not see ghosted text. Preview, Copy as rich text, and the Markdown, HTML and Word exports leave it out. Copy Markdown and the draft itself keep it, because those are your source. For a Word export, Recto sends the server the ghosted ranges with a fingerprint of the draft; if the server's copy differs, the export stops and asks you to let the draft sync first, rather than cutting the wrong text.
 
-Ghosts sync with the draft to your other Macs. The web app keeps them through its own edits and leaves them out of its Preview, copies and exports too; it does not draw them faded or ghost text yet. Ghost is not available for standalone Markdown files.
+Ghosts sync with the draft to your other Macs. The web app keeps them through its own edits and leaves them out of its Preview, copies and exports too; it draws them faded too, but ghosting and reviving are on the Mac for now. Ghost is not available for standalone Markdown files.
 
 [Return to the macOS app guide](../../apple/RectoApp/README.md).

@@ -52,6 +52,7 @@ import {
 	useDocumentSyncFor,
 	useWorkspace,
 } from "@/lib/workspace/workspace-context";
+import { writingMarksFor } from "@/lib/writing/marks";
 import { readerMarkdown } from "@/lib/writing/reader";
 import { ghostRangesFor } from "@/lib/writing/state";
 
@@ -257,6 +258,20 @@ export function PaneEditor({
 				onSetComments as EventListener,
 			);
 	}, [isActive]);
+
+	// Ghosts and alternatives (plan 026), derived from this document's history
+	// once the text settles and drawn by both editors. Display only.
+	useEffect(() => {
+		if (!documentId || markdown === null || leaf.mode === "preview") return;
+		const timer = setTimeout(() => {
+			const handle = leaf.mode === "rich" ? richRef.current : cmRef.current;
+			const live = handle?.getCanonicalMarkdown() ?? markdown;
+			const marks = writingMarksFor(live, getDocumentHistory(documentId));
+			cmRef.current?.setWritingMarks(marks);
+			richRef.current?.setWritingMarks(marks);
+		}, 200);
+		return () => clearTimeout(timer);
+	}, [documentId, markdown, leaf.mode, getDocumentHistory]);
 
 	// Re-apply the latest comment marks into the editor that just became active on a
 	// mode switch (mirrors the lint re-push on leaf.mode change).

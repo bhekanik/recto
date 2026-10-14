@@ -194,31 +194,38 @@ export function followWritingState(
 }
 
 /** The history fields reading the writing state needs. */
-type WritingHistory = {
+export type WritingHistory = {
 	nodes: readonly WritingNode[];
 	getHeadNodeId: () => string | null;
 	materializeAt: (nodeId: string) => string | null;
 };
 
 /**
- * The ghosts on `markdown`, the text a pane shows: derived at the history's
- * head and carried through any typing the head does not have yet.
+ * The writing state on `markdown`, the text a pane shows: derived at the
+ * history's head and carried through any typing the head does not have yet.
  */
+export function writingStateFor(
+	markdown: string,
+	history: WritingHistory | null,
+): WritingState | null {
+	const head = history?.getHeadNodeId() ?? null;
+	if (!history || !head) return null;
+	const nodes = new Map(history.nodes.map((node) => [node.nodeId, node]));
+	const atHead = materializeWriting(head, nodes);
+	if (atHead.ghosts.length === 0 && atHead.alternatives.length === 0)
+		return atHead;
+	const headMarkdown = history.materializeAt(head);
+	if (headMarkdown === null) return null;
+	return followWritingState(atHead, headMarkdown, markdown);
+}
+
+/** The ghosts on `markdown`, as ranges for the reader's text. */
 export function ghostRangesFor(
 	markdown: string,
 	history: WritingHistory | null,
 ): { from: number; to: number }[] {
-	const head = history?.getHeadNodeId() ?? null;
-	if (!history || !head) return [];
-	const nodes = new Map(history.nodes.map((node) => [node.nodeId, node]));
-	const atHead = materializeWriting(head, nodes);
-	if (atHead.ghosts.length === 0) return [];
-	const headMarkdown = history.materializeAt(head);
-	if (headMarkdown === null) return [];
-	return followWritingState(atHead, headMarkdown, markdown).ghosts.map(
-		(ghost) => ({
-			from: ghost.location,
-			to: ghost.location + ghost.length,
-		}),
-	);
+	return (writingStateFor(markdown, history)?.ghosts ?? []).map((ghost) => ({
+		from: ghost.location,
+		to: ghost.location + ghost.length,
+	}));
 }
