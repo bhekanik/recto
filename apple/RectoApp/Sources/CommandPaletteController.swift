@@ -372,6 +372,12 @@ final class CommandPaletteController {
             settings.toggleAITransformMode()
         case "ai-alternatives":
             editor?.suggestAlternatives?()
+        case "lab-opening":
+            editor?.ai?.review(.opening)
+        case "lab-clarity":
+            editor?.ai?.review(.clarity)
+        case "lab-voice":
+            editor?.ai?.review(.voice)
         case "lab-trim-10", "lab-trim-20", "lab-trim-30", "lab-trim-50":
             if let target = Int(id.dropFirst("lab-trim-".count)) { editor?.ai?.trim(target) }
         case "ai-transform":

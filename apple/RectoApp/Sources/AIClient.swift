@@ -36,6 +36,28 @@ struct AIClient {
         var range: NSRange { NSRange(location: Int(from), length: Int(to - from)) }
     }
 
+    struct LabFinding: Decodable, Sendable, Equatable {
+        let from: Double
+        let to: Double
+        let reason: String
+        let suggestion: String?
+        var range: NSRange { NSRange(location: Int(from), length: Int(to - from)) }
+    }
+
+    struct LabSpan: Decodable, Sendable, Equatable {
+        let from: Double
+        let to: Double
+        var range: NSRange { NSRange(location: Int(from), length: Int(to - from)) }
+    }
+
+    struct ReviewResult: Decodable, Sendable, Equatable {
+        let assessment: String
+        let findings: [LabFinding]
+        let openings: [String]
+        let opening: LabSpan?
+        let dropped: Double
+    }
+
     struct LabResult: Decodable, Sendable, Equatable {
         let cuts: [LabCut]
         let dropped: Double
@@ -187,6 +209,21 @@ struct AIClient {
             throw Failure.message("The AI wordings could not be claimed. Try again.")
         }
         return result.alternatives
+    }
+
+    /// `ai/lab:review`: an assessment and exact findings for one editorial pass.
+    func labReview(_ source: Source, pass: String) async throws -> ReviewResult {
+        try await clearLeftoverRun(documentId: source.documentId, kind: "lab")
+        let requestId = UUID().uuidString
+        let result: ReviewResult = try await cloud.api.action(ConvexFunction.aiLabReview, args: [
+            "requestId": .string(requestId), "documentId": .string(source.documentId),
+            "sourceNodeId": .string(source.nodeId), "sourceHash": .string(source.hash),
+            "pass": .string(pass), "platform": .string(Self.platform), "traceContent": true,
+        ])
+        guard try await acknowledge(requestId) else {
+            throw Failure.message("The Lab's review could not be claimed. Try again.")
+        }
+        return result
     }
 
     /// `ai/review:run`: comments and a suggestion branch land on the server.

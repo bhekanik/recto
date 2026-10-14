@@ -112,6 +112,11 @@ public final class RectoDecorationController: NSObject {
         didSet { if ghostRanges != oldValue { apply() } }
     }
 
+    /// Passages a Lab review points at, underlined in the second accent.
+    public var findingRanges: [NSRange] = [] {
+        didSet { if findingRanges != oldValue { apply() } }
+    }
+
     /// Cuts a Lab pass proposes, faded so the draft reads as if they were gone.
     public var proposedCuts: [NSRange] = [] {
         didSet { if proposedCuts != oldValue { apply() } }
@@ -242,6 +247,7 @@ public final class RectoDecorationController: NSObject {
         }
         ghostRanges = ghostRanges.compactMap(shift)
         proposedCuts = proposedCuts.compactMap(shift)
+        findingRanges = findingRanges.compactMap(shift)
         // Rendering attributes are laid down against TextKit's own locations;
         // lay them again once this edit has been processed.
         DispatchQueue.main.async { [weak self] in self?.apply() }
@@ -299,6 +305,9 @@ public final class RectoDecorationController: NSObject {
             + alternativeMarks
             .filter { NSMaxRange($0.range) <= text.length && $0.range.length > 0 }
             .map { MarkdownUnderline(range: $0.range, color: $0.isOnOriginal ? theme.ink3 : theme.accent) }
+            + findingRanges
+            .filter { NSMaxRange($0) <= text.length && $0.length > 0 }
+            .map { MarkdownUnderline(range: $0, color: theme.accent2) }
     }
 
     private func clear() {

@@ -452,3 +452,147 @@ export const alternatives = action({
 		});
 	},
 });
+
+// MARK: - Review passes
+
+export const REVIEW_PASSES = ["opening", "clarity", "voice"] as const;
+export type ReviewPass = (typeof REVIEW_PASSES)[number];
+
+export type LabFinding = {
+	from: number;
+	to: number;
+	reason: string;
+	/** A restrained rewrite of just this passage, when one exists without new facts. */
+	suggestion?: string;
+};
+
+export type ReviewResult = {
+	assessment: string;
+	findings: LabFinding[];
+	/** Candidate openings, each a replacement for `opening`. */
+	openings: string[];
+	opening?: { from: number; to: number };
+	dropped: number;
+};
+
+const MAX_FINDINGS = 8;
+const MAX_SUGGESTION_LENGTH = 2_000;
+
+const REVIEW_SHARED = `You are an editor reviewing a writer's draft in a Markdown writing app. The writer decides; you point and explain.
+Keep facts, quotations, citations, names, numbers, personal experience and the writer's voice, including useful roughness and British spelling where the draft uses it. Never invent material. When a fix needs something only the writer knows, say so as a question in the reason and leave the suggestion out.
+Quote passages exactly as they appear in the draft. Read patterns in context; a pattern is a hypothesis, not a rule. Stop when the useful points are made; at most eight findings.`;
+
+const REVIEW_PROMPTS: Record<ReviewPass, string> = {
+	opening: `${REVIEW_SHARED}
+Assess the opening (the first paragraph after any title) against the whole draft: does it say what the piece is about, earn the reader's attention and promise what follows delivers? Write the assessment in two to four plain sentences.
+Propose up to three alternative openings, each a full replacement for that first paragraph, built only from material already in the draft. If the draft lacks what a better opening needs, ask for it in the assessment instead of inventing it.
+Reply with JSON only: {"assessment":"…","openings":["…"],"findings":[{"text":"exact passage","before":"up to six words before it","reason":"the concrete problem","suggestion":"optional restrained rewrite of just this passage"}]}`,
+	clarity: `${REVIEW_SHARED}
+Find passages a careful reader would stumble over: ambiguous references, convoluted or overloaded sentences, missing steps in an argument, undefined terms. For each, name the concrete difficulty in the reason, and suggest a restrained rewrite of just that passage that keeps its meaning, unless fixing it needs information only the writer has.
+Reply with JSON only: {"assessment":"one or two sentences on the draft's clarity overall","findings":[{"text":"exact passage","before":"up to six words before it","reason":"…","suggestion":"…"}]}`,
+	voice: `${REVIEW_SHARED}
+Find words and phrasing that do not fit the draft's own voice: sudden formality or jargon, clichés, hedges and filler, phrasing that sounds generated rather than written. Judge against how the rest of the draft sounds, not a style guide. For each, give a restrained alternative for just that passage in the writer's register.
+Reply with JSON only: {"assessment":"one or two sentences on the draft's voice overall","findings":[{"text":"exact passage","before":"up to six words before it","reason":"…","suggestion":"…"}]}`,
+};
+
+/** The first paragraph after frontmatter and title headings: what an opening replaces. */
+export function openingRange(
+	source: string,
+): { from: number; to: number } | undefined {
+	let index = source.startsWith("---\n") ? source.indexOf("\n---", 4) + 4 : 0;
+	const lines = source.slice(index).split("\n");
+	for (const line of lines) {
+		if (line.trim().length === 0 || /^#{1,6}\s/.test(line)) {
+			index += line.length + 1;
+			continue;
+		}
+		const end = source.indexOf("\n\n", index);
+		const to = end === -1 ? source.length : end;
+		return { from: index, to: source.slice(0, to).trimEnd().length };
+	}
+	return undefined;
+}
+
+export function parseReview(
+	reply: string,
+	source: string,
+	pass: ReviewPass,
+): ReviewResult {
+	const start = reply.indexOf("{");
+	const end = reply.lastIndexOf("}");
+	if (start === -1 || end <= start)
+		throw new Error("The model did not return JSON");
+	const parsed = JSON.parse(reply.slice(start, end + 1)) as {
+		assessment?: unknown;
+		findings?: unknown;
+		openings?: unknown;
+	};
+	const proposed = Array.isArray(parsed.findings)
+		? parsed.findings.filter(
+				(item): item is ProposedCut & { suggestion?: unknown } =>
+					typeof item === "object" && item !== null,
+			)
+		: [];
+	const located = locateCuts(source, proposed.slice(0, MAX_FINDINGS));
+	const findings: LabFinding[] = located.cuts.map((cut) => {
+		const item = proposed.find(
+			(candidate) =>
+				typeof candidate.text === "string" &&
+				source.slice(cut.from, cut.to) === candidate.text,
+		);
+		const suggestion =
+			typeof item?.suggestion === "string" ? item.suggestion.trim() : "";
+		return suggestion.length > 0 &&
+			suggestion.length <= MAX_SUGGESTION_LENGTH &&
+			suggestion !== source.slice(cut.from, cut.to)
+			? { ...cut, suggestion }
+			: cut;
+	});
+	const opening = pass === "opening" ? openingRange(source) : undefined;
+	const openings =
+		opening && Array.isArray(parsed.openings)
+			? parseAlternatives(
+					JSON.stringify({ alternatives: parsed.openings.slice(0, 3) }),
+					source.slice(opening.from, opening.to),
+					"paragraph",
+				).alternatives
+			: [];
+	return {
+		assessment:
+			typeof parsed.assessment === "string"
+				? parsed.assessment.trim().slice(0, 2_000)
+				: "",
+		findings,
+		openings,
+		...(opening ? { opening } : {}),
+		dropped: located.dropped + Math.max(0, proposed.length - MAX_FINDINGS),
+	};
+}
+
+/**
+ * The Lab's editorial passes: an assessment and exact findings, each with an
+ * optional restrained rewrite the writer compares as an alternative. Nothing
+ * here edits the draft.
+ */
+export const review = action({
+	args: { ...baseArgs, pass: v.string() },
+	handler: async (
+		ctx,
+		input,
+	): Promise<{ runId: Id<"aiRuns"> } & ReviewResult> => {
+		validateBase(input);
+		const pass = input.pass as ReviewPass;
+		if (!REVIEW_PASSES.includes(pass))
+			aiError("invalid_argument", "Invalid Lab review.");
+		return await runPass(ctx, input, {
+			name: pass,
+			identity: {},
+			maxTokens: MAX_LAB_TOKENS,
+			messages: (source) => [
+				{ role: "system", content: REVIEW_PROMPTS[pass] },
+				{ role: "user", content: `Draft:\n${source}` },
+			],
+			parse: (reply, source) => parseReview(reply, source, pass),
+		});
+	},
+});

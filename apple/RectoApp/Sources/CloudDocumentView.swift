@@ -305,7 +305,14 @@ struct CloudDocumentView: View {
         chrome.ai = AIHooks(
             toggle: controller.toggle, transform: controller.beginTransform,
             critique: controller.critique, related: controller.findRelated, reindex: controller.reindex,
-            trim: controller.trim(target:))
+            trim: controller.trim(target:), review: controller.review)
+        controller.openAlternatives = { [chrome, model] range, scope in
+            guard let textView = chrome.seam?.nsTextView,
+                  var targets = Self.alternativesTargets(in: textView, writing: model.writing) else { return }
+            targets.ranges[scope] = range
+            targets.initial = scope
+            alternativesTargets = targets
+        }
         chrome.review = ReviewHooks(
             openSharing: { showsSharing = true },
             openReview: {
@@ -482,11 +489,17 @@ struct CloudDocumentView: View {
             .onChange(of: ai?.lab?.cutRanges ?? [], initial: true) { _, ranges in
                 chrome.decorations.proposedCuts = ranges
             }
+            .onChange(of: ai?.labReview?.findings.map(\.range) ?? [], initial: true) { _, ranges in
+                chrome.decorations.findingRanges = ranges
+            }
             .onChange(of: model.storage.markdown) { _, text in ai?.followText(text) }
             if let ai, ai.showsRelated, !zen.hidesChrome {
                 RelatedPanel(ai: ai, theme: styler.theme) { passage in
                     panes?.openDocument(passage.documentId, Int(passage.charStart))
                 }
+            }
+            if let ai, let review = ai.labReview, !zen.hidesChrome {
+                FindingsPanel(ai: ai, review: review, theme: styler.theme)
             }
             if showsOverflow, let overflow, !zen.hidesChrome {
                 OverflowPanel(model: overflow, theme: styler.theme, close: {
@@ -550,6 +563,10 @@ struct CloudDocumentView: View {
                 Menu {
                     ForEach(AIController.trimPresets, id: \.target) { preset in
                         Button("\(preset.label) (about \(preset.target)% shorter)") { ai.trim(target: preset.target) }
+                    }
+                    Divider()
+                    ForEach(AIController.ReviewPass.allCases, id: \.self) { pass in
+                        Button(pass.label) { ai.review(pass) }
                     }
                 } label: { Image(systemName: "flask") }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()

@@ -262,3 +262,35 @@ struct LabCutTests {
         #expect(lab.wordsAfter == 9)
     }
 }
+
+@Suite("Lab review")
+@MainActor
+struct LabReviewTests {
+    private func review(_ text: String, findings: [String]) -> AIController.LabReview {
+        AIController.LabReview(
+            pass: .clarity, assessment: "",
+            findings: findings.map {
+                AIController.LabReview.Finding(range: (text as NSString).range(of: $0), reason: "r", suggestion: nil)
+            },
+            opening: nil, openings: [], dropped: 0, text: text)
+    }
+
+    @Test("findings follow edits before and inside them and go when an edit cuts across them")
+    func follow() {
+        let text = "One sentence here. Another sentence there. Last one."
+        var moved = review(text, findings: ["Another sentence there.", "Last one."])
+        AIController.follow(&moved, to: "So one sentence here. Another sentence there. Last one.")
+        #expect(moved.findings.map { (moved.text as NSString).substring(with: $0.range) } == ["Another sentence there.", "Last one."])
+        AIController.follow(&moved, to: "So one sentence here. Another long sentence there. Last one.")
+        #expect((moved.text as NSString).substring(with: moved.findings[0].range) == "Another long sentence there.")
+        AIController.follow(&moved, to: "So one sentence here. Another long sentence thLast one.")
+        #expect(moved.findings.count == 1)
+    }
+
+    @Test("a suggestion's scope follows the passage it rewrites")
+    func scope() {
+        #expect(AIController.scope(of: "tension") == .word)
+        #expect(AIController.scope(of: "It all depends.") == .sentence)
+        #expect(AIController.scope(of: "One.\n\nTwo.") == .paragraph)
+    }
+}
