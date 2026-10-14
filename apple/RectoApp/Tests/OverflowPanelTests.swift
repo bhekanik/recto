@@ -296,3 +296,14 @@ private final class OverflowTestDragInfo: NSObject, NSDraggingInfo {
     func resetSpringLoading() {}
     func enumerateDraggingItems(options enumOpts: NSDraggingItemEnumerationOptions, for view: NSView?, classes classArray: [AnyClass], searchOptions: [NSPasteboard.ReadingOptionKey: Any], using block: (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void) {}
 }
+
+@Suite("Network return")
+struct NetworkReturnTests {
+    @Test("only a change from unavailable to available counts as the network coming back")
+    func transitions() {
+        var tracker = NetworkReturn()
+        let results = [true, true, false, true, true].map { tracker.update(satisfied: $0) }
+        // The first report is not a return; only the change after an outage is.
+        #expect(results == [false, false, false, true, false])
+    }
+}

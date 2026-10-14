@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Network
 import Observation
 import RectoAuth
 import RectoCore
@@ -68,6 +69,10 @@ final class RectoApplicationModel {
     var openURL: (URL) -> Bool = { NSWorkspace.shared.open($0) }
     private var emailChallenge: EmailCodeChallenge?
     private var authTask: Task<Void, Never>?
+    /// Retries the Convex login when the network comes back, so a Mac that
+    /// launched offline unlocks without anyone pressing Retry.
+    private var networkMonitor: NWPathMonitor?
+    private var networkReturn = NetworkReturn()
     private var syncTask: Task<Void, Never>?
     private let injectedComponents: Components?
     /// A document link waiting for its document: the link can arrive before
@@ -258,6 +263,29 @@ final class RectoApplicationModel {
         await refreshDocuments()
     }
 
+    /// Watch the network and recover the session each time it comes back.
+    private func followNetwork() {
+        networkMonitor?.cancel()
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] path in
+            let satisfied = path.status == .satisfied
+            Task { @MainActor [weak self] in await self?.networkChanged(satisfied: satisfied) }
+        }
+        monitor.start(queue: DispatchQueue(label: "com.bhekani.recto.network"))
+        networkMonitor = monitor
+    }
+
+    func networkChanged(satisfied: Bool) async {
+        guard networkReturn.update(satisfied: satisfied), let auth else { return }
+        switch auth.status {
+        case .signedIn, .convexLoginRequired:
+            _ = await auth.recoverConvexLoginIfNeeded()
+            await enterForeground()
+        case .loading, .signedOut, .blockedByRetainedWork:
+            return
+        }
+    }
+
     func leaveActive() async {
         WritingStatsModel.shared.flush()
         await registry?.flushAll()
@@ -378,6 +406,7 @@ final class RectoApplicationModel {
         store = components.store
         auth = components.auth
         sync = components.sync
+        followNetwork()
         registry = components.registry
         library = components.library
         api = components.api
@@ -414,5 +443,16 @@ final class RectoApplicationModel {
                 }
             }
         }
+    }
+}
+
+/// Reports the moment the network comes back: a change from unavailable to
+/// available, not every update while it stays available.
+struct NetworkReturn {
+    private var wasSatisfied: Bool?
+
+    mutating func update(satisfied: Bool) -> Bool {
+        defer { wasSatisfied = satisfied }
+        return satisfied && wasSatisfied == false
     }
 }
