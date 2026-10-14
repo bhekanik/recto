@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Observation
+import RectoCore
 import RectoCoreJS
 import RectoEditor
 
@@ -57,6 +58,37 @@ final class AIController {
 
     var sheet: Sheet?
     private(set) var selection: Selection?
+
+    /// The Lab's trim proposal: cuts shown faded over `base`, none applied
+    /// until the writer makes them.
+    struct LabProposal: Equatable {
+        let target: Int
+        let base: String
+        let cuts: [AIClient.LabCut]
+        let dropped: Int
+        /// Cuts the writer chose to keep the text of.
+        var kept: Set<Int> = []
+        /// The cut the walkthrough is on, when walking through.
+        var walking: Int?
+
+        var cutRanges: [NSRange] { cuts.indices.filter { !kept.contains($0) }.map { cuts[$0].range } }
+        var wordsBefore: Int { RectoWordCount.plainText(base) }
+        var wordsAfter: Int {
+            var text = base as NSString
+            for range in cutRanges.sorted(by: { $0.location > $1.location }) {
+                text = text.replacingCharacters(in: range, with: "") as NSString
+            }
+            return RectoWordCount.plainText(text as String)
+        }
+    }
+
+    enum LabState: Equatable {
+        case idle
+        case reading(target: Int)
+    }
+
+    private(set) var lab: LabProposal?
+    private(set) var labState: LabState = .idle
     private(set) var transformState: TransformState = .picking
     private(set) var isBusy = false
     private(set) var passages: [AIClient.Passage]?
@@ -146,6 +178,93 @@ final class AIController {
 
     private func source(_ client: AIClient) async throws -> AIClient.Source {
         try await client.source(head: { model.state.head }, markdown: { storage().markdown })
+    }
+
+    // MARK: - Lab
+
+    static let trimPresets: [(target: Int, label: String)] = [
+        (10, "Slight trim"), (20, "Tighten more"), (30, "Even sharper"), (50, "Cut in half"),
+    ]
+
+    static func trimLabel(_ target: Int) -> String {
+        trimPresets.first { $0.target == target }?.label ?? "Trim"
+    }
+
+    /// Ask for cuts making the draft about `target` percent shorter. Nothing in
+    /// the draft changes until the writer makes the cuts.
+    func trim(target: Int) {
+        withConsent { [weak self] in Task { await self?.runTrim(target: target) } }
+    }
+
+    private func runTrim(target: Int) async {
+        guard let client, labState == .idle else { return }
+        await model.keepAlternative()
+        lab = nil
+        labState = .reading(target: target)
+        defer { labState = .idle }
+        do {
+            let source = try await source(client)
+            let result = try await client.trim(source, target: target)
+            guard (storage().markdown as NSString).isEqual(to: source.markdown) else {
+                throw AIClient.Failure.message("The draft changed while the Lab read it. Nothing is shown; run it again.")
+            }
+            let length = (source.markdown as NSString).length
+            let cuts = result.cuts.filter { $0.from >= 0 && $0.to > $0.from && Int($0.to) <= length }
+            guard !cuts.isEmpty else {
+                message = ("\(Self.trimLabel(target))", "The Lab found nothing it would cut.", false)
+                return
+            }
+            lab = LabProposal(target: target, base: source.markdown, cuts: cuts, dropped: Int(result.dropped))
+        } catch {
+            fail(error)
+        }
+    }
+
+    /// A click in a faded cut keeps its words; a click on a kept one cuts them again.
+    func toggleCut(at location: Int) {
+        guard var lab, let index = lab.cuts.firstIndex(where: {
+            $0.range.location <= location && location < NSMaxRange($0.range)
+        }) else { return }
+        if lab.kept.contains(index) { lab.kept.remove(index) } else { lab.kept.insert(index) }
+        self.lab = lab
+    }
+
+    func walkThrough() {
+        guard var lab else { return }
+        lab.walking = lab.cuts.indices.first { !lab.kept.contains($0) } ?? 0
+        self.lab = lab
+        showWalkingCut()
+    }
+
+    /// Keep or cut the walkthrough's current cut, then move to the next.
+    func decideWalkingCut(keep: Bool) {
+        guard var lab, let index = lab.walking else { return }
+        if keep { lab.kept.insert(index) } else { lab.kept.remove(index) }
+        lab.walking = index + 1 < lab.cuts.count ? index + 1 : nil
+        self.lab = lab
+        showWalkingCut()
+    }
+
+    private func showWalkingCut() {
+        guard let lab, let index = lab.walking else { return }
+        chrome.jump(to: lab.cuts[index].range)
+    }
+
+    func makeCuts() async {
+        guard let lab else { return }
+        let ranges = lab.cutRanges
+        self.lab = nil
+        guard !ranges.isEmpty else { return }
+        if !(await model.applyCuts(ranges, on: lab.base)) {
+            errorMessage = "The draft changed since the Lab read it. Run it again."
+        }
+    }
+
+    func dismissLab() { lab = nil }
+
+    /// The proposal belongs to the text it was made for; any other text drops it.
+    func followText(_ markdown: String) {
+        if let lab, !(lab.base as NSString).isEqual(to: markdown) { self.lab = nil }
     }
 
     // MARK: - Transform

@@ -131,6 +131,9 @@ struct CloudDocumentView: View {
                     frontmatter: paneStorage(model).frontmatter, fallbackTitle: model.state.title, theme: styler.theme)
             }
             page(model, styler)
+            if let ai, ai.lab != nil || ai.labState != .idle {
+                LabBar(ai: ai, theme: styler.theme)
+            }
             if settings.showStatusBar, !zen.hidesChrome {
                 statusBar(model, styler)
                     .modifier(QuietChromeFade(quiet: chrome.quiet, settings: settings, quietOpacity: 0.3))
@@ -273,9 +276,14 @@ struct CloudDocumentView: View {
         chrome.openHistory = { view in historyView = historyView == view ? nil : view }
         chrome.checkpoint = { [model] in checkpoint(model) }
         let activate = panes?.activate ?? {}
-        chrome.onFocus = { [model] in
+        chrome.onFocus = { [model, chrome] in
             // Back in the text: the wording on show is the one the writer chose.
             if model.preview != nil { Task { await model.keepAlternative() } }
+            // A click in a faded cut keeps those words.
+            if ai?.lab != nil, let caret = chrome.seam?.selectedRange,
+               caret.length == 0, NSApp.currentEvent?.type == .leftMouseUp || NSApp.currentEvent?.type == .leftMouseDown {
+                ai?.toggleCut(at: caret.location)
+            }
             activate()
         }
         chrome.cloud = cloudContext(model, convexId: model.state.convexId)
@@ -288,7 +296,8 @@ struct CloudDocumentView: View {
         ai = controller
         chrome.ai = AIHooks(
             toggle: controller.toggle, transform: controller.beginTransform,
-            critique: controller.critique, related: controller.findRelated, reindex: controller.reindex)
+            critique: controller.critique, related: controller.findRelated, reindex: controller.reindex,
+            trim: controller.trim(target:))
         chrome.review = ReviewHooks(
             openSharing: { showsSharing = true },
             openReview: {
@@ -458,6 +467,10 @@ struct CloudDocumentView: View {
                 chrome.decorations.ghostRanges = ranges
             }
             .onChange(of: model.readerMarkdown) { _, text in readerStorage?.markdown = text }
+            .onChange(of: ai?.lab?.cutRanges ?? [], initial: true) { _, ranges in
+                chrome.decorations.proposedCuts = ranges
+            }
+            .onChange(of: model.storage.markdown) { _, text in ai?.followText(text) }
             if let ai, ai.showsRelated, !zen.hidesChrome {
                 RelatedPanel(ai: ai, theme: styler.theme) { passage in
                     panes?.openDocument(passage.documentId, Int(passage.charStart))
@@ -521,6 +534,17 @@ struct CloudDocumentView: View {
                 presentation: styler.presentation,
                 actions: chrome.formatToolbarActions
             )
+            if settings.aiEnabled, let ai {
+                Menu {
+                    ForEach(AIController.trimPresets, id: \.target) { preset in
+                        Button("\(preset.label) (about \(preset.target)% shorter)") { ai.trim(target: preset.target) }
+                    }
+                } label: { Image(systemName: "flask") }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                .foregroundStyle(Color(nsColor: styler.theme.ink3))
+                .disabled(ai.labState != .idle)
+                .help("Lab").accessibilityLabel("Lab")
+            }
             Button { showsOverflow.toggle() } label: {
                 Image(systemName: "tray.full")
             }

@@ -23,13 +23,14 @@ type QueryCtx = GenericQueryCtx<DataModel>;
 const kindValidator = v.union(
 	v.literal("transform"),
 	v.literal("review"),
+	v.literal("lab"),
 	v.literal("embed"),
 );
 const keySourceValidator = v.union(v.literal("byok"), v.literal("house"));
-type DurableRunKind = "transform" | "review";
+type DurableRunKind = "transform" | "review" | "lab";
 
 function isDurableRunKind(
-	kind: "transform" | "review" | "embed",
+	kind: "transform" | "review" | "lab" | "embed",
 ): kind is DurableRunKind {
 	return kind !== "embed";
 }
@@ -702,7 +703,11 @@ export const get = query({
 export const latestRecoverable = query({
 	args: {
 		documentId: v.id("documents"),
-		kind: v.union(v.literal("transform"), v.literal("review")),
+		kind: v.union(
+			v.literal("transform"),
+			v.literal("review"),
+			v.literal("lab"),
+		),
 	},
 	handler: async (ctx, args) => {
 		const userId = await requireUserId(ctx);
@@ -814,6 +819,7 @@ export const usageSummary = query({
 		const byKind = {
 			transform: { requests: 0, costMicros: 0 },
 			review: { requests: 0, costMicros: 0 },
+			lab: { requests: 0, costMicros: 0 },
 			embed: { requests: 0, costMicros: 0 },
 		};
 		let costMicros = 0;
@@ -821,6 +827,7 @@ export const usageSummary = query({
 		const requestIdsByKind = {
 			transform: new Set<string>(),
 			review: new Set<string>(),
+			lab: new Set<string>(),
 			embed: new Set<string>(),
 		};
 		for (const row of rows) {
@@ -829,7 +836,7 @@ export const usageSummary = query({
 			byKind[row.kind].costMicros += row.costMicros;
 			costMicros += row.costMicros;
 		}
-		for (const kind of ["transform", "review", "embed"] as const) {
+		for (const kind of ["transform", "review", "lab", "embed"] as const) {
 			byKind[kind].requests = requestIdsByKind[kind].size;
 		}
 		return {

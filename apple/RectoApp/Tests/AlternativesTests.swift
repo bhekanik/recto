@@ -199,3 +199,50 @@ struct GhostTests {
         await model.close()
     }
 }
+
+@Suite("Lab cuts", .serialized)
+@MainActor
+struct LabCutTests {
+    @Test("several cuts apply as one undo step and carry ghosts and alternatives with them")
+    func applyCuts() async throws {
+        _ = NSApplication.shared
+        let store = try RectoStore.inMemory()
+        let library = DocumentLibrary(store: store, sync: nil, origin: "lab-test")
+        let document = try await library.createDocument(title: "Lab")
+        let registry = DocumentSessionRegistry(store: store, sync: nil, origin: "lab-test")
+        let model = try await CloudDocumentModel.open(localId: document.localId, registry: registry)
+        let draft = "Much of the struggle, frankly, comes from balance. It all depends. The core should be obvious."
+        model.storage.markdown = draft
+        model.accept(RectoEditorEdit(markdown: draft, structural: true))
+        await model.save()
+        let core = (draft as NSString).range(of: "core")
+        await model.addAlternative("centre", at: core, scope: .word)
+
+        let cuts = [(draft as NSString).range(of: ", frankly,"), (draft as NSString).range(of: " It all depends.")]
+        #expect(await model.applyCuts(cuts, on: draft))
+        let cut = "Much of the struggle comes from balance. The core should be obvious."
+        #expect(model.state.markdown == cut)
+        let group = try #require(model.writing.alternatives.first)
+        #expect((cut as NSString).substring(with: group.range) == "core")
+
+        await model.undo()
+        #expect(model.state.markdown == draft)
+        #expect(await model.applyCuts(cuts, on: "stale text") == false)
+        await model.close()
+    }
+
+    @Test("a proposal counts words with and without its cuts and forgets kept ones")
+    func proposal() {
+        let base = "One two three four five six seven eight nine ten."
+        let cuts = [
+            AIClient.LabCut(from: 3, to: 7, reason: "a"),
+            AIClient.LabCut(from: 13, to: 18, reason: "b"),
+        ]
+        var lab = AIController.LabProposal(target: 20, base: base, cuts: cuts, dropped: 0)
+        #expect(lab.wordsBefore == 10)
+        #expect(lab.wordsAfter == 8)
+        lab.kept.insert(1)
+        #expect(lab.cutRanges == [NSRange(location: 3, length: 4)])
+        #expect(lab.wordsAfter == 9)
+    }
+}

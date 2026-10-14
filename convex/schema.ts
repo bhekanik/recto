@@ -166,6 +166,7 @@ export default defineSchema({
 		kind: v.union(
 			v.literal("transform"),
 			v.literal("review"),
+			v.literal("lab"),
 			v.literal("embed"),
 		),
 		documentId: v.id("documents"),
@@ -215,7 +216,11 @@ export default defineSchema({
 	aiActiveRuns: defineTable({
 		userId: v.string(),
 		documentId: v.id("documents"),
-		kind: v.union(v.literal("transform"), v.literal("review")),
+		kind: v.union(
+			v.literal("transform"),
+			v.literal("review"),
+			v.literal("lab"),
+		),
 		runId: v.id("aiRuns"),
 		sourceNodeId: v.string(),
 		updatedAt: v.number(),
@@ -240,6 +245,7 @@ export default defineSchema({
 		kind: v.union(
 			v.literal("transform"),
 			v.literal("review"),
+			v.literal("lab"),
 			v.literal("embed"),
 		),
 		model: v.string(),

@@ -22,6 +22,25 @@ struct AIClient {
         let output: String
     }
 
+    /// One proposed deletion, in UTF-16 offsets of the source it was made for.
+    struct LabCut: Decodable, Sendable, Equatable {
+        let from: Double
+        let to: Double
+        let reason: String
+
+        init(from: Double, to: Double, reason: String) {
+            self.from = from
+            self.to = to
+            self.reason = reason
+        }
+        var range: NSRange { NSRange(location: Int(from), length: Int(to - from)) }
+    }
+
+    struct LabResult: Decodable, Sendable, Equatable {
+        let cuts: [LabCut]
+        let dropped: Double
+    }
+
     /// `AiReviewSummary`.
     struct ReviewSummary: Decodable, Sendable, Equatable {
         let commentsPlaced: Double
@@ -134,6 +153,22 @@ struct AIClient {
             throw Failure.message("The AI result could not be claimed. Try again.")
         }
         return result.output
+    }
+
+    /// `ai/lab:run`'s trim pass: exact cuts proposed for `source`, never applied
+    /// on the server. A leftover run is only a proposal, so clearing it loses nothing.
+    func trim(_ source: Source, target: Int) async throws -> LabResult {
+        try await clearLeftoverRun(documentId: source.documentId, kind: "lab")
+        let requestId = UUID().uuidString
+        let result: LabResult = try await cloud.api.action(ConvexFunction.aiLabRun, args: [
+            "requestId": .string(requestId), "documentId": .string(source.documentId),
+            "sourceNodeId": .string(source.nodeId), "sourceHash": .string(source.hash),
+            "target": .number(Double(target)), "platform": .string(Self.platform), "traceContent": true,
+        ])
+        guard try await acknowledge(requestId) else {
+            throw Failure.message("The Lab's result could not be claimed. Try again.")
+        }
+        return result
     }
 
     /// `ai/review:run`: comments and a suggestion branch land on the server.

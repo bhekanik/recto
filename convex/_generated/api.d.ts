@@ -16,6 +16,7 @@ import type * as ai_credentials from "../ai/credentials.js";
 import type * as ai_crypto from "../ai/crypto.js";
 import type * as ai_embed from "../ai/embed.js";
 import type * as ai_errors from "../ai/errors.js";
+import type * as ai_lab from "../ai/lab.js";
 import type * as ai_langsmithSmoke from "../ai/langsmithSmoke.js";
 import type * as ai_limits from "../ai/limits.js";
 import type * as ai_provider from "../ai/provider.js";
@@ -58,6 +59,7 @@ declare const fullApi: ApiFromModules<{
   "ai/crypto": typeof ai_crypto;
   "ai/embed": typeof ai_embed;
   "ai/errors": typeof ai_errors;
+  "ai/lab": typeof ai_lab;
   "ai/langsmithSmoke": typeof ai_langsmithSmoke;
   "ai/limits": typeof ai_limits;
   "ai/provider": typeof ai_provider;

@@ -387,6 +387,36 @@ final class CloudDocumentModel {
         }
     }
 
+    /// Delete `cuts` of `base` as one history step, carrying alternatives and
+    /// ghosts through each. False when the draft is no longer `base`.
+    @discardableResult
+    func applyCuts(_ cuts: [NSRange], on base: String) async -> Bool {
+        await keepAlternative()
+        await edits.waitUntilDrained()
+        let ordered = cuts.filter { $0.length > 0 }.sorted { $0.location < $1.location }
+        guard (storage.markdown as NSString).isEqual(to: base),
+              let first = ordered.first, let last = ordered.last,
+              NSMaxRange(last) <= (base as NSString).length,
+              zip(ordered, ordered.dropFirst()).allSatisfy({ NSMaxRange($0) <= $1.location })
+        else { return false }
+        var text = base
+        var state = writing
+        for cut in ordered.reversed() {
+            text = (text as NSString).replacingCharacters(in: cut, with: "")
+            state = state.mapped(through: TextPatch(from: cut.location, to: NSMaxRange(cut), insert: ""), into: JSString(text))
+        }
+        let span = NSRange(location: first.location, length: NSMaxRange(last) - first.location)
+        let removed = ordered.reduce(0) { $0 + $1.length }
+        let replacement = (text as NSString).substring(with: NSRange(location: first.location, length: span.length - removed))
+        var applied = false
+        await perform {
+            applied = try await session.applyWriting(
+                expectedMarkdown: base, replacing: span, with: replacement, writing: state)
+            guard applied else { throw AlternativeFailure.draftChanged }
+        }
+        return applied
+    }
+
     /// The draft as readers get it: ghosted passages left out.
     var readerMarkdown: String { writing.readerMarkdown(storage.markdown) }
 

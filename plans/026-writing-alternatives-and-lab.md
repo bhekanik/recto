@@ -213,6 +213,14 @@ Ghost spans live in the same `WritingState` (`ghosts`). The field shipped with r
 
 BK approved the recommended publication policy on 2026-10-14: readers never see ghosted text. `WritingState.readerMarkdown` (and `lib/writing/reader.ts` for the server) removes ghosts, closing a double space. Preview shows a read-only reader copy while ghosts exist; rich copy and the Markdown and HTML exports use the reader text; Copy Markdown keeps the source. Word export is rendered by the server from its own text, so the Mac sends `omit` ranges plus the SHA-256 of the text they measure; a mismatch refuses the export instead of cutting the wrong passage.
 
+## Rung 6 proposes exact trim cuts
+
+`convex/ai/lab.ts` adds a `lab` run kind on the existing lifecycle (reserved run per request id, source verification against the stored head, BYOK or house key, provider-started boundary, usage settlement, success only while the document is unchanged). The trim pass sends the draft with an approximate target (10/20/30/50%) and a prompt that permits deletions only. The model returns exact quotes with a few preceding words and a reason; `locateCuts` keeps a quote only where it, or its preceding words plus it, occurs exactly once, outside frontmatter and not overlapping another cut. Dropped proposals are counted and shown. The run's output is the located cuts, so a retry replays them.
+
+On the Mac the flask menu and four `Lab:` palette commands start a pass. Proposed cuts fade (28% ink) over the exact text they were made for; any edit drops the proposal. A click in a faded cut keeps it; the walkthrough steps through cuts with their reasons. `Make the cuts` applies the remaining ranges as one structural history node via `CloudDocumentModel.applyCuts`, mapping writing state through each deletion so alternatives and ghosts survive. The bar reports words before and after using the session's word count.
+
+Live-provider validation runs in the installed check once BK signs in again; unit tests cover placement and parsing, and mounted tests cover applying cuts and the proposal arithmetic.
+
 ## Unresolved questions
 
 1. May the prepared check briefly disconnect and restore this Mac's active Ethernet/Wi-Fi connections? System changes outside the repository require approval; none has been received.

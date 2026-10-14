@@ -11,6 +11,8 @@ struct AIHooks {
     var critique: () -> Void
     var related: () -> Void
     var reindex: () -> Void
+    /// The Lab's trim pass, for a reduction of about this many percent.
+    var trim: (Int) -> Void = { _ in }
 }
 
 /// The review actions a synced host carries out.
