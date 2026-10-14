@@ -116,6 +116,22 @@ struct AlternativesTests {
         await model.close()
     }
 
+    @Test("AI wordings join the passage as AI's, in one undo step, without duplicates")
+    func suggested() async throws {
+        let model = try await open()
+        let tension = (draft as NSString).range(of: "tension")
+        await model.addAlternative("pressure", at: tension, scope: .word)
+        await model.addSuggestedAlternatives(["pressure", "strain", "friction"], at: tension, scope: .word, on: draft)
+        let group = try #require(model.writing.alternatives.first)
+        #expect(group.candidates.map(\.text) == ["tension", "pressure", "strain", "friction"])
+        #expect(group.candidates.map(\.author) == [.human, .human, .ai, .ai])
+        await model.undo()
+        #expect(model.writing.alternatives.first?.candidates.map(\.text) == ["tension", "pressure"])
+        await model.addSuggestedAlternatives(["strain"], at: tension, scope: .word, on: "stale")
+        #expect(model.writing.alternatives.first?.candidates.count == 2)
+        await model.close()
+    }
+
     @Test("the panel finds the word, sentence and paragraph at the caret, and a sentence wording replaces the sentence")
     func scopes() async throws {
         let text = "First line here.\n\nShouldn't everything be obvious? Unless you're making a product.\n"

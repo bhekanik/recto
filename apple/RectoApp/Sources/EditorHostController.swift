@@ -53,6 +53,8 @@ final class EditorHostController {
     var stashInOverflow: (() -> Void)?
     /// Set by the synced host: open or close the alternatives for the passage at the caret.
     var toggleAlternatives: (() -> Void)?
+    /// Set by the synced host: open the alternatives and ask the AI for wordings.
+    var suggestAlternatives: (() -> Void)?
     /// Set by the synced host: ghost the selection, or revive the ghost at the caret.
     var toggleGhost: (() -> Void)?
     /// Set by the synced host: the text with ghosted passages left out, and

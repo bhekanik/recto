@@ -370,6 +370,8 @@ final class CommandPaletteController {
             if let toggle = editor?.ai?.toggle { toggle() } else { settings.aiEnabled.toggle() }
         case "toggle-transform-mode":
             settings.toggleAITransformMode()
+        case "ai-alternatives":
+            editor?.suggestAlternatives?()
         case "lab-trim-10", "lab-trim-20", "lab-trim-30", "lab-trim-50":
             if let target = Int(id.dropFirst("lab-trim-".count)) { editor?.ai?.trim(target) }
         case "ai-transform":

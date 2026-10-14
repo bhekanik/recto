@@ -221,6 +221,10 @@ On the Mac the flask menu and four `Lab:` palette commands start a pass. Propose
 
 Live-provider validation runs in the installed check once BK signs in again; unit tests cover placement and parsing, and mounted tests cover applying cuts and the proposal arithmetic.
 
+## Rung 7 asks for AI wordings
+
+`ai/lab:alternatives` is a second pass on the Lab lifecycle, now factored into `runPass` (identity, an optional pre-reservation `check`, messages, token budget, parser). It takes the passage, its UTF-16 offset and scope; `check` refuses unless the stored draft holds exactly that passage there, before any run is reserved. The prompt marks the passage in the full draft; `parseAlternatives` keeps up to five distinct, non-identical wordings sized for the scope. The Mac adds them with `author: .ai` (sparkle) as one history node through `addSuggestedAlternatives`, from the panel's `Suggest with AI` or Control-Shift-G.
+
 ## Unresolved questions
 
 1. May the prepared check briefly disconnect and restore this Mac's active Ethernet/Wi-Fi connections? System changes outside the repository require approval; none has been received.

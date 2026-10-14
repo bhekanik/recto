@@ -293,6 +293,28 @@ final class CloudDocumentModel {
         }
     }
 
+    /// Add AI wordings for `range` as one history step, so one Undo removes them.
+    func addSuggestedAlternatives(_ texts: [String], at range: NSRange, scope: AlternativeGroup.Scope, on base: String) async {
+        await keepAlternative()
+        await edits.waitUntilDrained()
+        guard (storage.markdown as NSString).isEqual(to: base) else {
+            errorMessage = "The draft changed while the AI was suggesting. Try again."
+            return
+        }
+        var next = writing
+        for text in texts {
+            guard let added = next.adding(text, author: .ai, scope: scope, at: next.group(covering: range)?.range ?? range,
+                                          in: base, newId: newId) else { continue }
+            next = added
+        }
+        guard next != writing else { return }
+        await perform {
+            guard try await session.applyWriting(expectedMarkdown: base, writing: next) else {
+                throw AlternativeFailure.draftChanged
+            }
+        }
+    }
+
     /// Show `candidateId` in place without keeping it. The article in front
     /// follows a moment later, once the linter has judged it.
     func showAlternative(_ candidateId: String, in groupId: String) {

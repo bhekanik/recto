@@ -243,6 +243,14 @@ struct CloudDocumentView: View {
             let omission = writing.ghosts.isEmpty ? nil : ReaderOmission(markdown: source, ranges: writing.ghosts.map(\.range))
             return (writing.readerMarkdown(source), omission)
         }
+        chrome.suggestAlternatives = { [chrome, model] in
+            guard settings.aiEnabled, chrome.currentPresentation().isEditable, model.isEditable,
+                  let textView = chrome.seam?.nsTextView,
+                  let targets = alternativesTargets ?? Self.alternativesTargets(in: textView, writing: model.writing),
+                  let range = targets.ranges[targets.initial] else { return }
+            alternativesTargets = targets
+            ai?.suggestAlternatives(for: range, scope: targets.initial)
+        }
         chrome.toggleAlternatives = { [chrome, model] in
             if alternativesTargets != nil {
                 Task { await model.keepAlternative() }
@@ -440,7 +448,11 @@ struct CloudDocumentView: View {
     private func page(_ model: CloudDocumentModel, _ styler: MarkdownStyler) -> some View {
         HStack(spacing: 0) {
             if let targets = alternativesTargets, !zen.hidesChrome {
-                AlternativesPanel(model: model, theme: styler.theme, targets: targets) {
+                AlternativesPanel(
+                    model: model, theme: styler.theme, targets: targets,
+                    suggest: settings.aiEnabled ? ai.map { ai in { ai.suggestAlternatives(for: $0, scope: $1) } } : nil,
+                    isSuggesting: ai?.suggesting != nil
+                ) {
                     alternativesTargets = nil
                     chrome.focusText()
                 }

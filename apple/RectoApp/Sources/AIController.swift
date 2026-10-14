@@ -4,6 +4,7 @@ import Observation
 import RectoCore
 import RectoCoreJS
 import RectoEditor
+import RectoHistory
 
 /// `lib/ai/instructions.ts`'s presets, verbatim.
 struct TransformPreset: Identifiable, Equatable {
@@ -87,6 +88,8 @@ final class AIController {
         case reading(target: Int)
     }
 
+    /// The passage AI wordings are being fetched for.
+    private(set) var suggesting: NSRange?
     private(set) var lab: LabProposal?
     private(set) var labState: LabState = .idle
     private(set) var transformState: TransformState = .picking
@@ -178,6 +181,35 @@ final class AIController {
 
     private func source(_ client: AIClient) async throws -> AIClient.Source {
         try await client.source(head: { model.state.head }, markdown: { storage().markdown })
+    }
+
+    // MARK: - Alternatives
+
+    /// Ask for other wordings of `range`; they join its alternatives marked as AI's.
+    func suggestAlternatives(for range: NSRange, scope: AlternativeGroup.Scope) {
+        withConsent { [weak self] in Task { await self?.runSuggestions(for: range, scope: scope) } }
+    }
+
+    private func runSuggestions(for range: NSRange, scope: AlternativeGroup.Scope) async {
+        guard let client, suggesting == nil else { return }
+        await model.keepAlternative()
+        suggesting = range
+        defer { suggesting = nil }
+        do {
+            let source = try await source(client)
+            let text = source.markdown as NSString
+            guard NSMaxRange(range) <= text.length, range.length > 0 else { return }
+            let passage = text.substring(with: range)
+            let wordings = try await client.alternatives(
+                source, passage: passage, from: range.location, scope: scope.rawValue)
+            guard !wordings.isEmpty else {
+                message = ("AI alternatives", "The AI had no other wordings for this passage.", false)
+                return
+            }
+            await model.addSuggestedAlternatives(wordings, at: range, scope: scope, on: source.markdown)
+        } catch {
+            fail(error)
+        }
     }
 
     // MARK: - Lab

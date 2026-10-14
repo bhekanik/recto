@@ -171,6 +171,24 @@ struct AIClient {
         return result
     }
 
+    /// `ai/lab:alternatives`: other wordings for `passage`, which sits at
+    /// `from` (UTF-16) in `source`.
+    func alternatives(_ source: Source, passage: String, from: Int, scope: String) async throws -> [String] {
+        struct Result: Decodable { let alternatives: [String] }
+        try await clearLeftoverRun(documentId: source.documentId, kind: "lab")
+        let requestId = UUID().uuidString
+        let result: Result = try await cloud.api.action(ConvexFunction.aiLabAlternatives, args: [
+            "requestId": .string(requestId), "documentId": .string(source.documentId),
+            "sourceNodeId": .string(source.nodeId), "sourceHash": .string(source.hash),
+            "passage": .string(passage), "passageFrom": .number(Double(from)), "scope": .string(scope),
+            "platform": .string(Self.platform), "traceContent": true,
+        ])
+        guard try await acknowledge(requestId) else {
+            throw Failure.message("The AI wordings could not be claimed. Try again.")
+        }
+        return result.alternatives
+    }
+
     /// `ai/review:run`: comments and a suggestion branch land on the server.
     func review(_ source: Source) async throws -> ReviewSummary {
         try await clearLeftoverRun(documentId: source.documentId, kind: "review")

@@ -92,6 +92,8 @@ enum CommandRegistry {
                       aliases: ["notes", "flags", "missing", "todo", "tk"], shortcut: "⌃⇧N"),
         CommandAction(id: "toggle-notes-pin", label: "Pin notes panel open", section: .review,
                       aliases: ["pin", "keep open", "revision", "notes", "flags"], shortcut: ""),
+        CommandAction(id: "ai-alternatives", label: "AI alternatives for selection", section: .ai,
+                      aliases: ["suggest", "wordings", "synonyms", "alternatives", "other words", "ai"], shortcut: "⌃⇧G"),
         CommandAction(id: "lab-trim-10", label: "Lab: slight trim", section: .ai,
                       aliases: ["lab", "trim", "tighten", "shorten", "cut", "10%"], shortcut: ""),
         CommandAction(id: "lab-trim-20", label: "Lab: tighten more", section: .ai,

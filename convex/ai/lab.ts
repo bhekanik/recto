@@ -124,32 +124,61 @@ export function parseCuts(reply: string): ProposedCut[] {
 	);
 }
 
-const labArgs = {
+type Message = OpenAI.Chat.Completions.ChatCompletionMessageParam;
+
+/** What every Lab request carries: who, which draft, and how to trace it. */
+const baseArgs = {
 	requestId: v.string(),
 	documentId: v.id("documents"),
 	sourceNodeId: v.string(),
 	sourceHash: v.string(),
-	target: v.number(),
 	platform: v.string(),
 	traceContent: v.boolean(),
 };
 
-function replay(run: {
+type BaseInput = {
+	requestId: string;
+	documentId: Id<"documents">;
+	sourceNodeId: string;
+	sourceHash: string;
+	platform: string;
+	traceContent: boolean;
+};
+
+/** One Lab pass: how its request is identified, what it asks, how it reads the reply. */
+type LabPass<T extends object> = {
+	name: string;
+	identity: Record<string, string>;
+	/** Refuses a request that does not fit the draft, before any run is reserved. */
+	check?: (source: string) => void;
+	messages: (source: string) => Message[];
+	maxTokens: number;
+	parse: (reply: string, source: string) => T;
+};
+
+function validateBase(input: BaseInput): void {
+	validateRequestIdentity(input.requestId);
+	if (
+		input.sourceNodeId.trim().length === 0 ||
+		input.sourceHash.length !== 64 ||
+		input.platform.trim().length === 0 ||
+		utf8Length(input.platform) > MAX_PLATFORM_BYTES
+	)
+		aiError("invalid_argument", "Invalid Lab request.");
+}
+
+function replay<T extends object>(run: {
 	_id: Id<"aiRuns">;
 	status: string;
 	output?: string;
 	applicable?: boolean;
-}): LabResult | null {
+}): ({ runId: Id<"aiRuns"> } & T) | null {
 	if (
 		run.status === "succeeded" &&
 		run.applicable === true &&
 		run.output !== undefined
 	) {
-		const stored = JSON.parse(run.output) as {
-			cuts: LabCut[];
-			dropped: number;
-		};
-		return { runId: run._id, ...stored };
+		return { runId: run._id, ...(JSON.parse(run.output) as T) };
 	}
 	if (run.status === "provider_started" || run.status === "outcome_unknown") {
 		aiError(
@@ -163,69 +192,45 @@ function replay(run: {
 }
 
 /**
- * The Lab's trim pass: exact, reasoned cuts for the draft at `sourceNodeId`,
- * proposed and never applied here. Shares the transform's lifecycle: a
- * reserved run per request id, source verification, the writer's or the house
- * key, and success only while the document is still the one it read.
+ * The transform's lifecycle for a Lab pass: a reserved run per request id,
+ * source verification against the stored head, the writer's or the house key,
+ * a retry-safe boundary before inference, usage settled, and success only
+ * while the document is still the one it read. The parsed result is the run's
+ * output, so a retry with the same id replays it.
  */
-export const run = action({
-	args: labArgs,
-	handler: async (ctx, input): Promise<LabResult> => {
-		validateRequestIdentity(input.requestId);
-		if (
-			!TRIM_TARGETS.includes(input.target as TrimTarget) ||
-			input.sourceNodeId.trim().length === 0 ||
-			input.sourceHash.length !== 64 ||
-			input.platform.trim().length === 0 ||
-			utf8Length(input.platform) > MAX_PLATFORM_BYTES
-		)
-			aiError("invalid_argument", "Invalid Lab request.");
-		const userId = await requireActionUserId(ctx);
-		const sourceMarkdown = await verifySource(ctx, { ...input, userId });
-		const hash = await requestHash({
-			kind: "lab",
-			pass: "trim",
-			documentId: input.documentId,
-			sourceNodeId: input.sourceNodeId,
-			sourceHash: input.sourceHash,
-			target: String(input.target),
-		});
-		const begun = await ctx.runMutation(internal.ai.runs.begin, {
-			userId,
-			requestId: input.requestId,
-			kind: "lab",
-			documentId: input.documentId,
-			sourceNodeId: input.sourceNodeId,
-			sourceHash: input.sourceHash,
-			expectedSourceMarkdown: sourceMarkdown,
-			requestHash: hash,
-			model: AI_CHAT_MODEL,
-		});
-		if (begun.replay) {
-			const result = replay(begun.run);
-			if (result) return result;
-			aiError("request_conflict", "This AI request id cannot be reused.");
-		}
-		const runId = begun.run._id;
-		return await execute(ctx, { input, userId, runId, sourceMarkdown });
-	},
-});
-
-async function execute(
+async function runPass<T extends object>(
 	ctx: ActionCtx,
-	args: {
-		input: {
-			documentId: Id<"documents">;
-			target: number;
-			platform: string;
-			traceContent: boolean;
-		};
-		userId: string;
-		runId: Id<"aiRuns">;
-		sourceMarkdown: string;
-	},
-): Promise<LabResult> {
-	const { input, userId, runId, sourceMarkdown } = args;
+	input: BaseInput,
+	pass: LabPass<T>,
+): Promise<{ runId: Id<"aiRuns"> } & T> {
+	const userId = await requireActionUserId(ctx);
+	const sourceMarkdown = await verifySource(ctx, { ...input, userId });
+	pass.check?.(sourceMarkdown);
+	const hash = await requestHash({
+		kind: "lab",
+		pass: pass.name,
+		documentId: input.documentId,
+		sourceNodeId: input.sourceNodeId,
+		sourceHash: input.sourceHash,
+		...pass.identity,
+	});
+	const begun = await ctx.runMutation(internal.ai.runs.begin, {
+		userId,
+		requestId: input.requestId,
+		kind: "lab",
+		documentId: input.documentId,
+		sourceNodeId: input.sourceNodeId,
+		sourceHash: input.sourceHash,
+		expectedSourceMarkdown: sourceMarkdown,
+		requestHash: hash,
+		model: AI_CHAT_MODEL,
+	});
+	if (begun.replay) {
+		const result = replay<T>(begun.run);
+		if (result) return result;
+		aiError("request_conflict", "This AI request id cannot be reused.");
+	}
+	const runId = begun.run._id;
 	let provider: Awaited<ReturnType<typeof createProvider>>;
 	try {
 		const credential = await resolveCredential(ctx, userId);
@@ -265,53 +270,44 @@ async function execute(
 		const completion = await provider.client.chat.completions.create(
 			{
 				model: AI_CHAT_MODEL,
-				max_tokens: MAX_LAB_TOKENS,
-				messages: [
-					{ role: "system", content: SYSTEM_PROMPT },
-					{
-						role: "user",
-						content: `Target: about ${input.target}% shorter.\n\nDraft:\n${sourceMarkdown}`,
-					},
-				],
+				max_tokens: pass.maxTokens,
+				messages: pass.messages(sourceMarkdown),
 			},
 			{ langsmithExtra: { metadata: { traceContent: input.traceContent } } },
 		);
 		const usage: OpenAI.CompletionUsage | undefined = completion.usage;
+		const metrics = {
+			...parseProviderUsage(usage),
+			latencyMs: Date.now() - startedAt,
+			langsmithRunId: provider.langsmithRunId,
+		};
 		const settled = await ctx
 			.runMutation(internal.ai.runs.recordUsage, {
 				runId,
 				userId,
 				callIndex: 0,
-				usage: {
-					...parseProviderUsage(usage),
-					latencyMs: Date.now() - startedAt,
-					langsmithRunId: provider.langsmithRunId,
-				},
+				usage: metrics,
 			})
 			.catch(() => ({ recorded: false }));
 		if (!settled.recorded) throw new ProviderUsageSettlementError();
-		const located = locateCuts(
+		const result = pass.parse(
+			completion.choices[0]?.message.content ?? "",
 			sourceMarkdown,
-			parseCuts(completion.choices[0]?.message.content ?? ""),
 		);
 		const recorded = await ctx.runMutation(internal.ai.runs.succeed, {
 			runId,
 			userId,
-			output: JSON.stringify(located),
+			output: JSON.stringify(result),
 			expectedSourceMarkdown: sourceMarkdown,
-			usage: {
-				...parseProviderUsage(usage),
-				latencyMs: Date.now() - startedAt,
-				langsmithRunId: provider.langsmithRunId,
-			},
+			usage: metrics,
 		});
 		if (!recorded.applicable) {
 			aiError(
 				"document_changed",
-				"The provider completed, but the document changed before the cuts could be shown.",
+				"The provider completed, but the document changed before the result could be shown.",
 			);
 		}
-		return { runId, ...located };
+		return { runId, ...result };
 	} catch (error) {
 		const failure =
 			error instanceof Error ? error : new Error("AI provider failed");
@@ -326,3 +322,133 @@ async function execute(
 		await flushProvider(provider);
 	}
 }
+
+/**
+ * The Lab's trim pass: exact, reasoned cuts for the draft at `sourceNodeId`,
+ * proposed and never applied here.
+ */
+export const run = action({
+	args: { ...baseArgs, target: v.number() },
+	handler: async (ctx, input): Promise<LabResult> => {
+		validateBase(input);
+		if (!TRIM_TARGETS.includes(input.target as TrimTarget))
+			aiError("invalid_argument", "Invalid Lab request.");
+		return await runPass(ctx, input, {
+			name: "trim",
+			identity: { target: String(input.target) },
+			maxTokens: MAX_LAB_TOKENS,
+			messages: (source) => [
+				{ role: "system", content: SYSTEM_PROMPT },
+				{
+					role: "user",
+					content: `Target: about ${input.target}% shorter.\n\nDraft:\n${source}`,
+				},
+			],
+			parse: (reply, source) => locateCuts(source, parseCuts(reply)),
+		});
+	},
+});
+
+// MARK: - Alternatives
+
+export const ALTERNATIVE_SCOPES = ["word", "sentence", "paragraph"] as const;
+export type AlternativeScope = (typeof ALTERNATIVE_SCOPES)[number];
+const MAX_ALTERNATIVES = 5;
+const MAX_ALTERNATIVE_LENGTH: Record<AlternativeScope, number> = {
+	word: 60,
+	sentence: 800,
+	paragraph: 6_000,
+};
+
+const ALTERNATIVES_PROMPT = `You suggest other wordings for one passage of a writer's draft in a Markdown writing app.
+The writer compares your wordings in place against their own, so each must fit the surrounding text exactly where the passage stands: same grammatical role, same scope (a word stays a word or short phrase; a sentence stays a sentence; a paragraph stays a paragraph), and the same meaning.
+Keep the writer's voice and spelling conventions. Do not invent facts, names or numbers. Do not repeat the passage itself.
+Reply with JSON only: {"alternatives":["wording one","wording two"]}, at most five, best first.`;
+
+/** Wordings the writer can compare in place: trimmed, distinct, the right size. */
+export function parseAlternatives(
+	reply: string,
+	passage: string,
+	scope: AlternativeScope,
+): { alternatives: string[] } {
+	const start = reply.indexOf("{");
+	const end = reply.lastIndexOf("}");
+	if (start === -1 || end <= start)
+		throw new Error("The model did not return JSON");
+	const listed = (
+		JSON.parse(reply.slice(start, end + 1)) as { alternatives?: unknown }
+	).alternatives;
+	if (!Array.isArray(listed))
+		throw new Error("The model's reply had no alternatives");
+	const seen = new Set([passage]);
+	const alternatives: string[] = [];
+	for (const item of listed) {
+		if (typeof item !== "string") continue;
+		const wording = item.trim();
+		if (
+			wording.length === 0 ||
+			wording.length > MAX_ALTERNATIVE_LENGTH[scope] ||
+			(scope !== "paragraph" && wording.includes("\n")) ||
+			seen.has(wording)
+		)
+			continue;
+		seen.add(wording);
+		alternatives.push(wording);
+		if (alternatives.length === MAX_ALTERNATIVES) break;
+	}
+	return { alternatives };
+}
+
+/**
+ * Other wordings for the passage at `passageFrom`, which must hold `passage`
+ * exactly in the draft the server has, so suggestions are always for the
+ * words the writer chose.
+ */
+export const alternatives = action({
+	args: {
+		...baseArgs,
+		passage: v.string(),
+		passageFrom: v.number(),
+		scope: v.string(),
+	},
+	handler: async (
+		ctx,
+		input,
+	): Promise<{ runId: Id<"aiRuns">; alternatives: string[] }> => {
+		validateBase(input);
+		const scope = input.scope as AlternativeScope;
+		if (
+			!ALTERNATIVE_SCOPES.includes(scope) ||
+			input.passage.trim().length === 0 ||
+			input.passage.length > MAX_ALTERNATIVE_LENGTH[scope] ||
+			!Number.isSafeInteger(input.passageFrom) ||
+			input.passageFrom < 0
+		)
+			aiError("invalid_argument", "Invalid alternatives request.");
+		return await runPass(ctx, input, {
+			name: "alternatives",
+			identity: {
+				scope,
+				passage: input.passage,
+				passageFrom: String(input.passageFrom),
+			},
+			maxTokens: scope === "paragraph" ? 4_096 : 1_024,
+			check: (source) => {
+				const end = input.passageFrom + input.passage.length;
+				if (source.slice(input.passageFrom, end) !== input.passage)
+					aiError("document_changed", "The passage is no longer where it was.");
+			},
+			messages: (source) => {
+				const end = input.passageFrom + input.passage.length;
+				return [
+					{ role: "system", content: ALTERNATIVES_PROMPT },
+					{
+						role: "user",
+						content: `Draft, with the passage between ⟦ and ⟧:\n${source.slice(0, input.passageFrom)}⟦${input.passage}⟧${source.slice(end)}\n\nScope: ${scope}\nPassage: ${input.passage}`,
+					},
+				];
+			},
+			parse: (reply) => parseAlternatives(reply, input.passage, scope),
+		});
+	},
+});

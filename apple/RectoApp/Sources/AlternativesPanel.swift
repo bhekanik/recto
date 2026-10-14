@@ -17,6 +17,9 @@ struct AlternativesPanel: View {
     let model: CloudDocumentModel
     let theme: RectoEditorTheme
     let targets: AlternativesTargets
+    /// Asks the AI for wordings of the passage on show; nil while AI is off.
+    var suggest: ((NSRange, AlternativeGroup.Scope) -> Void)?
+    var isSuggesting = false
     let close: () -> Void
 
     @State private var draft = ""
@@ -62,7 +65,16 @@ struct AlternativesPanel: View {
                         ForEach(Array(group.candidates.enumerated()), id: \.element.id) { index, candidate in
                             row(candidate, isOriginal: index == 0, in: group)
                         }
-                    } else {
+                    }
+                    if isSuggesting {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.mini)
+                            Text("Asking the AI…").font(.system(size: 12))
+                        }
+                        .foregroundStyle(Color(nsColor: theme.ink3))
+                        .padding(.vertical, 4).padding(.horizontal, 6)
+                    }
+                    if group == nil, !isSuggesting {
                         Text(targets.ranges[currentScope] == nil
                              ? "There is no \(currentScope.label.lowercased()) at the caret."
                              : "Type another wording for “\(passage)” and press Return.")
@@ -83,6 +95,15 @@ struct AlternativesPanel: View {
                 .onExitCommand { finish(keeping: false) }
                 .accessibilityLabel("Add a wording")
                 .padding(.horizontal, 12)
+            if let suggest {
+                Button {
+                    suggest(group?.range ?? range, currentScope)
+                } label: {
+                    Label("Suggest with AI", systemImage: "sparkle")
+                }
+                .disabled(isSuggesting || targets.ranges[currentScope] == nil || model.preview != nil)
+                .padding(.horizontal, 12).padding(.top, 8)
+            }
             Text("↑↓ compare in place · return adds or keeps · esc restores")
                 .font(.system(size: 11)).foregroundStyle(Color(nsColor: theme.ink3))
                 .padding(12)

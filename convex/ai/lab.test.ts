@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { locateCuts, parseCuts } from "./lab";
+import { locateCuts, parseAlternatives, parseCuts } from "./lab";
 
 const draft =
 	"Much of the struggle comes from trying to balance the obvious. It all depends, but it matters. The core should be obvious.";
@@ -40,5 +40,22 @@ describe("Lab trim cuts", () => {
 		).toEqual([{ text: "a", reason: "b" }]);
 		expect(() => parseCuts("no json here")).toThrow();
 		expect(() => parseCuts('{"other":1}')).toThrow();
+	});
+});
+
+describe("Lab alternatives", () => {
+	it("keeps distinct wordings of the right size, never the passage itself", () => {
+		const reply =
+			'{"alternatives":["pressure"," pressure ","tension","a much\\nlonger thing","struggle","friction","difficulty","challenge","strain"]}';
+		expect(parseAlternatives(reply, "tension", "word")).toEqual({
+			alternatives: [
+				"pressure",
+				"struggle",
+				"friction",
+				"difficulty",
+				"challenge",
+			],
+		});
+		expect(() => parseAlternatives("nothing", "tension", "word")).toThrow();
 	});
 });

@@ -56,6 +56,7 @@ struct CommandRegistryTests {
         ("alternatives", .review, "Alternatives for selection", "⌃⇧A"),
         ("toggle-notes", .review, "Toggle notes panel", "⌃⇧N"),
         ("toggle-notes-pin", .review, "Pin notes panel open", ""),
+        ("ai-alternatives", .ai, "AI alternatives for selection", "⌃⇧G"),
         ("lab-trim-10", .ai, "Lab: slight trim", ""),
         ("lab-trim-20", .ai, "Lab: tighten more", ""),
         ("lab-trim-30", .ai, "Lab: even sharper", ""),
