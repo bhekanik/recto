@@ -28,8 +28,8 @@ struct CloudDocumentView: View {
     @State private var comments = CommentsModel()
     @State private var showsComments = false
     @State private var showsOverflow = false
-    /// The passage the alternatives panel is open on.
-    @State private var alternativesRange: NSRange?
+    /// The passages the alternatives panel is open on.
+    @State private var alternativesTargets: AlternativesTargets?
     @State private var overflow: OverflowModel?
     @State private var overflowOpenError: String?
     @State private var showsSharing = false
@@ -227,15 +227,15 @@ struct CloudDocumentView: View {
     private func wire(_ model: CloudDocumentModel) {
         chrome.toggleOverflow = { showsOverflow.toggle() }
         chrome.toggleAlternatives = { [chrome, model] in
-            if alternativesRange != nil {
+            if alternativesTargets != nil {
                 Task { await model.keepAlternative() }
-                alternativesRange = nil
+                alternativesTargets = nil
                 chrome.focusText()
                 return
             }
             guard chrome.currentPresentation().isEditable, model.isEditable,
                   let textView = chrome.seam?.nsTextView else { return }
-            alternativesRange = Self.alternativesTarget(in: textView, writing: model.writing)
+            alternativesTargets = Self.alternativesTargets(in: textView, writing: model.writing)
         }
         chrome.stashInOverflow = { [chrome, model] in
             // Preview is read-only, and a model that is not accepting edits must not move text.
@@ -345,17 +345,53 @@ struct CloudDocumentView: View {
         }
     }
 
-    /// The selection, the passage with alternatives under the caret, or the
-    /// word under the caret, in that order.
-    static func alternativesTarget(in textView: NSTextView, writing: WritingState) -> NSRange? {
-        let selection = textView.selectedRange()
-        if selection.length > 0 { return selection }
-        if let group = writing.group(containing: selection.location) { return group.range }
-        let word = textView.selectionRange(forProposedRange: selection, granularity: .selectByWord)
+    /// The passages around the caret, per scope. An existing passage under the
+    /// caret opens on its own scope; a selection opens as a word or sentence
+    /// depending on whether it spans words.
+    static func alternativesTargets(in textView: NSTextView, writing: WritingState) -> AlternativesTargets? {
         let text = textView.string as NSString
-        guard word.length > 0, NSMaxRange(word) <= text.length,
-              text.substring(with: word).rangeOfCharacter(from: .alphanumerics) != nil else { return nil }
-        return word
+        let selection = textView.selectedRange()
+        let caret = selection.location
+        var ranges: [AlternativeGroup.Scope: NSRange] = [:]
+
+        let word = textView.selectionRange(
+            forProposedRange: NSRange(location: caret, length: 0), granularity: .selectByWord)
+        if word.length > 0, NSMaxRange(word) <= text.length,
+           text.substring(with: word).rangeOfCharacter(from: .alphanumerics) != nil {
+            ranges[.word] = word
+        }
+        let paragraph = trimmed(text.paragraphRange(for: NSRange(location: caret, length: 0)), in: text)
+        if paragraph.length > 0 {
+            ranges[.paragraph] = paragraph
+            text.enumerateSubstrings(in: paragraph, options: [.bySentences, .substringNotRequired]) { _, range, _, stop in
+                if range.location <= caret, caret <= NSMaxRange(range) {
+                    ranges[.sentence] = trimmed(range, in: text)
+                    stop.pointee = true
+                }
+            }
+        }
+
+        if let group = writing.group(containing: caret), selection.length == 0 || group.range == selection {
+            ranges[group.scope] = group.range
+            return AlternativesTargets(ranges: ranges, initial: group.scope)
+        }
+        if selection.length > 0 {
+            let spansWords = text.substring(with: selection).rangeOfCharacter(from: .whitespacesAndNewlines) != nil
+            let scope: AlternativeGroup.Scope = spansWords ? .sentence : .word
+            ranges[scope] = selection
+            return AlternativesTargets(ranges: ranges, initial: scope)
+        }
+        guard !ranges.isEmpty else { return nil }
+        return AlternativesTargets(ranges: ranges, initial: ranges[.word] != nil ? .word : .sentence)
+    }
+
+    /// Without the surrounding whitespace and line break.
+    private static func trimmed(_ range: NSRange, in text: NSString) -> NSRange {
+        var start = range.location, end = NSMaxRange(range)
+        let space = CharacterSet.whitespacesAndNewlines
+        while start < end, let scalar = UnicodeScalar(text.character(at: start)), space.contains(scalar) { start += 1 }
+        while end > start, let scalar = UnicodeScalar(text.character(at: end - 1)), space.contains(scalar) { end -= 1 }
+        return NSRange(location: start, length: end - start)
     }
 
     private func alternativeMarks(_ model: CloudDocumentModel) -> [RectoDecorationController.AlternativeMark] {
@@ -367,9 +403,9 @@ struct CloudDocumentView: View {
     /// The text, and the outline beside it when shown.
     private func page(_ model: CloudDocumentModel, _ styler: MarkdownStyler) -> some View {
         HStack(spacing: 0) {
-            if let range = alternativesRange, !zen.hidesChrome {
-                AlternativesPanel(model: model, theme: styler.theme, range: range) {
-                    alternativesRange = nil
+            if let targets = alternativesTargets, !zen.hidesChrome {
+                AlternativesPanel(model: model, theme: styler.theme, targets: targets) {
+                    alternativesTargets = nil
                     chrome.focusText()
                 }
             }

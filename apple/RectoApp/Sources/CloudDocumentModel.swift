@@ -224,6 +224,37 @@ final class CloudDocumentModel {
         var shownId: String
         let base: String
         let baseWriting: WritingState
+        /// The a/an in front of the passage, corrected for the wording on show.
+        var article: ArticleFix?
+    }
+
+    struct ArticleFix: Equatable {
+        let range: NSRange
+        let text: String
+    }
+
+    private func shownChoice(_ preview: AlternativePreview) -> (state: WritingState, range: NSRange, text: String)? {
+        preview.baseWriting.choosing(
+            preview.shownId, in: preview.groupId, markdown: preview.base,
+            article: preview.article.map { ($0.range, $0.text) })
+    }
+
+    /// The article to use before `candidate` where the passage follows "a" or
+    /// "an", as the prose linter's indefinite-article rule judges it (so "an
+    /// hour" and "a university" come out right). Nil when nothing changes.
+    static func articleFix(before range: NSRange, in markdown: String, candidate: String) async -> ArticleFix? {
+        let source = markdown as NSString
+        let before = source.substring(to: range.location)
+        guard let match = try? NSRegularExpression(pattern: #"(?:^|[^\p{L}\p{N}])(an?|AN?|An)(\s+)$"#)
+            .firstMatch(in: before, range: NSRange(location: 0, length: (before as NSString).length))
+        else { return nil }
+        let articleRange = match.range(at: 1)
+        let article = (before as NSString).substring(with: articleRange)
+        guard let issues = try? await SharedRectoCore.core().lint("\(article) \(candidate)", categories: [.readability]),
+              let issue = issues.first(where: { $0.from == 0 && $0.to == (article as NSString).length }),
+              let expected = issue.message.firstMatch(of: /expected `([^`]+)`/)?.1
+        else { return nil }
+        return ArticleFix(range: articleRange, text: String(expected))
     }
 
     private(set) var preview: AlternativePreview?
@@ -232,7 +263,7 @@ final class CloudDocumentModel {
     /// Alternatives for the text on screen, which can be ahead of the session
     /// by edits still in the queue.
     var writing: WritingState {
-        if let preview, let choice = preview.baseWriting.choosing(preview.shownId, in: preview.groupId, markdown: preview.base) {
+        if let preview, let choice = shownChoice(preview) {
             return choice.state
         }
         guard !(state.markdown as NSString).isEqual(to: storage.markdown) else { return state.writing }
@@ -246,7 +277,7 @@ final class CloudDocumentModel {
     }
 
     /// Save `text` as another wording for `range` of the draft.
-    func addAlternative(_ text: String, at range: NSRange, scope: AlternativeGroup.Scope = .word) async {
+    func addAlternative(_ text: String, at range: NSRange, scope: AlternativeGroup.Scope) async {
         await keepAlternative()
         await edits.waitUntilDrained()
         let markdown = storage.markdown
@@ -262,7 +293,8 @@ final class CloudDocumentModel {
         }
     }
 
-    /// Show `candidateId` in place without keeping it.
+    /// Show `candidateId` in place without keeping it. The article in front
+    /// follows a moment later, once the linter has judged it.
     func showAlternative(_ candidateId: String, in groupId: String) {
         if preview == nil {
             guard let group = writing.alternatives.first(where: { $0.id == groupId }) else { return }
@@ -271,20 +303,37 @@ final class CloudDocumentModel {
                 base: storage.markdown, baseWriting: writing)
         }
         guard var preview,
-              let choice = preview.baseWriting.choosing(candidateId, in: groupId, markdown: preview.base) else { return }
+              let group = preview.baseWriting.alternatives.first(where: { $0.id == groupId }),
+              let candidate = group.candidates.first(where: { $0.id == candidateId }) else { return }
         preview.shownId = candidateId
+        preview.article = nil
         self.preview = preview
+        showPreviewText()
+        let base = preview.base
+        Task { [weak self] in
+            let fix = await Self.articleFix(before: group.range, in: base, candidate: candidate.text)
+            guard let self, fix != nil, self.preview?.shownId == candidateId, self.preview?.base == base else { return }
+            self.preview?.article = fix
+            self.showPreviewText()
+        }
+    }
+
+    private func showPreviewText() {
+        guard let preview, let choice = shownChoice(preview) else { return }
         let shown = (preview.base as NSString).replacingCharacters(in: choice.range, with: choice.text)
         for storage in allStorages { storage.markdown = shown }
     }
 
     /// Keep the wording on show as one history step.
     func keepAlternative() async {
-        guard let preview else { return }
+        guard var preview else { return }
         self.preview = nil
-        guard preview.shownId != preview.startId,
-              let choice = preview.baseWriting.choosing(preview.shownId, in: preview.groupId, markdown: preview.base)
-        else {
+        if preview.shownId != preview.startId, preview.article == nil,
+           let group = preview.baseWriting.alternatives.first(where: { $0.id == preview.groupId }),
+           let candidate = group.candidates.first(where: { $0.id == preview.shownId }) {
+            preview.article = await Self.articleFix(before: group.range, in: preview.base, candidate: candidate.text)
+        }
+        guard preview.shownId != preview.startId, let choice = shownChoice(preview) else {
             for storage in allStorages { storage.markdown = preview.base }
             return
         }
@@ -340,7 +389,7 @@ final class CloudDocumentModel {
     func accept(_ edit: RectoEditorEdit, from source: RectoTextStorage, origin: String? = nil) {
         // A preview is not in the history; typing over it would record the
         // shown wording as an edit of the original. Keep or restore it first.
-        if let preview, let choice = preview.baseWriting.choosing(preview.shownId, in: preview.groupId, markdown: preview.base) {
+        if let preview, let choice = shownChoice(preview) {
             source.markdown = (preview.base as NSString).replacingCharacters(in: choice.range, with: choice.text)
             return
         }

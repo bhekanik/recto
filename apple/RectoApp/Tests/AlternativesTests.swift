@@ -29,7 +29,7 @@ struct AlternativesTests {
     func previewKeepUndo() async throws {
         let model = try await open()
         let tension = (draft as NSString).range(of: "tension")
-        await model.addAlternative("pressure", at: tension)
+        await model.addAlternative("pressure", at: tension, scope: .word)
         let group = try #require(model.writing.alternatives.first)
         #expect(group.candidates.map(\.text) == ["tension", "pressure"])
         #expect(model.storage.markdown == draft)
@@ -61,10 +61,10 @@ struct AlternativesTests {
     func panelKeys() async throws {
         let model = try await open()
         let tension = (draft as NSString).range(of: "tension")
-        await model.addAlternative("pressure", at: tension)
-        await model.addAlternative("strain", at: tension)
+        await model.addAlternative("pressure", at: tension, scope: .word)
+        await model.addAlternative("strain", at: tension, scope: .word)
         var closed = false
-        let host = NSHostingView(rootView: AlternativesPanel(model: model, theme: .twilight, range: tension) { closed = true })
+        let host = NSHostingView(rootView: AlternativesPanel(model: model, theme: .twilight, targets: AlternativesTargets(ranges: [.word: tension], initial: .word)) { closed = true })
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 500), styleMask: [.titled], backing: .buffered, defer: false)
         window.contentView = host
         window.makeKeyAndOrderFront(nil)
@@ -87,6 +87,59 @@ struct AlternativesTests {
         window.sendEvent(try #require(key("\u{1b}", 53)))
         #expect(await Self.until { model.storage.markdown == draft })
         #expect(closed)
+        await model.close()
+    }
+
+    @Test("a wording that changes the vowel sound fixes a/an in the same undo step")
+    func article() async throws {
+        let model = try await open()
+        let source = "Like a thumbtack, for example."
+        model.storage.markdown = source
+        model.accept(RectoEditorEdit(markdown: source, structural: true))
+        await model.save()
+        await model.addAlternative("eraser", at: (source as NSString).range(of: "thumbtack"), scope: .word)
+        let group = try #require(model.writing.alternatives.first)
+        model.showAlternative(group.candidates[1].id, in: group.id)
+        #expect(await Self.until { model.storage.markdown == "Like an eraser, for example." }, "shown: \(model.storage.markdown)")
+        await model.keepAlternative()
+        #expect(model.state.markdown == "Like an eraser, for example.")
+        #expect((model.state.markdown as NSString).substring(with: try #require(model.writing.alternatives.first).range) == "eraser")
+        // Back to the original wording restores its article too.
+        model.showAlternative(group.candidates[0].id, in: group.id)
+        await model.keepAlternative()
+        #expect(model.state.markdown == source)
+        await model.undo()
+        #expect(model.state.markdown == "Like an eraser, for example.")
+        await model.undo()
+        #expect(model.state.markdown == source)
+        await model.close()
+    }
+
+    @Test("the panel finds the word, sentence and paragraph at the caret, and a sentence wording replaces the sentence")
+    func scopes() async throws {
+        let text = "First line here.\n\nShouldn't everything be obvious? Unless you're making a product.\n"
+        let view = NSTextView()
+        view.string = text
+        let caret = (text as NSString).range(of: "everything").location + 2
+        view.setSelectedRange(NSRange(location: caret, length: 0))
+        let targets = try #require(CloudDocumentView.alternativesTargets(in: view, writing: WritingState()))
+        let source = text as NSString
+        #expect(source.substring(with: try #require(targets.ranges[.word])) == "everything")
+        #expect(source.substring(with: try #require(targets.ranges[.sentence])) == "Shouldn't everything be obvious?")
+        #expect(source.substring(with: try #require(targets.ranges[.paragraph])) == "Shouldn't everything be obvious? Unless you're making a product.")
+        #expect(targets.initial == .word)
+
+        let model = try await open()
+        model.storage.markdown = text
+        model.accept(RectoEditorEdit(markdown: text, structural: true))
+        await model.save()
+        let sentence = try #require(targets.ranges[.sentence])
+        await model.addAlternative("Why isn't everything obvious?", at: sentence, scope: .sentence)
+        let group = try #require(model.writing.alternatives.first)
+        #expect(group.scope == .sentence)
+        model.showAlternative(group.candidates[1].id, in: group.id)
+        await model.keepAlternative()
+        #expect(model.state.markdown == "First line here.\n\nWhy isn't everything obvious? Unless you're making a product.\n")
         await model.close()
     }
 

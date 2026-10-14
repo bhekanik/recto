@@ -201,6 +201,12 @@ The panel opens with Control-Shift-A on the left, as in the video. Up and Down p
 
 Correction to the PR 73 description: test hosts never opened a mirror at the unsandboxed path (`~/Library/Application Support/Recto` does not exist on this Mac). The installed app's mirror lives in its sandbox container. The window-less test host is still correct, but the commit overstated the risk.
 
+## Rung 4 adds sentence and paragraph scopes and a/an
+
+The panel has Word, Sentence and Paragraph tabs. Ranges come from the system's own segmentation: `selectByWord` for the word, `NSString.paragraphRange` for the paragraph and `bySentences` enumeration inside it for the sentence, each trimmed of surrounding whitespace. A selection opens as a word when it holds no whitespace and as a sentence otherwise; a passage with alternatives opens on its stored scope. Passages never overlap, so a word inside a sentence that already has alternatives is refused with a message rather than nested.
+
+When a passage follows "a" or "an", the model asks the shared core's prose linter (`retext-indefinite-article`) about "article wording" and takes the article from its "expected `…`" message, which handles "an hour" and "a university" and keeps capitalisation. `WritingState.choosing(_:in:markdown:article:)` applies the article and the wording as one replacement and one history node, shifting later passages. The preview shows the article as soon as the linter answers.
+
 ## Unresolved questions
 
 1. May the prepared check briefly disconnect and restore this Mac's active Ethernet/Wi-Fi connections? System changes outside the repository require approval; none has been received.

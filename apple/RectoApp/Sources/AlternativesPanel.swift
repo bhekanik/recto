@@ -6,19 +6,31 @@ import SwiftUI
 /// Wordings for one passage, beside the draft. Up and Down show each wording
 /// in place, Return with an empty field keeps the one on show, Return with
 /// text saves it as another wording, Escape puts the starting wording back.
+/// The passages around the caret the panel can work on, one per scope, in
+/// the draft's UTF-16 offsets.
+struct AlternativesTargets: Equatable {
+    var ranges: [AlternativeGroup.Scope: NSRange]
+    var initial: AlternativeGroup.Scope
+}
+
 struct AlternativesPanel: View {
     let model: CloudDocumentModel
     let theme: RectoEditorTheme
-    /// The passage the panel opened on, in the draft's UTF-16 offsets.
-    let range: NSRange
+    let targets: AlternativesTargets
     let close: () -> Void
 
     @State private var draft = ""
+    @State private var scope: AlternativeGroup.Scope?
     @FocusState private var fieldFocused: Bool
+
+    private var currentScope: AlternativeGroup.Scope { scope ?? targets.initial }
+    private var range: NSRange { targets.ranges[currentScope] ?? NSRange(location: 0, length: 0) }
 
     private var group: AlternativeGroup? {
         let writing = model.writing
-        return writing.group(covering: range) ?? writing.group(containing: range.location)
+        if let exact = writing.group(covering: range) { return exact }
+        // A kept wording of another length moves the passage's end, not its start.
+        return writing.alternatives.first { !$0.detached && $0.scope == currentScope && $0.location == range.location }
     }
 
     private var shownId: String? { model.preview?.shownId ?? group?.activeId }
@@ -27,7 +39,6 @@ struct AlternativesPanel: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text("Alternatives").font(.system(size: 13, weight: .medium))
-                Text("Word").font(.system(size: 12)).foregroundStyle(Color(nsColor: theme.ink3))
                 Spacer()
                 Button { finish(keeping: false) } label: { Image(systemName: "xmark") }
                     .buttonStyle(.plain).focusable(false)
@@ -36,6 +47,14 @@ struct AlternativesPanel: View {
             .foregroundStyle(Color(nsColor: theme.ink2))
             .padding(.horizontal, 12).frame(height: 36)
             Color(nsColor: theme.line).frame(height: 1)
+            Picker("Scope", selection: Binding(get: { currentScope }, set: { choose($0) })) {
+                ForEach([AlternativeGroup.Scope.word, .sentence, .paragraph], id: \.self) { scope in
+                    Text(scope.label).tag(scope)
+                }
+            }
+            .pickerStyle(.segmented).labelsHidden()
+            .disabled(model.preview != nil)
+            .padding(.horizontal, 12).padding(.top, 10)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
@@ -44,7 +63,9 @@ struct AlternativesPanel: View {
                             row(candidate, isOriginal: index == 0, in: group)
                         }
                     } else {
-                        Text("Type another wording for “\(passage)” and press Return.")
+                        Text(targets.ranges[currentScope] == nil
+                             ? "There is no \(currentScope.label.lowercased()) at the caret."
+                             : "Type another wording for “\(passage)” and press Return.")
                             .font(.system(size: 12)).foregroundStyle(Color(nsColor: theme.ink3))
                             .padding(.vertical, 6)
                     }
@@ -125,7 +146,13 @@ struct AlternativesPanel: View {
         }
         draft = ""
         let target = group?.range ?? range
-        Task { await model.addAlternative(text, at: target) }
+        Task { await model.addAlternative(text, at: target, scope: currentScope) }
+    }
+
+    private func choose(_ next: AlternativeGroup.Scope) {
+        guard targets.ranges[next] != nil else { return }
+        scope = next
+        fieldFocused = true
     }
 
     private func finish(keeping: Bool) {
@@ -137,6 +164,16 @@ struct AlternativesPanel: View {
         } else {
             model.restoreAlternative()
             close()
+        }
+    }
+}
+
+extension AlternativeGroup.Scope {
+    var label: String {
+        switch self {
+        case .word: "Word"
+        case .sentence: "Sentence"
+        case .paragraph: "Paragraph"
         }
     }
 }

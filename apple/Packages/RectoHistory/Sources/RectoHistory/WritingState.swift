@@ -261,19 +261,37 @@ extension WritingState {
 
   /// Show `candidateId` in its passage: the text replacement to make and the
   /// state for the resulting text, with every other passage shifted.
-  public func choosing(_ candidateId: String, in groupId: String, markdown: String)
-    -> (state: WritingState, range: NSRange, text: String)?
-  {
+  ///
+  /// `article` replaces the indefinite article in front of the passage in the
+  /// same change ("a thumbtack" → "an eraser"), so one undo restores both.
+  public func choosing(
+    _ candidateId: String, in groupId: String, markdown: String,
+    article: (range: NSRange, text: String)? = nil
+  ) -> (state: WritingState, range: NSRange, text: String)? {
     guard let index = alternatives.firstIndex(where: { $0.id == groupId && !$0.detached }),
       let candidate = alternatives[index].candidates.first(where: { $0.id == candidateId })
     else { return nil }
     let range = alternatives[index].range
-    guard NSMaxRange(range) <= (markdown as NSString).length else { return nil }
+    let source = markdown as NSString
+    guard NSMaxRange(range) <= source.length else { return nil }
     var next = self
     next.alternatives[index].activeId = candidateId
-    let patch = TextPatch(from: range.location, to: NSMaxRange(range), insert: candidate.text)
-    let result = (markdown as NSString).replacingCharacters(in: range, with: candidate.text)
-    return (next.mapped(through: patch, into: JSString(result)), range, candidate.text)
+    var text = source as String
+    if let article {
+      guard NSMaxRange(article.range) <= range.location else { return nil }
+      let patch = TextPatch(from: article.range.location, to: NSMaxRange(article.range), insert: article.text)
+      text = source.replacingCharacters(in: article.range, with: article.text)
+      next = next.mapped(through: patch, into: JSString(text))
+    }
+    let shifted = next.alternatives[index].range
+    let patch = TextPatch(from: shifted.location, to: NSMaxRange(shifted), insert: candidate.text)
+    text = (text as NSString).replacingCharacters(in: shifted, with: candidate.text)
+    next = next.mapped(through: patch, into: JSString(text))
+    let start = article?.range.location ?? range.location
+    let changed = NSRange(location: start, length: NSMaxRange(range) - start)
+    let replacement = (text as NSString).substring(
+      with: NSRange(location: start, length: NSMaxRange(changed) + (text as NSString).length - source.length - start))
+    return (next, changed, replacement)
   }
 
   /// Remove a wording that is not showing. A passage left with only its
