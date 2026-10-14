@@ -178,9 +178,23 @@ public struct GroupingController: Sendable {
   /// Force-commit any pending draft (mode switch, blur, before navigate/persist).
   public mutating func flush() -> GroupCommit? { tick() }
 
+  /// The committed text the draft is measured against.
+  public var headMarkdown: String { parentMarkdown.string ?? parentMarkdown.lossyString }
+
+  /// A node with the head's text, for a change that rides on the node rather
+  /// than the text (writing state). Nil while a draft is pending: flush first.
+  public mutating func commitUnchanged(selection: NodeSelection?) -> GroupCommit? {
+    guard draftMarkdown == parentMarkdown else { return nil }
+    draftSelection = selection
+    return commitNode()
+  }
+
   private mutating func commitDraft() -> GroupCommit? {
     guard draftMarkdown != parentMarkdown else { return nil }
+    return commitNode()
+  }
 
+  private mutating func commitNode() -> GroupCommit {
     let patch = computePatch(parentMarkdown, draftMarkdown).encoded
     depthSinceSnapshot += 1
     let takeSnapshot = depthSinceSnapshot >= snapshotEveryN

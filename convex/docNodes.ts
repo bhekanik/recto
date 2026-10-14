@@ -2,7 +2,7 @@ import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
 import { syncBlobReferences } from "./blobReferences";
-import { requireOwnedDocument } from "./documents";
+import { requireOwnedDocument, requireWritingFits } from "./documents";
 
 const selectionValidator = v.union(
 	v.object({ anchor: v.number(), head: v.number() }),
@@ -19,6 +19,7 @@ function toClientNode(row: Doc<"docNodes">) {
 		selection: row.selection,
 		origin: row.origin,
 		createdAt: row.createdAt,
+		writing: row.writing,
 	};
 }
 
@@ -38,9 +39,11 @@ export const append = mutation({
 		selection: selectionValidator,
 		origin: v.string(),
 		createdAt: v.number(),
+		writing: v.optional(v.string()),
 	},
 	handler: async (ctx, args) => {
 		const doc = await requireOwnedDocument(ctx, args.documentId);
+		requireWritingFits(args.writing);
 
 		const existing = await ctx.db
 			.query("docNodes")
@@ -59,6 +62,7 @@ export const append = mutation({
 			selection: args.selection,
 			origin: args.origin,
 			createdAt: args.createdAt,
+			writing: args.writing,
 		});
 		await syncBlobReferences(ctx, doc.userId, "node", nodeRowId, [
 			args.patch,

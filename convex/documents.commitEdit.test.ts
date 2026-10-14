@@ -53,6 +53,54 @@ async function newDocument(t: ReturnType<typeof convexTest>) {
 }
 
 describe("documents.commitEdit", () => {
+	it("stores a node's writing state and returns it, absent where none was sent", async () => {
+		const t = convexTest(schema, modules);
+		const { owner, documentId, rootNodeId } = await newDocument(t);
+		const writing = JSON.stringify({ version: 1, alternatives: [] });
+
+		await owner.mutation(api.documents.commitEdit, {
+			documentId,
+			node: { ...nodeFor("node-1", rootNodeId, "", "one"), writing },
+			markdown: "one",
+			wordCount: 1,
+			expectedHeadNodeId: rootNodeId,
+			clientMutationId: "commit-1",
+		});
+		await owner.mutation(api.documents.commitEdit, {
+			documentId,
+			node: nodeFor("node-2", "node-1", "one", "two"),
+			markdown: "two",
+			wordCount: 1,
+			expectedHeadNodeId: "node-1",
+			clientMutationId: "commit-2",
+		});
+
+		const nodes = await owner.query(api.docNodes.listSince, { documentId });
+		expect(nodes.find((n) => n.nodeId === "node-1")?.writing).toBe(writing);
+		expect(nodes.find((n) => n.nodeId === "node-2")?.writing).toBeUndefined();
+	});
+
+	it("refuses writing state over 64 KiB without writing the node", async () => {
+		const t = convexTest(schema, modules);
+		const { owner, documentId, rootNodeId } = await newDocument(t);
+
+		await expect(
+			owner.mutation(api.documents.commitEdit, {
+				documentId,
+				node: {
+					...nodeFor("node-1", rootNodeId, "", "one"),
+					writing: "x".repeat(64 * 1024 + 1),
+				},
+				markdown: "one",
+				wordCount: 1,
+				expectedHeadNodeId: rootNodeId,
+				clientMutationId: "commit-1",
+			}),
+		).rejects.toThrow(ConvexError);
+		const nodes = await owner.query(api.docNodes.listSince, { documentId });
+		expect(nodes.map((n) => n.nodeId)).toEqual([rootNodeId]);
+	});
+
 	it("moves the node, the pointer and the markdown in one transaction", async () => {
 		const t = convexTest(schema, modules);
 		const { owner, documentId, rootNodeId } = await newDocument(t);

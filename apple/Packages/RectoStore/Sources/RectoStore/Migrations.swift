@@ -14,6 +14,7 @@ enum Migrations {
   static let v8 = "v8-remote-title-revision"
   static let v9 = "v9-document-overflow"
   static let v10 = "v10-overflow-moves"
+  static let v11 = "v11-node-writing-state"
 
   static func migrator() -> DatabaseMigrator {
     // Deliberately NOT `eraseDatabaseOnSchemaChange`, even in DEBUG: BK
@@ -249,6 +250,10 @@ enum Migrations {
         t.column("applied", .boolean).notNull()
         t.primaryKey(["documentLocalId", "nodeId"])
       }
+    }
+
+    migrator.registerMigration(v11) { db in
+      try db.alter(table: "doc_nodes") { t in t.add(column: "writing", .text) }
     }
 
     return migrator

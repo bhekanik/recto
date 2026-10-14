@@ -214,6 +214,111 @@ final class CloudDocumentModel {
         var errorDescription: String? { "The draft changed before the move. Select the text again." }
     }
 
+    // MARK: - Alternatives
+
+    /// A wording shown in place but not yet kept. The text it was shown over
+    /// is `base`; nothing reaches the history until it is kept.
+    struct AlternativePreview: Equatable {
+        let groupId: String
+        let startId: String
+        var shownId: String
+        let base: String
+        let baseWriting: WritingState
+    }
+
+    private(set) var preview: AlternativePreview?
+    private var idCounter = 0
+
+    /// Alternatives for the text on screen, which can be ahead of the session
+    /// by edits still in the queue.
+    var writing: WritingState {
+        if let preview, let choice = preview.baseWriting.choosing(preview.shownId, in: preview.groupId, markdown: preview.base) {
+            return choice.state
+        }
+        guard !(state.markdown as NSString).isEqual(to: storage.markdown) else { return state.writing }
+        guard !state.writing.isEmpty else { return state.writing }
+        return state.writing.mapped(through: computePatch(state.markdown, storage.markdown), into: JSString(storage.markdown))
+    }
+
+    private func newId() -> String {
+        idCounter += 1
+        return "\(UUID().uuidString.prefix(8))-\(idCounter)"
+    }
+
+    /// Save `text` as another wording for `range` of the draft.
+    func addAlternative(_ text: String, at range: NSRange, scope: AlternativeGroup.Scope = .word) async {
+        await keepAlternative()
+        await edits.waitUntilDrained()
+        let markdown = storage.markdown
+        guard let next = writing.adding(text, author: .human, scope: scope, at: range, in: markdown, newId: newId) else {
+            errorMessage = "Alternatives cannot overlap another passage with alternatives."
+            return
+        }
+        guard next != writing else { return }
+        await perform {
+            guard try await session.applyWriting(expectedMarkdown: markdown, writing: next) else {
+                throw AlternativeFailure.draftChanged
+            }
+        }
+    }
+
+    /// Show `candidateId` in place without keeping it.
+    func showAlternative(_ candidateId: String, in groupId: String) {
+        if preview == nil {
+            guard let group = writing.alternatives.first(where: { $0.id == groupId }) else { return }
+            preview = AlternativePreview(
+                groupId: groupId, startId: group.activeId, shownId: group.activeId,
+                base: storage.markdown, baseWriting: writing)
+        }
+        guard var preview,
+              let choice = preview.baseWriting.choosing(candidateId, in: groupId, markdown: preview.base) else { return }
+        preview.shownId = candidateId
+        self.preview = preview
+        let shown = (preview.base as NSString).replacingCharacters(in: choice.range, with: choice.text)
+        for storage in allStorages { storage.markdown = shown }
+    }
+
+    /// Keep the wording on show as one history step.
+    func keepAlternative() async {
+        guard let preview else { return }
+        self.preview = nil
+        guard preview.shownId != preview.startId,
+              let choice = preview.baseWriting.choosing(preview.shownId, in: preview.groupId, markdown: preview.base)
+        else {
+            for storage in allStorages { storage.markdown = preview.base }
+            return
+        }
+        await perform {
+            guard try await session.applyWriting(
+                expectedMarkdown: preview.base, replacing: choice.range, with: choice.text, writing: choice.state)
+            else { throw AlternativeFailure.draftChanged }
+        }
+    }
+
+    /// Put back the wording that showed before the preview.
+    func restoreAlternative() {
+        guard let preview else { return }
+        self.preview = nil
+        for storage in allStorages { storage.markdown = preview.base }
+    }
+
+    func removeAlternative(_ candidateId: String, from groupId: String) async {
+        await keepAlternative()
+        await edits.waitUntilDrained()
+        let markdown = storage.markdown
+        guard let next = writing.removing(candidateId, from: groupId) else { return }
+        await perform {
+            guard try await session.applyWriting(expectedMarkdown: markdown, writing: next) else {
+                throw AlternativeFailure.draftChanged
+            }
+        }
+    }
+
+    enum AlternativeFailure: LocalizedError {
+        case draftChanged
+        var errorDescription: String? { "The draft changed while saving the alternative. Try again." }
+    }
+
     var pendingEditCount: Int { edits.pendingCount }
     /// `pendingEditCount` as it changes. The queue is an `ObservableObject`,
     /// which Observation does not track, so a view that shows the count has to
@@ -233,6 +338,12 @@ final class CloudDocumentModel {
     /// this turn, so a writer switching panes never types over stale text;
     /// then it joins the ordered queue like any edit.
     func accept(_ edit: RectoEditorEdit, from source: RectoTextStorage, origin: String? = nil) {
+        // A preview is not in the history; typing over it would record the
+        // shown wording as an edit of the original. Keep or restore it first.
+        if let preview, let choice = preview.baseWriting.choosing(preview.shownId, in: preview.groupId, markdown: preview.base) {
+            source.markdown = (preview.base as NSString).replacingCharacters(in: choice.range, with: choice.text)
+            return
+        }
         let markdown = edit.markdown
         guard !(markdown as NSString).isEqual(to: source.markdown)
             || !(markdown as NSString).isEqual(to: state.markdown)
@@ -377,7 +488,7 @@ final class CloudDocumentModel {
 
     private func adopt(_ updated: DocumentState) {
         state = updated
-        guard edits.pendingCount == 0 else { return }
+        guard edits.pendingCount == 0, preview == nil else { return }
         edits.adoptAuthoritativeMarkdown(updated.markdown)
         for storage in allStorages where !(storage.markdown as NSString).isEqual(to: updated.markdown) {
             storage.markdown = updated.markdown

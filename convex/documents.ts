@@ -86,6 +86,16 @@ export function requireDocumentTextFits(
 	}
 }
 
+/** Matches `WritingState.maxEncodedBytes` on the Mac. */
+export const MAX_WRITING_BYTES = 64 * 1024;
+
+/** A node's writing state is opaque here; only its size is the server's concern. */
+export function requireWritingFits(writing: string | undefined): void {
+	if (writing !== undefined && utf8Length(writing) > MAX_WRITING_BYTES) {
+		refuse("too_large", "Alternatives for this draft exceed 64 KiB.");
+	}
+}
+
 export function requireId(value: string, field: string): string {
 	if (value.length === 0 || value.length > MAX_ID_LENGTH) {
 		refuse("invalid_argument", `Invalid ${field}`);
@@ -426,6 +436,7 @@ export const commitEdit = mutation({
 			),
 			origin: v.string(),
 			createdAt: v.number(),
+			writing: v.optional(v.string()),
 		}),
 		markdown: v.string(),
 		wordCount: v.number(),
@@ -472,6 +483,7 @@ export const commitEdit = mutation({
 		if (nodeRowBytes > MAX_MARKDOWN_LENGTH) {
 			refuse("too_large", MARKDOWN_TOO_LARGE_MESSAGE);
 		}
+		requireWritingFits(args.node.writing);
 
 		// A node's parent IS the head it was committed onto; a caller that names
 		// one head and parents the node on another would leave the DAG

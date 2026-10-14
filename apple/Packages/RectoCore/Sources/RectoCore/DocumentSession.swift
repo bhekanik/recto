@@ -20,6 +20,8 @@ public struct DocumentState: Sendable, Equatable {
   public var divergence: Divergence?
   public var canUndo: Bool
   public var canRedo: Bool
+  /// Alternatives for `markdown`, in its UTF-16 offsets.
+  public var writing: WritingState = WritingState()
 }
 
 /// Two heads that neither reaches the other. Both stay in the DAG; the UI's
@@ -29,6 +31,11 @@ public struct Divergence: Sendable, Equatable {
   public var remoteHeadNodeId: String
   /// Nearest common ancestor — the base a three-way compare needs.
   public var baseNodeId: String?
+}
+
+public enum WritingError: Error, LocalizedError, Equatable, Sendable {
+  case tooLarge
+  public var errorDescription: String? { "Alternatives for this draft exceed 64 KiB. Remove some before adding more." }
 }
 
 public enum SessionError: Error, Equatable, Sendable {
@@ -105,6 +112,16 @@ public actor DocumentSession {
   private var controller: GroupingController?
   private var document: DocumentRecord?
   private var nodesById: [String: DocNode] = [:]
+  /// Writing state for the text the editor shows, followed keystroke by
+  /// keystroke so a node that groups several edits can still record exactly
+  /// what the writer saw, rather than what its one combined patch implies.
+  private var liveWriting = WritingState()
+  private var liveWritingMarkdown = ""
+  /// The node the live state builds on. Local commits keep it current; any
+  /// other head move (undo, a jump, a remote head) leaves it behind.
+  private var liveWritingHead = ""
+  /// Materialized writing state per node. Nodes are immutable, so are these.
+  private var writingByNode: [String: WritingState] = [:]
   private var stateContinuations: [UUID: AsyncStream<DocumentState>.Continuation] = [:]
   private var idleTask: Task<Void, Never>?
   private var draftTask: Task<Void, Never>?
@@ -311,12 +328,14 @@ public actor DocumentSession {
             document.localHeadNodeId, $0, in: nodesById))
       },
       canUndo: head?.parentNodeId != nil || controller?.hasPendingDraft == true,
-      canRedo: !children(of: document.localHeadNodeId).isEmpty)
+      canRedo: !children(of: document.localHeadNodeId).isEmpty,
+      writing: liveWriting)
   }
 
   private func removeStateContinuation(_ id: UUID) { stateContinuations[id] = nil }
 
   private func publish() {
+    syncLiveWriting()
     guard let state = currentState else { return }
     for continuation in stateContinuations.values { continuation.yield(state) }
   }
@@ -470,8 +489,11 @@ public actor DocumentSession {
     // Stage the grouping decision in a copy; the live controller is only
     // replaced once every store write for it has succeeded.
     var staged = controller!
+    let previousWriting = liveWriting
+    let previousWritingMarkdown = liveWritingMarkdown
     let commits = staged.record(
       markdown: markdown, selection: selection, structural: structural, now: timestamp)
+    advanceLiveWriting(to: markdown)
 
     var expectedGeneration = generation
     do {
@@ -484,7 +506,9 @@ public actor DocumentSession {
           commit, base: head, expectedDraftRevision: expectedGeneration,
           includeDerivedTitle: !editorTitleLaneOwnsDraft,
           origin: isThisChange ? originOverride ?? origin : origin,
-          retainNewerEditorIngress: preserveAcceptedOrder, at: timestamp)
+          retainNewerEditorIngress: preserveAcceptedOrder,
+          live: Self.sameText(commit.markdown, previousWritingMarkdown) ? previousWriting : nil,
+          at: timestamp)
         head = persisted.localHeadNodeId
         expectedGeneration = persisted.draftRevision
       }
@@ -622,10 +646,12 @@ public actor DocumentSession {
     origin: String? = nil,
     retainNewerEditorIngress: Bool = false,
     overflowMove: OverflowMoveIntent? = nil,
+    live: WritingState? = nil,
     at timestamp: Double
   ) async throws -> DocumentRecord
   {
     let origin = origin ?? self.origin
+    let writing = try nodeWriting(for: commit, live: live)
     let words = countWords(commit.markdown)
     let title = includeDerivedTitle ? derivedTitle(for: commit.markdown) : nil
     let node = DocNodeRecord(
@@ -636,7 +662,8 @@ public actor DocumentSession {
       snapshot: commit.snapshot,
       selection: commit.selection,
       origin: origin,
-      createdAt: timestamp)
+      createdAt: timestamp,
+      writing: writing.explicit?.encoded)
     let job = OutboxJob(
       documentLocalId: documentLocalId,
       kind: .commitEdit,
@@ -644,17 +671,131 @@ public actor DocumentSession {
       baseHeadNodeId: commit.parentNodeId,
       payload: OutboxPayload.commit(
         commit, origin: origin, createdAt: timestamp, wordCount: words,
-        title: title
+        title: title, writing: writing.explicit?.encoded
       ).encoded,
       createdAt: timestamp)
 
-    return try await store.commit(
+    let persisted = try await store.commit(
       documentLocalId: documentLocalId, node: node, markdown: commit.markdown, wordCount: words,
       title: title,
       preserveQueuedDraftJob: !includeDerivedTitle,
       retainNewerEditorIngress: retainNewerEditorIngress,
       expectedHeadNodeId: base, expectedDraftRevision: expectedDraftRevision,
       overflowMove: overflowMove, job: job, now: timestamp)
+    writingByNode[commit.nodeId] = writing.state
+    liveWritingHead = commit.nodeId
+    return persisted
+  }
+
+  // MARK: - Writing state
+
+  /// What a commit's node records: nothing when its parent's state, mapped
+  /// through the patch, already says it; otherwise the live state.
+  private func nodeWriting(for commit: GroupCommit, live: WritingState?) throws
+    -> (state: WritingState, explicit: WritingState?)
+  {
+    let live = live ?? (Self.sameText(commit.markdown, liveWritingMarkdown) ? liveWriting : nil)
+    let parent = writing(at: commit.parentNodeId)
+    let derived = parent.isEmpty
+      ? parent : parent.mapped(through: try TextPatch.decode(commit.patch), into: JSString(commit.markdown))
+    guard let live, live != derived else { return (derived, nil) }
+    guard live.encoded.utf8.count <= WritingState.maxEncodedBytes else {
+      throw WritingError.tooLarge
+    }
+    return (live, live)
+  }
+
+  private func writing(at nodeId: String) -> WritingState {
+    if let cached = writingByNode[nodeId] { return cached }
+    guard nodesById[nodeId] != nil else { return WritingState() }
+    let state = (try? materializeWriting(nodeId, nodesById)) ?? WritingState()
+    writingByNode[nodeId] = state
+    return state
+  }
+
+  private func advanceLiveWriting(to markdown: String) {
+    guard !Self.sameText(markdown, liveWritingMarkdown) else { return }
+    if !liveWriting.isEmpty {
+      liveWriting = liveWriting.mapped(
+        through: computePatch(liveWritingMarkdown, markdown), into: JSString(markdown))
+    }
+    liveWritingMarkdown = markdown
+  }
+
+  /// When the shown text changed by any other route (navigation, a remote
+  /// head, a rebuild), derive the live state from the head again.
+  private func syncLiveWriting() {
+    guard let controller else {
+      liveWriting = WritingState()
+      liveWritingMarkdown = ""
+      return
+    }
+    let display = controller.draft
+    guard !Self.sameText(display, liveWritingMarkdown) || liveWritingHead != controller.currentNodeId
+    else { return }
+    let head = writing(at: controller.currentNodeId)
+    liveWriting = head.isEmpty
+      ? head
+      : head.mapped(through: computePatch(controller.headMarkdown, display), into: JSString(display))
+    liveWritingMarkdown = display
+    liveWritingHead = controller.currentNodeId
+  }
+
+  private static func sameText(_ a: String, _ b: String) -> Bool { (a as NSString).isEqual(to: b) }
+
+  /// Replace `range` with `replacement` (or change nothing) and record
+  /// `writing` for the resulting text, as one history node. False when the
+  /// shown text is no longer `expectedMarkdown`.
+  @discardableResult
+  public func applyWriting(
+    expectedMarkdown: String, replacing range: NSRange? = nil, with replacement: String = "",
+    writing: WritingState, selection: NodeSelection? = nil
+  ) async throws -> Bool {
+    try await withTransition {
+      try requireWritable()
+      try await performFlush()
+      guard let document, var staged = controller else { throw SessionError.notOpen }
+      guard Self.sameText(document.displayMarkdown, expectedMarkdown) else { return false }
+      var next = expectedMarkdown
+      if let range {
+        guard NSMaxRange(range) <= (expectedMarkdown as NSString).length else { return false }
+        next = (expectedMarkdown as NSString).replacingCharacters(in: range, with: replacement)
+      }
+      let state = writing.validated(against: JSString(next))
+      guard state.encoded.utf8.count <= WritingState.maxEncodedBytes else { throw WritingError.tooLarge }
+      let timestamp = now()
+      let commits: [GroupCommit]
+      if Self.sameText(next, expectedMarkdown) {
+        guard let commit = staged.commitUnchanged(selection: selection) else { return false }
+        commits = [commit]
+      } else {
+        commits = staged.record(markdown: next, selection: selection, structural: true, now: timestamp)
+      }
+      guard !commits.isEmpty else { return false }
+      do {
+        var head = document.localHeadNodeId
+        var expectedRevision = document.draftRevision
+        for (index, commit) in commits.enumerated() {
+          let persisted = try await persist(
+            commit, base: head, expectedDraftRevision: expectedRevision,
+            live: index == commits.count - 1 ? state : nil, at: timestamp)
+          head = persisted.localHeadNodeId
+          expectedRevision = persisted.draftRevision
+        }
+      } catch {
+        try? await rebuildControllerFromStore()
+        publish()
+        throw error
+      }
+      controller = staged
+      liveWriting = state
+      liveWritingMarkdown = next
+      try await reload()
+      editorTitleLaneOwnsDraft = self.document?.editorIngressRevision != nil
+      publish()
+      await sync?.requestDrain()
+      return true
+    }
   }
 
   // MARK: - Overflow moves

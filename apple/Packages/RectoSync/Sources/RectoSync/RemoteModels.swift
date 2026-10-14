@@ -230,10 +230,12 @@ public struct RemoteNode: Decodable, Sendable, Equatable {
   public let selection: Selection?
   public let origin: String
   public let createdAt: Double
+  /// Absent on nodes from clients that predate writing state.
+  public let writing: String?
 
   public init(
     nodeId: String, parentNodeId: String?, patch: String, snapshot: String?,
-    selection: Selection?, origin: String, createdAt: Double
+    selection: Selection?, origin: String, createdAt: Double, writing: String? = nil
   ) {
     self.nodeId = nodeId
     self.parentNodeId = parentNodeId
@@ -242,6 +244,7 @@ public struct RemoteNode: Decodable, Sendable, Equatable {
     self.selection = selection
     self.origin = origin
     self.createdAt = createdAt
+    self.writing = writing
   }
 
   public func record(documentLocalId: String) -> DocNodeRecord {
@@ -254,7 +257,8 @@ public struct RemoteNode: Decodable, Sendable, Equatable {
       selection: selection.map { NodeSelection(anchor: Int($0.anchor), head: Int($0.head)) },
       origin: origin,
       createdAt: createdAt,
-      synced: true)
+      synced: true,
+      writing: writing)
   }
 }
 

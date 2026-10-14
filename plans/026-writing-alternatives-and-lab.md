@@ -1,6 +1,6 @@
 # Writing experiments stay attached to the draft
 
-Status: full feature set unfinished. Overflow 0.1.3 is published and installed; its actual held drag, Undo/Redo, online sync and full relaunch pass. The offline edit/reopen check still awaits approval for a brief Ethernet and Wi-Fi disconnect. Rung 2 (stash and move back as single undo steps) is built and tested on branch `feat/overflow-stash`, not yet merged or released. Alternatives, Ghost, Lab and web parity remain unfinished.
+Status: full feature set unfinished. Mac 0.1.4 (stash and move back, rung 2) is published and installed, but its installed check waits for BK to sign in again: Clerk rejected the stored session (401) on 2026-10-14. Rung 3 (word alternatives) is built on branch `feat/word-alternatives`. Ghost, Lab and web parity remain unfinished. The offline check is approved and waits on the same sign-in.
 
 The chat is the source of truth for scope and decisions. This file preserves the execution detail for the next agent. The HTML companion is temporary and is linked in the chat.
 
@@ -190,6 +190,16 @@ Branch `feat/overflow-stash` from `origin/main` `6c1073f`. A stash or move-back 
 The move bypasses the write-ahead draft: the node commit is its only write, and it clears editor ingress as a head move does. Without that, the ordered editor lane kept the pre-stash draft row, which a relaunch would have restored. The mounted app test now asserts the cleared row. A move is refused while Overflow holds an unresolved two-device conflict, when the draft or notes changed since the selection, in Preview, and past the 64 KiB limit.
 
 Entry points: Control-Shift-X, `Stash selection in Overflow` in the palette and Review menu, and Control-Return in Overflow (moves to the draft caret without replacing a draft selection). Dragging still copies. The editor's right-click menu belongs to the external engine and is not changed in this rung. Server sync is unchanged: prose and notes travel through their existing queues, so another device can briefly see one half before the other.
+
+## Rung 3 keeps alternatives on the history nodes
+
+Alternatives live in a versioned `WritingState` (`RectoHistory/WritingState.swift`) attached to history nodes as an optional `writing` JSON field, locally (`doc_nodes.writing`, migration v11) and on the server (`docNodes.writing`, 64 KiB cap). A node stores it only where it changes; every other node derives it from its parent by mapping each passage's UTF-16 range through the node's patch. Edits before a passage shift it, edits at its edges stay outside it, edits inside it edit the wording on show, and edits across an edge detach it without discarding wordings. Nodes from the web or older Macs therefore shift alternatives rather than erasing them, and undo, redo, branches and sync carry them with no extra machinery.
+
+Typing groups keystrokes into one node with one combined patch, which can differ from mapping keystroke by keystroke (a letter typed just after a word would fold into it). The session follows the live state per keystroke and stores it explicitly on any node whose derived state would differ. Adding, keeping and removing wordings are single nodes, text-unchanged nodes where only alternatives change.
+
+The panel opens with Control-Shift-A on the left, as in the video. Up and Down preview wordings in place without touching history; the draft refuses typing while a preview shows; Return, clicking back into the draft or closing keeps it; Escape restores. The engine draws one wavy underline per range, so "showing a variant" is the underline's accent colour rather than the video's dots, and hovering shows a tooltip. Hover-and-arrow cycling directly in the text, sentence and paragraph scopes, a/an adjustment and AI wordings follow in later rungs.
+
+Correction to the PR 73 description: test hosts never opened a mirror at the unsandboxed path (`~/Library/Application Support/Recto` does not exist on this Mac). The installed app's mirror lives in its sandbox container. The window-less test host is still correct, but the commit overstated the risk.
 
 ## Unresolved questions
 

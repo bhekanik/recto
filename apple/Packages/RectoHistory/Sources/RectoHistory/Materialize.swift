@@ -19,6 +19,8 @@ public struct DocNode: Equatable, Sendable {
   public var selection: NodeSelection?
   public var origin: String
   public var createdAt: Double
+  /// The node's explicit `WritingState`, encoded; nil where it is derived.
+  public var writing: String?
 
   public init(
     nodeId: String,
@@ -27,7 +29,8 @@ public struct DocNode: Equatable, Sendable {
     snapshot: String? = nil,
     selection: NodeSelection? = nil,
     origin: String = "",
-    createdAt: Double = 0
+    createdAt: Double = 0,
+    writing: String? = nil
   ) {
     self.nodeId = nodeId
     self.parentNodeId = parentNodeId
@@ -36,6 +39,7 @@ public struct DocNode: Equatable, Sendable {
     self.selection = selection
     self.origin = origin
     self.createdAt = createdAt
+    self.writing = writing
   }
 }
 

@@ -22,12 +22,13 @@ public struct OutboxPayload: Codable, Sendable, Equatable {
   public var wordCount: Int?
   public var date: String?
   public var words: Int?
+  public var writing: String?
 
   public init(
     title: String? = nil, nodeId: String? = nil, parentNodeId: String? = nil,
     patch: String? = nil, snapshot: String? = nil, selection: NodeSelection? = nil,
     origin: String? = nil, createdAt: Double? = nil, markdown: String? = nil,
-    wordCount: Int? = nil, date: String? = nil, words: Int? = nil
+    wordCount: Int? = nil, date: String? = nil, words: Int? = nil, writing: String? = nil
   ) {
     self.title = title
     self.nodeId = nodeId
@@ -42,6 +43,7 @@ public struct OutboxPayload: Codable, Sendable, Equatable {
     self.wordCount = wordCount
     self.date = date
     self.words = words
+    self.writing = writing
   }
 
   public var selection: NodeSelection? {
@@ -129,13 +131,13 @@ extension OutboxPayload {
   /// The payload for a node the grouping controller just produced.
   public static func commit(
     _ commit: GroupCommit, origin: String, createdAt: Double, wordCount: Int,
-    title: String? = nil
+    title: String? = nil, writing: String? = nil
   )
     -> OutboxPayload
   {
     OutboxPayload(
       title: title, nodeId: commit.nodeId, parentNodeId: commit.parentNodeId, patch: commit.patch,
       snapshot: commit.snapshot, selection: commit.selection, origin: origin,
-      createdAt: createdAt, markdown: commit.markdown, wordCount: wordCount)
+      createdAt: createdAt, markdown: commit.markdown, wordCount: wordCount, writing: writing)
   }
 }

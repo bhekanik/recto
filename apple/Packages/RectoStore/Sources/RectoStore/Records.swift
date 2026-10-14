@@ -163,6 +163,8 @@ public struct DocNodeRecord: Codable, Sendable, FetchableRecord, PersistableReco
   /// The server has this node (an outbox commit was acknowledged, or it arrived
   /// from `docNodes.listSince`).
   public var synced: Bool
+  /// The node's explicit `WritingState`, encoded; nil where it is derived.
+  public var writing: String?
 
   public init(
     documentLocalId: String,
@@ -175,7 +177,8 @@ public struct DocNodeRecord: Codable, Sendable, FetchableRecord, PersistableReco
     createdAt: Double,
     materialized: String? = nil,
     materializedAt: Double? = nil,
-    synced: Bool = false
+    synced: Bool = false,
+    writing: String? = nil
   ) {
     self.documentLocalId = documentLocalId
     self.nodeId = nodeId
@@ -189,6 +192,7 @@ public struct DocNodeRecord: Codable, Sendable, FetchableRecord, PersistableReco
     self.materialized = materialized
     self.materializedAt = materializedAt
     self.synced = synced
+    self.writing = writing
   }
 
   public var selection: NodeSelection? {
@@ -199,7 +203,7 @@ public struct DocNodeRecord: Codable, Sendable, FetchableRecord, PersistableReco
   public var docNode: DocNode {
     DocNode(
       nodeId: nodeId, parentNodeId: parentNodeId, patch: patch, snapshot: snapshot,
-      selection: selection, origin: origin, createdAt: createdAt)
+      selection: selection, origin: origin, createdAt: createdAt, writing: writing)
   }
 }
 

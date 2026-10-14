@@ -190,7 +190,7 @@ final class CommandPaletteController {
                 actions = actions.filter { $0.id == "toggle-ai" }
             }
             // Writing flags and Overflow do not need the server's review hooks.
-            let localReviewIds: Set<String> = ["add-flag", "toggle-notes", "toggle-notes-pin", "toggle-overflow", "stash-in-overflow"]
+            let localReviewIds: Set<String> = ["add-flag", "toggle-notes", "toggle-notes-pin", "toggle-overflow", "stash-in-overflow", "alternatives"]
             if section == .review, editor?.review == nil {
                 actions.removeAll { !localReviewIds.contains($0.id) }
             }
@@ -199,6 +199,9 @@ final class CommandPaletteController {
             }
             if section == .review, editor?.stashInOverflow == nil {
                 actions.removeAll { $0.id == "stash-in-overflow" }
+            }
+            if section == .review, editor?.toggleAlternatives == nil {
+                actions.removeAll { $0.id == "alternatives" }
             }
             if section == .review, editor == nil {
                 actions.removeAll()
@@ -352,6 +355,8 @@ final class CommandPaletteController {
             editor?.toggleOverflow?()
         case "stash-in-overflow":
             editor?.stashInOverflow?()
+        case "alternatives":
+            editor?.toggleAlternatives?()
         case "toggle-notes":
             editor?.notes.toggle(settings)
         case "toggle-notes-pin":
