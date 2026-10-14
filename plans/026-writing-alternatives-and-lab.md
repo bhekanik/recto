@@ -207,10 +207,28 @@ The panel has Word, Sentence and Paragraph tabs. Ranges come from the system's o
 
 When a passage follows "a" or "an", the model asks the shared core's prose linter (`retext-indefinite-article`) about "article wording" and takes the article from its "expected `…`" message, which handles "an hour" and "a university" and keeps capitalisation. `WritingState.choosing(_:in:markdown:article:)` applies the article and the wording as one replacement and one history node, shifting later passages. The preview shows the article as soon as the linter answers.
 
+## Rung 5 ghosts passages in place
+
+Ghost spans live in the same `WritingState` (`ghosts`). The field shipped with rung 3's first writing-state release so no client that writes writing state can drop it. Spans shift through patches like alternatives; typing inside stays ghosted, an edit across an edge trims the span to what it left, deleting all of it removes it, and ghosting next to a ghost joins them. Control-/ (`Ghost or revive`) ghosts the selection or revives the ghost under the caret, one history node each. The decoration controller draws ghosts at 12% ink.
+
+BK approved the recommended publication policy on 2026-10-14: readers never see ghosted text. `WritingState.readerMarkdown` (and `lib/writing/reader.ts` for the server) removes ghosts, closing a double space. Preview shows a read-only reader copy while ghosts exist; rich copy and the Markdown and HTML exports use the reader text; Copy Markdown keeps the source. Word export is rendered by the server from its own text, so the Mac sends `omit` ranges plus the SHA-256 of the text they measure; a mismatch refuses the export instead of cutting the wrong passage.
+
+## Rung 6 proposes exact trim cuts
+
+`convex/ai/lab.ts` adds a `lab` run kind on the existing lifecycle (reserved run per request id, source verification against the stored head, BYOK or house key, provider-started boundary, usage settlement, success only while the document is unchanged). The trim pass sends the draft with an approximate target (10/20/30/50%) and a prompt that permits deletions only. The model returns exact quotes with a few preceding words and a reason; `locateCuts` keeps a quote only where it, or its preceding words plus it, occurs exactly once, outside frontmatter and not overlapping another cut. Dropped proposals are counted and shown. The run's output is the located cuts, so a retry replays them.
+
+On the Mac the flask menu and four `Lab:` palette commands start a pass. Proposed cuts fade (28% ink) over the exact text they were made for; any edit drops the proposal. A click in a faded cut keeps it; the walkthrough steps through cuts with their reasons. `Make the cuts` applies the remaining ranges as one structural history node via `CloudDocumentModel.applyCuts`, mapping writing state through each deletion so alternatives and ghosts survive. The bar reports words before and after using the session's word count.
+
+Live-provider validation runs in the installed check once BK signs in again; unit tests cover placement and parsing, and mounted tests cover applying cuts and the proposal arithmetic.
+
+## Rung 7 asks for AI wordings
+
+`ai/lab:alternatives` is a second pass on the Lab lifecycle, now factored into `runPass` (identity, an optional pre-reservation `check`, messages, token budget, parser). It takes the passage, its UTF-16 offset and scope; `check` refuses unless the stored draft holds exactly that passage there, before any run is reserved. The prompt marks the passage in the full draft; `parseAlternatives` keeps up to five distinct, non-identical wordings sized for the scope. The Mac adds them with `author: .ai` (sparkle) as one history node through `addSuggestedAlternatives`, from the panel's `Suggest with AI` or Control-Shift-G.
+
 ## Unresolved questions
 
 1. May the prepared check briefly disconnect and restore this Mac's active Ethernet/Wi-Fi connections? System changes outside the repository require approval; none has been received.
 
-2. Should ghosted text be omitted from reader-facing preview/copy/export? Recommended: yes, with source view/copy retaining it. This decision is needed before the Ghost increment.
+2. Resolved 2026-10-14: ghosted text is left out of reader-facing preview, rich copy and exports; source copy keeps it.
 3. How should writing metadata travel with plain `.md` files? Library drafts are the accepted initial scope; portability must be decided before file support is advertised.
 4. Which existing dedicated CI deployment and credentials should own authenticated browser tests? The latest browser CI job cannot start its server with the current authentication configuration. This does not justify creating credentials or changing account settings implicitly.

@@ -307,3 +307,49 @@ extension WritingState {
     return next
   }
 }
+
+extension WritingState {
+  /// The text a reader gets: ghosted passages removed. Where a removal leaves
+  /// two spaces side by side, one goes, so "Keep. Cut. Keep." reads "Keep. Keep.".
+  public func readerMarkdown(_ markdown: String) -> String {
+    var text = markdown as NSString
+    for ghost in ghosts.sorted(by: { $0.location > $1.location }) {
+      guard ghost.length > 0, ghost.location + ghost.length <= text.length else { continue }
+      var range = ghost.range
+      let before = range.location > 0 ? text.character(at: range.location - 1) : 0
+      let after = NSMaxRange(range) < text.length ? text.character(at: NSMaxRange(range)) : 0
+      if before == 0x20, after == 0x20 { range.length += 1 }
+      text = text.replacingCharacters(in: range, with: "") as NSString
+    }
+    return text as String
+  }
+
+  /// Ghost `range`, joining any ghost it touches. Nil for an empty range.
+  public func ghosting(_ range: NSRange, newId: () -> String) -> WritingState? {
+    guard range.length > 0 else { return nil }
+    var start = range.location, end = NSMaxRange(range)
+    var next = self
+    next.ghosts.removeAll { ghost in
+      let touches = ghost.location <= end && start <= ghost.location + ghost.length
+      if touches {
+        start = min(start, ghost.location)
+        end = max(end, ghost.location + ghost.length)
+      }
+      return touches
+    }
+    next.ghosts.append(GhostSpan(id: newId(), location: start, length: end - start))
+    next.ghosts.sort { $0.location < $1.location }
+    return next
+  }
+
+  /// The ghost under `location`, edges included.
+  public func ghost(containing location: Int) -> GhostSpan? {
+    ghosts.first { $0.location <= location && location <= $0.location + $0.length }
+  }
+
+  public func reviving(_ ghostId: String) -> WritingState {
+    var next = self
+    next.ghosts.removeAll { $0.id == ghostId }
+    return next
+  }
+}

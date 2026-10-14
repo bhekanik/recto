@@ -293,6 +293,28 @@ final class CloudDocumentModel {
         }
     }
 
+    /// Add AI wordings for `range` as one history step, so one Undo removes them.
+    func addSuggestedAlternatives(_ texts: [String], at range: NSRange, scope: AlternativeGroup.Scope, on base: String) async {
+        await keepAlternative()
+        await edits.waitUntilDrained()
+        guard (storage.markdown as NSString).isEqual(to: base) else {
+            errorMessage = "The draft changed while the AI was suggesting. Try again."
+            return
+        }
+        var next = writing
+        for text in texts {
+            guard let added = next.adding(text, author: .ai, scope: scope, at: next.group(covering: range)?.range ?? range,
+                                          in: base, newId: newId) else { continue }
+            next = added
+        }
+        guard next != writing else { return }
+        await perform {
+            guard try await session.applyWriting(expectedMarkdown: base, writing: next) else {
+                throw AlternativeFailure.draftChanged
+            }
+        }
+    }
+
     /// Show `candidateId` in place without keeping it. The article in front
     /// follows a moment later, once the linter has judged it.
     func showAlternative(_ candidateId: String, in groupId: String) {
@@ -362,6 +384,63 @@ final class CloudDocumentModel {
             }
         }
     }
+
+    /// Revive the ghost at `range` if there is one, otherwise set the selection
+    /// aside in place. One history step either way.
+    func toggleGhost(_ range: NSRange) async {
+        await keepAlternative()
+        await edits.waitUntilDrained()
+        let markdown = storage.markdown
+        let current = writing
+        let next: WritingState
+        if let ghost = current.ghost(containing: range.location),
+           range.length == 0 || NSMaxRange(range) <= ghost.location + ghost.length {
+            next = current.reviving(ghost.id)
+        } else if let ghosted = current.ghosting(range, newId: newId) {
+            next = ghosted
+        } else {
+            errorMessage = "Select the text to ghost, or put the caret in a ghost to revive it."
+            return
+        }
+        await perform {
+            guard try await session.applyWriting(expectedMarkdown: markdown, writing: next) else {
+                throw AlternativeFailure.draftChanged
+            }
+        }
+    }
+
+    /// Delete `cuts` of `base` as one history step, carrying alternatives and
+    /// ghosts through each. False when the draft is no longer `base`.
+    @discardableResult
+    func applyCuts(_ cuts: [NSRange], on base: String) async -> Bool {
+        await keepAlternative()
+        await edits.waitUntilDrained()
+        let ordered = cuts.filter { $0.length > 0 }.sorted { $0.location < $1.location }
+        guard (storage.markdown as NSString).isEqual(to: base),
+              let first = ordered.first, let last = ordered.last,
+              NSMaxRange(last) <= (base as NSString).length,
+              zip(ordered, ordered.dropFirst()).allSatisfy({ NSMaxRange($0) <= $1.location })
+        else { return false }
+        var text = base
+        var state = writing
+        for cut in ordered.reversed() {
+            text = (text as NSString).replacingCharacters(in: cut, with: "")
+            state = state.mapped(through: TextPatch(from: cut.location, to: NSMaxRange(cut), insert: ""), into: JSString(text))
+        }
+        let span = NSRange(location: first.location, length: NSMaxRange(last) - first.location)
+        let removed = ordered.reduce(0) { $0 + $1.length }
+        let replacement = (text as NSString).substring(with: NSRange(location: first.location, length: span.length - removed))
+        var applied = false
+        await perform {
+            applied = try await session.applyWriting(
+                expectedMarkdown: base, replacing: span, with: replacement, writing: state)
+            guard applied else { throw AlternativeFailure.draftChanged }
+        }
+        return applied
+    }
+
+    /// The draft as readers get it: ghosted passages left out.
+    var readerMarkdown: String { writing.readerMarkdown(storage.markdown) }
 
     enum AlternativeFailure: LocalizedError {
         case draftChanged

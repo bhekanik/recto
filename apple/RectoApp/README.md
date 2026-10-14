@@ -24,7 +24,7 @@ the floating bold, italic, strikethrough, inline-code and link panel. Standalone
 and synced documents both send those edits through their existing history
 owners as structural boundaries.
 
-Keep unused material beside a library draft with [Overflow](../../docs/how-to/keep-notes-in-overflow.md). Open it through `Toggle Overflow` in the command palette or Review menu, or use the tray button beside the formatting toolbar. Control-Shift-X stashes the draft's selection there as one undoable step. Compare other wordings for a word or passage in place with [alternatives](../../docs/how-to/compare-wordings-with-alternatives.md) (Control-Shift-A).
+Keep unused material beside a library draft with [Overflow](../../docs/how-to/keep-notes-in-overflow.md). Open it through `Toggle Overflow` in the command palette or Review menu, or use the tray button beside the formatting toolbar. Control-Shift-X stashes the draft's selection there as one undoable step. Compare other wordings for a word or passage in place with [alternatives](../../docs/how-to/compare-wordings-with-alternatives.md) (Control-Shift-A). [Ghost](../../docs/how-to/set-text-aside-with-ghost.md) a passage with Control-/ to set it aside in place. The [Lab](../../docs/how-to/trim-a-draft-in-the-lab.md) proposes cuts to tighten a draft, faded in place until you make them.
 
 `project.yml` is the source of truth. XcodeGen 2.46.0 generated the committed
 `Recto.xcodeproj`; regenerate it after adding or removing project files:

@@ -2,6 +2,7 @@ import AppKit
 import RectoCore
 import RectoEditor
 import RectoHistory
+import RectoSync
 @testable import RectoStore
 import SwiftUI
 import Testing
@@ -115,6 +116,22 @@ struct AlternativesTests {
         await model.close()
     }
 
+    @Test("AI wordings join the passage as AI's, in one undo step, without duplicates")
+    func suggested() async throws {
+        let model = try await open()
+        let tension = (draft as NSString).range(of: "tension")
+        await model.addAlternative("pressure", at: tension, scope: .word)
+        await model.addSuggestedAlternatives(["pressure", "strain", "friction"], at: tension, scope: .word, on: draft)
+        let group = try #require(model.writing.alternatives.first)
+        #expect(group.candidates.map(\.text) == ["tension", "pressure", "strain", "friction"])
+        #expect(group.candidates.map(\.author) == [.human, .human, .ai, .ai])
+        await model.undo()
+        #expect(model.writing.alternatives.first?.candidates.map(\.text) == ["tension", "pressure"])
+        await model.addSuggestedAlternatives(["strain"], at: tension, scope: .word, on: "stale")
+        #expect(model.writing.alternatives.first?.candidates.count == 2)
+        await model.close()
+    }
+
     @Test("the panel finds the word, sentence and paragraph at the caret, and a sentence wording replaces the sentence")
     func scopes() async throws {
         let text = "First line here.\n\nShouldn't everything be obvious? Unless you're making a product.\n"
@@ -155,5 +172,93 @@ struct AlternativesTests {
         if let field = view as? NSTextField, field.isEditable { return field }
         for child in view.subviews { if let found = textField(in: child) { return found } }
         return nil
+    }
+}
+
+@Suite("Ghost", .serialized)
+@MainActor
+struct GhostTests {
+    @Test("ghosting keeps the text, leaves it out for readers, revives from the caret, and undoes")
+    func ghostAndRevive() async throws {
+        _ = NSApplication.shared
+        let store = try RectoStore.inMemory()
+        let library = DocumentLibrary(store: store, sync: nil, origin: "ghost-test")
+        let document = try await library.createDocument(title: "Ghost")
+        let registry = DocumentSessionRegistry(store: store, sync: nil, origin: "ghost-test")
+        let model = try await CloudDocumentModel.open(localId: document.localId, registry: registry)
+        let draft = "Keep this. Maybe cut this. Keep that."
+        model.storage.markdown = draft
+        model.accept(RectoEditorEdit(markdown: draft, structural: true))
+        await model.save()
+
+        let cut = (draft as NSString).range(of: "Maybe cut this.")
+        await model.toggleGhost(cut)
+        #expect(model.state.markdown == draft)
+        #expect(model.writing.ghosts.map(\.range) == [cut])
+        #expect(model.readerMarkdown == "Keep this. Keep that.")
+        let omit = ReaderOmission(markdown: draft, ranges: [cut])
+        guard case let .object(fields) = omit.convexValue, case let .string(hash) = fields["markdownSha256"] else {
+            Issue.record("omission did not encode as an object with a hash")
+            return
+        }
+        #expect(hash.count == 64)
+        #expect(fields["ranges"] == .array([.object(["from": .number(Double(cut.location)), "to": .number(Double(NSMaxRange(cut)))])]))
+
+        await model.toggleGhost(NSRange(location: cut.location + 4, length: 0))
+        #expect(model.writing.ghosts.isEmpty)
+        #expect(model.readerMarkdown == draft)
+
+        await model.undo()
+        #expect(model.writing.ghosts.map(\.range) == [cut])
+        await model.undo()
+        #expect(model.writing.ghosts.isEmpty)
+        await model.close()
+    }
+}
+
+@Suite("Lab cuts", .serialized)
+@MainActor
+struct LabCutTests {
+    @Test("several cuts apply as one undo step and carry ghosts and alternatives with them")
+    func applyCuts() async throws {
+        _ = NSApplication.shared
+        let store = try RectoStore.inMemory()
+        let library = DocumentLibrary(store: store, sync: nil, origin: "lab-test")
+        let document = try await library.createDocument(title: "Lab")
+        let registry = DocumentSessionRegistry(store: store, sync: nil, origin: "lab-test")
+        let model = try await CloudDocumentModel.open(localId: document.localId, registry: registry)
+        let draft = "Much of the struggle, frankly, comes from balance. It all depends. The core should be obvious."
+        model.storage.markdown = draft
+        model.accept(RectoEditorEdit(markdown: draft, structural: true))
+        await model.save()
+        let core = (draft as NSString).range(of: "core")
+        await model.addAlternative("centre", at: core, scope: .word)
+
+        let cuts = [(draft as NSString).range(of: ", frankly,"), (draft as NSString).range(of: " It all depends.")]
+        #expect(await model.applyCuts(cuts, on: draft))
+        let cut = "Much of the struggle comes from balance. The core should be obvious."
+        #expect(model.state.markdown == cut)
+        let group = try #require(model.writing.alternatives.first)
+        #expect((cut as NSString).substring(with: group.range) == "core")
+
+        await model.undo()
+        #expect(model.state.markdown == draft)
+        #expect(await model.applyCuts(cuts, on: "stale text") == false)
+        await model.close()
+    }
+
+    @Test("a proposal counts words with and without its cuts and forgets kept ones")
+    func proposal() {
+        let base = "One two three four five six seven eight nine ten."
+        let cuts = [
+            AIClient.LabCut(from: 3, to: 7, reason: "a"),
+            AIClient.LabCut(from: 13, to: 18, reason: "b"),
+        ]
+        var lab = AIController.LabProposal(target: 20, base: base, cuts: cuts, dropped: 0)
+        #expect(lab.wordsBefore == 10)
+        #expect(lab.wordsAfter == 8)
+        lab.kept.insert(1)
+        #expect(lab.cutRanges == [NSRange(location: 3, length: 4)])
+        #expect(lab.wordsAfter == 9)
     }
 }

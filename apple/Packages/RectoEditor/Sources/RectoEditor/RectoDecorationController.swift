@@ -107,6 +107,16 @@ public final class RectoDecorationController: NSObject {
         didSet { if alternativeMarks != oldValue { apply() } }
     }
 
+    /// Passages set aside in place, drawn at about a tenth of the ink.
+    public var ghostRanges: [NSRange] = [] {
+        didSet { if ghostRanges != oldValue { apply() } }
+    }
+
+    /// Cuts a Lab pass proposes, faded so the draft reads as if they were gone.
+    public var proposedCuts: [NSRange] = [] {
+        didSet { if proposedCuts != oldValue { apply() } }
+    }
+
     public var theme: RectoEditorTheme = .twilight {
         didSet { if theme != oldValue { apply() } }
     }
@@ -133,6 +143,8 @@ public final class RectoDecorationController: NSObject {
     private var appliedDim: [NSRange] = []
     private var appliedComments: [NSRange] = []
     private var appliedFlags: [NSRange] = []
+    private var appliedGhosts: [NSRange] = []
+    private var appliedCuts: [NSRange] = []
 
     public override init() {
         super.init()
@@ -228,6 +240,8 @@ public final class RectoDecorationController: NSObject {
         alternativeMarks = alternativeMarks.compactMap { mark in
             shift(mark.range).map { var moved = mark; moved.range = $0; return moved }
         }
+        ghostRanges = ghostRanges.compactMap(shift)
+        proposedCuts = proposedCuts.compactMap(shift)
         // Rendering attributes are laid down against TextKit's own locations;
         // lay them again once this edit has been processed.
         DispatchQueue.main.async { [weak self] in self?.apply() }
@@ -265,6 +279,14 @@ public final class RectoDecorationController: NSObject {
             setRendering([.backgroundColor: Self.commentWash(focused: mark.isFocused, dark: dark)], for: mark.range)
             appliedComments.append(mark.range)
         }
+        for range in ghostRanges where NSMaxRange(range) <= text.length && range.length > 0 {
+            setRendering([.foregroundColor: theme.ink.withAlphaComponent(0.12)], for: range)
+            appliedGhosts.append(range)
+        }
+        for range in proposedCuts where NSMaxRange(range) <= text.length && range.length > 0 {
+            setRendering([.foregroundColor: theme.ink.withAlphaComponent(0.28)], for: range)
+            appliedCuts.append(range)
+        }
         if tintsFlags {
             for match in Self.flagToken.matches(in: text as String, range: NSRange(location: 0, length: text.length)) {
                 setRendering([.foregroundColor: theme.flagColor], for: match.range)
@@ -291,9 +313,14 @@ public final class RectoDecorationController: NSObject {
         for range in appliedFlags {
             removeRendering(.foregroundColor, for: clamp(range, to: length))
         }
+        for range in appliedGhosts + appliedCuts {
+            removeRendering(.foregroundColor, for: clamp(range, to: length))
+        }
         appliedDim.removeAll()
         appliedComments.removeAll()
         appliedFlags.removeAll()
+        appliedGhosts.removeAll()
+        appliedCuts.removeAll()
     }
 
     private func clamp(_ range: NSRange, to length: Int) -> NSRange {

@@ -1,8 +1,10 @@
 "use node";
 
+import { createHash } from "node:crypto";
 import { v } from "convex/values";
 import { renderDocx } from "../lib/export/docx-render";
 import { safeFilename } from "../lib/export/filename";
+import { readerMarkdown } from "../lib/writing/reader";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { action } from "./_generated/server";
@@ -52,6 +54,18 @@ export const docx = action({
 		 * client sends its own origin; native clients omit it and get the default.
 		 */
 		origin: v.optional(v.string()),
+		/**
+		 * Ghosted passages to leave out, as UTF-16 ranges of the markdown whose
+		 * SHA-256 is given. The server only knows the text, not the writing
+		 * state, so the client names the ranges; a hash mismatch means they were
+		 * measured on another text and nothing is cut.
+		 */
+		omit: v.optional(
+			v.object({
+				markdownSha256: v.string(),
+				ranges: v.array(v.object({ from: v.number(), to: v.number() })),
+			}),
+		),
 	},
 	handler: async (
 		ctx,
@@ -80,7 +94,19 @@ export const docx = action({
 		// Exporting the SERVER's canonical markdown: a client with unsynced edits
 		// must flush them (the native outbox drains before export) or it gets the
 		// last text the server saw, which is the only text the server can vouch for.
-		const bytes = await renderDocx(doc.markdown, doc.title, args.origin);
+		let markdown = doc.markdown;
+		if (args.omit) {
+			const digest = createHash("sha256")
+				.update(doc.markdown, "utf8")
+				.digest("hex");
+			if (digest !== args.omit.markdownSha256) {
+				throw new Error(
+					"The draft on the server differs from this Mac's. Let it sync, then export again.",
+				);
+			}
+			markdown = readerMarkdown(doc.markdown, args.omit.ranges);
+		}
+		const bytes = await renderDocx(markdown, doc.title, args.origin);
 		if (bytes.byteLength > MAX_DOCX_BYTES) {
 			throw new Error(DOCX_TOO_LARGE_MESSAGE);
 		}

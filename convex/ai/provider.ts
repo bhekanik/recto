@@ -90,7 +90,7 @@ export async function flushProvider(
 export async function createProvider(args: {
 	apiKey: string;
 	userId: string;
-	kind: "transform" | "review" | "embed";
+	kind: "transform" | "review" | "lab" | "embed";
 	keySource: "byok" | "house";
 	documentId: string;
 	platform: string;

@@ -16,6 +16,7 @@
 		12113DD6A2827A36EAFF075F /* CloudDocumentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29201557E3758137FD48E070 /* CloudDocumentView.swift */; };
 		12C672FD1921110AACD309FA /* MarkdownHandlerSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A9B27E0E9570FB896924145 /* MarkdownHandlerSettingsTests.swift */; };
 		12EA8C3D97683280072BB04A /* ReviewSurfaceModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1343FDACCCA7D5AB919528A /* ReviewSurfaceModel.swift */; };
+		131508E4257FE8D2C4CFE3AF /* LabBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CCBBE607F627E2AB92CBD5C /* LabBar.swift */; };
 		13168A0C0C734F8007CD4F23 /* CommentAnchor.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2487F991B53EE441E06C072 /* CommentAnchor.swift */; };
 		16894C35A6742F13EF48D5D7 /* RectoDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 688482441E8C255771A630E8 /* RectoDocument.swift */; };
 		17680E8E8E1700E0B1E8BC4F /* WritingGoals.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15D45A5C4EDBD6AFF00A8600 /* WritingGoals.swift */; };
@@ -142,6 +143,7 @@
 		081000DF06421E2AB99C4D14 /* TopFormatToolbarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopFormatToolbarTests.swift; sourceTree = "<group>"; };
 		08898BE55D91DA265879530D /* DisplaySettingsPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplaySettingsPanel.swift; sourceTree = "<group>"; };
 		0A8CD39F039EBC275145E44A /* RectoAuth */ = {isa = PBXFileReference; lastKnownFileType = folder; name = RectoAuth; path = ../Packages/RectoAuth; sourceTree = SOURCE_ROOT; };
+		0CCBBE607F627E2AB92CBD5C /* LabBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabBar.swift; sourceTree = "<group>"; };
 		11E155B5B97B250D91DD9A8D /* AutoVersioning.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoVersioning.swift; sourceTree = "<group>"; };
 		1431D8EE1D0E47F5712E71A6 /* WritingGoalsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WritingGoalsTests.swift; sourceTree = "<group>"; };
 		15D45A5C4EDBD6AFF00A8600 /* WritingGoals.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WritingGoals.swift; sourceTree = "<group>"; };
@@ -345,6 +347,7 @@
 				68F202CDD0816F399DD891A8 /* GoalConfigController.swift */,
 				02B6D7800E92A211EE1A23EB /* HandoffEnvironment.swift */,
 				4FE2398821A83F66312028FC /* HistoryPanel.swift */,
+				0CCBBE607F627E2AB92CBD5C /* LabBar.swift */,
 				06C9B6E94A93D096586FCD77 /* LibraryGroups.swift */,
 				26EF72694687925314503054 /* MarkdownHandlerSettings.swift */,
 				BEE9F7192940DC6EA6DC79C9 /* NotesPanel.swift */,
@@ -655,6 +658,7 @@
 				74962DA097DE9EA1CEC32AA3 /* GoalConfigController.swift in Sources */,
 				87C43C876F634C0552593789 /* HandoffEnvironment.swift in Sources */,
 				A27999E05D5E6B25C82E7734 /* HistoryPanel.swift in Sources */,
+				131508E4257FE8D2C4CFE3AF /* LabBar.swift in Sources */,
 				9B8F0EE82B650E24C9EF4F0A /* LibraryGroups.swift in Sources */,
 				A69E275C753052A3B33B0261 /* MarkdownHandlerSettings.swift in Sources */,
 				DC0FDB3FB1E7A0B45873CB06 /* NotesPanel.swift in Sources */,
