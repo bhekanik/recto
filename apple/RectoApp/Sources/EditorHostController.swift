@@ -47,6 +47,8 @@ final class EditorHostController {
     var undo: () -> Void = {}
     var redo: () -> Void = {}
     var toggleOverflow: (() -> Void)?
+    /// Set by the synced host: move the selection to Overflow as one undo step.
+    var stashInOverflow: (() -> Void)?
 
     func noteOverflowFocused() {
         registry.noteFocused(self)

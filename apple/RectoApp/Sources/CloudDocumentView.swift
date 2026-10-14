@@ -223,6 +223,15 @@ struct CloudDocumentView: View {
     /// Hook the window's chrome up to this document.
     private func wire(_ model: CloudDocumentModel) {
         chrome.toggleOverflow = { showsOverflow.toggle() }
+        chrome.stashInOverflow = { [chrome, model] in
+            // Preview is read-only, and a model that is not accepting edits must not move text.
+            guard chrome.currentPresentation().isEditable, model.isEditable,
+                  let range = chrome.seam?.selectedRange else { return }
+            Task {
+                await model.stashInOverflow(range)
+                overflow?.refresh()
+            }
+        }
         if overflow == nil {
             do { overflow = try OverflowModel.open(store: registry.store, localId: localId) }
             catch { overflowOpenError = error.localizedDescription }
@@ -346,7 +355,16 @@ struct CloudDocumentView: View {
                     chrome.focusText()
                 }, onFocus: chrome.noteOverflowFocused, onDragBegan: { source, text in
                     model.beginOverflowDrag(from: source, text: text)
-                }, onDragEnded: model.endOverflowDrag)
+                }, onDragEnded: model.endOverflowDrag, onMoveIntoDraft: { [chrome] notesRange in
+                    guard chrome.currentPresentation().isEditable, model.isEditable else { return }
+                    // Insert at the caret; a selection left in the draft is not replaced.
+                    let caret = chrome.seam?.selectedRange.location ?? (model.storage.markdown as NSString).length
+                    let range = NSRange(location: caret, length: 0)
+                    Task {
+                        await model.moveFromOverflow(overflow, notesRange: notesRange, into: range)
+                        overflow.refresh()
+                    }
+                })
             }
             if showsComments, !zen.hidesChrome {
                 CommentsPanel(

@@ -371,11 +371,12 @@ public actor RectoStore {
     retainNewerEditorIngress: Bool = false,
     expectedHeadNodeId: String,
     expectedDraftRevision: Int? = nil,
+    overflowMove: OverflowMoveIntent? = nil,
     job: OutboxJob?,
     now: Double = Date().timeIntervalSince1970 * 1000
   ) throws -> DocumentRecord {
     try orderedEditorReceipts.withLock { receipts in
-      try writer.write { db in
+      let result: DocumentRecord = try writer.write { db in
         guard var document = try DocumentRecord.fetchOne(db, key: documentLocalId) else {
           throw StoreError.documentNotFound(documentLocalId)
         }
@@ -406,6 +407,10 @@ public actor RectoStore {
         stored.materialized = markdown
         stored.materializedAt = now
         try stored.save(db)
+        if let overflowMove {
+          try Self.applyNewOverflowMove(
+            db, documentLocalId: documentLocalId, nodeId: node.nodeId, intent: overflowMove)
+        }
 
         // Grouping can commit the previous body while the current callback starts
         // the next group. That newer ingress must follow the commit, not vanish.
@@ -419,6 +424,8 @@ public actor RectoStore {
           && (document.draftMarkdown.map { !($0 as NSString).isEqual(to: markdown) } == true
             || preserveQueuedDraftJob)
           && !committedAcknowledgedIngress
+          // A move replaces the drained draft wholesale, as a head move does.
+          && overflowMove == nil
         var retainedDraftJob: OutboxJob?
         if job != nil {
           let queuedDraft = try OutboxJob
@@ -469,6 +476,9 @@ public actor RectoStore {
         try Self.trimMaterializationCache(db, documentLocalId: documentLocalId)
         return document
       }
+      // Callbacks accepted before a move belong to the text it replaced.
+      if overflowMove != nil { receipts.headResetCutoffs[documentLocalId] = result.draftRevision }
+      return result
     }
   }
 
@@ -494,6 +504,8 @@ public actor RectoStore {
     expectedHeadNodeId: String?,
     job: OutboxJob?,
     clearDivergence: Bool = false,
+    overflowLeaving: [String] = [],
+    overflowEntering: [String] = [],
     now: Double = Date().timeIntervalSince1970 * 1000
   ) throws -> DocumentRecord {
     try orderedEditorReceipts.withLock { receipts in
@@ -515,6 +527,8 @@ public actor RectoStore {
         node.materialized = markdown
         node.materializedAt = now
         try node.update(db)
+        try Self.shiftOverflowMoves(
+          db, documentLocalId: documentLocalId, leaving: overflowLeaving, entering: overflowEntering)
 
         document.localHeadNodeId = nodeId
         document.markdown = markdown

@@ -51,6 +51,7 @@ struct CommandRegistryTests {
         ("add-comment", .review, "Add comment on selection", ""),
         ("add-flag", .review, "Flag this spot…", "⌘⇧X"),
         ("toggle-overflow", .review, "Toggle Overflow", ""),
+        ("stash-in-overflow", .review, "Stash selection in Overflow", "⌃⇧X"),
         ("toggle-notes", .review, "Toggle notes panel", "⌃⇧N"),
         ("toggle-notes-pin", .review, "Pin notes panel open", ""),
         ("ai-transform", .ai, "Transform selection with AI…", "⌃⇧I"),
@@ -318,6 +319,25 @@ struct CommandPaletteControllerTests {
         #expect(controller.perform("toggle-overflow", editor: editor, library: PaletteLibrary()))
         #expect(toggled)
         editor.toggleOverflow = nil
+        #expect(!offered())
+    }
+
+    @Test("stashing in Overflow is offered only where a synced draft can do it")
+    func stashCapability() {
+        let settings = settings()
+        let editor = EditorHostController(settings: settings)
+        let controller = CommandPaletteController(settings: settings, editors: EditorHostRegistry(), pasteboard: pasteboard)
+        func offered() -> Bool {
+            CommandPaletteController.sections(settings: settings, library: PaletteLibrary(), editor: editor)
+                .flatMap(\.items).contains { $0.id == "stash-in-overflow" }
+        }
+        #expect(!offered())
+        var stashed = false
+        editor.stashInOverflow = { stashed = true }
+        #expect(offered())
+        #expect(controller.perform("stash-in-overflow", editor: editor, library: PaletteLibrary()))
+        #expect(stashed)
+        editor.stashInOverflow = nil
         #expect(!offered())
     }
 

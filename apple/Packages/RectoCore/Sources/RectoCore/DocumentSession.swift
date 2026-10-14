@@ -621,6 +621,7 @@ public actor DocumentSession {
     includeDerivedTitle: Bool = true,
     origin: String? = nil,
     retainNewerEditorIngress: Bool = false,
+    overflowMove: OverflowMoveIntent? = nil,
     at timestamp: Double
   ) async throws -> DocumentRecord
   {
@@ -653,7 +654,97 @@ public actor DocumentSession {
       preserveQueuedDraftJob: !includeDerivedTitle,
       retainNewerEditorIngress: retainNewerEditorIngress,
       expectedHeadNodeId: base, expectedDraftRevision: expectedDraftRevision,
-      job: job, now: timestamp)
+      overflowMove: overflowMove, job: job, now: timestamp)
+  }
+
+  // MARK: - Overflow moves
+
+  /// Move `range` of the draft to the end of the document's Overflow notes as
+  /// one history node. Returns false when the draft no longer matches
+  /// `expectedMarkdown`, so a stale selection never removes the wrong text.
+  @discardableResult
+  public func moveToOverflow(expectedMarkdown: String, range: NSRange) async throws -> Bool {
+    guard range.length > 0, NSMaxRange(range) <= (expectedMarkdown as NSString).length else { return false }
+    let text = (expectedMarkdown as NSString).substring(with: range)
+    return try await performOverflowMove(
+      expectedMarkdown: expectedMarkdown, range: range, replacement: "", intent: .stash(text))
+  }
+
+  /// Move `notesText`, read from the notes at `notesLocation` and
+  /// `notesGeneration`, into the draft in place of `range`, as one history node.
+  /// Throws `OverflowError.changed` when the notes moved on since the read.
+  @discardableResult
+  public func moveFromOverflow(
+    expectedMarkdown: String, replacing range: NSRange,
+    notesText: String, notesLocation: Int, notesGeneration: Int
+  ) async throws -> Bool {
+    guard !notesText.isEmpty, NSMaxRange(range) <= (expectedMarkdown as NSString).length else { return false }
+    return try await performOverflowMove(
+      expectedMarkdown: expectedMarkdown, range: range, replacement: notesText,
+      intent: .restore(notesText, at: notesLocation, generation: notesGeneration))
+  }
+
+  /// No write-ahead draft: the node commit is the only write, so the draft and
+  /// the notes change in one transaction or not at all.
+  private func performOverflowMove(
+    expectedMarkdown: String, range: NSRange, replacement: String, intent: OverflowMoveIntent
+  ) async throws -> Bool {
+    try await withTransition {
+      try requireWritable()
+      try await performFlush()
+      guard let document, var staged = controller else { throw SessionError.notOpen }
+      guard (document.displayMarkdown as NSString).isEqual(to: expectedMarkdown) else { return false }
+      let next = (expectedMarkdown as NSString).replacingCharacters(in: range, with: replacement)
+      let caret = range.location + (replacement as NSString).length
+      let timestamp = now()
+      let commits = staged.record(
+        markdown: next, selection: NodeSelection(anchor: caret, head: caret), structural: true,
+        now: timestamp)
+      guard !commits.isEmpty else { return false }
+      do {
+        var head = document.localHeadNodeId
+        var expectedRevision = document.draftRevision
+        for (index, commit) in commits.enumerated() {
+          let persisted = try await persist(
+            commit, base: head, expectedDraftRevision: expectedRevision,
+            overflowMove: index == commits.count - 1 ? intent : nil, at: timestamp)
+          head = persisted.localHeadNodeId
+          expectedRevision = persisted.draftRevision
+        }
+        lastOrderedIngressGeneration = max(lastOrderedIngressGeneration, expectedRevision)
+      } catch {
+        try? await rebuildControllerFromStore()
+        publish()
+        throw error
+      }
+      controller = staged
+      try await reload()
+      editorTitleLaneOwnsDraft = self.document?.editorIngressRevision != nil
+      publish()
+      await sync?.requestDrain()
+      return true
+    }
+  }
+
+  /// The nodes a head move leaves (deepest first) and enters (shallowest
+  /// first), up to their common ancestor. Empty when the two are not connected.
+  private func overflowPath(from base: String, to target: String) -> (leaving: [String], entering: [String]) {
+    var targetLine: [String] = []
+    var onTargetLine = Set<String>()
+    var cursor: String? = target
+    while let id = cursor, nodesById[id] != nil, onTargetLine.insert(id).inserted {
+      targetLine.append(id)
+      cursor = nodesById[id]?.parentNodeId
+    }
+    var leaving: [String] = []
+    var visited = Set<String>()
+    cursor = base
+    while let id = cursor, !onTargetLine.contains(id), nodesById[id] != nil, visited.insert(id).inserted {
+      leaving.append(id)
+      cursor = nodesById[id]?.parentNodeId
+    }
+    guard let ancestor = cursor, onTargetLine.contains(ancestor) else { return ([], []) }
+    return (leaving, Array(targetLine.prefix { $0 != ancestor }.reversed()))
   }
 
   // MARK: - Navigation
@@ -730,10 +821,12 @@ public actor DocumentSession {
 
     // Materializing suspended. If the head moved in that window the move is
     // stale, and applying it would strand the newer node's queued commit.
+    let path = overflowPath(from: base, to: nodeId)
     let moved = try await store.moveHead(
       documentLocalId: documentLocalId, to: nodeId, markdown: markdown, wordCount: words,
       title: title,
-      expectedHeadNodeId: base, job: job, now: timestamp)
+      expectedHeadNodeId: base, job: job,
+      overflowLeaving: path.leaving, overflowEntering: path.entering, now: timestamp)
     lastOrderedIngressGeneration = max(lastOrderedIngressGeneration, moved.draftRevision)
     controller?.setCurrent(
       nodeId: nodeId, markdown: markdown,

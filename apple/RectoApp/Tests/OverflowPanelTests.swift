@@ -182,6 +182,62 @@ struct OverflowPanelTests {
         await cloud.close()
     }
 
+    @Test("stash and Control-Return move text as single undo steps that carry the notes")
+    func stashAndMoveBack() async throws {
+        _ = NSApplication.shared
+        let store = try RectoStore.inMemory()
+        let library = DocumentLibrary(store: store, sync: nil, origin: "move-test")
+        let document = try await library.createDocument(title: "Move check")
+        let registry = DocumentSessionRegistry(store: store, sync: nil, origin: "move-test")
+        let cloud = try await CloudDocumentModel.open(localId: document.localId, registry: registry)
+        let model = try OverflowModel.open(store: store, localId: document.localId)
+        #expect(model.accept("note"))
+        let draft = "Keep 😀.\n\nSet aside.\n\nEnd."
+        cloud.storage.markdown = draft
+        cloud.accept(RectoEditorEdit(markdown: draft, structural: true))
+        await cloud.save()
+
+        await cloud.stashInOverflow((draft as NSString).range(of: "Set aside.\n\n"))
+        model.refresh()
+        #expect(cloud.storage.markdown == "Keep 😀.\n\nEnd.")
+        #expect(model.record.markdown == "note\n\nSet aside.\n\n")
+        #expect(cloud.editError == nil)
+        // A relaunch restores the draft row; it must not bring the stashed text back.
+        #expect(try await store.document(localId: document.localId)?.draftMarkdown == nil)
+
+        var moved: NSRange?
+        let host = NSHostingView(rootView: OverflowPanel(model: model, theme: .twilight, close: {}, onFocus: {}, onMoveIntoDraft: { moved = $0 }))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 600), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.contentView = host
+        defer { window.close() }
+        host.layoutSubtreeIfNeeded()
+        await Task.yield()
+        let scratchpad = try #require(findOverflow(in: host))
+        let selection = (scratchpad.string as NSString).range(of: "Set aside.\n\n")
+        scratchpad.setSelectedRange(selection)
+        let controlReturn = try #require(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: .control, timestamp: 0, windowNumber: window.windowNumber,
+            context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
+        scratchpad.keyDown(with: controlReturn)
+        #expect(moved == selection)
+        #expect(scratchpad.string == "note\n\nSet aside.\n\n", "Control-Return must not type a newline")
+
+        await cloud.moveFromOverflow(model, notesRange: selection, into: NSRange(location: ("Keep 😀.\n\n" as NSString).length, length: 0))
+        model.refresh()
+        #expect(cloud.storage.markdown == draft, "move error: \(cloud.editError ?? "none")")
+        #expect(model.record.markdown == "note\n\n")
+
+        await cloud.undo()
+        model.refresh()
+        #expect(cloud.storage.markdown == "Keep 😀.\n\nEnd.")
+        #expect(model.record.markdown == "note\n\nSet aside.\n\n")
+        await cloud.undo()
+        model.refresh()
+        #expect(cloud.storage.markdown == draft)
+        #expect(model.record.markdown == "note")
+        await cloud.close()
+    }
+
     @Test("drag classification requires one complete exact insertion, including repeated Unicode")
     func exactInsertion() {
         #expect(CloudDocumentModel.isOverflowInsertion(before: "abc", after: "abaabc", dragged: "aba"))

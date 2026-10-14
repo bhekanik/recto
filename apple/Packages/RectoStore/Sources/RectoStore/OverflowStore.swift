@@ -27,10 +27,12 @@ public struct OverflowRecord: Codable, FetchableRecord, PersistableRecord, Equat
 public enum OverflowError: Error, LocalizedError {
   case tooLarge
   case changed
+  case unresolvedCopy
   public var errorDescription: String? {
     switch self {
     case .tooLarge: "Overflow can hold up to 64 KiB of notes."
     case .changed: "Overflow changed in another pane. Your edit was not saved; try again."
+    case .unresolvedCopy: "Choose which Overflow copy to keep before moving text in or out of it."
     }
   }
 }

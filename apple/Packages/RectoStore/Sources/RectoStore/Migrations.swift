@@ -13,6 +13,7 @@ enum Migrations {
   static let v7 = "v7-editor-ingress-acknowledgement"
   static let v8 = "v8-remote-title-revision"
   static let v9 = "v9-document-overflow"
+  static let v10 = "v10-overflow-moves"
 
   static func migrator() -> DatabaseMigrator {
     // Deliberately NOT `eraseDatabaseOnSchemaChange`, even in DEBUG: BK
@@ -233,6 +234,20 @@ enum Migrations {
         t.column("syncError", .text)
         t.column("observedMarkdown", .text)
         t.column("observedRevision", .integer)
+      }
+    }
+
+    migrator.registerMigration(v10) { db in
+      try db.create(table: "overflow_move") { t in
+        t.column("documentLocalId", .text).notNull().references("documents", onDelete: .cascade)
+        t.column("nodeId", .text).notNull()
+        t.column("kind", .text).notNull()
+        t.column("text", .text).notNull()
+        t.column("notesText", .text).notNull()
+        t.column("notesLocation", .integer).notNull()
+        t.column("notesGeneration", .integer).notNull()
+        t.column("applied", .boolean).notNull()
+        t.primaryKey(["documentLocalId", "nodeId"])
       }
     }
 
