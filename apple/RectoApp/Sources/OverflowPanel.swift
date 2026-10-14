@@ -25,7 +25,7 @@ struct OverflowPanel: View {
             .foregroundStyle(Color(nsColor: theme.ink2))
             .padding(.horizontal, 12).frame(height: 36)
             Color(nsColor: theme.line).frame(height: 1)
-            Text("Notes stay outside your draft and exports. Drag a selected passage into your draft to copy it, or press Control-Return to move it to the caret.")
+            Text("Notes stay outside your draft and exports. Drag a selected passage into your draft to copy it, or press Control-Return or Command-Return to move it to the caret.")
                 .font(.system(size: 12)).foregroundStyle(Color(nsColor: theme.ink3))
                 .padding(12)
             OverflowEditor(model: model, theme: theme, onFocus: onFocus, onDragBegan: onDragBegan, onDragEnded: onDragEnded, onMoveIntoDraft: onMoveIntoDraft)
@@ -108,13 +108,38 @@ final class OverflowTextView: NSTextView {
     }
 
     var onMoveIntoDraft: (NSRange) -> Void = { _ in }
+    /// Control-Return (as in the walkthrough) or Command-Return with notes selected.
+    static func isMoveKey(_ event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        return event.type == .keyDown && (event.keyCode == 36 || event.keyCode == 76)
+            && (modifiers == .control || modifiers == .command)
+    }
+
     override func keyDown(with event: NSEvent) {
-        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        if modifiers == .control, event.keyCode == 36 || event.keyCode == 76, selectedRange().length > 0 {
+        if Self.isMoveKey(event), selectedRange().length > 0 {
             onMoveIntoDraft(selectedRange())
         } else {
             super.keyDown(with: event)
         }
+    }
+
+    /// macOS binds Control-Return to "show the contextual menu", which it
+    /// handles before `keyDown`. Here, with notes selected, the key moves them.
+    override func showContextMenuForSelection(_ sender: Any?) {
+        if let event = NSApp.currentEvent, Self.isMoveKey(event), selectedRange().length > 0 {
+            onMoveIntoDraft(selectedRange())
+        } else {
+            super.showContextMenuForSelection(sender)
+        }
+    }
+
+    /// Command-Return reaches key equivalents before `keyDown`.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if window?.firstResponder === self, Self.isMoveKey(event), selectedRange().length > 0 {
+            onMoveIntoDraft(selectedRange())
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
     }
 
     var onFocus: () -> Void = {}
