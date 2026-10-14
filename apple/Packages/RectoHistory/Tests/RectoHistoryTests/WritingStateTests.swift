@@ -144,6 +144,26 @@ struct AlternativeEditingTests {
     #expect((result as NSString).substring(with: shown.alternatives[1].range) == "tension")
   }
 
+  @Test("choosing with an article changes both in one replacement and keeps later passages")
+  func article() throws {
+    var ids = 0
+    let next = { ids += 1; return "id\(ids)" }
+    let source = "Like a thumbtack, for example, and the tension."
+    let word = (source as NSString).range(of: "thumbtack")
+    let later = (source as NSString).range(of: "tension")
+    var state = try #require(WritingState().adding("eraser", author: .human, scope: .word, at: word, in: source, newId: next))
+    state = try #require(state.adding("pressure", author: .human, scope: .word, at: later, in: source, newId: next))
+    let article = (range: NSRange(location: 5, length: 1), text: "an")
+    let choice = try #require(state.choosing(
+      state.alternatives[0].candidates[1].id, in: state.alternatives[0].id, markdown: source, article: article))
+    let result = (source as NSString).replacingCharacters(in: choice.range, with: choice.text)
+    #expect(result == "Like an eraser, for example, and the tension.")
+    #expect(choice.range == NSRange(location: 5, length: NSMaxRange(word) - 5))
+    #expect(choice.state.validated(against: JSString(result)) == choice.state)
+    #expect((result as NSString).substring(with: choice.state.alternatives[0].range) == "eraser")
+    #expect((result as NSString).substring(with: choice.state.alternatives[1].range) == "tension")
+  }
+
   @Test("removing hides nothing that is showing and drops a passage left with its original")
   func removing() throws {
     var ids = 0
