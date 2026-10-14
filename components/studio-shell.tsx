@@ -36,6 +36,7 @@ import {
 } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RenderPaneNode } from "@/components/workspace/render-pane-node";
+import { AlternativesPanel } from "@/components/writing/alternatives-panel";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { dispatchOpenSearch } from "@/lib/editor/codemirror";
@@ -88,6 +89,7 @@ import {
 } from "@/lib/workspace/workspace-context";
 import { readerMarkdown } from "@/lib/writing/reader";
 import { ghostRangesFor } from "@/lib/writing/state";
+import { useAlternatives } from "@/lib/writing/use-alternatives";
 import { useWritingActions } from "@/lib/writing/use-writing-actions";
 
 function StudioWorkspace() {
@@ -527,6 +529,13 @@ function StudioWorkspace() {
 		void overflowMoves.stash();
 	}, [overflowMoves]);
 
+	const alternatives = useAlternatives({
+		registry,
+		activeDocId,
+		activePaneId: workspace?.activePaneId ?? null,
+		activeMode,
+		getController: () => activeHistoryRef.current,
+	});
 	const writingActions = useWritingActions({
 		registry,
 		activeDocId,
@@ -560,6 +569,7 @@ function StudioWorkspace() {
 				toggleOverflow,
 				stashInOverflow,
 				toggleGhost: writingActions.toggleGhost,
+				openAlternatives: alternatives.open,
 				effectiveAiEnabled,
 				activeDocId,
 				activeDocIsOwned,
@@ -595,6 +605,7 @@ function StudioWorkspace() {
 			toggleOverflow,
 			stashInOverflow,
 			writingActions.toggleGhost,
+			alternatives.open,
 			effectiveAiEnabled,
 			activeDocId,
 			activeDocIsOwned,
@@ -718,6 +729,9 @@ function StudioWorkspace() {
 						return;
 					case "ghost":
 						dispatchRef.current("ghost");
+						return;
+					case "alternatives":
+						dispatchRef.current("alternatives");
 						return;
 					case "open-go-to-heading":
 						dispatchRef.current("go-to-heading");
@@ -1095,6 +1109,13 @@ function StudioWorkspace() {
 							setOverflowOpen(false);
 							dispatchFocusEditor();
 						}}
+					/>
+				)}
+
+				{!showEmpty && activeDocIsOwned && alternatives.targets && (
+					<AlternativesPanel
+						key={JSON.stringify(alternatives.targets)}
+						alternatives={alternatives}
 					/>
 				)}
 

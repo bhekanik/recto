@@ -4,6 +4,7 @@ import {
 	type AppShortcutAction,
 	createAppShortcutHandler,
 	isAddFlagKey,
+	isAlternativesKey,
 	isFindKey,
 	isGhostKey,
 	isSpellcheckKey,
@@ -158,5 +159,16 @@ describe("flag chords", () => {
 		expect(isGhostKey(key("/", { ctrlKey: true }))).toBe(true);
 		expect(isGhostKey(key("/", { metaKey: true }))).toBe(false);
 		expect(isGhostKey(key("/", { ctrlKey: true, shiftKey: true }))).toBe(false);
+	});
+	it("opens alternatives with Control-Shift-A on a Mac and Alt+Shift+A elsewhere", () => {
+		expect(
+			isAlternativesKey(key("A", { ctrlKey: true, shiftKey: true }), true),
+		).toBe(true);
+		expect(
+			isAlternativesKey(key("A", { altKey: true, shiftKey: true }), false),
+		).toBe(true);
+		expect(
+			isAlternativesKey(key("A", { ctrlKey: true, shiftKey: true }), false),
+		).toBe(false);
 	});
 });

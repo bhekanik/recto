@@ -45,6 +45,7 @@ export type ActionMapDeps = {
 	toggleOverflow: () => void;
 	stashInOverflow: () => void;
 	toggleGhost: () => void;
+	openAlternatives: () => void;
 	effectiveAiEnabled: boolean;
 	activeDocId: Id<"documents"> | null;
 	activeDocIsOwned: boolean;
@@ -173,6 +174,9 @@ export function createActionMap(
 		},
 		ghost: () => {
 			if (deps.activeDocIsOwned) deps.toggleGhost();
+		},
+		alternatives: () => {
+			if (deps.activeDocIsOwned) deps.openAlternatives();
 		},
 		"toggle-ai": () => (deps.toggleAiEnabled ?? settings.toggleAiEnabled)(),
 		"toggle-transform-mode": () => settings.toggleAiTransformMode(),
