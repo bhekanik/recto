@@ -15,13 +15,25 @@ public struct WritingState: Codable, Equatable, Sendable {
 
   public var version: Int
   public var alternatives: [AlternativeGroup]
+  /// Passages set aside in place: still in the text, shown faintly.
+  public var ghosts: [GhostSpan]
 
-  public init(alternatives: [AlternativeGroup] = []) {
+  public init(alternatives: [AlternativeGroup] = [], ghosts: [GhostSpan] = []) {
     self.version = Self.currentVersion
     self.alternatives = alternatives
+    self.ghosts = ghosts
   }
 
-  public var isEmpty: Bool { alternatives.isEmpty }
+  private enum CodingKeys: String, CodingKey { case version, alternatives, ghosts }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    version = try container.decode(Int.self, forKey: .version)
+    alternatives = try container.decodeIfPresent([AlternativeGroup].self, forKey: .alternatives) ?? []
+    ghosts = try container.decodeIfPresent([GhostSpan].self, forKey: .ghosts) ?? []
+  }
+
+  public var isEmpty: Bool { alternatives.isEmpty && ghosts.isEmpty }
 
   /// Sorted keys, so equal states encode to equal strings across devices.
   public var encoded: String {
@@ -74,6 +86,22 @@ public struct AlternativeGroup: Codable, Equatable, Sendable, Identifiable {
   public var isOnOriginal: Bool { candidates.first?.id == activeId }
 }
 
+/// A passage the writer set aside without deleting it.
+public struct GhostSpan: Codable, Equatable, Sendable, Identifiable {
+  public var id: String
+  /// UTF-16 range in the node's Markdown.
+  public var location: Int
+  public var length: Int
+
+  public init(id: String, location: Int, length: Int) {
+    self.id = id
+    self.location = location
+    self.length = length
+  }
+
+  public var range: NSRange { NSRange(location: location, length: length) }
+}
+
 public struct AlternativeCandidate: Codable, Equatable, Sendable, Identifiable {
   public enum Author: String, Codable, Sendable { case human, ai }
 
@@ -121,6 +149,26 @@ extension WritingState {
       }
       next.alternatives[index] = group
     }
+    // A ghost keeps whatever of it the edit left: typing inside it stays
+    // ghosted, an edit across an edge trims it, deleting all of it removes it.
+    next.ghosts = next.ghosts.compactMap { ghost in
+      var ghost = ghost
+      let start = ghost.location, end = ghost.location + ghost.length
+      if patch.to <= start {
+        ghost.location += delta
+      } else if patch.from >= end {
+      } else if patch.from >= start, patch.to <= end {
+        ghost.length += delta
+      } else if patch.from <= start, patch.to >= end {
+        return nil
+      } else if patch.from <= start {
+        ghost.location = patch.from + patch.insert.count
+        ghost.length = end - patch.to
+      } else {
+        ghost.length = patch.from - start
+      }
+      return ghost.length > 0 ? ghost : nil
+    }
     return next
   }
 
@@ -139,6 +187,7 @@ extension WritingState {
         continue
       }
     }
+    next.ghosts.removeAll { $0.location < 0 || $0.length <= 0 || $0.location + $0.length > markdown.count }
     return next
   }
 }

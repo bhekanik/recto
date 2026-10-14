@@ -75,6 +75,26 @@ struct WritingStateTests {
     #expect((typed as NSString).substring(with: derived.range) == "tension")
   }
 
+  @Test("ghosts shift, grow with typing inside, trim at their edges and go when deleted")
+  func ghosts() {
+    let source = "Keep this. Maybe cut this. Keep that."
+    let range = (source as NSString).range(of: "Maybe cut this.")
+    let state = WritingState(ghosts: [GhostSpan(id: "g", location: range.location, length: range.length)])
+    func after(_ next: String) -> [GhostSpan] {
+      state.mapped(through: computePatch(source, next), into: JSString(next)).ghosts
+    }
+    var next = "So keep this. Maybe cut this. Keep that."
+    #expect((next as NSString).substring(with: after(next)[0].range) == "Maybe cut this.")
+    next = "Keep this. Maybe cut all this. Keep that."
+    #expect((next as NSString).substring(with: after(next)[0].range) == "Maybe cut all this.")
+    next = "Keep this. Maybe cut this. Keep that."
+    next = "Keep thcut this. Keep that."
+    #expect((next as NSString).substring(with: after(next)[0].range) == "cut this.")
+    #expect(after("Keep this.  Keep that.").isEmpty)
+    #expect(WritingState.decode(#"{"version":1,"alternatives":[]}"#) == WritingState())
+    #expect(WritingState.decode(state.encoded) == state)
+  }
+
   @Test("a stored state that disagrees with its text is detached, and an unknown version is ignored")
   func validation() {
     var wrong = state()
