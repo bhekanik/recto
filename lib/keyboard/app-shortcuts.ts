@@ -28,6 +28,7 @@ export type AppShortcutAction =
 	| { type: "toggle-spellcheck" }
 	| { type: "add-flag" }
 	| { type: "toggle-notes" }
+	| { type: "stash-in-overflow" }
 	| { type: "open-go-to-heading" }
 	| { type: "toggle-outline" }
 	| { type: "find-replace" }
@@ -83,6 +84,14 @@ export function isAddFlagKey(event: KeyboardEvent, mac = isMac): boolean {
 }
 
 /** ⌃⇧N (mac) / Alt+Shift+N — the notes panel (Ctrl+Shift+N is a private window). */
+/** Control-Shift-X on a Mac, as in the native app; Alt+Shift+X elsewhere. */
+export function isStashKey(event: KeyboardEvent, mac = isMac): boolean {
+	if (event.key.toLowerCase() !== "x" || !event.shiftKey || event.metaKey) {
+		return false;
+	}
+	return mac ? event.ctrlKey && !event.altKey : event.altKey && !event.ctrlKey;
+}
+
 export function isToggleNotesKey(event: KeyboardEvent, mac = isMac): boolean {
 	if (event.key.toLowerCase() !== "n" || !event.shiftKey || event.metaKey) {
 		return false;
@@ -295,6 +304,12 @@ export function createAppShortcutHandler(
 			event.preventDefault();
 			event.stopPropagation();
 			onAction({ type: "toggle-notes" });
+			return;
+		}
+		if (isStashKey(event)) {
+			event.preventDefault();
+			event.stopPropagation();
+			onAction({ type: "stash-in-overflow" });
 			return;
 		}
 		// AI (plan 009) — the studio handlers no-op when AI features are disabled.

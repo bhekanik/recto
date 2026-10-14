@@ -42,6 +42,8 @@ export type ActionMapDeps = {
 	summonAddComment: () => void;
 	addFlag: () => void;
 	toggleNotes: () => void;
+	toggleOverflow: () => void;
+	stashInOverflow: () => void;
 	effectiveAiEnabled: boolean;
 	activeDocId: Id<"documents"> | null;
 	activeDocIsOwned: boolean;
@@ -162,6 +164,12 @@ export function createActionMap(
 		"add-flag": () => deps.addFlag(),
 		"toggle-notes": () => deps.toggleNotes(),
 		"toggle-notes-pin": () => settings.toggleNotesPinned(),
+		"toggle-overflow": () => {
+			if (deps.activeDocIsOwned) deps.toggleOverflow();
+		},
+		"stash-in-overflow": () => {
+			if (deps.activeDocIsOwned) deps.stashInOverflow();
+		},
 		"toggle-ai": () => (deps.toggleAiEnabled ?? settings.toggleAiEnabled)(),
 		"toggle-transform-mode": () => settings.toggleAiTransformMode(),
 		"ai-transform": () => {

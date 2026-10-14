@@ -6,6 +6,7 @@ import {
 	isAddFlagKey,
 	isFindKey,
 	isSpellcheckKey,
+	isStashKey,
 	isToggleNotesKey,
 	shouldInterceptFind,
 } from "./app-shortcuts";
@@ -137,5 +138,19 @@ describe("flag chords", () => {
 		handle(key("X", { ctrlKey: true, shiftKey: true }));
 		handle(key("N", { altKey: true, shiftKey: true }));
 		expect(actions).toEqual([{ type: "add-flag" }, { type: "toggle-notes" }]);
+	});
+	it("stashes with Control-Shift-X on a Mac and Alt+Shift+X elsewhere, never over Flag this spot", () => {
+		expect(isStashKey(key("X", { ctrlKey: true, shiftKey: true }), true)).toBe(
+			true,
+		);
+		expect(isStashKey(key("X", { altKey: true, shiftKey: true }), false)).toBe(
+			true,
+		);
+		expect(isStashKey(key("X", { ctrlKey: true, shiftKey: true }), false)).toBe(
+			false,
+		);
+		expect(isStashKey(key("X", { metaKey: true, shiftKey: true }), true)).toBe(
+			false,
+		);
 	});
 });

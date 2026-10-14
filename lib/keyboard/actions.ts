@@ -48,6 +48,8 @@ export type ActionId =
 	| "add-flag"
 	| "toggle-notes"
 	| "toggle-notes-pin"
+	| "toggle-overflow"
+	| "stash-in-overflow"
 	| "ai-transform"
 	| "ai-critique"
 	| "ai-related"
@@ -359,6 +361,27 @@ export const ACTIONS: ActionDef[] = [
 		section: "Review",
 		aliases: ["pin", "keep open", "revision", "notes", "flags"],
 		shortcut: { mac: "", other: "" },
+	},
+	{
+		id: "toggle-overflow",
+		label: "Toggle Overflow",
+		section: "Review",
+		aliases: ["scratchpad", "notes", "overflow", "spare paragraphs"],
+		shortcut: { mac: "", other: "" },
+	},
+	{
+		id: "stash-in-overflow",
+		label: "Stash selection in Overflow",
+		section: "Review",
+		aliases: [
+			"stash",
+			"set aside",
+			"move to overflow",
+			"scratchpad",
+			"cut for later",
+		],
+		// Off Mac, Ctrl+Shift+X is Flag this spot.
+		shortcut: { mac: "Ctrl+⇧+X", other: "Alt+Shift+X" },
 	},
 	{
 		id: "ai-transform",
