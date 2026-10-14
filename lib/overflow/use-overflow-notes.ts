@@ -56,6 +56,7 @@ export function useOverflowNotes(documentId: Id<"documents"> | null) {
 	const hydratedFor = useRef<Id<"documents"> | null>(null);
 
 	// A new document starts over.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: documentId is the trigger; the body resets refs and state for the new document
 	useEffect(() => {
 		hydratedFor.current = null;
 		dirtyRef.current = false;
