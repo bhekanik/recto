@@ -62,6 +62,7 @@ function makeDeps(overrides: Partial<ActionMapDeps> = {}): ActionMapDeps {
 		toggleNotes: vi.fn(),
 		toggleOverflow: vi.fn(),
 		stashInOverflow: vi.fn(),
+		toggleGhost: vi.fn(),
 		effectiveAiEnabled: true,
 		activeDocId: "doc1" as ActionMapDeps["activeDocId"],
 		activeDocIsOwned: true,

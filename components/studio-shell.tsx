@@ -88,6 +88,7 @@ import {
 } from "@/lib/workspace/workspace-context";
 import { readerMarkdown } from "@/lib/writing/reader";
 import { ghostRangesFor } from "@/lib/writing/state";
+import { useWritingActions } from "@/lib/writing/use-writing-actions";
 
 function StudioWorkspace() {
 	const {
@@ -526,6 +527,14 @@ function StudioWorkspace() {
 		void overflowMoves.stash();
 	}, [overflowMoves]);
 
+	const writingActions = useWritingActions({
+		registry,
+		activeDocId,
+		activePaneId: workspace?.activePaneId ?? null,
+		activeMode,
+		getController: () => activeHistoryRef.current,
+	});
+
 	const actionMap = useMemo(
 		() =>
 			createActionMap({
@@ -550,6 +559,7 @@ function StudioWorkspace() {
 				toggleNotes: flagState.toggleNotes,
 				toggleOverflow,
 				stashInOverflow,
+				toggleGhost: writingActions.toggleGhost,
 				effectiveAiEnabled,
 				activeDocId,
 				activeDocIsOwned,
@@ -584,6 +594,7 @@ function StudioWorkspace() {
 			flagState.toggleNotes,
 			toggleOverflow,
 			stashInOverflow,
+			writingActions.toggleGhost,
 			effectiveAiEnabled,
 			activeDocId,
 			activeDocIsOwned,
@@ -704,6 +715,9 @@ function StudioWorkspace() {
 						return;
 					case "stash-in-overflow":
 						dispatchRef.current("stash-in-overflow");
+						return;
+					case "ghost":
+						dispatchRef.current("ghost");
 						return;
 					case "open-go-to-heading":
 						dispatchRef.current("go-to-heading");
