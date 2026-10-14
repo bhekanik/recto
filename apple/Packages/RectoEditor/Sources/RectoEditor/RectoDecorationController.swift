@@ -85,6 +85,28 @@ public final class RectoDecorationController: NSObject {
         didSet { if lintMarks != oldValue { apply() } }
     }
 
+    /// A passage with saved wordings: a quiet underline while it shows its
+    /// original, the accent once it shows another.
+    public struct AlternativeMark: Equatable, Sendable {
+        public var range: NSRange
+        public var count: Int
+        public var isOnOriginal: Bool
+
+        public init(range: NSRange, count: Int, isOnOriginal: Bool) {
+            self.range = range
+            self.count = count
+            self.isOnOriginal = isOnOriginal
+        }
+
+        var message: String {
+            "\(count) wordings · showing \(isOnOriginal ? "the original" : "an alternative") · ⌃⇧A to compare"
+        }
+    }
+
+    public var alternativeMarks: [AlternativeMark] = [] {
+        didSet { if alternativeMarks != oldValue { apply() } }
+    }
+
     public var theme: RectoEditorTheme = .twilight {
         didSet { if theme != oldValue { apply() } }
     }
@@ -202,6 +224,10 @@ public final class RectoDecorationController: NSObject {
         commentMarks = commentMarks.compactMap { mark in
             shift(mark.range).map { var moved = mark; moved.range = $0; return moved }
         }
+        // Until the embedder's next state arrives; a touched passage is hidden.
+        alternativeMarks = alternativeMarks.compactMap { mark in
+            shift(mark.range).map { var moved = mark; moved.range = $0; return moved }
+        }
         // Rendering attributes are laid down against TextKit's own locations;
         // lay them again once this edit has been processed.
         DispatchQueue.main.async { [weak self] in self?.apply() }
@@ -248,6 +274,9 @@ public final class RectoDecorationController: NSObject {
         seam.underlines = lintMarks
             .filter { NSMaxRange($0.range) <= text.length && $0.range.length > 0 }
             .map { MarkdownUnderline(range: $0.range, color: Self.lintColor($0.category, dark: dark)) }
+            + alternativeMarks
+            .filter { NSMaxRange($0.range) <= text.length && $0.range.length > 0 }
+            .map { MarkdownUnderline(range: $0.range, color: $0.isOnOriginal ? theme.ink3 : theme.accent) }
     }
 
     private func clear() {
@@ -307,10 +336,13 @@ public final class RectoDecorationController: NSObject {
 
     /// The message of the lint mark under `point`, if any.
     public func lintMessage(at point: NSPoint) -> String? {
-        guard let textView, !lintMarks.isEmpty else { return nil }
+        guard let textView, !lintMarks.isEmpty || !alternativeMarks.isEmpty else { return nil }
         let index = textView.characterIndexForInsertion(at: point)
         guard index != NSNotFound else { return nil }
         let messages = lintMarks
+            .filter { index >= $0.range.location && index < NSMaxRange($0.range) }
+            .map(\.message)
+            + alternativeMarks
             .filter { index >= $0.range.location && index < NSMaxRange($0.range) }
             .map(\.message)
         return messages.isEmpty ? nil : messages.joined(separator: "\n")

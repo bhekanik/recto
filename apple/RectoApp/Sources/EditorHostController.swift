@@ -49,6 +49,8 @@ final class EditorHostController {
     var toggleOverflow: (() -> Void)?
     /// Set by the synced host: move the selection to Overflow as one undo step.
     var stashInOverflow: (() -> Void)?
+    /// Set by the synced host: open or close the alternatives for the passage at the caret.
+    var toggleAlternatives: (() -> Void)?
 
     func noteOverflowFocused() {
         registry.noteFocused(self)

@@ -315,6 +315,10 @@ export default defineSchema({
 			v.object({ anchor: v.number(), head: v.number() }),
 			v.null(),
 		),
+		// Explicit writing state (alternatives) for this node's text, as versioned
+		// JSON. Absent where it is derived from the parent through `patch`, which
+		// is every node written by a client that predates it.
+		writing: v.optional(v.string()),
 		origin: v.string(), // device/client id that created the node
 		createdAt: v.number(),
 		// Who authored this node, when that is someone other than the document's

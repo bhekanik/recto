@@ -52,6 +52,7 @@ struct CommandRegistryTests {
         ("add-flag", .review, "Flag this spot…", "⌘⇧X"),
         ("toggle-overflow", .review, "Toggle Overflow", ""),
         ("stash-in-overflow", .review, "Stash selection in Overflow", "⌃⇧X"),
+        ("alternatives", .review, "Alternatives for selection", "⌃⇧A"),
         ("toggle-notes", .review, "Toggle notes panel", "⌃⇧N"),
         ("toggle-notes-pin", .review, "Pin notes panel open", ""),
         ("ai-transform", .ai, "Transform selection with AI…", "⌃⇧I"),

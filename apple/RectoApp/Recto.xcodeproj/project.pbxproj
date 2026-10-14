@@ -11,6 +11,7 @@
 		05C91015428DB5062B792ABB /* ReviewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7F92E7C4F5C339CE42F93BB /* ReviewModelTests.swift */; };
 		0D1657826C73A405D99760A4 /* KeyboardNavigationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D42D652D53492C574A283241 /* KeyboardNavigationTests.swift */; };
 		0E6BB374C80683FFB87A5F1E /* RectoCoreJS in Frameworks */ = {isa = PBXBuildFile; productRef = 1BF5718BB87E5E0898876E6C /* RectoCoreJS */; };
+		0ECC8D6650F2D2FBD84FD220 /* AlternativesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D824F0F684A871CADC626422 /* AlternativesTests.swift */; };
 		0F27E87B51814B552083A0D6 /* AutoVersioning.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11E155B5B97B250D91DD9A8D /* AutoVersioning.swift */; };
 		12113DD6A2827A36EAFF075F /* CloudDocumentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29201557E3758137FD48E070 /* CloudDocumentView.swift */; };
 		12C672FD1921110AACD309FA /* MarkdownHandlerSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A9B27E0E9570FB896924145 /* MarkdownHandlerSettingsTests.swift */; };
@@ -74,6 +75,7 @@
 		9B8F0EE82B650E24C9EF4F0A /* LibraryGroups.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06C9B6E94A93D096586FCD77 /* LibraryGroups.swift */; };
 		9FB703FFE9E9279098841DC8 /* ZenMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA3A74D0D69F9E702408570F /* ZenMode.swift */; };
 		A00A4B74222E46F4A09BFD3F /* WordCountTracking.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9368B38C653A8BC56D4AB7AA /* WordCountTracking.swift */; };
+		A20FED2F4C94BE75AE6CDE4C /* AlternativesPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D3C3AAF003989583ACE7540 /* AlternativesPanel.swift */; };
 		A27999E05D5E6B25C82E7734 /* HistoryPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FE2398821A83F66312028FC /* HistoryPanel.swift */; };
 		A31B534CE1D375A3731C0C0D /* WritingFlagsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E7B807DECEF3FDBAD631B2D /* WritingFlagsTests.swift */; };
 		A347F6A7844DF668348C8C80 /* WritingSettingsTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74A4C6FC5F98C41BD07E4141 /* WritingSettingsTab.swift */; };
@@ -145,6 +147,7 @@
 		15D45A5C4EDBD6AFF00A8600 /* WritingGoals.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WritingGoals.swift; sourceTree = "<group>"; };
 		1624C1F53E5C33BDBF21C699 /* r-dark-accent.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "r-dark-accent.png"; sourceTree = "<group>"; };
 		19640BE1E6FD08CAE6A3C02F /* CommentsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommentsModel.swift; sourceTree = "<group>"; };
+		1D3C3AAF003989583ACE7540 /* AlternativesPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlternativesPanel.swift; sourceTree = "<group>"; };
 		1D555444683948EF0618D0AE /* ExportFile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportFile.swift; sourceTree = "<group>"; };
 		203C1E04C76AF6896D9C490A /* WritingStatsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WritingStatsModel.swift; sourceTree = "<group>"; };
 		250C2D1E689D4E327F47CA43 /* EditorStatusBarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorStatusBarTests.swift; sourceTree = "<group>"; };
@@ -240,6 +243,7 @@
 		CD732FDE9A42768F4D278301 /* VimUndoRegimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VimUndoRegimeTests.swift; sourceTree = "<group>"; };
 		D09B8E4F436878C6794F11AB /* ReadingTime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingTime.swift; sourceTree = "<group>"; };
 		D42D652D53492C574A283241 /* KeyboardNavigationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardNavigationTests.swift; sourceTree = "<group>"; };
+		D824F0F684A871CADC626422 /* AlternativesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlternativesTests.swift; sourceTree = "<group>"; };
 		D88EC0199D3061B9D5A33378 /* ProseLinting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProseLinting.swift; sourceTree = "<group>"; };
 		D9DB60C52E316B80A267C344 /* OverflowPanelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverflowPanelTests.swift; sourceTree = "<group>"; };
 		DA53218E8DA7B61CDFDC0AE8 /* RectoSync */ = {isa = PBXFileReference; lastKnownFileType = folder; name = RectoSync; path = ../Packages/RectoSync; sourceTree = SOURCE_ROOT; };
@@ -313,6 +317,7 @@
 				2EAA6744E41BCF30F17C9A05 /* AIClient.swift */,
 				4E0A8E79DC64FF5787876A8E /* AIController.swift */,
 				8556E1FF3EF270A44B2B3CD9 /* AIViews.swift */,
+				1D3C3AAF003989583ACE7540 /* AlternativesPanel.swift */,
 				7E9FB961CB61B80D498AC7F0 /* AppConfiguration.swift */,
 				ED6923F868328DA6A34A2A21 /* AppearanceSettingsTab.swift */,
 				11E155B5B97B250D91DD9A8D /* AutoVersioning.swift */,
@@ -421,6 +426,7 @@
 		F4E0A085C43948CFEEF12462 /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+				D824F0F684A871CADC626422 /* AlternativesTests.swift */,
 				FD3F7F786A85496318A94A06 /* AppConfigurationTests.swift */,
 				C392C824BA3377AB65598207 /* ApplicationModelTests.swift */,
 				2F03D2999A598D80B0686FA9 /* CommandPaletteTests.swift */,
@@ -573,6 +579,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0ECC8D6650F2D2FBD84FD220 /* AlternativesTests.swift in Sources */,
 				58006658EEBBF3A6E9838451 /* AppConfigurationTests.swift in Sources */,
 				21A6C4AB51BF061B6A77E594 /* ApplicationModelTests.swift in Sources */,
 				66EA966A8506D70C38405B71 /* CommandPaletteTests.swift in Sources */,
@@ -620,6 +627,7 @@
 				37922CBF4C7301C6B0141D70 /* AIClient.swift in Sources */,
 				71009928A5A0B0C16073882C /* AIController.swift in Sources */,
 				DB1507CE201C207D5F146FB6 /* AIViews.swift in Sources */,
+				A20FED2F4C94BE75AE6CDE4C /* AlternativesPanel.swift in Sources */,
 				E2C8A1EB9E80686B323D0A61 /* AppConfiguration.swift in Sources */,
 				86122FF82C29BCF53F7C770C /* AppearanceSettingsTab.swift in Sources */,
 				0F27E87B51814B552083A0D6 /* AutoVersioning.swift in Sources */,

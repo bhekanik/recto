@@ -1111,7 +1111,8 @@ public actor SyncEngine: SyncControlling {
       // Validated before we got here: a commit whose base head we had to guess
       // is a commit onto the wrong parent.
       expectedHeadNodeId: job.baseHeadNodeId ?? "",
-      clientMutationId: job.clientMutationId)
+      clientMutationId: job.clientMutationId,
+      writing: payload.writing)
   }
 
   /// Everything an accepted `documents.create` implies, in one store

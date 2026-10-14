@@ -308,7 +308,7 @@ public actor InMemoryTransport: RectoTransport {
           selection: request.selection.map {
             RemoteNode.Selection(anchor: Double($0.anchor), head: Double($0.head))
           },
-          origin: request.origin, createdAt: request.createdAt))
+          origin: request.origin, createdAt: request.createdAt, writing: request.writing))
     }
 
     if document.currentNodeId == request.nodeId {
@@ -371,7 +371,7 @@ public actor InMemoryTransport: RectoTransport {
         selection: node.selection.map {
           RemoteNode.Selection(anchor: Double($0.anchor), head: Double($0.head))
         },
-        origin: node.origin, createdAt: node.createdAt))
+        origin: node.origin, createdAt: node.createdAt, writing: node.writing))
     notifyNodeSubscribers(documentId: documentId)
   }
 

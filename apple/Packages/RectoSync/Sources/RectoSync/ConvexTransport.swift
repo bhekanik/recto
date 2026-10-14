@@ -57,12 +57,13 @@ public struct CommitEditRequest: Sendable, Equatable {
   public var title: String?
   public var expectedHeadNodeId: String
   public var clientMutationId: String
+  public var writing: String?
 
   public init(
     documentId: String, nodeId: String, parentNodeId: String?, patch: String, snapshot: String?,
     selection: NodeSelection?, origin: String, createdAt: Double, markdown: String,
     wordCount: Int, title: String? = nil, expectedHeadNodeId: String,
-    clientMutationId: String
+    clientMutationId: String, writing: String? = nil
   ) {
     self.documentId = documentId
     self.nodeId = nodeId
@@ -77,6 +78,7 @@ public struct CommitEditRequest: Sendable, Equatable {
     self.title = title
     self.expectedHeadNodeId = expectedHeadNodeId
     self.clientMutationId = clientMutationId
+    self.writing = writing
   }
 
   /// `docNodes.append` arguments: the node, flat, and nothing about the head.
@@ -93,6 +95,7 @@ public struct CommitEditRequest: Sendable, Equatable {
       "createdAt": createdAt,
     ]
     if let snapshot { args["snapshot"] = snapshot }
+    if let writing { args["writing"] = writing }
     return args
   }
 
@@ -114,6 +117,7 @@ public struct CommitEditRequest: Sendable, Equatable {
     ]
     // `v.optional()` means "absent", not "null": sending null fails validation.
     if let snapshot { node["snapshot"] = snapshot }
+    if let writing { node["writing"] = writing }
 
     var args: [String: ConvexEncodable?] = [
       "documentId": documentId,

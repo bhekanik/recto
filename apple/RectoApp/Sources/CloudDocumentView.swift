@@ -1,6 +1,7 @@
 import AppKit
 import RectoCore
 import RectoEditor
+import RectoHistory
 import RectoSync
 import SwiftUI
 
@@ -27,6 +28,8 @@ struct CloudDocumentView: View {
     @State private var comments = CommentsModel()
     @State private var showsComments = false
     @State private var showsOverflow = false
+    /// The passage the alternatives panel is open on.
+    @State private var alternativesRange: NSRange?
     @State private var overflow: OverflowModel?
     @State private var overflowOpenError: String?
     @State private var showsSharing = false
@@ -223,6 +226,17 @@ struct CloudDocumentView: View {
     /// Hook the window's chrome up to this document.
     private func wire(_ model: CloudDocumentModel) {
         chrome.toggleOverflow = { showsOverflow.toggle() }
+        chrome.toggleAlternatives = { [chrome, model] in
+            if alternativesRange != nil {
+                Task { await model.keepAlternative() }
+                alternativesRange = nil
+                chrome.focusText()
+                return
+            }
+            guard chrome.currentPresentation().isEditable, model.isEditable,
+                  let textView = chrome.seam?.nsTextView else { return }
+            alternativesRange = Self.alternativesTarget(in: textView, writing: model.writing)
+        }
         chrome.stashInOverflow = { [chrome, model] in
             // Preview is read-only, and a model that is not accepting edits must not move text.
             guard chrome.currentPresentation().isEditable, model.isEditable,
@@ -244,7 +258,12 @@ struct CloudDocumentView: View {
         chrome.panes = panes?.commands
         chrome.openHistory = { view in historyView = historyView == view ? nil : view }
         chrome.checkpoint = { [model] in checkpoint(model) }
-        chrome.onFocus = panes?.activate ?? {}
+        let activate = panes?.activate ?? {}
+        chrome.onFocus = { [model] in
+            // Back in the text: the wording on show is the one the writer chose.
+            if model.preview != nil { Task { await model.keepAlternative() } }
+            activate()
+        }
         chrome.cloud = cloudContext(model, convexId: model.state.convexId)
         comments.follow(chrome.cloud)
         chrome.decorations.onOpenComment = { id in
@@ -326,9 +345,34 @@ struct CloudDocumentView: View {
         }
     }
 
+    /// The selection, the passage with alternatives under the caret, or the
+    /// word under the caret, in that order.
+    static func alternativesTarget(in textView: NSTextView, writing: WritingState) -> NSRange? {
+        let selection = textView.selectedRange()
+        if selection.length > 0 { return selection }
+        if let group = writing.group(containing: selection.location) { return group.range }
+        let word = textView.selectionRange(forProposedRange: selection, granularity: .selectByWord)
+        let text = textView.string as NSString
+        guard word.length > 0, NSMaxRange(word) <= text.length,
+              text.substring(with: word).rangeOfCharacter(from: .alphanumerics) != nil else { return nil }
+        return word
+    }
+
+    private func alternativeMarks(_ model: CloudDocumentModel) -> [RectoDecorationController.AlternativeMark] {
+        model.writing.alternatives.filter { !$0.detached }.map {
+            RectoDecorationController.AlternativeMark(range: $0.range, count: $0.candidates.count, isOnOriginal: $0.isOnOriginal)
+        }
+    }
+
     /// The text, and the outline beside it when shown.
     private func page(_ model: CloudDocumentModel, _ styler: MarkdownStyler) -> some View {
         HStack(spacing: 0) {
+            if let range = alternativesRange, !zen.hidesChrome {
+                AlternativesPanel(model: model, theme: styler.theme, range: range) {
+                    alternativesRange = nil
+                    chrome.focusText()
+                }
+            }
             RectoEditorView(
                 storage: paneStorage(model),
                 styler: styler,
@@ -344,6 +388,9 @@ struct CloudDocumentView: View {
             // Panes share the window, so each may be narrower than a window's page.
             .frame(minWidth: panes == nil ? 620 : 280, minHeight: panes == nil ? 500 : 200)
             .background(WritingControlsHost(controller: chrome.writingController))
+            .onChange(of: alternativeMarks(model), initial: true) { _, marks in
+                chrome.decorations.alternativeMarks = marks
+            }
             if let ai, ai.showsRelated, !zen.hidesChrome {
                 RelatedPanel(ai: ai, theme: styler.theme) { passage in
                     panes?.openDocument(passage.documentId, Int(passage.charStart))
