@@ -236,6 +236,9 @@ private struct StudioCommands: Commands {
                 .keyboardShortcut("x", modifiers: [.command, .shift])
             Button("Toggle Overflow") { editors.controller(in: NSApp.keyWindow)?.toggleOverflow?() }
                 .disabled(editors.controller(in: NSApp.keyWindow)?.toggleOverflow == nil)
+            Button("Stash selection in Overflow") { editors.controller(in: NSApp.keyWindow)?.stashInOverflow?() }
+                .keyboardShortcut("x", modifiers: [.control, .shift])
+                .disabled(editors.controller(in: NSApp.keyWindow)?.stashInOverflow == nil)
             Button("Toggle notes panel") { editors.controller(in: NSApp.keyWindow)?.notes.toggle(settings) }
                 .keyboardShortcut("n", modifiers: [.control, .shift])
             Button("Pin notes panel open", action: settings.toggleNotesPinned)

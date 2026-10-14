@@ -176,6 +176,44 @@ final class CloudDocumentModel {
         return true
     }
 
+    /// Move `range` of the draft to the end of Overflow as one history step.
+    func stashInOverflow(_ range: NSRange) async {
+        let markdown = storage.markdown
+        guard range.length > 0, NSMaxRange(range) <= (markdown as NSString).length else {
+            errorMessage = "Select the text to stash in Overflow."
+            return
+        }
+        await perform {
+            guard try await session.moveToOverflow(expectedMarkdown: markdown, range: range) else {
+                throw OverflowMoveFailure.draftChanged
+            }
+        }
+    }
+
+    /// Move the selected Overflow text into the draft in place of `range`, as one history step.
+    func moveFromOverflow(_ notes: OverflowModel, notesRange: NSRange, into range: NSRange) async {
+        let markdown = storage.markdown
+        let record = notes.record
+        let notesText = record.markdown as NSString
+        guard notes.unsavedMarkdown == nil, notesRange.length > 0, NSMaxRange(notesRange) <= notesText.length,
+              NSMaxRange(range) <= (markdown as NSString).length else {
+            errorMessage = "Select saved Overflow text to move into the draft."
+            return
+        }
+        await perform {
+            guard try await session.moveFromOverflow(
+                expectedMarkdown: markdown, replacing: range,
+                notesText: notesText.substring(with: notesRange), notesLocation: notesRange.location,
+                notesGeneration: record.generation)
+            else { throw OverflowMoveFailure.draftChanged }
+        }
+    }
+
+    enum OverflowMoveFailure: LocalizedError {
+        case draftChanged
+        var errorDescription: String? { "The draft changed before the move. Select the text again." }
+    }
+
     var pendingEditCount: Int { edits.pendingCount }
     /// `pendingEditCount` as it changes. The queue is an `ObservableObject`,
     /// which Observation does not track, so a view that shows the count has to

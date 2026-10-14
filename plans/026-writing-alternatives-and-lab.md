@@ -1,6 +1,6 @@
 # Writing experiments stay attached to the draft
 
-Status: full feature set unfinished. Overflow 0.1.3 is published and installed; its actual held drag, Undo/Redo, online sync and full relaunch pass. The offline edit/reopen check awaits approval for a brief Ethernet and Wi-Fi disconnect. Atomic stash/restore, alternatives, Ghost, Lab and web parity remain unfinished. BK accepted the selected model and waived the unavailable cross-provider review.
+Status: full feature set unfinished. Overflow 0.1.3 is published and installed; its actual held drag, Undo/Redo, online sync and full relaunch pass. The offline edit/reopen check still awaits approval for a brief Ethernet and Wi-Fi disconnect. Rung 2 (stash and move back as single undo steps) is built and tested on branch `feat/overflow-stash`, not yet merged or released. Alternatives, Ghost, Lab and web parity remain unfinished.
 
 The chat is the source of truth for scope and decisions. This file preserves the execution detail for the next agent. The HTML companion is temporary and is linked in the chat.
 
@@ -164,13 +164,32 @@ Core 81, Store 55 and Sync 73 tests pass, along with 20 native Overflow and orde
 
 Rapid typing around a structural insertion needs an accepted FIFO identity separate from the mutable durable-draft revision. The correction preserves queued edits, invalidates pre-navigation input and retains the newest acknowledged draft until pending history receipts drain. The next atomic stash/restore contract must preserve these safeguards and the existing independent notes undo promise.
 
-Next action: obtain the pending approval, then run the prepared bounded offline edit/reopen/reconnect check on the existing test draft and verify its production acknowledgement. The script rechecks active interfaces and restores their previous state in cleanup and through an independent watchdog. No network change has been made. A per-process sandbox alternative failed before app startup; it did not prove offline behavior. Until the actual check passes, rung 1 is deployed, not done, and dependent implementation remains gated by the invoked orchestrate skill. Atomic stash/restore is next; drag delivery does not complete the full feature set.
+Superseded next action (2026-10-05): obtain the pending approval, then run the prepared bounded offline edit/reopen/reconnect check on the existing test draft and verify its production acknowledgement. The script rechecks active interfaces and restores their previous state in cleanup and through an independent watchdog. No network change has been made. A per-process sandbox alternative failed before app startup; it did not prove offline behavior. Until the actual check passes, rung 1 is deployed, not done, and dependent implementation remains gated by the invoked orchestrate skill. Atomic stash/restore is next; drag delivery does not complete the full feature set.
 
 The 0.1.3 signing, notarisation and publication took 3 minutes 57 seconds, with negligible queue wait. Its clean CI Mac Debug tests took 5 minutes 29 seconds and the cold Release archive about 7 minutes.
 
 For 0.1.2, the release archive/export took about 2 minutes 27 seconds; the full signing, notarisation and publication took 3 minutes 40 seconds. Cold hosted native archives took about 7–8 minutes. Native input diagnosis added about 11 minutes to the installed check; a bounded Accessibility path allowed the online checks to finish. Source-equivalence checks avoided repeating native gates after the web-only build flag.
 
 Durable evidence, exact next actions and the selected-model waiver are retained in `/Users/bhekanik/code/bhekanik/.orchestrate/recto-writing-20261004/handover.md`. The parked main checkout remains untouched apart from this agent-owned plan.
+
+## The narration adds interaction detail the frames did not show
+
+On 2026-10-14 the walkthrough was watched again with its audio transcribed (`evidence/video-recovered/transcript-5XgkcpUyFr8UF8pD.srt` in the ledger). Every feature was already in scope; these details were not recorded:
+
+- Alternatives cycle on hover: point at underlined text and use the arrow keys. The left panel (Word, Sentence, Paragraph; "return adds · esc closes") is for adding and managing them, and dims the rest of the draft while open.
+- The marker is a squiggly underline with dots at its end; the middle dot lights when the shown wording is not the original. Paragraph alternatives show a bar in the left margin. With no alternatives left, the underline goes.
+- AI candidates carry a "bot point" instead of a bullet; Undo removes them.
+- Right-click is the main entry: Alternatives for selection (⌃⇧A), AI alternatives for selection (⌃⇧G), Ghost it (⌃/), Stash this in Overflow (⌃⇧X). Overflow's Control-Return puts selected text into the page.
+- Trim is cut-only: "it's not rewriting anything for me. I don't want it to do that." Cuts are often phrases (", etc", "because you have limited resources"). Clicking a faded word keeps it. The presets are the main control, with Original as the baseline. The video shows no per-cut reasons; those remain this plan's addition.
+- The video's Lab lists six mark passes (punctuation and typos, weakest sentences, long sentences, convoluted sentences, words off the tone, hedges and filler). This plan's four essay-skill passes remain the agreed scope unless BK reopens it.
+
+## Rung 2 records each move on its history node
+
+Branch `feat/overflow-stash` from `origin/main` `6c1073f`. A stash or move-back is one structural node, committed in the same SQLite transaction as the notes change and an `overflow_move` row (migration v10) naming that node. Undo, redo and history jumps reverse or reapply the moves on the path between the old and new head, inside `moveHead`'s transaction. Only the moved run is touched, so notes typed after a move survive its undo; the research option of whole-notes snapshots per node was rejected because undo would erase those notes. Moved text is located at its recorded offset or as its only exact occurrence; if the writer edited it, undo leaves the notes alone, so the text can be in both places but is never lost. Reinsertion uses the recorded offset only while the notes generation is the one the move left; otherwise the run is appended after a blank line.
+
+The move bypasses the write-ahead draft: the node commit is its only write, and it clears editor ingress as a head move does. Without that, the ordered editor lane kept the pre-stash draft row, which a relaunch would have restored. The mounted app test now asserts the cleared row. A move is refused while Overflow holds an unresolved two-device conflict, when the draft or notes changed since the selection, in Preview, and past the 64 KiB limit.
+
+Entry points: Control-Shift-X, `Stash selection in Overflow` in the palette and Review menu, and Control-Return in Overflow (moves to the draft caret without replacing a draft selection). Dragging still copies. The editor's right-click menu belongs to the external engine and is not changed in this rung. Server sync is unchanged: prose and notes travel through their existing queues, so another device can briefly see one half before the other.
 
 ## Unresolved questions
 

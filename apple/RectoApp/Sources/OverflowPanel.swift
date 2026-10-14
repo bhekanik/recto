@@ -9,6 +9,7 @@ struct OverflowPanel: View {
     let onFocus: () -> Void
     var onDragBegan: (OverflowTextView, String) -> Void = { _, _ in }
     var onDragEnded: () -> Void = {}
+    var onMoveIntoDraft: (NSRange) -> Void = { _ in }
     @State private var showsOtherCopy = false
     @State private var resolution: Bool?
 
@@ -24,10 +25,10 @@ struct OverflowPanel: View {
             .foregroundStyle(Color(nsColor: theme.ink2))
             .padding(.horizontal, 12).frame(height: 36)
             Color(nsColor: theme.line).frame(height: 1)
-            Text("Notes stay outside your draft and exports. Select a passage, then drag it into your draft. The notes stay here.")
+            Text("Notes stay outside your draft and exports. Drag a selected passage into your draft to copy it, or press Control-Return to move it to the caret.")
                 .font(.system(size: 12)).foregroundStyle(Color(nsColor: theme.ink3))
                 .padding(12)
-            OverflowEditor(model: model, theme: theme, onFocus: onFocus, onDragBegan: onDragBegan, onDragEnded: onDragEnded)
+            OverflowEditor(model: model, theme: theme, onFocus: onFocus, onDragBegan: onDragBegan, onDragEnded: onDragEnded, onMoveIntoDraft: onMoveIntoDraft)
             if model.unsavedMarkdown != nil {
                 Button("Retry saving notes", action: model.retryUnsaved).padding(12)
                 Text("These changes are not saved. Keep this panel open or copy them before closing.")
@@ -106,6 +107,16 @@ final class OverflowTextView: NSTextView {
         super.draggingSession(session, endedAt: screenPoint, operation: operation)
     }
 
+    var onMoveIntoDraft: (NSRange) -> Void = { _ in }
+    override func keyDown(with event: NSEvent) {
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if modifiers == .control, event.keyCode == 36 || event.keyCode == 76, selectedRange().length > 0 {
+            onMoveIntoDraft(selectedRange())
+        } else {
+            super.keyDown(with: event)
+        }
+    }
+
     var onFocus: () -> Void = {}
     override func becomeFirstResponder() -> Bool {
         let focused = super.becomeFirstResponder()
@@ -122,6 +133,7 @@ private struct OverflowEditor: NSViewRepresentable {
     let onFocus: () -> Void
     let onDragBegan: (OverflowTextView, String) -> Void
     let onDragEnded: () -> Void
+    let onMoveIntoDraft: (NSRange) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(model: model) }
     func makeNSView(context: Context) -> NSScrollView {
@@ -133,6 +145,7 @@ private struct OverflowEditor: NSViewRepresentable {
         text.onFocus = onFocus
         text.onDragBegan = onDragBegan
         text.onDragEnded = onDragEnded
+        text.onMoveIntoDraft = onMoveIntoDraft
         text.isRichText = false
         text.allowsUndo = true
         text.isVerticallyResizable = true
@@ -154,6 +167,7 @@ private struct OverflowEditor: NSViewRepresentable {
         applyTheme(text, scroll)
         text.onDragBegan = onDragBegan
         text.onDragEnded = onDragEnded
+        text.onMoveIntoDraft = onMoveIntoDraft
         context.coordinator.generation = model.record.generation
         if !(text.string as NSString).isEqual(to: model.displayMarkdown) {
             // A remote copy or another pane replaced the buffer. Old undo cannot overwrite it.

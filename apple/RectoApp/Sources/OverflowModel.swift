@@ -58,6 +58,14 @@ final class OverflowModel {
         }
     }
 
+    /// Read the notes now, rather than at the next poll, after a draft move changed them.
+    func refresh() {
+        do {
+            let updated = try store.overflow(localId: record.documentLocalId)
+            if updated != record { record = updated }
+        } catch { errorMessage = error.localizedDescription }
+    }
+
     func retryUnsaved() {
         if let unsavedMarkdown { _ = accept(unsavedMarkdown) }
     }
