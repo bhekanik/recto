@@ -11,6 +11,8 @@ export type DocNode = {
 	selection?: DocNodeSelection;
 	origin?: string;
 	createdAt?: number;
+	/** Explicit writing state (alternatives, ghosts) for this node's text. */
+	writing?: string;
 };
 
 /**

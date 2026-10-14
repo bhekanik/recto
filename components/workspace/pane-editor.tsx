@@ -52,6 +52,8 @@ import {
 	useDocumentSyncFor,
 	useWorkspace,
 } from "@/lib/workspace/workspace-context";
+import { readerMarkdown } from "@/lib/writing/reader";
+import { ghostRangesFor } from "@/lib/writing/state";
 
 /**
  * Convex's HTTP-actions origin (`.convex.site`), a different host from the
@@ -93,7 +95,7 @@ export function PaneEditor({
 	canClose,
 	onClose,
 }: PaneEditorProps) {
-	const { actions, registry } = useWorkspace();
+	const { actions, registry, getDocumentHistory } = useWorkspace();
 	const {
 		spellcheck,
 		smartPaste,
@@ -665,7 +667,14 @@ export function PaneEditor({
 						inert={leaf.mode !== "preview"}
 					>
 						<PreviewPane
-							markdown={markdown}
+							markdown={
+								leaf.mode === "preview" && documentId
+									? readerMarkdown(
+											markdown,
+											ghostRangesFor(markdown, getDocumentHistory(documentId)),
+										)
+									: markdown
+							}
 							fallbackTitle={title}
 							className={`recto-preview ${surfaceClass} text-[length:var(--text-body)] leading-[var(--leading-body)] text-[var(--color-ink-primary)]`}
 						/>

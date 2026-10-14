@@ -193,7 +193,12 @@ export function createActionMap(
 		},
 		"copy-markdown": () => {
 			const source = getExportSource();
-			if (source) void copyAsMarkdown(source);
+			// The source copy keeps everything, ghosts included.
+			if (source)
+				void copyAsMarkdown({
+					...source,
+					markdown: source.sourceMarkdown ?? source.markdown,
+				});
 		},
 		"export-md": () => {
 			const source = getExportSource();

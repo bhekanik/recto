@@ -86,6 +86,8 @@ import {
 	useWorkspace,
 	WorkspaceProvider,
 } from "@/lib/workspace/workspace-context";
+import { readerMarkdown } from "@/lib/writing/reader";
+import { ghostRangesFor } from "@/lib/writing/state";
 
 function StudioWorkspace() {
 	const {
@@ -418,7 +420,14 @@ function StudioWorkspace() {
 		);
 		const markdown =
 			handle?.getCanonicalMarkdown() ?? activeSync?.markdown ?? "";
-		return { title: activeTitle, markdown };
+		const ghosts = ghostRangesFor(markdown, activeHistoryRef.current);
+		return ghosts.length === 0
+			? { title: activeTitle, markdown }
+			: {
+					title: activeTitle,
+					markdown: readerMarkdown(markdown, ghosts),
+					sourceMarkdown: markdown,
+				};
 	}, [activeDocId, workspace, registry, activeSync, activeTitle]);
 
 	// --- Document outline (plan 005) ---
