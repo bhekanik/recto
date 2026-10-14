@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import Foundation
 import RectoSync
 import UniformTypeIdentifiers
@@ -46,13 +47,16 @@ enum ExportController {
     }
 
     /// Export as `.docx` — the server renders, the app fetches and saves.
-    static func exportDocx(cloud: CloudDocumentContext, convexId: String, title: String, window: NSWindow?) async {
+    static func exportDocx(
+        cloud: CloudDocumentContext, convexId: String, title: String, omit: ReaderOmission? = nil, window: NSWindow?
+    ) async {
         guard await cloud.syncForExport() || confirmExportingLastSyncedVersion() else { return }
         guard let url = savePanel(named: ExportFile.safeFilename(title), extension: "docx", window: window)
         else { return }
         do {
-            let result: DocxExportResult = try await cloud.api.action(
-                ConvexFunction.exportDocx, args: ["documentId": .string(convexId)])
+            var args: [String: ConvexValue] = ["documentId": .string(convexId)]
+            if let omit { args["omit"] = omit.convexValue }
+            let result: DocxExportResult = try await cloud.api.action(ConvexFunction.exportDocx, args: args)
             guard let source = URL(string: result.url) else {
                 throw RemoteCallError(code: nil, message: "The export returned an unreadable URL.")
             }
@@ -113,5 +117,22 @@ enum ExportController {
         alert.messageText = headline
         alert.informativeText = error.localizedDescription
         alert.runModal()
+    }
+}
+/// Passages the server must leave out of its own export, with a hash of the
+/// text their ranges are offsets into. The server refuses a mismatch rather
+/// than cutting a different passage out of a newer text.
+struct ReaderOmission: Equatable {
+    let markdown: String
+    let ranges: [NSRange]
+
+    var convexValue: ConvexValue {
+        let digest = SHA256.hash(data: Data(markdown.utf8)).map { String(format: "%02x", $0) }.joined()
+        return .object([
+            "markdownSha256": .string(digest),
+            "ranges": .array(ranges.map {
+                .object(["from": .number(Double($0.location)), "to": .number(Double(NSMaxRange($0)))])
+            }),
+        ])
     }
 }

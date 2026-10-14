@@ -84,6 +84,8 @@ enum CommandRegistry {
                       aliases: ["scratchpad", "notes", "overflow", "spare paragraphs"], shortcut: ""),
         CommandAction(id: "stash-in-overflow", label: "Stash selection in Overflow", section: .review,
                       aliases: ["stash", "set aside", "move to overflow", "scratchpad", "cut for later"], shortcut: "⌃⇧X"),
+        CommandAction(id: "ghost", label: "Ghost or revive", section: .review,
+                      aliases: ["ghost", "dim", "set aside", "hide", "revive", "fade", "maybe cut"], shortcut: "⌃/"),
         CommandAction(id: "alternatives", label: "Alternatives for selection", section: .review,
                       aliases: ["alternatives", "wordings", "synonyms", "other words", "variants", "compare"], shortcut: "⌃⇧A"),
         CommandAction(id: "toggle-notes", label: "Toggle notes panel", section: .review,

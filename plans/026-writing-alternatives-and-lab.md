@@ -207,10 +207,16 @@ The panel has Word, Sentence and Paragraph tabs. Ranges come from the system's o
 
 When a passage follows "a" or "an", the model asks the shared core's prose linter (`retext-indefinite-article`) about "article wording" and takes the article from its "expected `…`" message, which handles "an hour" and "a university" and keeps capitalisation. `WritingState.choosing(_:in:markdown:article:)` applies the article and the wording as one replacement and one history node, shifting later passages. The preview shows the article as soon as the linter answers.
 
+## Rung 5 ghosts passages in place
+
+Ghost spans live in the same `WritingState` (`ghosts`). The field shipped with rung 3's first writing-state release so no client that writes writing state can drop it. Spans shift through patches like alternatives; typing inside stays ghosted, an edit across an edge trims the span to what it left, deleting all of it removes it, and ghosting next to a ghost joins them. Control-/ (`Ghost or revive`) ghosts the selection or revives the ghost under the caret, one history node each. The decoration controller draws ghosts at 12% ink.
+
+BK approved the recommended publication policy on 2026-10-14: readers never see ghosted text. `WritingState.readerMarkdown` (and `lib/writing/reader.ts` for the server) removes ghosts, closing a double space. Preview shows a read-only reader copy while ghosts exist; rich copy and the Markdown and HTML exports use the reader text; Copy Markdown keeps the source. Word export is rendered by the server from its own text, so the Mac sends `omit` ranges plus the SHA-256 of the text they measure; a mismatch refuses the export instead of cutting the wrong passage.
+
 ## Unresolved questions
 
 1. May the prepared check briefly disconnect and restore this Mac's active Ethernet/Wi-Fi connections? System changes outside the repository require approval; none has been received.
 
-2. Should ghosted text be omitted from reader-facing preview/copy/export? Recommended: yes, with source view/copy retaining it. This decision is needed before the Ghost increment.
+2. Resolved 2026-10-14: ghosted text is left out of reader-facing preview, rich copy and exports; source copy keeps it.
 3. How should writing metadata travel with plain `.md` files? Library drafts are the accepted initial scope; portability must be decided before file support is advertised.
 4. Which existing dedicated CI deployment and credentials should own authenticated browser tests? The latest browser CI job cannot start its server with the current authentication configuration. This does not justify creating credentials or changing account settings implicitly.

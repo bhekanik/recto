@@ -175,3 +175,22 @@ struct AlternativeEditingTests {
     #expect(try #require(state.removing(group.candidates[1].id, from: group.id)).isEmpty)
   }
 }
+
+@Suite("ghosts")
+struct GhostTests {
+  @Test("readers get the text without ghosts, and ghosting joins touching ghosts")
+  func reader() throws {
+    let text = "Keep this. Maybe cut this. Keep that."
+    var ids = 0
+    let next = { ids += 1; return "g\(ids)" }
+    let cut = (text as NSString).range(of: "Maybe cut this.")
+    var state = try #require(WritingState().ghosting(cut, newId: next))
+    #expect(state.readerMarkdown(text) == "Keep this. Keep that.")
+    state = try #require(state.ghosting(NSRange(location: NSMaxRange(cut), length: 5), newId: next))
+    #expect(state.ghosts.count == 1)
+    #expect(state.ghosts[0].range == NSRange(location: cut.location, length: cut.length + 5))
+    #expect(state.ghost(containing: cut.location + 3)?.id == state.ghosts[0].id)
+    #expect(state.reviving(state.ghosts[0].id).ghosts.isEmpty)
+    #expect(WritingState().readerMarkdown(text) == text)
+  }
+}

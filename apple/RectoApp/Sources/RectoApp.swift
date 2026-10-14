@@ -274,6 +274,9 @@ private struct StudioCommands: Commands {
             Button("Stash selection in Overflow") { editors.controller(in: NSApp.keyWindow)?.stashInOverflow?() }
                 .keyboardShortcut("x", modifiers: [.control, .shift])
                 .disabled(editors.controller(in: NSApp.keyWindow)?.stashInOverflow == nil)
+            Button("Ghost or revive") { editors.controller(in: NSApp.keyWindow)?.toggleGhost?() }
+                .keyboardShortcut("/", modifiers: [.control])
+                .disabled(editors.controller(in: NSApp.keyWindow)?.toggleGhost == nil)
             Button("Alternatives for selection") { editors.controller(in: NSApp.keyWindow)?.toggleAlternatives?() }
                 .keyboardShortcut("a", modifiers: [.control, .shift])
                 .disabled(editors.controller(in: NSApp.keyWindow)?.toggleAlternatives == nil)

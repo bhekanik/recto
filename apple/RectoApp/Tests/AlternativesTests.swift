@@ -2,6 +2,7 @@ import AppKit
 import RectoCore
 import RectoEditor
 import RectoHistory
+import RectoSync
 @testable import RectoStore
 import SwiftUI
 import Testing
@@ -155,5 +156,46 @@ struct AlternativesTests {
         if let field = view as? NSTextField, field.isEditable { return field }
         for child in view.subviews { if let found = textField(in: child) { return found } }
         return nil
+    }
+}
+
+@Suite("Ghost", .serialized)
+@MainActor
+struct GhostTests {
+    @Test("ghosting keeps the text, leaves it out for readers, revives from the caret, and undoes")
+    func ghostAndRevive() async throws {
+        _ = NSApplication.shared
+        let store = try RectoStore.inMemory()
+        let library = DocumentLibrary(store: store, sync: nil, origin: "ghost-test")
+        let document = try await library.createDocument(title: "Ghost")
+        let registry = DocumentSessionRegistry(store: store, sync: nil, origin: "ghost-test")
+        let model = try await CloudDocumentModel.open(localId: document.localId, registry: registry)
+        let draft = "Keep this. Maybe cut this. Keep that."
+        model.storage.markdown = draft
+        model.accept(RectoEditorEdit(markdown: draft, structural: true))
+        await model.save()
+
+        let cut = (draft as NSString).range(of: "Maybe cut this.")
+        await model.toggleGhost(cut)
+        #expect(model.state.markdown == draft)
+        #expect(model.writing.ghosts.map(\.range) == [cut])
+        #expect(model.readerMarkdown == "Keep this. Keep that.")
+        let omit = ReaderOmission(markdown: draft, ranges: [cut])
+        guard case let .object(fields) = omit.convexValue, case let .string(hash) = fields["markdownSha256"] else {
+            Issue.record("omission did not encode as an object with a hash")
+            return
+        }
+        #expect(hash.count == 64)
+        #expect(fields["ranges"] == .array([.object(["from": .number(Double(cut.location)), "to": .number(Double(NSMaxRange(cut)))])]))
+
+        await model.toggleGhost(NSRange(location: cut.location + 4, length: 0))
+        #expect(model.writing.ghosts.isEmpty)
+        #expect(model.readerMarkdown == draft)
+
+        await model.undo()
+        #expect(model.writing.ghosts.map(\.range) == [cut])
+        await model.undo()
+        #expect(model.writing.ghosts.isEmpty)
+        await model.close()
     }
 }

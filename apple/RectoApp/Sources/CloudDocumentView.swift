@@ -30,6 +30,9 @@ struct CloudDocumentView: View {
     @State private var showsOverflow = false
     /// The passages the alternatives panel is open on.
     @State private var alternativesTargets: AlternativesTargets?
+    /// What Preview shows while the draft has ghosts: the reader's text, which
+    /// leaves them out. Read-only, so it never feeds the history.
+    @State private var readerStorage: RectoTextStorage?
     @State private var overflow: OverflowModel?
     @State private var overflowOpenError: String?
     @State private var showsSharing = false
@@ -226,6 +229,17 @@ struct CloudDocumentView: View {
     /// Hook the window's chrome up to this document.
     private func wire(_ model: CloudDocumentModel) {
         chrome.toggleOverflow = { showsOverflow.toggle() }
+        chrome.toggleGhost = { [chrome, model] in
+            guard chrome.currentPresentation().isEditable, model.isEditable,
+                  let range = chrome.seam?.selectedRange else { return }
+            Task { await model.toggleGhost(range) }
+        }
+        chrome.readerText = { [model] in
+            let writing = model.writing
+            let source = model.storage.markdown
+            let omission = writing.ghosts.isEmpty ? nil : ReaderOmission(markdown: source, ranges: writing.ghosts.map(\.range))
+            return (writing.readerMarkdown(source), omission)
+        }
         chrome.toggleAlternatives = { [chrome, model] in
             if alternativesTargets != nil {
                 Task { await model.keepAlternative() }
@@ -394,6 +408,19 @@ struct CloudDocumentView: View {
         return NSRange(location: start, length: end - start)
     }
 
+    private func previewsReader(_ model: CloudDocumentModel, _ styler: MarkdownStyler) -> Bool {
+        styler.presentation == .preview && !model.writing.ghosts.isEmpty
+    }
+
+    private func readerStorage(_ model: CloudDocumentModel) -> RectoTextStorage {
+        // Kept current by the `onChange` on `readerMarkdown`, not here: writing
+        // to a storage while the view renders would be a side effect of rendering.
+        if let readerStorage { return readerStorage }
+        let created = RectoTextStorage(documentId: "\(model.localId)#reader", markdown: model.readerMarkdown)
+        DispatchQueue.main.async { readerStorage = created }
+        return created
+    }
+
     private func alternativeMarks(_ model: CloudDocumentModel) -> [RectoDecorationController.AlternativeMark] {
         model.writing.alternatives.filter { !$0.detached }.map {
             RectoDecorationController.AlternativeMark(range: $0.range, count: $0.candidates.count, isOnOriginal: $0.isOnOriginal)
@@ -410,7 +437,7 @@ struct CloudDocumentView: View {
                 }
             }
             RectoEditorView(
-                storage: paneStorage(model),
+                storage: previewsReader(model, styler) ? readerStorage(model) : paneStorage(model),
                 styler: styler,
                 placeholder: "Start writing…   ⌘K for commands",
                 onAttach: { seam in
@@ -424,9 +451,13 @@ struct CloudDocumentView: View {
             // Panes share the window, so each may be narrower than a window's page.
             .frame(minWidth: panes == nil ? 620 : 280, minHeight: panes == nil ? 500 : 200)
             .background(WritingControlsHost(controller: chrome.writingController))
-            .onChange(of: alternativeMarks(model), initial: true) { _, marks in
+            .onChange(of: previewsReader(model, styler) ? [] : alternativeMarks(model), initial: true) { _, marks in
                 chrome.decorations.alternativeMarks = marks
             }
+            .onChange(of: previewsReader(model, styler) ? [] : model.writing.ghosts.map(\.range), initial: true) { _, ranges in
+                chrome.decorations.ghostRanges = ranges
+            }
+            .onChange(of: model.readerMarkdown) { _, text in readerStorage?.markdown = text }
             if let ai, ai.showsRelated, !zen.hidesChrome {
                 RelatedPanel(ai: ai, theme: styler.theme) { passage in
                     panes?.openDocument(passage.documentId, Int(passage.charStart))

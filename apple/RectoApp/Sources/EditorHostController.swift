@@ -51,6 +51,11 @@ final class EditorHostController {
     var stashInOverflow: (() -> Void)?
     /// Set by the synced host: open or close the alternatives for the passage at the caret.
     var toggleAlternatives: (() -> Void)?
+    /// Set by the synced host: ghost the selection, or revive the ghost at the caret.
+    var toggleGhost: (() -> Void)?
+    /// Set by the synced host: the text with ghosted passages left out, and
+    /// what to send the server so its own export can leave them out too.
+    var readerText: (() -> (markdown: String, omit: ReaderOmission?))?
 
     func noteOverflowFocused() {
         registry.noteFocused(self)
@@ -180,6 +185,10 @@ final class EditorHostController {
     /// not removed, so the view's string is the Markdown source in every
     /// presentation.
     var markdown: String? { seam?.text }
+
+    /// What exports and rich copies use: the reader's text where a host
+    /// provides one, otherwise the source.
+    var readerMarkdown: String? { readerText?().markdown ?? markdown }
 
     /// The web's `onJumpToHeading`: place the caret at the heading's offset —
     /// UTF-16 source units, which is what the outline reports and the editor

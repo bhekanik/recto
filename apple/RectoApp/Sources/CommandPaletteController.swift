@@ -190,7 +190,7 @@ final class CommandPaletteController {
                 actions = actions.filter { $0.id == "toggle-ai" }
             }
             // Writing flags and Overflow do not need the server's review hooks.
-            let localReviewIds: Set<String> = ["add-flag", "toggle-notes", "toggle-notes-pin", "toggle-overflow", "stash-in-overflow", "alternatives"]
+            let localReviewIds: Set<String> = ["add-flag", "toggle-notes", "toggle-notes-pin", "toggle-overflow", "stash-in-overflow", "alternatives", "ghost"]
             if section == .review, editor?.review == nil {
                 actions.removeAll { !localReviewIds.contains($0.id) }
             }
@@ -202,6 +202,9 @@ final class CommandPaletteController {
             }
             if section == .review, editor?.toggleAlternatives == nil {
                 actions.removeAll { $0.id == "alternatives" }
+            }
+            if section == .review, editor?.toggleGhost == nil {
+                actions.removeAll { $0.id == "ghost" }
             }
             if section == .review, editor == nil {
                 actions.removeAll()
@@ -357,6 +360,8 @@ final class CommandPaletteController {
             editor?.stashInOverflow?()
         case "alternatives":
             editor?.toggleAlternatives?()
+        case "ghost":
+            editor?.toggleGhost?()
         case "toggle-notes":
             editor?.notes.toggle(settings)
         case "toggle-notes-pin":
@@ -382,11 +387,11 @@ final class CommandPaletteController {
             pasteboard.clearContents()
             pasteboard.setString(markdown, forType: .string)
         case "copy-rich":
-            guard let editor, let markdown = editor.markdown else { return true }
+            guard let editor, let markdown = editor.readerMarkdown else { return true }
             let window = editor.window
             Task { await ExportController.copyRich(markdown: markdown, pasteboard: pasteboard, window: window) }
         case "export-md":
-            guard let editor, let markdown = editor.markdown else { return true }
+            guard let editor, let markdown = editor.readerMarkdown else { return true }
             // Deferred past this palette's own close, so the save panel the
             // export opens is not modal on top of a palette that is about to
             // disappear — the web's download begins after the palette is gone.
@@ -396,7 +401,7 @@ final class CommandPaletteController {
                 ExportController.exportMarkdown(markdown: markdown, title: title, window: window)
             }
         case "export-html":
-            guard let editor, let markdown = editor.markdown else { return true }
+            guard let editor, let markdown = editor.readerMarkdown else { return true }
             let title = editor.documentTitle
             let window = editor.window
             Task { await ExportController.exportHtml(markdown: markdown, title: title, window: window) }
@@ -407,8 +412,9 @@ final class CommandPaletteController {
             else { return true }
             let title = editor.documentTitle
             let window = editor.window
+            let omit = editor.readerText?().omit
             Task { @MainActor in
-                await ExportController.exportDocx(cloud: cloud, convexId: convexId, title: title, window: window)
+                await ExportController.exportDocx(cloud: cloud, convexId: convexId, title: title, omit: omit, window: window)
             }
         case "find-replace":
             editor?.showFindAndReplace()

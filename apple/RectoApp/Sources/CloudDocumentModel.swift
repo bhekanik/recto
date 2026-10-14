@@ -363,6 +363,33 @@ final class CloudDocumentModel {
         }
     }
 
+    /// Revive the ghost at `range` if there is one, otherwise set the selection
+    /// aside in place. One history step either way.
+    func toggleGhost(_ range: NSRange) async {
+        await keepAlternative()
+        await edits.waitUntilDrained()
+        let markdown = storage.markdown
+        let current = writing
+        let next: WritingState
+        if let ghost = current.ghost(containing: range.location),
+           range.length == 0 || NSMaxRange(range) <= ghost.location + ghost.length {
+            next = current.reviving(ghost.id)
+        } else if let ghosted = current.ghosting(range, newId: newId) {
+            next = ghosted
+        } else {
+            errorMessage = "Select the text to ghost, or put the caret in a ghost to revive it."
+            return
+        }
+        await perform {
+            guard try await session.applyWriting(expectedMarkdown: markdown, writing: next) else {
+                throw AlternativeFailure.draftChanged
+            }
+        }
+    }
+
+    /// The draft as readers get it: ghosted passages left out.
+    var readerMarkdown: String { writing.readerMarkdown(storage.markdown) }
+
     enum AlternativeFailure: LocalizedError {
         case draftChanged
         var errorDescription: String? { "The draft changed while saving the alternative. Try again." }
