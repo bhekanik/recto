@@ -27,7 +27,7 @@ private func makeJWT(audience: String?, subject: String = "user_1", ttl: TimeInt
   return "\(segment(["alg": "RS256", "typ": "JWT"])).\(segment(claims)).signature"
 }
 
-@Suite("JWT claims")
+@Suite("JWT claims", .timeLimit(.minutes(1)))
 struct JWTClaimsTests {
   @Test("a convex-template token is recognised")
   func templatedToken() throws {
@@ -77,7 +77,7 @@ struct JWTClaimsTests {
   }
 }
 
-@Suite("auth features")
+@Suite("auth features", .timeLimit(.minutes(1)))
 struct AuthFeatureTests {
   @Test("Apple and passkeys are off until the Clerk dashboard is configured")
   func defaultsOff() {
@@ -106,7 +106,7 @@ struct AuthFeatureTests {
   }
 }
 
-@Suite("cold session restoration")
+@Suite("cold session restoration", .timeLimit(.minutes(1)))
 struct ColdSessionRestorationTests {
   @MainActor
   private final class ActiveSession {
@@ -280,7 +280,7 @@ struct ColdSessionRestorationTests {
   }
 }
 
-@Suite("auth publication interleaving")
+@Suite("auth publication interleaving", .timeLimit(.minutes(1)))
 @MainActor
 struct AuthPublicationInterleavingTests {
   enum SuspensionPoint: Sendable {
@@ -481,7 +481,7 @@ struct AuthPublicationInterleavingTests {
   }
 }
 
-@Suite("account-deletion ordering")
+@Suite("account-deletion ordering", .timeLimit(.minutes(1)))
 @MainActor
 struct AccountDeletionOrderingTests {
   private final class ActiveSession {
@@ -532,7 +532,7 @@ struct AccountDeletionOrderingTests {
   }
 }
 
-@Suite("sign-out safety")
+@Suite("sign-out safety", .timeLimit(.minutes(1)))
 struct SignOutTests {
   /// Records the stop/start calls an identity change makes.
   private actor RecordingSync: SyncControlling {
@@ -612,7 +612,7 @@ struct SignOutTests {
   }
 }
 
-@Suite("refused sign-out lifecycle")
+@Suite("refused sign-out lifecycle", .timeLimit(.minutes(1)))
 @MainActor
 struct RefusedSignOutLifecycleTests {
   enum SuspensionPoint: Sendable {
@@ -672,17 +672,22 @@ struct RefusedSignOutLifecycleTests {
 
     func invalidateAll() { isEditable = false }
 
+    private var suspensionObservers: [CheckedContinuation<Void, Never>] = []
+
     private func suspend() async {
       isSuspended = true
+      suspensionObservers.forEach { $0.resume() }
+      suspensionObservers.removeAll()
       await withCheckedContinuation { releaseGate = $0 }
     }
 
+    // Waits for the signal rather than a number of yields: under parallel load
+    // a yield budget ran out first, the test released a gate nobody held yet,
+    // and the coordinator then suspended forever. The suite's time limit
+    // catches a suspension point that is never reached.
     func waitUntilSuspended() async {
-      for _ in 0..<10_000 {
-        if isSuspended { return }
-        await Task.yield()
-      }
-      Issue.record("coordinator never reached the requested suspension point")
+      if isSuspended { return }
+      await withCheckedContinuation { suspensionObservers.append($0) }
     }
 
     enum StartWaitError: Error, Equatable {
@@ -886,7 +891,7 @@ struct RefusedSignOutLifecycleTests {
   }
 }
 
-@Suite("refused sign-out publication containment")
+@Suite("refused sign-out publication containment", .timeLimit(.minutes(1)))
 @MainActor
 struct RefusedSignOutPublicationContainmentTests {
   private final class ActiveSession {
@@ -1012,7 +1017,7 @@ struct RefusedSignOutPublicationContainmentTests {
   }
 }
 
-@Suite("round-3 auth")
+@Suite("round-3 auth", .timeLimit(.minutes(1)))
 struct Round3AuthTests {
   /// Records the ordering of everything auth drives, and can write into the
   /// store from inside `freezeAndFlushAll` to reproduce the check-to-purge race.
@@ -1140,7 +1145,7 @@ struct Round3AuthTests {
   }
 }
 
-@Suite("round-4 auth")
+@Suite("round-4 auth", .timeLimit(.minutes(1)))
 struct Round4AuthTests {
   @Test("signing in as another owner is blocked while retained work exists")
   func ownerMismatchWithRetainedWorkIsBlocked() async throws {
@@ -1204,7 +1209,7 @@ struct Round4AuthTests {
   }
 }
 
-@Suite("round-5 auth")
+@Suite("round-5 auth", .timeLimit(.minutes(1)))
 struct Round5AuthTests {
   private actor Coordinator: SyncControlling, EditSessionCoordinating {
     private(set) var events: [String] = []
@@ -1311,7 +1316,7 @@ struct Round5AuthTests {
   }
 }
 
-@Suite("round-6 auth")
+@Suite("round-6 auth", .timeLimit(.minutes(1)))
 struct Round6AuthTests {
   @MainActor
   private final class ActiveSession {
@@ -1366,8 +1371,12 @@ struct Round6AuthTests {
 
     func record(_ event: String) { events.append(event) }
 
+    private var stopObservers: [CheckedContinuation<Void, Never>] = []
+
     func stop() async {
       events.append("sync.stop.begin")
+      stopObservers.forEach { $0.resume() }
+      stopObservers.removeAll()
       if suspendStop {
         await withCheckedContinuation { self.stopGate = $0 }
       }
@@ -1379,9 +1388,12 @@ struct Round6AuthTests {
     }
     /// Suspend until `stop()` is parked, so the test knows the window is open.
     func awaitStopBegan() async {
-      // Bounded: a regression that never stops the sockets must fail the test,
-      // not hang the suite.
-      for _ in 0..<10_000 where !events.contains("sync.stop.begin") { await Task.yield() }
+      // On the signal, not a yield budget: when the budget ran out first, the
+      // test released a gate nobody held and `stop()` then parked forever. A
+      // regression that never stops the sockets fails on the suite's time
+      // limit instead.
+      if events.contains("sync.stop.begin") { return }
+      await withCheckedContinuation { stopObservers.append($0) }
     }
     func start() async { events.append("sync.start") }
     func clear() { events.removeAll() }

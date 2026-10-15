@@ -215,6 +215,8 @@ jobs:
   # Needs the macOS 26 SDK. Convex's binary requires macOS 26.2.
   apple-core:
     runs-on: macos-26
+    # A hung test otherwise holds the runner for GitHub's six-hour limit.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
