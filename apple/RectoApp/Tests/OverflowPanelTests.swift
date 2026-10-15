@@ -238,6 +238,21 @@ struct OverflowPanelTests {
         await cloud.close()
     }
 
+    @Test("Control-Return and Command-Return are the move key; plain Return and other chords are not")
+    func moveKey() throws {
+        func key(_ flags: NSEvent.ModifierFlags, code: UInt16 = 36) throws -> NSEvent {
+            try #require(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: 0,
+                context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: code))
+        }
+        #expect(OverflowTextView.isMoveKey(try key(.control)))
+        #expect(OverflowTextView.isMoveKey(try key(.command)))
+        #expect(OverflowTextView.isMoveKey(try key(.control, code: 76)))
+        #expect(!OverflowTextView.isMoveKey(try key([])))
+        #expect(!OverflowTextView.isMoveKey(try key([.control, .shift])))
+        #expect(!OverflowTextView.isMoveKey(try key(.option)))
+    }
+
     @Test("drag classification requires one complete exact insertion, including repeated Unicode")
     func exactInsertion() {
         #expect(CloudDocumentModel.isOverflowInsertion(before: "abc", after: "abaabc", dragged: "aba"))
@@ -280,4 +295,15 @@ private final class OverflowTestDragInfo: NSObject, NSDraggingInfo {
     func slideDraggedImage(to screenPoint: NSPoint) {}
     func resetSpringLoading() {}
     func enumerateDraggingItems(options enumOpts: NSDraggingItemEnumerationOptions, for view: NSView?, classes classArray: [AnyClass], searchOptions: [NSPasteboard.ReadingOptionKey: Any], using block: (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void) {}
+}
+
+@Suite("Network return")
+struct NetworkReturnTests {
+    @Test("only a change from unavailable to available counts as the network coming back")
+    func transitions() {
+        var tracker = NetworkReturn()
+        let results = [true, true, false, true, true].map { tracker.update(satisfied: $0) }
+        // The first report is not a return; only the change after an outage is.
+        #expect(results == [false, false, false, true, false])
+    }
 }
