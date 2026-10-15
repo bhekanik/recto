@@ -7,7 +7,7 @@ import type { HistoryController } from "@/lib/history/use-document-history";
 import type { Mode } from "@/lib/modes/types";
 import { toast } from "@/lib/ui/toast";
 import type { DocumentModelRegistry } from "@/lib/workspace/document-registry";
-import { adding, choosing, removing } from "./edits";
+import { adding, addingAll, choosing, removing } from "./edits";
 import {
 	emptyWritingState,
 	validateWritingState,
@@ -93,11 +93,11 @@ export function useAlternatives({
 		);
 	}, [resolve]);
 
-	const open = useCallback(() => {
+	const open = useCallback((): AlternativeTargets | null => {
 		const target = resolve();
 		if (!target) {
 			toast("Switch to Rich, Raw or Vim to compare wordings.", "info");
-			return;
+			return null;
 		}
 		const { handle } = target;
 		const markdown = handle.getCanonicalMarkdown();
@@ -127,10 +127,16 @@ export function useAlternatives({
 				"Put the caret in a word, or select the passage to compare.",
 				"info",
 			);
-			return;
+			return null;
 		}
 		setTargets(next);
+		return next;
 	}, [resolve, activeMode]);
+
+	/** Open the panel on a passage the Lab pointed at, not the caret's. */
+	const openAt = useCallback((range: Range, scope: Scope) => {
+		setTargets({ ranges: { [scope]: range }, initial: scope });
+	}, []);
 
 	const commit = useCallback(
 		(state: WritingState, markdown?: string) => {
@@ -287,6 +293,49 @@ export function useAlternatives({
 		[resolve, commit],
 	);
 
+	/**
+	 * Add the AI's wordings for `range` as one history node, only while the
+	 * draft is still `base`, the text they were suggested for. True when the
+	 * passage has them, added now or before.
+	 */
+	const addSuggested = useCallback(
+		(texts: readonly string[], scope: Scope, range: Range, base: string) => {
+			const target = resolve();
+			if (!target) return false;
+			target.controller.flush();
+			const markdown = target.handle.getCanonicalMarkdown();
+			if (markdown !== base) {
+				toast(
+					"The draft changed while the AI was suggesting. Try again.",
+					"info",
+				);
+				return false;
+			}
+			const state =
+				writingStateFor(markdown, target.controller) ?? emptyWritingState();
+			const next = addingAll(
+				state,
+				texts,
+				"ai",
+				scope,
+				range.from,
+				range.to,
+				markdown,
+				() => crypto.randomUUID(),
+			);
+			if (!next) {
+				toast(
+					"Alternatives cannot overlap another passage with alternatives.",
+					"info",
+				);
+				return false;
+			}
+			if (next !== state) commit(next);
+			return true;
+		},
+		[resolve, commit],
+	);
+
 	const remove = useCallback(
 		(candidateId: string, groupId: string) => {
 			const target = resolve();
@@ -320,8 +369,10 @@ export function useAlternatives({
 		previewShownId: preview?.shownId ?? null,
 		writing,
 		open,
+		openAt,
 		close,
 		add,
+		addSuggested,
 		show,
 		keep,
 		restore,

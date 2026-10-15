@@ -23,8 +23,10 @@ import {
 } from "@/lib/editor/milkdown";
 import { PreviewPane } from "@/lib/editor/preview";
 import {
+	EDITOR_CHANGE_EVENT,
 	FOCUS_EDITOR_EVENT,
 	FOCUS_PANE_EVENT,
+	LAB_MARKS_EVENT,
 	LINT_COUNT_EVENT,
 	SWITCH_MODE_EVENT,
 } from "@/lib/events";
@@ -52,7 +54,8 @@ import {
 	useDocumentSyncFor,
 	useWorkspace,
 } from "@/lib/workspace/workspace-context";
-import { writingMarksFor } from "@/lib/writing/marks";
+import type { LabMarksDetail } from "@/lib/writing/lab";
+import { type WritingMark, writingMarksFor } from "@/lib/writing/marks";
 import { readerMarkdown } from "@/lib/writing/reader";
 import { ghostRangesFor } from "@/lib/writing/state";
 
@@ -205,7 +208,11 @@ export function PaneEditor({
 	const handleEditorChange = useCallback(() => {
 		sync?.handleEditorChange();
 		setChangeTick((t) => t + 1);
-	}, [sync]);
+		// The Lab drops a trim proposal and moves its findings on any edit.
+		window.dispatchEvent(
+			new CustomEvent(EDITOR_CHANGE_EVENT, { detail: { documentId } }),
+		);
+	}, [sync, documentId]);
 
 	const {
 		docIssues,
@@ -272,6 +279,37 @@ export function PaneEditor({
 		}, 200);
 		return () => clearTimeout(timer);
 	}, [documentId, markdown, leaf.mode, getDocumentHistory]);
+
+	// The Lab's cuts and findings (plan 026): studio-shell owns them and pushes
+	// them here for the ACTIVE pane only, as it does comment highlights. A ref
+	// keeps the latest so a freshly mounted editor gets them after a mode switch.
+	const lastLabMarksRef = useRef<WritingMark[]>([]);
+	useEffect(() => {
+		if (!isActive) return;
+		const onLabMarks = (event: CustomEvent<LabMarksDetail>) => {
+			if (event.detail.documentId !== documentId) return;
+			lastLabMarksRef.current = event.detail.marks;
+			cmRef.current?.setLabMarks(event.detail.marks);
+			richRef.current?.setLabMarks(event.detail.marks);
+		};
+		window.addEventListener(LAB_MARKS_EVENT, onLabMarks as EventListener);
+		return () => {
+			window.removeEventListener(LAB_MARKS_EVENT, onLabMarks as EventListener);
+			lastLabMarksRef.current = [];
+			cmRef.current?.setLabMarks([]);
+			richRef.current?.setLabMarks([]);
+		};
+	}, [isActive, documentId]);
+	useEffect(() => {
+		if (leaf.mode === "preview") return;
+		// The incoming editor mounts after this commit; wait for it, as the
+		// writing marks do.
+		const timer = setTimeout(() => {
+			cmRef.current?.setLabMarks(lastLabMarksRef.current);
+			richRef.current?.setLabMarks(lastLabMarksRef.current);
+		}, 200);
+		return () => clearTimeout(timer);
+	}, [leaf.mode]);
 
 	// Re-apply the latest comment marks into the editor that just became active on a
 	// mode switch (mirrors the lint re-push on leaf.mode change).

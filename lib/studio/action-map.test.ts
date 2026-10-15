@@ -64,6 +64,9 @@ function makeDeps(overrides: Partial<ActionMapDeps> = {}): ActionMapDeps {
 		stashInOverflow: vi.fn(),
 		toggleGhost: vi.fn(),
 		openAlternatives: vi.fn(),
+		suggestAlternatives: vi.fn(),
+		labReview: vi.fn(),
+		labTrim: vi.fn(),
 		effectiveAiEnabled: true,
 		activeDocId: "doc1" as ActionMapDeps["activeDocId"],
 		activeDocIsOwned: true,
@@ -409,5 +412,57 @@ describe("createActionMap", () => {
 		});
 		createActionMap(deps)["copy-markdown"]();
 		await vi.waitFor(() => expect(writes).toEqual(["Keep. Ghost. Keep."]));
+	});
+
+	it("runs the Lab only with effective AI on the writer's own document", () => {
+		const on = makeDeps();
+		const map = createActionMap(on);
+		map["lab-trim-10"]();
+		map["lab-trim-50"]();
+		map["lab-voice"]();
+		map["ai-alternatives"]();
+		expect(on.labTrim).toHaveBeenNthCalledWith(1, 10);
+		expect(on.labTrim).toHaveBeenNthCalledWith(2, 50);
+		expect(on.labReview).toHaveBeenCalledWith("voice");
+		expect(on.suggestAlternatives).toHaveBeenCalledTimes(1);
+
+		for (const gate of [
+			{ effectiveAiEnabled: false },
+			{ activeDocIsOwned: false },
+		]) {
+			const off = makeDeps(gate);
+			const offMap = createActionMap(off);
+			for (const id of [
+				"lab-opening",
+				"lab-clarity",
+				"lab-voice",
+				"lab-trim-10",
+				"lab-trim-20",
+				"lab-trim-30",
+				"lab-trim-50",
+				"ai-alternatives",
+			] as const) {
+				offMap[id]();
+			}
+			expect(off.labTrim).not.toHaveBeenCalled();
+			expect(off.labReview).not.toHaveBeenCalled();
+			expect(off.suggestAlternatives).not.toHaveBeenCalled();
+		}
+	});
+
+	it("files the Lab under AI with the Mac app's ids and labels", () => {
+		const lab = ACTIONS.filter(
+			(a) => a.id.startsWith("lab-") || a.id === "ai-alternatives",
+		);
+		expect(lab.map((a) => [a.id, a.label, a.section])).toEqual([
+			["ai-alternatives", "AI alternatives for selection", "AI"],
+			["lab-opening", "Lab: improve the opening", "AI"],
+			["lab-clarity", "Lab: find confusing passages", "AI"],
+			["lab-voice", "Lab: check voice and phrasing", "AI"],
+			["lab-trim-10", "Lab: slight trim", "AI"],
+			["lab-trim-20", "Lab: tighten more", "AI"],
+			["lab-trim-30", "Lab: even sharper", "AI"],
+			["lab-trim-50", "Lab: cut in half", "AI"],
+		]);
 	});
 });

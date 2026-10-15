@@ -4,6 +4,7 @@ import {
 	type AppShortcutAction,
 	createAppShortcutHandler,
 	isAddFlagKey,
+	isAiAlternativesKey,
 	isAlternativesKey,
 	isFindKey,
 	isGhostKey,
@@ -170,5 +171,18 @@ describe("flag chords", () => {
 		expect(
 			isAlternativesKey(key("A", { ctrlKey: true, shiftKey: true }), false),
 		).toBe(false);
+	});
+	it("asks for AI alternatives with Control-Shift-G on a Mac and Alt+Shift+G elsewhere", () => {
+		expect(
+			isAiAlternativesKey(key("G", { ctrlKey: true, shiftKey: true }), true),
+		).toBe(true);
+		expect(
+			isAiAlternativesKey(key("G", { altKey: true, shiftKey: true }), false),
+		).toBe(true);
+		// Off Mac, Ctrl+Shift+G stays the browser's find previous.
+		expect(
+			isAiAlternativesKey(key("G", { ctrlKey: true, shiftKey: true }), false),
+		).toBe(false);
+		expect(isAiAlternativesKey(key("g", { ctrlKey: true }), true)).toBe(false);
 	});
 });

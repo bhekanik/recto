@@ -41,6 +41,7 @@ import {
 import { dispatchOpenComment } from "@/lib/review/summon";
 import type { WritingMark } from "@/lib/writing/marks";
 import {
+	setLabMarks,
 	setWritingMarks,
 	writingMarksExtension,
 } from "@/lib/writing/writing-decorations-cm";
@@ -55,6 +56,7 @@ export type CodeMirrorEditorHandle = EditorHandle & {
 	/** Push display-only comment highlights (full-doc offsets; plan 010 Phase B). */
 	setCommentHighlights: (highlights: CommentHighlight[]) => void;
 	setWritingMarks: (marks: WritingMark[]) => void;
+	setLabMarks: (marks: WritingMark[]) => void;
 	/** Open the find/replace panel (focuses the editor first). */
 	openSearch: () => void;
 };
@@ -711,6 +713,11 @@ export const CodeMirrorEditor = forwardRef<
 			const view = viewRef.current;
 			if (!view) return;
 			view.dispatch({ effects: setWritingMarks.of(marks) });
+		},
+		setLabMarks(marks: WritingMark[]) {
+			const view = viewRef.current;
+			if (!view) return;
+			view.dispatch({ effects: setLabMarks.of(marks) });
 		},
 		setCommentHighlights(highlights: CommentHighlight[]) {
 			const view = viewRef.current;

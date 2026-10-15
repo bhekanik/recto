@@ -52,6 +52,14 @@ export type ActionId =
 	| "stash-in-overflow"
 	| "ghost"
 	| "alternatives"
+	| "ai-alternatives"
+	| "lab-opening"
+	| "lab-clarity"
+	| "lab-voice"
+	| "lab-trim-10"
+	| "lab-trim-20"
+	| "lab-trim-30"
+	| "lab-trim-50"
 	| "ai-transform"
 	| "ai-critique"
 	| "ai-related"
@@ -414,6 +422,70 @@ export const ACTIONS: ActionDef[] = [
 		],
 		// Off Mac, Ctrl+Shift+A is the browser's tab search.
 		shortcut: { mac: "Ctrl+⇧+A", other: "Alt+Shift+A" },
+	},
+	{
+		id: "ai-alternatives",
+		label: "AI alternatives for selection",
+		section: "AI",
+		aliases: [
+			"suggest",
+			"wordings",
+			"synonyms",
+			"alternatives",
+			"other words",
+			"ai",
+		],
+		// Off Mac, Ctrl+Shift+G is the browser's find previous.
+		shortcut: { mac: "Ctrl+⇧+G", other: "Alt+Shift+G" },
+	},
+	{
+		id: "lab-opening",
+		label: "Lab: improve the opening",
+		section: "AI",
+		aliases: ["lab", "opening", "intro", "hook", "first paragraph"],
+		shortcut: { mac: "", other: "" },
+	},
+	{
+		id: "lab-clarity",
+		label: "Lab: find confusing passages",
+		section: "AI",
+		aliases: ["lab", "clarity", "confusing", "unclear", "hard to follow"],
+		shortcut: { mac: "", other: "" },
+	},
+	{
+		id: "lab-voice",
+		label: "Lab: check voice and phrasing",
+		section: "AI",
+		aliases: ["lab", "voice", "tone", "phrasing", "register", "cliche"],
+		shortcut: { mac: "", other: "" },
+	},
+	{
+		id: "lab-trim-10",
+		label: "Lab: slight trim",
+		section: "AI",
+		aliases: ["lab", "trim", "tighten", "shorten", "cut", "10%"],
+		shortcut: { mac: "", other: "" },
+	},
+	{
+		id: "lab-trim-20",
+		label: "Lab: tighten more",
+		section: "AI",
+		aliases: ["lab", "trim", "tighten", "shorten", "cut", "20%"],
+		shortcut: { mac: "", other: "" },
+	},
+	{
+		id: "lab-trim-30",
+		label: "Lab: even sharper",
+		section: "AI",
+		aliases: ["lab", "trim", "tighten", "shorten", "cut", "30%"],
+		shortcut: { mac: "", other: "" },
+	},
+	{
+		id: "lab-trim-50",
+		label: "Lab: cut in half",
+		section: "AI",
+		aliases: ["lab", "trim", "halve", "shorten", "cut", "50%"],
+		shortcut: { mac: "", other: "" },
 	},
 	{
 		id: "ai-transform",

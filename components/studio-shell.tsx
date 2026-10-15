@@ -37,6 +37,8 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { RenderPaneNode } from "@/components/workspace/render-pane-node";
 import { AlternativesPanel } from "@/components/writing/alternatives-panel";
+import { FindingsPanel } from "@/components/writing/findings-panel";
+import { LabBar } from "@/components/writing/lab-bar";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { dispatchOpenSearch } from "@/lib/editor/codemirror";
@@ -90,6 +92,7 @@ import {
 import { readerMarkdown } from "@/lib/writing/reader";
 import { ghostRangesFor } from "@/lib/writing/state";
 import { useAlternatives } from "@/lib/writing/use-alternatives";
+import { useLab } from "@/lib/writing/use-lab";
 import { useWritingActions } from "@/lib/writing/use-writing-actions";
 
 function StudioWorkspace() {
@@ -536,6 +539,16 @@ function StudioWorkspace() {
 		activeMode,
 		getController: () => activeHistoryRef.current,
 	});
+	const lab = useLab({
+		registry,
+		activeDocId,
+		activePaneId: workspace?.activePaneId ?? null,
+		activeMode,
+		enabled: effectiveAiEnabled && activeDocIsOwned,
+		headNodeId: activeHistory?.currentNodeId ?? null,
+		getController: () => activeHistoryRef.current,
+		alternatives,
+	});
 	const writingActions = useWritingActions({
 		registry,
 		activeDocId,
@@ -570,6 +583,9 @@ function StudioWorkspace() {
 				stashInOverflow,
 				toggleGhost: writingActions.toggleGhost,
 				openAlternatives: alternatives.open,
+				suggestAlternatives: lab.suggestAtCaret,
+				labReview: lab.startReview,
+				labTrim: lab.trim,
 				effectiveAiEnabled,
 				activeDocId,
 				activeDocIsOwned,
@@ -606,6 +622,9 @@ function StudioWorkspace() {
 			stashInOverflow,
 			writingActions.toggleGhost,
 			alternatives.open,
+			lab.suggestAtCaret,
+			lab.startReview,
+			lab.trim,
 			effectiveAiEnabled,
 			activeDocId,
 			activeDocIsOwned,
@@ -732,6 +751,9 @@ function StudioWorkspace() {
 						return;
 					case "alternatives":
 						dispatchRef.current("alternatives");
+						return;
+					case "ai-alternatives":
+						dispatchRef.current("ai-alternatives");
 						return;
 					case "open-go-to-heading":
 						dispatchRef.current("go-to-heading");
@@ -937,6 +959,10 @@ function StudioWorkspace() {
 					)}
 				</main>
 
+				{!showEmpty && activeDocIsOwned && effectiveAiEnabled && (
+					<LabBar lab={lab} />
+				)}
+
 				{!showEmpty && statusVisible && activeSync && (
 					<div className={bottomChromeClass} {...chromeHoverProps}>
 						<SyncStatusBar
@@ -1116,7 +1142,13 @@ function StudioWorkspace() {
 					<AlternativesPanel
 						key={JSON.stringify(alternatives.targets)}
 						alternatives={alternatives}
+						suggest={effectiveAiEnabled ? lab.suggest : undefined}
+						suggesting={lab.busy?.kind === "suggest"}
 					/>
+				)}
+
+				{!showEmpty && activeDocIsOwned && effectiveAiEnabled && lab.review && (
+					<FindingsPanel review={lab.review} lab={lab} />
 				)}
 
 				{flagState.draft && (

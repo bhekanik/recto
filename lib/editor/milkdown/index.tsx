@@ -72,7 +72,12 @@ import { lintPlugin, setLintMeta } from "./lint-plugin";
 import { replaceMarkdownSelection } from "./replace-selection";
 import { SelectionToolbarView } from "./selection-toolbar-view";
 import { SlashMenuView } from "./slash-menu-view";
-import { setWritingMeta, writingPlugin } from "./writing-plugin";
+import {
+	labPluginKey,
+	setLabMeta,
+	setWritingMeta,
+	writingPlugin,
+} from "./writing-plugin";
 
 export type MilkdownEditorHandle = EditorHandle & {
 	getPmView: () => PMEditorView | null;
@@ -84,6 +89,7 @@ export type MilkdownEditorHandle = EditorHandle & {
 	/** Push display-only comment highlights (located by quote text; plan 010 Phase B). */
 	setCommentHighlights: (marks: CommentMark[]) => void;
 	setWritingMarks: (marks: WritingMark[]) => void;
+	setLabMarks: (marks: WritingMark[]) => void;
 };
 
 const rectoSlash = slashFactory("RECTO_SLASH");
@@ -460,6 +466,7 @@ const MilkdownEditorInner = forwardRef<MilkdownEditorHandle, InnerProps>(
 				// marks arrive via tr meta and are located by searching for the quote.
 				.use($prose(() => commentPlugin()))
 				.use($prose(() => writingPlugin()))
+				.use($prose(() => writingPlugin(labPluginKey, setLabMeta)))
 				// Writing flags: `<!--flag: note-->` drawn as a flag glyph.
 				.use($prose(() => flagPlugin()))
 				.config((ctx) => {
@@ -755,6 +762,16 @@ const MilkdownEditorInner = forwardRef<MilkdownEditorHandle, InnerProps>(
 				try {
 					const view = editor.ctx.get(editorViewCtx);
 					view.dispatch(view.state.tr.setMeta(setWritingMeta, marks));
+				} catch {
+					// editor still mounting — next push will land once the view exists
+				}
+			},
+			setLabMarks(marks: WritingMark[]) {
+				const editor = editorRef.current;
+				if (!editor) return;
+				try {
+					const view = editor.ctx.get(editorViewCtx);
+					view.dispatch(view.state.tr.setMeta(setLabMeta, marks));
 				} catch {
 					// editor still mounting — next push will land once the view exists
 				}

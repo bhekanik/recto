@@ -22,6 +22,7 @@ import type { Mode } from "@/lib/modes/types";
 import { SOURCE_REPOSITORY_URL } from "@/lib/project-links";
 import type { StudioSettingsApi } from "@/lib/studio/use-studio-settings";
 import type { WorkspaceActions } from "@/lib/workspace/use-workspace-persistence";
+import type { ReviewPass, TrimTarget } from "@/lib/writing/lab";
 
 type HistoryView = "tree" | "versions";
 
@@ -46,6 +47,10 @@ export type ActionMapDeps = {
 	stashInOverflow: () => void;
 	toggleGhost: () => void;
 	openAlternatives: () => void;
+	/** The Lab's passes (plan 026); each needs effective AI on an owned document. */
+	suggestAlternatives: () => void;
+	labReview: (pass: ReviewPass) => void;
+	labTrim: (target: TrimTarget) => void;
 	effectiveAiEnabled: boolean;
 	activeDocId: Id<"documents"> | null;
 	activeDocIsOwned: boolean;
@@ -178,6 +183,7 @@ export function createActionMap(
 		alternatives: () => {
 			if (deps.activeDocIsOwned) deps.openAlternatives();
 		},
+		...labActions(deps),
 		"toggle-ai": () => (deps.toggleAiEnabled ?? settings.toggleAiEnabled)(),
 		"toggle-transform-mode": () => settings.toggleAiTransformMode(),
 		"ai-transform": () => {
@@ -251,6 +257,39 @@ export function createActionMap(
 		"theme-aurora": () => settings.setTheme("aurora"),
 		"theme-dawn": () => settings.setTheme("dawn"),
 		"theme-moonlit": () => settings.setTheme("moonlit"),
+	};
+}
+
+/**
+ * The Lab's palette entries. AI on the writer's own document only:
+ * `effectiveAiEnabled` folds in consent and the no-AI-on-shared gate, and a
+ * grantee never runs the owner's AI.
+ */
+function labActions(
+	deps: ActionMapDeps,
+): Record<
+	| "ai-alternatives"
+	| "lab-opening"
+	| "lab-clarity"
+	| "lab-voice"
+	| "lab-trim-10"
+	| "lab-trim-20"
+	| "lab-trim-30"
+	| "lab-trim-50",
+	() => void
+> {
+	const gated = (run: () => void) => () => {
+		if (deps.effectiveAiEnabled && deps.activeDocIsOwned) run();
+	};
+	return {
+		"ai-alternatives": gated(() => deps.suggestAlternatives()),
+		"lab-opening": gated(() => deps.labReview("opening")),
+		"lab-clarity": gated(() => deps.labReview("clarity")),
+		"lab-voice": gated(() => deps.labReview("voice")),
+		"lab-trim-10": gated(() => deps.labTrim(10)),
+		"lab-trim-20": gated(() => deps.labTrim(20)),
+		"lab-trim-30": gated(() => deps.labTrim(30)),
+		"lab-trim-50": gated(() => deps.labTrim(50)),
 	};
 }
 

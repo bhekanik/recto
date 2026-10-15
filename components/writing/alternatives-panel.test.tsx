@@ -31,9 +31,11 @@ function controller(): AlternativesController {
 		targets: { ranges: { word: { from: 12, to: 19 } }, initial: "word" },
 		previewShownId: null,
 		writing: () => state,
-		open: vi.fn(),
+		open: vi.fn(() => null),
+		openAt: vi.fn(),
 		close: vi.fn(),
 		add: vi.fn(),
+		addSuggested: vi.fn(() => true),
 		show: vi.fn(),
 		keep: vi.fn(async () => {}),
 		restore: vi.fn(),
@@ -50,12 +52,24 @@ describe("alternatives panel", () => {
 		document.body.replaceChildren();
 	});
 
-	async function render(alternatives: AlternativesController) {
+	async function render(
+		alternatives: AlternativesController,
+		ai: {
+			suggest?: (range: { from: number; to: number }, scope: string) => void;
+			suggesting?: boolean;
+		} = {},
+	) {
 		const host = document.createElement("div");
 		document.body.append(host);
 		root = createRoot(host);
 		await act(async () =>
-			root?.render(<AlternativesPanel alternatives={alternatives} />),
+			root?.render(
+				<AlternativesPanel
+					alternatives={alternatives}
+					suggest={ai.suggest}
+					suggesting={ai.suggesting}
+				/>,
+			),
 		);
 		const field = host.querySelector<HTMLInputElement>(
 			'input[aria-label="Add a wording"]',
@@ -91,5 +105,33 @@ describe("alternatives panel", () => {
 		expect(alternatives.close).toHaveBeenCalledTimes(1);
 		await press(field, "Escape");
 		expect(alternatives.restore).toHaveBeenCalledTimes(1);
+	});
+
+	const suggestButton = (host: HTMLElement) =>
+		[...host.querySelectorAll("button")].find(
+			(b) => b.textContent === "Suggest with AI",
+		);
+
+	it("asks the AI for wordings of the passage on show, only while AI is on", async () => {
+		const suggest = vi.fn();
+		const { host } = await render(controller(), { suggest });
+		const button = suggestButton(host);
+		expect(button?.disabled).toBe(false);
+		await act(async () => button?.click());
+		expect(suggest).toHaveBeenCalledWith({ from: 12, to: 19 }, "word");
+		await act(async () => root?.unmount());
+		root = null;
+		document.body.replaceChildren();
+		const off = await render(controller());
+		expect(suggestButton(off.host)).toBeUndefined();
+	});
+
+	it("says the AI is being asked and holds the button meanwhile", async () => {
+		const { host } = await render(controller(), {
+			suggest: vi.fn(),
+			suggesting: true,
+		});
+		expect(host.textContent).toContain("Asking the AI…");
+		expect(suggestButton(host)?.disabled).toBe(true);
 	});
 });

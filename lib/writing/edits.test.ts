@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	adding,
+	addingAll,
 	choosing,
 	ghostContaining,
 	ghosting,
@@ -105,5 +106,64 @@ describe("alternative edits on the web, as on the Mac", () => {
 		expect(groupContaining(state, at("tension") + 7)?.id).toBe(
 			state.alternatives[1]?.id,
 		);
+	});
+});
+
+describe("AI wordings added together", () => {
+	const text = "The tension held.";
+	const from = text.indexOf("tension");
+	const to = from + "tension".length;
+
+	it("starts one passage for all of them, marked as the AI's, skipping repeats", () => {
+		let id = 0;
+		const next = () => `id${++id}`;
+		const state = addingAll(
+			emptyWritingState(),
+			["strain", "pressure", "strain"],
+			"ai",
+			"word",
+			from,
+			to,
+			text,
+			next,
+		);
+		expect(state?.alternatives).toHaveLength(1);
+		expect(
+			state?.alternatives[0]?.candidates.map((c) => [c.text, c.author]),
+		).toEqual([
+			["tension", "human"],
+			["strain", "ai"],
+			["pressure", "ai"],
+		]);
+	});
+
+	it("refuses a passage overlapping another, and leaves a known wording alone", () => {
+		const newId = () => crypto.randomUUID();
+		const state = adding(
+			emptyWritingState(),
+			"tension held",
+			"human",
+			"sentence",
+			from,
+			text.length - 1,
+			text,
+			newId,
+		);
+		if (!state) throw new Error("no state");
+		expect(
+			addingAll(state, ["strain"], "ai", "word", from, to, text, newId),
+		).toBeNull();
+		expect(
+			addingAll(
+				state,
+				["tension held"],
+				"ai",
+				"sentence",
+				from,
+				text.length - 1,
+				text,
+				newId,
+			),
+		).toBe(state);
 	});
 });

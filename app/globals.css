@@ -968,3 +968,19 @@
 	text-decoration-thickness: 1px;
 	text-underline-offset: 3px;
 }
+
+/* The Lab (plan 026): a proposed cut fades to about a quarter of the ink and
+ * a click keeps its words (a kept cut stays clickable to cut it again); a
+ * review's finding is underlined in the second accent. Display only. */
+.recto-writing-lab-cut {
+	opacity: 0.28;
+	cursor: pointer;
+}
+.recto-writing-lab-kept {
+	cursor: pointer;
+}
+.recto-writing-lab-finding {
+	text-decoration: underline var(--color-accent-2);
+	text-decoration-thickness: 1.5px;
+	text-underline-offset: 3px;
+}
