@@ -291,6 +291,8 @@ export function useReviewerHistory(args: {
 		restoreVersion: noopRestore,
 		recordChange,
 		commitProgrammatic: noopCommitProgrammatic,
+		// A reviewer suggests text; alternatives and ghosts are the owner's.
+		commitWriting: noopCommitProgrammatic,
 		flush,
 		tagVersion: noopTag,
 		materializeAt,

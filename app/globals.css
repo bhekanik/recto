@@ -951,3 +951,20 @@
 	--sidebar-border: var(--color-line);
 	--sidebar-ring: var(--color-focus-ring);
 }
+
+/* Writing state (plan 026): a ghost stays in place at about a tenth of the ink;
+ * a passage with alternatives gets a wavy underline, accented while it shows a
+ * wording other than its original. Display only. */
+.recto-writing-ghost {
+	opacity: 0.15;
+}
+.recto-writing-alternative {
+	text-decoration: underline wavy var(--color-ink-tertiary);
+	text-decoration-thickness: 1px;
+	text-underline-offset: 3px;
+}
+.recto-writing-alternative-variant {
+	text-decoration: underline wavy var(--color-accent);
+	text-decoration-thickness: 1px;
+	text-underline-offset: 3px;
+}

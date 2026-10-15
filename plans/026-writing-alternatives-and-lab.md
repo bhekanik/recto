@@ -235,6 +235,10 @@ On the Mac the flask menu and `Lab:` palette commands start a pass; findings app
 
 The web gets `Toggle Overflow` and `Stash selection in Overflow` (Control-Shift-X on a Mac, Alt+Shift+X elsewhere, because Ctrl+Shift+X is Flag this spot off Mac). `useOverflowNotes` edits locally and saves with `overflow.save`'s revision CAS after a 500 ms pause, adopting the server copy only while nothing is unsaved (D11); a conflict keeps both copies; a failed save keeps its client mutation id so a retry replays. `useOverflowMoves` writes the destination before the source (notes then draft for a stash, draft then notes for a move back), so a failure leaves text in both places. The draft half is one `commitProgrammatic` node with origin `overflow`. The web does not reverse the notes on undo: the Mac's `overflow_move` journal is local to the Mac that made the move. Browser verification needs a signed-in session: the e2e harness would create a test user in the live Clerk instance, which needs BK's approval.
 
+## The web reads writing state and honours ghosts
+
+`lib/writing/state.ts` ports the writing-state core (decode, mapping through a patch, validation, derivation at a node) with the Swift field names. `lib/writing/fixtures/mapping.json` holds shared cases that both `lib/writing/state.test.ts` and `WritingStateParityTests` (RectoHistory) run, so the two implementations cannot drift. `ghostRangesFor` derives the ghosts at the history head and carries them to the pane's live text. The web Preview and every export or rich copy use the reader's text; Copy Markdown keeps the source via `ExportSource.sourceMarkdown`. Web-side drawing of ghosts and alternatives, and the web Lab, are the next increments.
+
 ## Unresolved questions
 
 1. Resolved 2026-10-14: BK approved the brief Ethernet/Wi-Fi disconnect; the installed 0.1.6 check ran and restored the network both times.

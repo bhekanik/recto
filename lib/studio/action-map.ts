@@ -44,6 +44,7 @@ export type ActionMapDeps = {
 	toggleNotes: () => void;
 	toggleOverflow: () => void;
 	stashInOverflow: () => void;
+	toggleGhost: () => void;
 	effectiveAiEnabled: boolean;
 	activeDocId: Id<"documents"> | null;
 	activeDocIsOwned: boolean;
@@ -170,6 +171,9 @@ export function createActionMap(
 		"stash-in-overflow": () => {
 			if (deps.activeDocIsOwned) deps.stashInOverflow();
 		},
+		ghost: () => {
+			if (deps.activeDocIsOwned) deps.toggleGhost();
+		},
 		"toggle-ai": () => (deps.toggleAiEnabled ?? settings.toggleAiEnabled)(),
 		"toggle-transform-mode": () => settings.toggleAiTransformMode(),
 		"ai-transform": () => {
@@ -193,7 +197,12 @@ export function createActionMap(
 		},
 		"copy-markdown": () => {
 			const source = getExportSource();
-			if (source) void copyAsMarkdown(source);
+			// The source copy keeps everything, ghosts included.
+			if (source)
+				void copyAsMarkdown({
+					...source,
+					markdown: source.sourceMarkdown ?? source.markdown,
+				});
 		},
 		"export-md": () => {
 			const source = getExportSource();

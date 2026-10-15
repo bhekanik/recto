@@ -86,6 +86,9 @@ import {
 	useWorkspace,
 	WorkspaceProvider,
 } from "@/lib/workspace/workspace-context";
+import { readerMarkdown } from "@/lib/writing/reader";
+import { ghostRangesFor } from "@/lib/writing/state";
+import { useWritingActions } from "@/lib/writing/use-writing-actions";
 
 function StudioWorkspace() {
 	const {
@@ -418,7 +421,14 @@ function StudioWorkspace() {
 		);
 		const markdown =
 			handle?.getCanonicalMarkdown() ?? activeSync?.markdown ?? "";
-		return { title: activeTitle, markdown };
+		const ghosts = ghostRangesFor(markdown, activeHistoryRef.current);
+		return ghosts.length === 0
+			? { title: activeTitle, markdown }
+			: {
+					title: activeTitle,
+					markdown: readerMarkdown(markdown, ghosts),
+					sourceMarkdown: markdown,
+				};
 	}, [activeDocId, workspace, registry, activeSync, activeTitle]);
 
 	// --- Document outline (plan 005) ---
@@ -517,6 +527,14 @@ function StudioWorkspace() {
 		void overflowMoves.stash();
 	}, [overflowMoves]);
 
+	const writingActions = useWritingActions({
+		registry,
+		activeDocId,
+		activePaneId: workspace?.activePaneId ?? null,
+		activeMode,
+		getController: () => activeHistoryRef.current,
+	});
+
 	const actionMap = useMemo(
 		() =>
 			createActionMap({
@@ -541,6 +559,7 @@ function StudioWorkspace() {
 				toggleNotes: flagState.toggleNotes,
 				toggleOverflow,
 				stashInOverflow,
+				toggleGhost: writingActions.toggleGhost,
 				effectiveAiEnabled,
 				activeDocId,
 				activeDocIsOwned,
@@ -575,6 +594,7 @@ function StudioWorkspace() {
 			flagState.toggleNotes,
 			toggleOverflow,
 			stashInOverflow,
+			writingActions.toggleGhost,
 			effectiveAiEnabled,
 			activeDocId,
 			activeDocIsOwned,
@@ -695,6 +715,9 @@ function StudioWorkspace() {
 						return;
 					case "stash-in-overflow":
 						dispatchRef.current("stash-in-overflow");
+						return;
+					case "ghost":
+						dispatchRef.current("ghost");
 						return;
 					case "open-go-to-heading":
 						dispatchRef.current("go-to-heading");

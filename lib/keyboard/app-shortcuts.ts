@@ -29,6 +29,7 @@ export type AppShortcutAction =
 	| { type: "add-flag" }
 	| { type: "toggle-notes" }
 	| { type: "stash-in-overflow" }
+	| { type: "ghost" }
 	| { type: "open-go-to-heading" }
 	| { type: "toggle-outline" }
 	| { type: "find-replace" }
@@ -90,6 +91,17 @@ export function isStashKey(event: KeyboardEvent, mac = isMac): boolean {
 		return false;
 	}
 	return mac ? event.ctrlKey && !event.altKey : event.altKey && !event.ctrlKey;
+}
+
+/** Control-/ everywhere, as on the Mac app. */
+export function isGhostKey(event: KeyboardEvent): boolean {
+	return (
+		event.key === "/" &&
+		event.ctrlKey &&
+		!event.metaKey &&
+		!event.altKey &&
+		!event.shiftKey
+	);
 }
 
 export function isToggleNotesKey(event: KeyboardEvent, mac = isMac): boolean {
@@ -298,6 +310,12 @@ export function createAppShortcutHandler(
 			event.preventDefault();
 			event.stopPropagation();
 			onAction({ type: "add-flag" });
+			return;
+		}
+		if (isGhostKey(event)) {
+			event.preventDefault();
+			event.stopPropagation();
+			onAction({ type: "ghost" });
 			return;
 		}
 		if (isToggleNotesKey(event)) {

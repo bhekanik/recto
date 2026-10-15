@@ -194,3 +194,31 @@ struct GhostTests {
     #expect(WritingState().readerMarkdown(text) == text)
   }
 }
+
+/// The same cases the web's `lib/writing/state.test.ts` runs, so the Mac and
+/// the web map writing state identically.
+@Suite("writing state parity with the web")
+struct WritingStateParityTests {
+  private struct Case: Decodable {
+    let name: String
+    let state: WritingState
+    let before: String
+    let after: String
+    let expected: WritingState
+  }
+
+  @Test("every shared fixture case maps the same way")
+  func parity() throws {
+    let fixture = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+      .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+      .appending(path: "lib/writing/fixtures/mapping.json")
+    let cases = try JSONDecoder().decode([Case].self, from: Data(contentsOf: fixture))
+    #expect(cases.count >= 8)
+    for testCase in cases {
+      let mapped = testCase.state.mapped(
+        through: computePatch(testCase.before, testCase.after), into: JSString(testCase.after))
+      #expect(mapped == testCase.expected, "\(testCase.name)")
+    }
+  }
+}

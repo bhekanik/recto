@@ -5,6 +5,7 @@ import {
 	createAppShortcutHandler,
 	isAddFlagKey,
 	isFindKey,
+	isGhostKey,
 	isSpellcheckKey,
 	isStashKey,
 	isToggleNotesKey,
@@ -152,5 +153,10 @@ describe("flag chords", () => {
 		expect(isStashKey(key("X", { metaKey: true, shiftKey: true }), true)).toBe(
 			false,
 		);
+	});
+	it("ghosts with Control-/ and nothing else", () => {
+		expect(isGhostKey(key("/", { ctrlKey: true }))).toBe(true);
+		expect(isGhostKey(key("/", { metaKey: true }))).toBe(false);
+		expect(isGhostKey(key("/", { ctrlKey: true, shiftKey: true }))).toBe(false);
 	});
 });

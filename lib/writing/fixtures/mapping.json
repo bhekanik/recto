@@ -1,0 +1,548 @@
+[
+	{
+		"name": "edit before shifts both",
+		"state": {
+			"version": 1,
+			"alternatives": [
+				{
+					"id": "g",
+					"scope": "word",
+					"location": 15,
+					"length": 7,
+					"candidates": [
+						{
+							"id": "o",
+							"text": "tension",
+							"author": "human"
+						},
+						{
+							"id": "p",
+							"text": "pressure",
+							"author": "ai"
+						}
+					],
+					"activeId": "o",
+					"detached": false
+				}
+			],
+			"ghosts": [
+				{
+					"id": "h",
+					"location": 24,
+					"length": 14
+				}
+			]
+		},
+		"before": "😀 Much of the tension, maybe cut this, in design.",
+		"after": "😀😀 Much of the tension, maybe cut this, in design.",
+		"expected": {
+			"version": 1,
+			"alternatives": [
+				{
+					"id": "g",
+					"scope": "word",
+					"location": 17,
+					"length": 7,
+					"candidates": [
+						{
+							"id": "o",
+							"text": "tension",
+							"author": "human"
+						},
+						{
+							"id": "p",
+							"text": "pressure",
+							"author": "ai"
+						}
+					],
+					"activeId": "o",
+					"detached": false
+				}
+			],
+			"ghosts": [
+				{
+					"id": "h",
+					"location": 26,
+					"length": 14
+				}
+			]
+		}
+	},
+	{
+		"name": "typing right after a word stays outside it",
+		"state": {
+			"version": 1,
+			"alternatives": [
+				{
+					"id": "g",
+					"scope": "word",
+					"location": 15,
+					"length": 7,
+					"candidates": [
+						{
+							"id": "o",
+							"text": "tension",
+							"author": "human"
+						},
+						{
+							"id": "p",
+							"text": "pressure",
+							"author": "ai"
+						}
+					],
+					"activeId": "o",
+					"detached": false
+				}
+			],
+			"ghosts": [
+				{
+					"id": "h",
+					"location": 24,
+					"length": 14
+				}
+			]
+		},
+		"before": "😀 Much of the tension, maybe cut this, in design.",
+		"after": "😀 Much of the tensions, maybe cut this, in design.",
+		"expected": {
+			"version": 1,
+			"alternatives": [
+				{
+					"id": "g",
+					"scope": "word",
+					"location": 15,
+					"length": 7,
+					"candidates": [
+						{
+							"id": "o",
+							"text": "tension",
+							"author": "human"
+						},
+						{
+							"id": "p",
+							"text": "pressure",
+							"author": "ai"
+						}
+					],
+					"activeId": "o",
+					"detached": false
+				}
+			],
+			"ghosts": [
+				{
+					"id": "h",
+					"location": 25,
+					"length": 14
+				}
+			]
+		}
+	},
+	{
+		"name": "an edit inside edits the wording on show",
+		"state": {
+			"version": 1,
+			"alternatives": [
+				{
+					"id": "g",
+					"scope": "word",
+					"location": 15,
+					"length": 7,
+					"candidates": [
+						{
+							"id": "o",
+							"text": "tension",
+							"author": "human"
+						},
+						{
+							"id": "p",
+							"text": "pressure",
+							"author": "ai"
+						}
+					],
+					"activeId": "o",
+					"detached": false
+				}
+			],
+			"ghosts": [
+				{
+					"id": "h",
+					"location": 24,
+					"length": 14
+				}
+			]
+		},
+		"before": "😀 Much of the tension, maybe cut this, in design.",
+		"after": "😀 Much of the tenzion, maybe cut this, in design.",
+		"expected": {
+			"version": 1,
+			"alternatives": [
+				{
+					"id": "g",
+					"scope": "word",
+					"location": 15,
+					"length": 7,
+					"candidates": [
+						{
+							"id": "o",
+							"text": "tenzion",
+							"author": "human"
+						},
+						{
+							"id": "p",
+							"text": "pressure",
+							"author": "ai"
+						}
+					],
+					"activeId": "o",
+					"detached": false
+				}
+			],
+			"ghosts": [
+				{
+					"id": "h",
+					"location": 24,
+					"length": 14
+				}
+			]
+		}
+	},
+	{
+		"name": "an edit across a word's edge detaches it",
+		"state": {
+			"version": 1,
+			"alternatives": [
+				{
+					"id": "g",
+					"scope": "word",
+					"location": 15,
+					"length": 7,
+					"candidates": [
+						{
+							"id": "o",
+							"text": "tension",
+							"author": "human"
+						},
+						{
+							"id": "p",
+							"text": "pressure",
+							"author": "ai"
+						}
+					],
+					"activeId": "o",
+					"detached": false
+				}
+			],
+			"ghosts": [
+				{
+					"id": "h",
+					"location": 24,
+					"length": 14
+				}
+			]
+		},
+		"before": "😀 Much of the tension, maybe cut this, in design.",
+		"after": "😀 Much of thension, maybe cut this, in design.",
+		"expected": {
+			"version": 1,
+			"alternatives": [
+				{
+					"id": "g",
+					"scope": "word",
+					"location": 15,
+					"length": 7,
+					"candidates": [
+						{
+							"id": "o",
+							"text": "tension",
+							"author": "human"
+						},
+						{
+							"id": "p",
+							"text": "pressure",
+							"author": "ai"
+						}
+					],
+					"activeId": "o",
+					"detached": true
+				}
+			],
+			"ghosts": [
+				{
+					"id": "h",
+					"location": 21,
+					"length": 14
+				}
+			]
+		}
+	},
+	{
+		"name": "typing inside a ghost stays ghosted",
+		"state": {
+			"version": 1,
+			"alternatives": [
+				{
+					"id": "g",
+					"scope": "word",
+					"location": 15,
+					"length": 7,
+					"candidates": [
+						{
+							"id": "o",
+							"text": "tension",
+							"author": "human"
+						},
+						{
+							"id": "p",
+							"text": "pressure",
+							"author": "ai"
+						}
+					],
+					"activeId": "o",
+					"detached": false
+				}
+			],
+			"ghosts": [
+				{
+					"id": "h",
+					"location": 24,
+					"length": 14
+				}
+			]
+		},
+		"before": "😀 Much of the tension, maybe cut this, in design.",
+		"after": "😀 Much of the tension, maybe cut all this, in design.",
+		"expected": {
+			"version": 1,
+			"alternatives": [
+				{
+					"id": "g",
+					"scope": "word",
+					"location": 15,
+					"length": 7,
+					"candidates": [
+						{
+							"id": "o",
+							"text": "tension",
+							"author": "human"
+						},
+						{
+							"id": "p",
+							"text": "pressure",
+							"author": "ai"
+						}
+					],
+					"activeId": "o",
+					"detached": false
+				}
+			],
+			"ghosts": [
+				{
+					"id": "h",
+					"location": 24,
+					"length": 18
+				}
+			]
+		}
+	},
+	{
+		"name": "an edit across a ghost's start trims it",
+		"state": {
+			"version": 1,
+			"alternatives": [
+				{
+					"id": "g",
+					"scope": "word",
+					"location": 15,
+					"length": 7,
+					"candidates": [
+						{
+							"id": "o",
+							"text": "tension",
+							"author": "human"
+						},
+						{
+							"id": "p",
+							"text": "pressure",
+							"author": "ai"
+						}
+					],
+					"activeId": "o",
+					"detached": false
+				}
+			],
+			"ghosts": [
+				{
+					"id": "h",
+					"location": 24,
+					"length": 14
+				}
+			]
+		},
+		"before": "😀 Much of the tension, maybe cut this, in design.",
+		"after": "😀 Much of the tension; mXybe cut this, in design.",
+		"expected": {
+			"version": 1,
+			"alternatives": [
+				{
+					"id": "g",
+					"scope": "word",
+					"location": 15,
+					"length": 7,
+					"candidates": [
+						{
+							"id": "o",
+							"text": "tension",
+							"author": "human"
+						},
+						{
+							"id": "p",
+							"text": "pressure",
+							"author": "ai"
+						}
+					],
+					"activeId": "o",
+					"detached": false
+				}
+			],
+			"ghosts": [
+				{
+					"id": "h",
+					"location": 26,
+					"length": 12
+				}
+			]
+		}
+	},
+	{
+		"name": "an edit across a ghost's end trims it",
+		"state": {
+			"version": 1,
+			"alternatives": [
+				{
+					"id": "g",
+					"scope": "word",
+					"location": 15,
+					"length": 7,
+					"candidates": [
+						{
+							"id": "o",
+							"text": "tension",
+							"author": "human"
+						},
+						{
+							"id": "p",
+							"text": "pressure",
+							"author": "ai"
+						}
+					],
+					"activeId": "o",
+					"detached": false
+				}
+			],
+			"ghosts": [
+				{
+					"id": "h",
+					"location": 24,
+					"length": 14
+				}
+			]
+		},
+		"before": "😀 Much of the tension, maybe cut this, in design.",
+		"after": "😀 Much of the tension, maybe cut thXX in design.",
+		"expected": {
+			"version": 1,
+			"alternatives": [
+				{
+					"id": "g",
+					"scope": "word",
+					"location": 15,
+					"length": 7,
+					"candidates": [
+						{
+							"id": "o",
+							"text": "tension",
+							"author": "human"
+						},
+						{
+							"id": "p",
+							"text": "pressure",
+							"author": "ai"
+						}
+					],
+					"activeId": "o",
+					"detached": false
+				}
+			],
+			"ghosts": [
+				{
+					"id": "h",
+					"location": 24,
+					"length": 12
+				}
+			]
+		}
+	},
+	{
+		"name": "deleting all of a ghost removes it",
+		"state": {
+			"version": 1,
+			"alternatives": [
+				{
+					"id": "g",
+					"scope": "word",
+					"location": 15,
+					"length": 7,
+					"candidates": [
+						{
+							"id": "o",
+							"text": "tension",
+							"author": "human"
+						},
+						{
+							"id": "p",
+							"text": "pressure",
+							"author": "ai"
+						}
+					],
+					"activeId": "o",
+					"detached": false
+				}
+			],
+			"ghosts": [
+				{
+					"id": "h",
+					"location": 24,
+					"length": 14
+				}
+			]
+		},
+		"before": "😀 Much of the tension, maybe cut this, in design.",
+		"after": "😀 Much of the tension, in design.",
+		"expected": {
+			"version": 1,
+			"alternatives": [
+				{
+					"id": "g",
+					"scope": "word",
+					"location": 15,
+					"length": 7,
+					"candidates": [
+						{
+							"id": "o",
+							"text": "tension",
+							"author": "human"
+						},
+						{
+							"id": "p",
+							"text": "pressure",
+							"author": "ai"
+						}
+					],
+					"activeId": "o",
+					"detached": false
+				}
+			],
+			"ghosts": []
+		}
+	}
+]

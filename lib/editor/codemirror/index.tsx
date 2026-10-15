@@ -39,6 +39,11 @@ import {
 	setCommentHighlights,
 } from "@/lib/review/comment-decorations-cm";
 import { dispatchOpenComment } from "@/lib/review/summon";
+import type { WritingMark } from "@/lib/writing/marks";
+import {
+	setWritingMarks,
+	writingMarksExtension,
+} from "@/lib/writing/writing-decorations-cm";
 import { codeMirrorFlagEditing, flagHighlight } from "./flags";
 import { lintExtension, setLintIssues } from "./lint-extension";
 
@@ -49,6 +54,7 @@ export type CodeMirrorEditorHandle = EditorHandle & {
 	setLintIssues: (issues: LintIssue[]) => void;
 	/** Push display-only comment highlights (full-doc offsets; plan 010 Phase B). */
 	setCommentHighlights: (highlights: CommentHighlight[]) => void;
+	setWritingMarks: (marks: WritingMark[]) => void;
 	/** Open the find/replace panel (focuses the editor first). */
 	openSearch: () => void;
 };
@@ -541,6 +547,7 @@ export const CodeMirrorEditor = forwardRef<
 			}),
 			lintExtension(),
 			commentHighlightExtension(),
+			writingMarksExtension(),
 			search({ top: true }),
 			// AFTER vimExt so vim's keymap wins in normal mode (its `/` search keeps
 			// working); the search keymap only binds panel chords (Mod-F, Enter, etc.).
@@ -700,6 +707,11 @@ export const CodeMirrorEditor = forwardRef<
 			view.dispatch({ effects: setLintIssues.of(issues) });
 		},
 		flags: codeMirrorFlagEditing(() => viewRef.current),
+		setWritingMarks(marks: WritingMark[]) {
+			const view = viewRef.current;
+			if (!view) return;
+			view.dispatch({ effects: setWritingMarks.of(marks) });
+		},
 		setCommentHighlights(highlights: CommentHighlight[]) {
 			const view = viewRef.current;
 			if (!view) return;

@@ -230,4 +230,22 @@ describe("retention keep-set (blueprint 07 §8)", () => {
 		const prunable = computePrunable(recentNodes, "head", [], now);
 		expect(prunable.size).toBe(0);
 	});
+	it("commits a node that keeps the text, for writing state, only with no draft pending", () => {
+		const commits: { patch: string; markdown: string }[] = [];
+		const controller = new GroupingController({
+			rootNodeId: "root",
+			rootMarkdown: "Keep.",
+			onCommit: (commit) => commits.push(commit),
+			schedule: false,
+		});
+		expect(controller.commitUnchanged()).toBe(true);
+		expect(commits[0]?.markdown).toBe("Keep.");
+		expect(JSON.parse(commits[0]?.patch ?? "{}")).toEqual({
+			from: 5,
+			to: 5,
+			insert: "",
+		});
+		controller.record("Keep it.", null);
+		expect(controller.commitUnchanged()).toBe(false);
+	});
 });

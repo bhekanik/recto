@@ -50,6 +50,7 @@ export type ActionId =
 	| "toggle-notes-pin"
 	| "toggle-overflow"
 	| "stash-in-overflow"
+	| "ghost"
 	| "ai-transform"
 	| "ai-critique"
 	| "ai-related"
@@ -382,6 +383,21 @@ export const ACTIONS: ActionDef[] = [
 		],
 		// Off Mac, Ctrl+Shift+X is Flag this spot.
 		shortcut: { mac: "Ctrl+⇧+X", other: "Alt+Shift+X" },
+	},
+	{
+		id: "ghost",
+		label: "Ghost or revive",
+		section: "Review",
+		aliases: [
+			"ghost",
+			"dim",
+			"set aside",
+			"hide",
+			"revive",
+			"fade",
+			"maybe cut",
+		],
+		shortcut: { mac: "Ctrl+/", other: "Ctrl+/" },
 	},
 	{
 		id: "ai-transform",

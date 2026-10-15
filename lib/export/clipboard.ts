@@ -2,7 +2,16 @@ import { toast } from "@/lib/ui/toast";
 import { generateExportHtml } from "./html";
 
 /** What every copy/export action funnels through — derived from the canonical model. */
-export type ExportSource = { title: string; markdown: string };
+/**
+ * What an export or copy reads. `markdown` is the reader's text (ghosted
+ * passages left out); `sourceMarkdown`, when it differs, is the draft as
+ * written, for the explicit source copy.
+ */
+export type ExportSource = {
+	title: string;
+	markdown: string;
+	sourceMarkdown?: string;
+};
 
 function handleClipboardError(err: unknown): void {
 	const name = err instanceof Error ? err.name : "";

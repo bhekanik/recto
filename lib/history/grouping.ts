@@ -158,10 +158,25 @@ export class GroupingController {
 		this.tick();
 	}
 
+	/**
+	 * A node with the head's text, for a change that rides on the node rather
+	 * than the text (writing state). False while a draft is pending: flush first.
+	 */
+	commitUnchanged(selection: NodeSelection = null): boolean {
+		if (this.draftMarkdown !== this.parentMarkdown) return false;
+		this.cancelIdle();
+		this.draftSelection = selection;
+		this.commitNode();
+		return true;
+	}
+
 	private commitDraft(): void {
 		this.cancelIdle();
 		if (this.draftMarkdown === this.parentMarkdown) return;
+		this.commitNode();
+	}
 
+	private commitNode(): void {
 		const patch = encodePatch(
 			computePatch(this.parentMarkdown, this.draftMarkdown),
 		);

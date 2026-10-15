@@ -52,6 +52,12 @@ export type HistoryController = {
 		markdown: string,
 		opts?: { origin?: string },
 	) => string | null;
+	/**
+	 * Record `writing` (an encoded writing state) on one new node: with
+	 * `markdown` as its text when given and different, otherwise on a node
+	 * that keeps the text. Returns the node id, or null if nothing committed.
+	 */
+	commitWriting: (writing: string, markdown?: string) => string | null;
 	flush: () => void;
 	tagVersion: (label: string, kind?: "auto" | "manual") => Promise<void>;
 	materializeAt: (nodeId: string) => string | null;
@@ -720,6 +726,8 @@ export function useDocumentHistory(args: {
 	// their node `ai:<label>`); cleared after use so normal edits keep the device
 	// origin (plan 009).
 	const originOverrideRef = useRef<string | null>(null);
+	/** Writing state the next commit records on its node, then forgets. */
+	const writingOverrideRef = useRef<string | null>(null);
 
 	/**
 	 * Send the head of the queue, and only the head.
@@ -927,6 +935,8 @@ export function useDocumentHistory(args: {
 			if (!documentId) return;
 			const commitOrigin = originOverrideRef.current ?? origin;
 			originOverrideRef.current = null;
+			const writing = writingOverrideRef.current ?? undefined;
+			writingOverrideRef.current = null;
 			const node: HistoryNode = {
 				nodeId: commit.nodeId,
 				parentNodeId: commit.parentNodeId,
@@ -935,6 +945,7 @@ export function useDocumentHistory(args: {
 				selection: commit.selection,
 				origin: commitOrigin,
 				createdAt: Date.now(),
+				...(writing ? { writing } : {}),
 			};
 			setLocalNodes((prev) => [...prev, node]);
 			nodesByIdRef.current = new Map(nodesByIdRef.current).set(
@@ -968,6 +979,7 @@ export function useDocumentHistory(args: {
 						selection: commit.selection,
 						origin: commitOrigin,
 						createdAt: node.createdAt,
+						...(writing ? { writing } : {}),
 					},
 					markdown: commit.markdown,
 					wordCount: countWords(commit.markdown),
@@ -1362,6 +1374,29 @@ export function useDocumentHistory(args: {
 			const after = controller.currentNodeId;
 			// Clear an unused override if record() found nothing to commit (no change).
 			if (after === before) originOverrideRef.current = null;
+			return after === before ? null : after;
+		},
+		[],
+	);
+
+	const commitWriting = useCallback(
+		(writing: string, markdown?: string): string | null => {
+			const controller = controllerRef.current;
+			if (!controller) return null;
+			controller.flush();
+			const before = controller.currentNodeId;
+			writingOverrideRef.current = writing;
+			const handle = getHandleRef.current();
+			const current = handle?.getCanonicalMarkdown();
+			if (markdown !== undefined && markdown !== current) {
+				handle?.seed(markdown, { programmatic: true });
+				controller.record(markdown, null, { structural: true });
+				controller.flush();
+			} else {
+				controller.commitUnchanged(null);
+			}
+			const after = controller.currentNodeId;
+			if (after === before) writingOverrideRef.current = null;
 			return after === before ? null : after;
 		},
 		[],
@@ -1806,6 +1841,7 @@ export function useDocumentHistory(args: {
 		restoreVersion,
 		recordChange,
 		commitProgrammatic,
+		commitWriting,
 		flush,
 		tagVersion,
 		materializeAt,

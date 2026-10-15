@@ -52,6 +52,9 @@ import {
 	useDocumentSyncFor,
 	useWorkspace,
 } from "@/lib/workspace/workspace-context";
+import { writingMarksFor } from "@/lib/writing/marks";
+import { readerMarkdown } from "@/lib/writing/reader";
+import { ghostRangesFor } from "@/lib/writing/state";
 
 /**
  * Convex's HTTP-actions origin (`.convex.site`), a different host from the
@@ -93,7 +96,7 @@ export function PaneEditor({
 	canClose,
 	onClose,
 }: PaneEditorProps) {
-	const { actions, registry } = useWorkspace();
+	const { actions, registry, getDocumentHistory } = useWorkspace();
 	const {
 		spellcheck,
 		smartPaste,
@@ -255,6 +258,20 @@ export function PaneEditor({
 				onSetComments as EventListener,
 			);
 	}, [isActive]);
+
+	// Ghosts and alternatives (plan 026), derived from this document's history
+	// once the text settles and drawn by both editors. Display only.
+	useEffect(() => {
+		if (!documentId || markdown === null || leaf.mode === "preview") return;
+		const timer = setTimeout(() => {
+			const handle = leaf.mode === "rich" ? richRef.current : cmRef.current;
+			const live = handle?.getCanonicalMarkdown() ?? markdown;
+			const marks = writingMarksFor(live, getDocumentHistory(documentId));
+			cmRef.current?.setWritingMarks(marks);
+			richRef.current?.setWritingMarks(marks);
+		}, 200);
+		return () => clearTimeout(timer);
+	}, [documentId, markdown, leaf.mode, getDocumentHistory]);
 
 	// Re-apply the latest comment marks into the editor that just became active on a
 	// mode switch (mirrors the lint re-push on leaf.mode change).
@@ -665,7 +682,14 @@ export function PaneEditor({
 						inert={leaf.mode !== "preview"}
 					>
 						<PreviewPane
-							markdown={markdown}
+							markdown={
+								leaf.mode === "preview" && documentId
+									? readerMarkdown(
+											markdown,
+											ghostRangesFor(markdown, getDocumentHistory(documentId)),
+										)
+									: markdown
+							}
 							fallbackTitle={title}
 							className={`recto-preview ${surfaceClass} text-[length:var(--text-body)] leading-[var(--leading-body)] text-[var(--color-ink-primary)]`}
 						/>

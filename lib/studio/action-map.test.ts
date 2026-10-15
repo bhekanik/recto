@@ -62,6 +62,7 @@ function makeDeps(overrides: Partial<ActionMapDeps> = {}): ActionMapDeps {
 		toggleNotes: vi.fn(),
 		toggleOverflow: vi.fn(),
 		stashInOverflow: vi.fn(),
+		toggleGhost: vi.fn(),
 		effectiveAiEnabled: true,
 		activeDocId: "doc1" as ActionMapDeps["activeDocId"],
 		activeDocIsOwned: true,
@@ -391,5 +392,21 @@ describe("createActionMap", () => {
 		createActionMap(shared)["stash-in-overflow"]();
 		expect(shared.toggleOverflow).not.toHaveBeenCalled();
 		expect(shared.stashInOverflow).not.toHaveBeenCalled();
+	});
+	it("copies the source for Copy Markdown and the reader's text for other exports", async () => {
+		const writes: string[] = [];
+		Object.defineProperty(globalThis.navigator, "clipboard", {
+			configurable: true,
+			value: { writeText: async (text: string) => writes.push(text) },
+		});
+		const deps = makeDeps({
+			getExportSource: () => ({
+				title: "Draft",
+				markdown: "Keep. Keep.",
+				sourceMarkdown: "Keep. Ghost. Keep.",
+			}),
+		});
+		createActionMap(deps)["copy-markdown"]();
+		await vi.waitFor(() => expect(writes).toEqual(["Keep. Ghost. Keep."]));
 	});
 });
