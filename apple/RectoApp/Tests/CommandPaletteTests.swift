@@ -1,4 +1,6 @@
 import AppKit
+import Observation
+import Synchronization
 import RectoCoreJS
 import RectoEditor
 import RectoStore
@@ -310,6 +312,24 @@ struct CommandPaletteControllerTests {
         ], canOpenInWeb: false)
         let hidden = CommandPaletteController.sections(settings: settings(), library: unavailable).first
         #expect(hidden?.items.map(\.id) == ["new-document"] + native + ["document-a"])
+    }
+
+    @Test("the menu bar re-reads its editor commands when a window becomes key or an editor changes")
+    func registryChangesAreObservable() {
+        let registry = EditorHostRegistry()
+        func observes(_ change: () -> Void) -> Bool {
+            let fired = Mutex(false)
+            withObservationTracking { _ = registry.controller(in: nil) } onChange: { fired.withLock { $0 = true } }
+            change()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            return fired.withLock { $0 }
+        }
+        #expect(observes { registry.changed() })
+        #expect(observes { NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: nil) })
+        let editor = EditorHostController(settings: settings(), registry: registry)
+        #expect(observes { registry.noteFocused(editor) })
+        #expect(!observes { registry.noteFocused(editor) }, "a caret move in the same editor must not re-render the menu")
+        #expect(observes { editor.hooksChanged() })
     }
 
     @Test("Overflow is offered by its local capability without review hooks and stays absent for files")

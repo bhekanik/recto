@@ -1,4 +1,5 @@
 import AppKit
+import Observation
 import RectoCoreJS
 import RectoEditor
 import RectoSync
@@ -153,6 +154,9 @@ final class EditorHostController {
         if seam == nil { registry.remove(self) } else { registry.add(self) }
     }
 
+    /// Tell the menu bar this editor's command hooks were (re)wired.
+    func hooksChanged() { registry.changed() }
+
     /// Focus blur over the text, see ``RectoFocusBlurController``.
     let blur = RectoFocusBlurController()
 
@@ -279,22 +283,47 @@ final class EditorHostController {
 /// palette) can find the one in a given window. Weak: a host that goes away
 /// without detaching costs nothing.
 @MainActor
+@Observable
 final class EditorHostRegistry {
     static let shared = EditorHostRegistry()
 
-    private let controllers = NSHashTable<EditorHostController>.weakObjects()
+    @ObservationIgnored private let controllers = NSHashTable<EditorHostController>.weakObjects()
+
+    /// Bumped whenever the editor a command would reach may have changed. The
+    /// menu bar disables its editor commands by asking `controller(in:)`, and
+    /// neither the key window nor this table is observable: after a launch
+    /// that restored a document, the menu (and its ⌃⇧X, ⌃/, ⌃⇧A and ⌃⇧G
+    /// chords) stayed disabled until something unrelated re-rendered it.
+    private(set) var revision = 0
+    @ObservationIgnored private var keyWindowObservers: [NSObjectProtocol] = []
+
+    init() {
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
+            keyWindowObservers.append(NotificationCenter.default.addObserver(
+                forName: name, object: nil, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.changed() }
+            })
+        }
+    }
+
+    /// The editor's commands changed (its hooks were wired up).
+    func changed() { revision &+= 1 }
 
     func add(_ controller: EditorHostController) {
         controllers.add(controller)
+        changed()
     }
 
     func remove(_ controller: EditorHostController) {
         controllers.remove(controller)
+        changed()
     }
 
     /// The editor in `window` that commands act on: the one holding the
     /// keyboard, else the one that last did (a pane window has several).
     func controller(in window: NSWindow?) -> EditorHostController? {
+        _ = revision
         guard let window else { return nil }
         let inWindow = controllers.allObjects.filter { $0.window === window }
         if let typing = inWindow.first(where: { $0.seam?.nsTextView.map { window.firstResponder === $0 } ?? false }) {
@@ -304,15 +333,18 @@ final class EditorHostRegistry {
         return inWindow.first
     }
 
-    private weak var lastFocused: EditorHostController?
+    @ObservationIgnored private weak var lastFocused: EditorHostController?
 
     func noteFocused(_ controller: EditorHostController) {
+        // Every caret move lands here; only a different editor changes commands.
+        guard lastFocused !== controller else { return }
         lastFocused = controller
+        changed()
     }
 
     /// The window `Window("Recto", id: "cloud-library")` is on screen in, for
     /// surfaces that need a home when the key window has no editor.
-    weak var libraryWindow: NSWindow?
+    @ObservationIgnored weak var libraryWindow: NSWindow?
 
     /// The View menu's mode chords: switch the lens of the editor in `window`.
     func choosePresentation(_ presentation: Presentation, in window: NSWindow?) {

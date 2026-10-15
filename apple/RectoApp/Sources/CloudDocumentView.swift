@@ -329,6 +329,7 @@ struct CloudDocumentView: View {
         chrome.documentTitle = model.state.title
         vim.controller.history = model
         vim.controller.onSave = { Task { await model.save() } }
+        chrome.hooksChanged()
     }
 
     private func cloudContext(_ model: CloudDocumentModel, convexId: String?) -> CloudDocumentContext? {
