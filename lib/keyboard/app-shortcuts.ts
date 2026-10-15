@@ -31,6 +31,7 @@ export type AppShortcutAction =
 	| { type: "stash-in-overflow" }
 	| { type: "ghost" }
 	| { type: "alternatives" }
+	| { type: "ai-alternatives" }
 	| { type: "open-go-to-heading" }
 	| { type: "toggle-outline" }
 	| { type: "find-replace" }
@@ -97,6 +98,17 @@ export function isStashKey(event: KeyboardEvent, mac = isMac): boolean {
 /** Control-Shift-A on a Mac, as in the native app; Alt+Shift+A elsewhere. */
 export function isAlternativesKey(event: KeyboardEvent, mac = isMac): boolean {
 	if (event.key.toLowerCase() !== "a" || !event.shiftKey || event.metaKey) {
+		return false;
+	}
+	return mac ? event.ctrlKey && !event.altKey : event.altKey && !event.ctrlKey;
+}
+
+/** Control-Shift-G on a Mac, as in the native app; Alt+Shift+G elsewhere. */
+export function isAiAlternativesKey(
+	event: KeyboardEvent,
+	mac = isMac,
+): boolean {
+	if (event.key.toLowerCase() !== "g" || !event.shiftKey || event.metaKey) {
 		return false;
 	}
 	return mac ? event.ctrlKey && !event.altKey : event.altKey && !event.ctrlKey;
@@ -325,6 +337,12 @@ export function createAppShortcutHandler(
 			event.preventDefault();
 			event.stopPropagation();
 			onAction({ type: "alternatives" });
+			return;
+		}
+		if (isAiAlternativesKey(event)) {
+			event.preventDefault();
+			event.stopPropagation();
+			onAction({ type: "ai-alternatives" });
 			return;
 		}
 		if (isGhostKey(event)) {

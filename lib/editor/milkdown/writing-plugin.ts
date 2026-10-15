@@ -6,6 +6,9 @@ import type { WritingMark } from "@/lib/writing/marks";
 export const writingPluginKey = new PluginKey<DecorationSet>("RECTO_WRITING");
 /** Transaction meta key carrying fresh `WritingMark[]` for the rich editor. */
 export const setWritingMeta = "recto-set-writing";
+/** The Lab's cuts and findings: a layer of their own, pushed by the shell. */
+export const labPluginKey = new PluginKey<DecorationSet>("RECTO_LAB");
+export const setLabMeta = "recto-set-lab";
 
 /**
  * Rich-mode positions are tree positions, not Markdown offsets, so each mark
@@ -38,6 +41,9 @@ function decorate(doc: PMNode, marks: WritingMark[]): DecorationSet {
 					current.pos + at + mark.text.length,
 					{
 						class: `recto-writing-${mark.kind}`,
+						...(mark.index === undefined
+							? {}
+							: { "data-lab-cut": String(mark.index) }),
 					},
 				),
 			);
@@ -49,20 +55,23 @@ function decorate(doc: PMNode, marks: WritingMark[]): DecorationSet {
 	return DecorationSet.create(doc, decorations);
 }
 
-export function writingPlugin(): Plugin<DecorationSet> {
+export function writingPlugin(
+	key = writingPluginKey,
+	meta = setWritingMeta,
+): Plugin<DecorationSet> {
 	return new Plugin<DecorationSet>({
-		key: writingPluginKey,
+		key,
 		state: {
 			init: () => DecorationSet.empty,
 			apply(tr, set) {
-				const marks = tr.getMeta(setWritingMeta) as WritingMark[] | undefined;
+				const marks = tr.getMeta(meta) as WritingMark[] | undefined;
 				if (marks) return decorate(tr.doc, marks);
 				return set.map(tr.mapping, tr.doc);
 			},
 		},
 		props: {
 			decorations(state) {
-				return writingPluginKey.getState(state) ?? null;
+				return key.getState(state) ?? null;
 			},
 		},
 	});

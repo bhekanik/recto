@@ -1,13 +1,13 @@
 "use client";
 
-import { Circle, Minus, Sparkle, X } from "lucide-react";
+import { Circle, LoaderCircle, Minus, Sparkle, X } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import type { AlternativeGroup } from "@/lib/writing/state";
-import type { Scope } from "@/lib/writing/targets";
+import type { Range, Scope } from "@/lib/writing/targets";
 import type { AlternativesController } from "@/lib/writing/use-alternatives";
 
 const SCOPES: { scope: Scope; label: string }[] = [
@@ -23,8 +23,13 @@ const SCOPES: { scope: Scope; label: string }[] = [
  */
 export function AlternativesPanel({
 	alternatives,
+	suggest,
+	suggesting = false,
 }: {
 	alternatives: AlternativesController;
+	/** Ask the AI for wordings of a passage; absent while AI is off. */
+	suggest?: (range: Range, scope: Scope) => void;
+	suggesting?: boolean;
 }) {
 	const targets = alternatives.targets;
 	const [scope, setScope] = useState<Scope | null>(null);
@@ -148,7 +153,19 @@ export function AlternativesPanel({
 						</li>
 					);
 				})}
-				{!group && (
+				{suggesting && (
+					<li
+						className="flex items-center gap-[var(--space-2)] px-[var(--space-2)] text-[length:var(--text-ui-sm)] text-[var(--color-ink-tertiary)]"
+						role="status"
+					>
+						<LoaderCircle
+							aria-hidden
+							className="size-3 animate-spin motion-reduce:animate-none"
+						/>
+						Asking the AI…
+					</li>
+				)}
+				{!group && !suggesting && (
 					<li className="text-[length:var(--text-ui-sm)] text-[var(--color-ink-tertiary)]">
 						{range
 							? "Type another wording and press Return."
@@ -192,6 +209,28 @@ export function AlternativesPanel({
 						}
 					}}
 				/>
+				{suggest && (
+					<Button
+						size="sm"
+						variant="outline"
+						className="self-start"
+						disabled={
+							suggesting || !range || alternatives.previewShownId !== null
+						}
+						onClick={() => {
+							if (!range) return;
+							suggest(
+								group
+									? { from: group.location, to: group.location + group.length }
+									: range,
+								current,
+							);
+						}}
+					>
+						<Sparkle aria-hidden />
+						Suggest with AI
+					</Button>
+				)}
 				<p className="text-[length:var(--text-ui-sm)] text-[var(--color-ink-tertiary)]">
 					↑↓ compare in place · return adds or keeps · esc restores
 				</p>

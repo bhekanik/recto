@@ -128,6 +128,30 @@ export function adding(
 }
 
 /**
+ * Add each of `texts` as a wording for `[from, to)`, as one state
+ * (`addSuggestedAlternatives` on the Mac). A wording `adding` refuses is
+ * skipped; null when none could be added.
+ */
+export function addingAll(
+	state: WritingState,
+	texts: readonly string[],
+	author: AlternativeCandidate["author"],
+	scope: AlternativeGroup["scope"],
+	from: number,
+	to: number,
+	markdown: string,
+	newId: () => string,
+): WritingState | null {
+	let next: WritingState | null = null;
+	for (const text of texts) {
+		next =
+			adding(next ?? state, text, author, scope, from, to, markdown, newId) ??
+			next;
+	}
+	return next;
+}
+
+/**
  * Show `candidateId` in its passage: the replacement to make (`[from, to)` of
  * `markdown` → `text`) and the state for the resulting text. `article`
  * replaces the a/an before the passage in the same change.

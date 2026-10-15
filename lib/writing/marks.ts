@@ -9,8 +9,16 @@ import { type WritingHistory, writingStateFor } from "./state";
 export type WritingMark = {
 	from: number;
 	to: number;
-	kind: "ghost" | "alternative" | "alternative-variant";
+	kind:
+		| "ghost"
+		| "alternative"
+		| "alternative-variant"
+		| "lab-cut"
+		| "lab-kept"
+		| "lab-finding";
 	text: string;
+	/** A Lab cut's index, drawn as `data-lab-cut` so a click can name it. */
+	index?: number;
 };
 
 export function writingMarksFor(

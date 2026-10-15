@@ -23,3 +23,9 @@ export const FOCUS_EDITOR_EVENT = "recto:focus-editor";
 
 /** Workspace persistence → PaneEditor: move focus into the now-active pane. */
 export const FOCUS_PANE_EVENT = "recto:focus-pane";
+
+/** Studio-shell → active PaneEditor: the Lab's cuts and findings to draw. */
+export const LAB_MARKS_EVENT = "recto:lab-marks";
+
+/** PaneEditor → studio-shell: the writer changed a document's text. */
+export const EDITOR_CHANGE_EVENT = "recto:editor-change";
