@@ -225,6 +225,11 @@ Live-provider validation runs in the installed check once BK signs in again; uni
 
 `ai/lab:alternatives` is a second pass on the Lab lifecycle, now factored into `runPass` (identity, an optional pre-reservation `check`, messages, token budget, parser). It takes the passage, its UTF-16 offset and scope; `check` refuses unless the stored draft holds exactly that passage there, before any run is reserved. The prompt marks the passage in the full draft; `parseAlternatives` keeps up to five distinct, non-identical wordings sized for the scope. The Mac adds them with `author: .ai` (sparkle) as one history node through `addSuggestedAlternatives`, from the panel's `Suggest with AI` or Control-Shift-G.
 
+||||||| parent of bcb140c (feat: Overflow on the web)
+## Rung 11 starts with Overflow on the web
+
+The web gets `Toggle Overflow` and `Stash selection in Overflow` (Control-Shift-X on a Mac, Alt+Shift+X elsewhere, because Ctrl+Shift+X is Flag this spot off Mac). `useOverflowNotes` edits locally and saves with `overflow.save`'s revision CAS after a 500 ms pause, adopting the server copy only while nothing is unsaved (D11); a conflict keeps both copies; a failed save keeps its client mutation id so a retry replays. `useOverflowMoves` writes the destination before the source (notes then draft for a stash, draft then notes for a move back), so a failure leaves text in both places. The draft half is one `commitProgrammatic` node with origin `overflow`. The web does not reverse the notes on undo: the Mac's `overflow_move` journal is local to the Mac that made the move. Browser verification needs a signed-in session: the e2e harness would create a test user in the live Clerk instance, which needs BK's approval.
+
 ## Unresolved questions
 
 1. May the prepared check briefly disconnect and restore this Mac's active Ethernet/Wi-Fi connections? System changes outside the repository require approval; none has been received.

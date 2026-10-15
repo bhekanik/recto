@@ -21,6 +21,7 @@ import {
 	type HistoryView,
 } from "@/components/history/history-panel";
 import { OutlinePanel } from "@/components/outline/outline-panel";
+import { OverflowPanel } from "@/components/overflow/overflow-panel";
 import { CommentsPanel } from "@/components/review/comments-panel";
 import { ReviewSurface } from "@/components/review/review-surface";
 import { ShareDialog } from "@/components/share-dialog";
@@ -59,6 +60,8 @@ import {
 } from "@/lib/keyboard/app-shortcuts";
 import { readingTimeMinutes } from "@/lib/markdown";
 import { headingsWithFlags } from "@/lib/outline/flagged-headings";
+import { useOverflowMoves } from "@/lib/overflow/use-overflow-moves";
+import { useOverflowNotes } from "@/lib/overflow/use-overflow-notes";
 import { createActionMap } from "@/lib/studio/action-map";
 import { StudioSettingsProvider } from "@/lib/studio/settings-context";
 import { useAiFeatures } from "@/lib/studio/use-ai-features";
@@ -493,6 +496,27 @@ function StudioWorkspace() {
 	// The single application action registry (blueprint 13 §7.3.4): one
 	// `Record<ActionId, () => void>` that both surfaces call directly — the command
 	// palette / menu and the capture-phase keyboard handler.
+	// --- Overflow (plan 026) ------------------------------------------------
+	const [overflowOpen, setOverflowOpen] = useState(false);
+	const overflowNotes = useOverflowNotes(
+		activeDocId && activeDocIsOwned ? activeDocId : null,
+	);
+	const overflowMoves = useOverflowMoves({
+		registry,
+		activeDocId,
+		activePaneId: workspace?.activePaneId ?? null,
+		activeMode,
+		getController: () => activeHistoryRef.current,
+		notes: overflowNotes,
+	});
+	const toggleOverflow = useCallback(
+		() => setOverflowOpen((open) => !open),
+		[],
+	);
+	const stashInOverflow = useCallback(() => {
+		void overflowMoves.stash();
+	}, [overflowMoves]);
+
 	const actionMap = useMemo(
 		() =>
 			createActionMap({
@@ -515,6 +539,8 @@ function StudioWorkspace() {
 				summonAddComment,
 				addFlag: flagState.addFlag,
 				toggleNotes: flagState.toggleNotes,
+				toggleOverflow,
+				stashInOverflow,
 				effectiveAiEnabled,
 				activeDocId,
 				activeDocIsOwned,
@@ -547,6 +573,8 @@ function StudioWorkspace() {
 			summonAddComment,
 			flagState.addFlag,
 			flagState.toggleNotes,
+			toggleOverflow,
+			stashInOverflow,
 			effectiveAiEnabled,
 			activeDocId,
 			activeDocIsOwned,
@@ -664,6 +692,9 @@ function StudioWorkspace() {
 						return;
 					case "toggle-notes":
 						dispatchRef.current("toggle-notes");
+						return;
+					case "stash-in-overflow":
+						dispatchRef.current("stash-in-overflow");
 						return;
 					case "open-go-to-heading":
 						dispatchRef.current("go-to-heading");
@@ -1026,6 +1057,19 @@ function StudioWorkspace() {
 						onResolve={flagState.resolveFlag}
 						onClose={() => {
 							flagState.setNotesOpen(false);
+							dispatchFocusEditor();
+						}}
+					/>
+				)}
+
+				{!showEmpty && overflowOpen && activeDocIsOwned && (
+					<OverflowPanel
+						notes={overflowNotes}
+						onMoveIntoDraft={(from, text) => {
+							void overflowMoves.moveIntoDraft(from, text);
+						}}
+						onClose={() => {
+							setOverflowOpen(false);
 							dispatchFocusEditor();
 						}}
 					/>

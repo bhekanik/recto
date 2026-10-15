@@ -60,6 +60,8 @@ function makeDeps(overrides: Partial<ActionMapDeps> = {}): ActionMapDeps {
 		summonAddComment: vi.fn(),
 		addFlag: vi.fn(),
 		toggleNotes: vi.fn(),
+		toggleOverflow: vi.fn(),
+		stashInOverflow: vi.fn(),
 		effectiveAiEnabled: true,
 		activeDocId: "doc1" as ActionMapDeps["activeDocId"],
 		activeDocIsOwned: true,
@@ -377,5 +379,17 @@ describe("createActionMap", () => {
 			noneMap["export-md"]();
 			noneMap["export-html"]();
 		}).not.toThrow();
+	});
+	it("Overflow acts only on the writer's own document", () => {
+		const owned = makeDeps({ activeDocIsOwned: true });
+		createActionMap(owned)["toggle-overflow"]();
+		createActionMap(owned)["stash-in-overflow"]();
+		expect(owned.toggleOverflow).toHaveBeenCalledTimes(1);
+		expect(owned.stashInOverflow).toHaveBeenCalledTimes(1);
+		const shared = makeDeps({ activeDocIsOwned: false });
+		createActionMap(shared)["toggle-overflow"]();
+		createActionMap(shared)["stash-in-overflow"]();
+		expect(shared.toggleOverflow).not.toHaveBeenCalled();
+		expect(shared.stashInOverflow).not.toHaveBeenCalled();
 	});
 });
