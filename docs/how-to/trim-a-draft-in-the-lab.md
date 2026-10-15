@@ -2,7 +2,7 @@
 
 The Lab reads a library draft and proposes cuts. It only deletes; it never rewrites, adds or reorders your words. AI must be on (`Toggle AI` in the command palette), and the draft must be synced.
 
-Open the Lab with the flask button beside the formatting toolbar, or search for "Lab" in the command palette, and choose how hard to trim:
+Open the Lab with the flask button beside the formatting toolbar, or search for "Lab" in the command palette, and choose how hard to trim. The web app has the same passes in the command palette, in Rich, Raw or Vim mode:
 
 - Slight trim: about 10% shorter
 - Tighten more: about 20% shorter
