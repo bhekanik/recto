@@ -13,6 +13,8 @@ struct AIHooks {
     var reindex: () -> Void
     /// The Lab's trim pass, for a reduction of about this many percent.
     var trim: (Int) -> Void = { _ in }
+    /// One of the Lab's editorial passes.
+    var review: (AIController.ReviewPass) -> Void = { _ in }
 }
 
 /// The review actions a synced host carries out.

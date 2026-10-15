@@ -27,6 +27,7 @@ public enum ConvexFunction {
   public static let aiTransformRun = "ai/transform:run"
   public static let aiLabRun = "ai/lab:run"
   public static let aiLabAlternatives = "ai/lab:alternatives"
+  public static let aiLabReview = "ai/lab:review"
   public static let aiReviewRun = "ai/review:run"
   public static let aiEmbedRun = "ai/embed:run"
   public static let aiRunsLatestRecoverable = "ai/runs:latestRecoverable"
@@ -59,7 +60,7 @@ public enum ConvexFunction {
     documentsRemove, docNodesListSince, docNodesAppend, writingStatsRecord,
     writingStatsList, exportDocx, versionsList, versionsCreate, versionsRemove, versionsRename,
     reviewAddShare, reviewListShares, reviewRevokeShare, reviewDocumentShareState, reviewListOpenBranches, reviewGetBranchDiff, reviewAcceptBranch, reviewAcceptHunks, reviewRejectBranch, reviewAddComment, reviewListComments, reviewSetCommentResolved, reviewRemoveComment,
-    aiConsentGet, aiConsentAccept, aiConsentRevoke, aiCredentialsStatus, aiCredentialsSaveKey, aiCredentialsRemove, aiTransformRun, aiLabRun, aiLabAlternatives, aiReviewRun, aiEmbedRun, aiRunsLatestRecoverable, aiRunsAcknowledge, embeddingsSearchByVector, embeddingsReplaceChunks,
+    aiConsentGet, aiConsentAccept, aiConsentRevoke, aiCredentialsStatus, aiCredentialsSaveKey, aiCredentialsRemove, aiTransformRun, aiLabRun, aiLabAlternatives, aiLabReview, aiReviewRun, aiEmbedRun, aiRunsLatestRecoverable, aiRunsAcknowledge, embeddingsSearchByVector, embeddingsReplaceChunks,
   ]
 }
 

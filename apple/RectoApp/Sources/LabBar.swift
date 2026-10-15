@@ -15,6 +15,9 @@ struct LabBar: View {
             case let (.reading(target), _):
                 ProgressView().controlSize(.small)
                 Text("\(AIController.trimLabel(target)) · Reading the draft…")
+            case let (.reviewing(pass), _):
+                ProgressView().controlSize(.small)
+                Text("\(pass.label) · Reading the draft…")
             case let (.idle, lab?):
                 if let index = lab.walking {
                     walkthrough(lab, index)

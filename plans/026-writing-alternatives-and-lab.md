@@ -225,15 +225,19 @@ Live-provider validation runs in the installed check once BK signs in again; uni
 
 `ai/lab:alternatives` is a second pass on the Lab lifecycle, now factored into `runPass` (identity, an optional pre-reservation `check`, messages, token budget, parser). It takes the passage, its UTF-16 offset and scope; `check` refuses unless the stored draft holds exactly that passage there, before any run is reserved. The prompt marks the passage in the full draft; `parseAlternatives` keeps up to five distinct, non-identical wordings sized for the scope. The Mac adds them with `author: .ai` (sparkle) as one history node through `addSuggestedAlternatives`, from the panel's `Suggest with AI` or Control-Shift-G.
 
-||||||| parent of bcb140c (feat: Overflow on the web)
+## Rungs 8–10 share one review pass
+
+`ai/lab:review` runs the opening, clarity or voice prompt on the shared `runPass` lifecycle. Each prompt carries the essay rules (keep facts, quotations and voice; never invent; ask the writer when a fix needs their knowledge; read patterns in context; stop at eight useful points). Findings are exact quotes placed by `locateCuts`; a suggestion survives only if it differs from the passage. The opening pass also returns the opening paragraph's range (after frontmatter and title headings) and up to three openings, validated like alternatives.
+
+On the Mac the flask menu and `Lab:` palette commands start a pass; findings appear in a panel beside the draft with the assessment, are underlined in the second accent, and follow edits (an edit across one drops it). `Compare wording` and `Compare openings` add suggestions as AI alternatives and open the alternatives panel on that passage, so every suggestion is read in place and chosen through the same one-step, undoable path. Nothing is applied from the review itself.
+
 ## Rung 11 starts with Overflow on the web
 
 The web gets `Toggle Overflow` and `Stash selection in Overflow` (Control-Shift-X on a Mac, Alt+Shift+X elsewhere, because Ctrl+Shift+X is Flag this spot off Mac). `useOverflowNotes` edits locally and saves with `overflow.save`'s revision CAS after a 500 ms pause, adopting the server copy only while nothing is unsaved (D11); a conflict keeps both copies; a failed save keeps its client mutation id so a retry replays. `useOverflowMoves` writes the destination before the source (notes then draft for a stash, draft then notes for a move back), so a failure leaves text in both places. The draft half is one `commitProgrammatic` node with origin `overflow`. The web does not reverse the notes on undo: the Mac's `overflow_move` journal is local to the Mac that made the move. Browser verification needs a signed-in session: the e2e harness would create a test user in the live Clerk instance, which needs BK's approval.
 
 ## Unresolved questions
 
-1. May the prepared check briefly disconnect and restore this Mac's active Ethernet/Wi-Fi connections? System changes outside the repository require approval; none has been received.
-
+1. Resolved 2026-10-14: BK approved the brief Ethernet/Wi-Fi disconnect; the installed 0.1.6 check ran and restored the network both times.
 2. Resolved 2026-10-14: ghosted text is left out of reader-facing preview, rich copy and exports; source copy keeps it.
 3. How should writing metadata travel with plain `.md` files? Library drafts are the accepted initial scope; portability must be decided before file support is advertised.
 4. Which existing dedicated CI deployment and credentials should own authenticated browser tests? The latest browser CI job cannot start its server with the current authentication configuration. This does not justify creating credentials or changing account settings implicitly.

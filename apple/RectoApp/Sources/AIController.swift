@@ -86,7 +86,38 @@ final class AIController {
     enum LabState: Equatable {
         case idle
         case reading(target: Int)
+        case reviewing(ReviewPass)
     }
+
+    enum ReviewPass: String, CaseIterable, Equatable {
+        case opening, clarity, voice
+        var label: String {
+            switch self {
+            case .opening: "Improve the opening"
+            case .clarity: "Find confusing passages"
+            case .voice: "Check voice and phrasing"
+            }
+        }
+    }
+
+    /// One editorial pass's result, its ranges kept in step with the text.
+    struct LabReview: Equatable {
+        struct Finding: Equatable {
+            var range: NSRange
+            let reason: String
+            let suggestion: String?
+        }
+        let pass: ReviewPass
+        let assessment: String
+        var findings: [Finding]
+        var opening: NSRange?
+        let openings: [String]
+        let dropped: Int
+        /// The text the ranges are offsets into.
+        var text: String
+    }
+
+    private(set) var labReview: LabReview?
 
     /// The passage AI wordings are being fetched for.
     private(set) var suggesting: NSRange?
@@ -181,6 +212,95 @@ final class AIController {
 
     private func source(_ client: AIClient) async throws -> AIClient.Source {
         try await client.source(head: { model.state.head }, markdown: { storage().markdown })
+    }
+
+    // MARK: - Lab review
+
+    /// Set by the host: open the alternatives panel on a passage.
+    @ObservationIgnored var openAlternatives: (NSRange, AlternativeGroup.Scope) -> Void = { _, _ in }
+
+    func review(_ pass: ReviewPass) {
+        withConsent { [weak self] in Task { await self?.runReview(pass) } }
+    }
+
+    private func runReview(_ pass: ReviewPass) async {
+        guard let client, labState == .idle else { return }
+        await model.keepAlternative()
+        labState = .reviewing(pass)
+        defer { labState = .idle }
+        do {
+            let source = try await source(client)
+            let result = try await client.labReview(source, pass: pass.rawValue)
+            let length = (source.markdown as NSString).length
+            let fits = { (range: NSRange) in range.length > 0 && NSMaxRange(range) <= length }
+            var review = LabReview(
+                pass: pass, assessment: result.assessment,
+                findings: result.findings.filter { fits($0.range) }.map {
+                    LabReview.Finding(range: $0.range, reason: $0.reason, suggestion: $0.suggestion)
+                },
+                opening: result.opening.map(\.range).flatMap { fits($0) ? $0 : nil },
+                openings: result.openings, dropped: Int(result.dropped), text: source.markdown)
+            // The draft may have moved on while the pass ran; carry the ranges over.
+            Self.follow(&review, to: storage().markdown)
+            labReview = review
+        } catch {
+            fail(error)
+        }
+    }
+
+    func dismissReview() { labReview = nil }
+
+    func dismissFinding(at index: Int) {
+        guard labReview?.findings.indices.contains(index) == true else { return }
+        labReview?.findings.remove(at: index)
+    }
+
+    func showFinding(at index: Int) {
+        guard let finding = labReview?.findings[safe: index] else { return }
+        chrome.jump(to: finding.range)
+    }
+
+    /// Add the finding's suggestion as an AI wording of its passage and open
+    /// the alternatives there, so it is compared in place, not applied.
+    func compareFinding(at index: Int) async {
+        guard let review = labReview, let finding = review.findings[safe: index],
+              let suggestion = finding.suggestion else { return }
+        let scope = Self.scope(of: (review.text as NSString).substring(with: finding.range))
+        await model.addSuggestedAlternatives([suggestion], at: finding.range, scope: scope, on: review.text)
+        openAlternatives(finding.range, scope)
+    }
+
+    func compareOpenings() async {
+        guard let review = labReview, let opening = review.opening, !review.openings.isEmpty else { return }
+        await model.addSuggestedAlternatives(review.openings, at: opening, scope: .paragraph, on: review.text)
+        openAlternatives(opening, .paragraph)
+    }
+
+    static func scope(of passage: String) -> AlternativeGroup.Scope {
+        if passage.contains("\n") { return .paragraph }
+        return passage.rangeOfCharacter(from: .whitespaces) == nil ? .word : .sentence
+    }
+
+    /// Shift the review's ranges through the edit from its text to `markdown`.
+    /// A finding the edit cut across is dropped; an edit inside it keeps it.
+    static func follow(_ review: inout LabReview, to markdown: String) {
+        guard !(review.text as NSString).isEqual(to: markdown) else { return }
+        let patch = computePatch(review.text, markdown)
+        let delta = patch.insert.count - (patch.to - patch.from)
+        func shift(_ range: NSRange) -> NSRange? {
+            let start = range.location, end = NSMaxRange(range)
+            if patch.to <= start { return NSRange(location: start + delta, length: range.length) }
+            if patch.from >= end { return range }
+            if patch.from >= start, patch.to <= end, range.length + delta > 0 {
+                return NSRange(location: start, length: range.length + delta)
+            }
+            return nil
+        }
+        review.findings = review.findings.compactMap { finding in
+            shift(finding.range).map { var moved = finding; moved.range = $0; return moved }
+        }
+        review.opening = review.opening.flatMap(shift)
+        review.text = markdown
     }
 
     // MARK: - Alternatives
@@ -294,9 +414,14 @@ final class AIController {
 
     func dismissLab() { lab = nil }
 
-    /// The proposal belongs to the text it was made for; any other text drops it.
+    /// The proposal belongs to the text it was made for; any other text drops
+    /// it. A review's findings follow the text instead.
     func followText(_ markdown: String) {
         if let lab, !(lab.base as NSString).isEqual(to: markdown) { self.lab = nil }
+        if var review = labReview {
+            Self.follow(&review, to: markdown)
+            labReview = review
+        }
     }
 
     // MARK: - Transform
@@ -436,4 +561,8 @@ final class AIController {
         return text.substring(with: NSRange(location: start, length: max(0, end - start)))
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
+}
+
+extension Array {
+    subscript(safe index: Int) -> Element? { indices.contains(index) ? self[index] : nil }
 }

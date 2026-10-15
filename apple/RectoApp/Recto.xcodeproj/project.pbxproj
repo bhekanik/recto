@@ -119,6 +119,7 @@
 		ED99C6449F2609A3250222DB /* WindowSettingsTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 519EB914F6100E0B9B31F0D5 /* WindowSettingsTab.swift */; };
 		ED9D34A38A2C7FFAFF7329B3 /* GeneralSettingsTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E8BFA6E14BB3BA48D1DF795 /* GeneralSettingsTab.swift */; };
 		EF27CFAA742758F792BC9CA4 /* ReviewSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C4971B2E8CE1588AA6D8A24 /* ReviewSurface.swift */; };
+		F055B26F6E05A4866AC8000D /* FindingsPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F83F71215F04AF49323A2F6 /* FindingsPanel.swift */; };
 		F43E7099F20D1ECC414204D9 /* SharedRectoCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9E0596B01A39521DDFD3990 /* SharedRectoCore.swift */; };
 		F5D056FD27B5B132534B6754 /* RectoStore in Frameworks */ = {isa = PBXBuildFile; productRef = F1EB6ECFD9B2455F40C0C47E /* RectoStore */; };
 		F84E96206049779B646D8FCA /* WritingGoalsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1431D8EE1D0E47F5712E71A6 /* WritingGoalsTests.swift */; };
@@ -144,6 +145,7 @@
 		08898BE55D91DA265879530D /* DisplaySettingsPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplaySettingsPanel.swift; sourceTree = "<group>"; };
 		0A8CD39F039EBC275145E44A /* RectoAuth */ = {isa = PBXFileReference; lastKnownFileType = folder; name = RectoAuth; path = ../Packages/RectoAuth; sourceTree = SOURCE_ROOT; };
 		0CCBBE607F627E2AB92CBD5C /* LabBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabBar.swift; sourceTree = "<group>"; };
+		0F83F71215F04AF49323A2F6 /* FindingsPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FindingsPanel.swift; sourceTree = "<group>"; };
 		11E155B5B97B250D91DD9A8D /* AutoVersioning.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoVersioning.swift; sourceTree = "<group>"; };
 		1431D8EE1D0E47F5712E71A6 /* WritingGoalsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WritingGoalsTests.swift; sourceTree = "<group>"; };
 		15D45A5C4EDBD6AFF00A8600 /* WritingGoals.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WritingGoals.swift; sourceTree = "<group>"; };
@@ -343,6 +345,7 @@
 				06F1089147A9513D2B76ABDE /* EmailSignInView.swift */,
 				E283EF3CBDD2EE8864372778 /* ExportController.swift */,
 				1D555444683948EF0618D0AE /* ExportFile.swift */,
+				0F83F71215F04AF49323A2F6 /* FindingsPanel.swift */,
 				6E8BFA6E14BB3BA48D1DF795 /* GeneralSettingsTab.swift */,
 				68F202CDD0816F399DD891A8 /* GoalConfigController.swift */,
 				02B6D7800E92A211EE1A23EB /* HandoffEnvironment.swift */,
@@ -654,6 +657,7 @@
 				AF3C02D0F992E368A1F8B5BA /* EmailSignInView.swift in Sources */,
 				B4732DE94027E2F60D77FAB1 /* ExportController.swift in Sources */,
 				37B76FF4F2D5115FA3D9FA37 /* ExportFile.swift in Sources */,
+				F055B26F6E05A4866AC8000D /* FindingsPanel.swift in Sources */,
 				ED9D34A38A2C7FFAFF7329B3 /* GeneralSettingsTab.swift in Sources */,
 				74962DA097DE9EA1CEC32AA3 /* GoalConfigController.swift in Sources */,
 				87C43C876F634C0552593789 /* HandoffEnvironment.swift in Sources */,

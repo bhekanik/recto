@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { locateCuts, parseAlternatives, parseCuts } from "./lab";
+import {
+	locateCuts,
+	openingRange,
+	parseAlternatives,
+	parseCuts,
+	parseReview,
+} from "./lab";
 
 const draft =
 	"Much of the struggle comes from trying to balance the obvious. It all depends, but it matters. The core should be obvious.";
@@ -57,5 +63,46 @@ describe("Lab alternatives", () => {
 			],
 		});
 		expect(() => parseAlternatives("nothing", "tension", "word")).toThrow();
+	});
+});
+
+describe("Lab review", () => {
+	const source =
+		"---\ntitle: Draft\n---\n# The Obvious\n\nMuch of the struggle comes from balance. It all depends.\n\nThe core should be obvious.";
+
+	it("finds the opening paragraph after frontmatter and headings", () => {
+		const range = openingRange(source);
+		expect(range && source.slice(range.from, range.to)).toBe(
+			"Much of the struggle comes from balance. It all depends.",
+		);
+		expect(openingRange("# Only a heading\n")).toBeUndefined();
+	});
+
+	it("places findings exactly, keeps useful suggestions and caps openings", () => {
+		const reply = JSON.stringify({
+			assessment: "The opening states the tension but not the stakes.",
+			openings: ["A", "B", "C", "D"],
+			findings: [
+				{
+					text: "It all depends.",
+					reason: "hedge",
+					suggestion: "It depends on the product.",
+				},
+				{ text: "The core", reason: "vague", suggestion: "The core" },
+				{ text: "missing text", reason: "invented" },
+			],
+		});
+		const result = parseReview(reply, source, "opening");
+		expect(result.assessment).toBe(
+			"The opening states the tension but not the stakes.",
+		);
+		expect(result.openings).toEqual(["A", "B", "C"]);
+		expect(
+			result.findings.map((finding) => source.slice(finding.from, finding.to)),
+		).toEqual(["It all depends.", "The core"]);
+		expect(result.findings[0]?.suggestion).toBe("It depends on the product.");
+		expect(result.findings[1]?.suggestion).toBeUndefined();
+		expect(result.dropped).toBe(1);
+		expect(parseReview(reply, source, "voice").openings).toEqual([]);
 	});
 });

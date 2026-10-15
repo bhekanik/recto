@@ -218,7 +218,11 @@ struct OverflowPanelTests {
         let controlReturn = try #require(NSEvent.keyEvent(
             with: .keyDown, location: .zero, modifierFlags: .control, timestamp: 0, windowNumber: window.windowNumber,
             context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
-        scratchpad.keyDown(with: controlReturn)
+        // Through the window, as a real keystroke arrives: AppKit offers a
+        // modified key as a key equivalent before keyDown.
+        window.makeKeyAndOrderFront(nil)
+        #expect(window.makeFirstResponder(scratchpad))
+        window.sendEvent(controlReturn)
         #expect(moved == selection)
         #expect(scratchpad.string == "note\n\nSet aside.\n\n", "Control-Return must not type a newline")
 
