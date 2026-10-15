@@ -325,7 +325,9 @@ struct CommandPaletteControllerTests {
             return fired.withLock { $0 }
         }
         #expect(observes { registry.changed() })
-        #expect(observes { NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: nil) })
+        // A real window as the object: AppKit's own observers assert on it.
+        let window = NSWindow(contentRect: .zero, styleMask: .borderless, backing: .buffered, defer: true)
+        #expect(observes { NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window) })
         let editor = EditorHostController(settings: settings(), registry: registry)
         #expect(observes { registry.noteFocused(editor) })
         #expect(!observes { registry.noteFocused(editor) }, "a caret move in the same editor must not re-render the menu")
