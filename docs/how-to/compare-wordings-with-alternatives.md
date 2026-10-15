@@ -12,6 +12,6 @@ The underline is quiet while the passage shows its original and takes the accent
 
 Keeping a wording, adding one and removing one are each a single Undo. Undo and the history panel bring back the wordings together with the text they belong to. Typing before or after a passage moves its alternatives with it. Typing inside it edits the wording on show. An edit that cuts across the passage's edge keeps the wordings but hides the underline, so Recto never rewrites text it can no longer find exactly.
 
-Alternatives sync with the draft to your other Macs. The web app keeps them through its own edits and underlines them the same way, but comparing and adding wordings is on the Mac for now. Exports and copies contain only the wording on show. Alternatives are not available for standalone Markdown files.
+Alternatives sync with the draft to your other Macs. The web app underlines them the same way and has the same panel: `Alternatives for selection` in the command palette, or Control-Shift-A on a Mac (Alt+Shift+A elsewhere). In Rich mode on the web, a selection must be text that appears once in the draft; for repeated text, select it in Raw. AI wordings are on the Mac for now. Exports and copies contain only the wording on show. Alternatives are not available for standalone Markdown files.
 
 [Return to the macOS app guide](../../apple/RectoApp/README.md).

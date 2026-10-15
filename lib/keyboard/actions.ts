@@ -51,6 +51,7 @@ export type ActionId =
 	| "toggle-overflow"
 	| "stash-in-overflow"
 	| "ghost"
+	| "alternatives"
 	| "ai-transform"
 	| "ai-critique"
 	| "ai-related"
@@ -398,6 +399,21 @@ export const ACTIONS: ActionDef[] = [
 			"maybe cut",
 		],
 		shortcut: { mac: "Ctrl+/", other: "Ctrl+/" },
+	},
+	{
+		id: "alternatives",
+		label: "Alternatives for selection",
+		section: "Review",
+		aliases: [
+			"alternatives",
+			"wordings",
+			"synonyms",
+			"other words",
+			"variants",
+			"compare",
+		],
+		// Off Mac, Ctrl+Shift+A is the browser's tab search.
+		shortcut: { mac: "Ctrl+⇧+A", other: "Alt+Shift+A" },
 	},
 	{
 		id: "ai-transform",
